@@ -226,9 +226,14 @@ a thousand simulations. That is why CI splits it across parallel shards.
   This is also why the repository can stay private: Cloudflare Pages serves from private
   repositories, unlike GitHub Pages, which needs Enterprise for that.
 
-  Needs a `HUB_PAGES_TOKEN` secret — a fine-grained PAT with *Contents: read and write*
-  on the hub repository. Three repository variables override the destination, and they
-  are deliberately independent:
+  Needs a deploy token as a **repository secret on this repository**, named either
+  `GATE_DEPLOY_PAT` (matching what the other Wild Things repos call theirs) or
+  `HUB_PAGES_TOKEN` — a fine-grained PAT with *Contents: read and write* on the hub
+  repository. A secret of the same name living in another repository does not help:
+  Actions cannot read secrets across repositories, so the value has to exist here.
+
+  Three repository variables override the destination, and they are deliberately
+  independent:
 
   | Variable | Default | Meaning |
   |---|---|---|
