@@ -45,7 +45,11 @@ jobs:
 
       - name: Check the destination is configured
         env:
-          HUB_PAGES_TOKEN: ${{ secrets.HUB_PAGES_TOKEN }}
+          # Either name works. GATE_DEPLOY_PAT is what the other Wild Things repos
+          # already call their wt-gate deploy token, so reusing that name avoids
+          # minting a second token for the same job. Repository secrets do not cross
+          # repositories, so the value still has to exist *here* either way.
+          HUB_PAGES_TOKEN: ${{ secrets.GATE_DEPLOY_PAT || secrets.HUB_PAGES_TOKEN }}
         run: |
           echo "Publishing into $HUB_REPO at $HUB_PATH, served from $SITE_BASE"
           case "$SITE_BASE" in
@@ -53,7 +57,7 @@ jobs:
             *) echo "::error::SITE_BASE must start and end with a slash, e.g. /wow-dps/ — got '$SITE_BASE'"; exit 1 ;;
           esac
           if [ -z "$HUB_PAGES_TOKEN" ]; then
-            echo "::error::HUB_PAGES_TOKEN is not set. Create a fine-grained PAT with Contents: read and write on $HUB_REPO and add it as a repository secret."
+            echo "::error::No deploy token. Add a repository secret named GATE_DEPLOY_PAT (or HUB_PAGES_TOKEN) holding a fine-grained PAT with Contents: read and write on $HUB_REPO. A secret of that name in another repository is not visible here -- Actions cannot read secrets across repositories."
             exit 1
           fi
 
@@ -80,7 +84,7 @@ jobs:
 
       - name: Publish into the hub repository
         env:
-          HUB_PAGES_TOKEN: ${{ secrets.HUB_PAGES_TOKEN }}
+          HUB_PAGES_TOKEN: ${{ secrets.GATE_DEPLOY_PAT || secrets.HUB_PAGES_TOKEN }}
         run: |
           set -euo pipefail
           git clone --depth 1 \
