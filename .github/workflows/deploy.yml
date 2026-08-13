@@ -22,8 +22,11 @@ concurrency:
 env:
   # Where the built site is published, and under which sub-path. The hub can host
   # several tools side by side, so the path is what keeps them apart.
-  HUB_REPO: Wild-Things-Tools/wt-pages
-  HUB_PATH: wow-dps-breakdown
+  #
+  # Both are overridable with repository variables (Settings -> Secrets and variables
+  # -> Actions -> Variables), so renaming or moving the hub needs no code change.
+  HUB_REPO: ${{ vars.HUB_REPO || 'Wild-Things-Tools/wt-pages' }}
+  HUB_PATH: ${{ vars.HUB_PATH || 'wow-dps-breakdown' }}
 
 jobs:
   publish:
@@ -31,12 +34,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check the hub token is configured
+      - name: Check the hub is configured
         env:
           HUB_PAGES_TOKEN: ${{ secrets.HUB_PAGES_TOKEN }}
         run: |
+          echo "Publishing to $HUB_REPO under /$HUB_PATH/"
           if [ -z "$HUB_PAGES_TOKEN" ]; then
-            echo "::error::HUB_PAGES_TOKEN is not set. Create a fine-grained PAT with Contents: read and write on $HUB_REPO and add it as a repository secret."
+            echo "::error::HUB_PAGES_TOKEN is not set. Create a fine-grained PAT with Contents: read and write on $HUB_REPO and add it as a repository secret. If the hub lives elsewhere, set the HUB_REPO repository variable."
             exit 1
           fi
 

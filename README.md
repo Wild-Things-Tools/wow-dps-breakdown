@@ -219,9 +219,19 @@ a thousand simulations. That is why CI splits it across parallel shards.
   commits the dataset. A balance patch or an APL fix is on the site the next morning.
 - **On every push to `main`** (`deploy.yml`): rebuilds the SPA and publishes it into a
   separate **public** hub repository — including the data commits the nightly job makes.
-  The source repository stays private; only the compiled site travels. This needs a
-  `HUB_PAGES_TOKEN` secret (a fine-grained PAT with *Contents: read and write* on the hub
-  repo). If the source repo is ever made public, native GitHub Pages is simpler and the
+  The source repository stays private; only the compiled site travels.
+
+  Needs a `HUB_PAGES_TOKEN` secret: a fine-grained PAT with *Contents: read and write*
+  on the hub repo. The destination defaults to `Wild-Things-Tools/wt-pages` under
+  `/wow-dps-breakdown/` and is overridable with the `HUB_REPO` and `HUB_PATH` repository
+  variables, so moving or renaming the hub needs no code change.
+
+  The hub repository must be **public** — GitHub Pages will not serve a private repo
+  without an Enterprise plan, which is the whole reason for this arrangement. Set its
+  Pages source to *Deploy from a branch* (`main`, root), not *GitHub Actions*: this
+  workflow pushes finished files, it does not run a build there.
+
+  If the source repo is ever made public, native GitHub Pages is simpler and the
   workflow can be pointed back at it.
 - **Weekly, optional** (`logs-verification.yml`): pulls ranking medians from Warcraft
   Logs for a reality check. Skips itself cleanly if credentials are not configured.
