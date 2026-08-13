@@ -47,8 +47,8 @@ jobs:
         env:
           # Either name works. GATE_DEPLOY_PAT is what the other Wild Things repos
           # already call their wt-gate deploy token, so reusing that name avoids
-          # minting a second token for the same job. Repository secrets do not cross
-          # repositories, so the value still has to exist *here* either way.
+          # minting a second token for the same job. It resolves for an organisation
+          # secret shared with this repository as well as a repository secret on it.
           HUB_PAGES_TOKEN: ${{ secrets.GATE_DEPLOY_PAT || secrets.HUB_PAGES_TOKEN }}
         run: |
           echo "Publishing into $HUB_REPO at $HUB_PATH, served from $SITE_BASE"
@@ -57,7 +57,7 @@ jobs:
             *) echo "::error::SITE_BASE must start and end with a slash, e.g. /wow-dps/ — got '$SITE_BASE'"; exit 1 ;;
           esac
           if [ -z "$HUB_PAGES_TOKEN" ]; then
-            echo "::error::No deploy token. Add a repository secret named GATE_DEPLOY_PAT (or HUB_PAGES_TOKEN) holding a fine-grained PAT with Contents: read and write on $HUB_REPO. A secret of that name in another repository is not visible here -- Actions cannot read secrets across repositories."
+            echo "::error::No deploy token. Expected GATE_DEPLOY_PAT or HUB_PAGES_TOKEN: a fine-grained PAT with Contents: read and write on $HUB_REPO. If it is an organisation secret, check that its repository access covers this repository -- one scoped to 'Selected repositories' must list it. A *repository* secret in a different repository is not visible here."
             exit 1
           fi
 

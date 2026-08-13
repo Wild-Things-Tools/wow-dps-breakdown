@@ -226,11 +226,15 @@ a thousand simulations. That is why CI splits it across parallel shards.
   This is also why the repository can stay private: Cloudflare Pages serves from private
   repositories, unlike GitHub Pages, which needs Enterprise for that.
 
-  Needs a deploy token as a **repository secret on this repository**, named either
-  `GATE_DEPLOY_PAT` (matching what the other Wild Things repos call theirs) or
-  `HUB_PAGES_TOKEN` — a fine-grained PAT with *Contents: read and write* on the hub
-  repository. A secret of the same name living in another repository does not help:
-  Actions cannot read secrets across repositories, so the value has to exist here.
+  Needs a deploy token visible to this repository, named either `GATE_DEPLOY_PAT`
+  (matching what the other Wild Things repos call theirs) or `HUB_PAGES_TOKEN` — a
+  fine-grained PAT with *Contents: read and write* on the hub repository.
+
+  Either an **organisation secret** shared with this repository, or a **repository
+  secret** on it. Organisation secrets carry a repository-access setting, so one scoped
+  to "Selected repositories" has to list this repo explicitly. A *repository* secret
+  living in a different repository is not visible here — Actions cannot read secrets
+  across repositories.
 
   Three repository variables override the destination, and they are deliberately
   independent:
