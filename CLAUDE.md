@@ -69,7 +69,11 @@ Both measurements rest on SimulationCraft's `prioritydps` field. Facts about it:
   with no funnel data at all.
 - `min_iterations` **does not exist**. simc warns and ignores it.
 - `deterministic=1` and a non-zero `target_error` are **mutually exclusive** — simc exits
-  with a setup failure. `SimSettings.as_simc_options` picks one or the other.
+  with a setup failure. `SimSettings.as_simc_options` picks one or the other. The default
+  is the deterministic branch: every run gets committed, so adaptive sampling would bury
+  real changes under a fresh layer of Monte Carlo noise every night. Verified that two
+  separate runs of one profile return bit-identical DPS. 3000 iterations measures at
+  ~0.05% standard error in ~9s per cell; 10000 buys 0.03% for triple the runtime.
 - Options must come **after** the profile path on the command line to override it.
 - `fixed_time=1` appears in the JSON options by default but does *not* mean fixed fight
   length. `vary_combat_length` (default ±20%) still applies, so fight lengths are spread

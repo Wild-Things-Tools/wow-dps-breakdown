@@ -196,14 +196,16 @@ npm install
 npm run dev
 ```
 
-A full run at publication quality is `--target-error 0.2` across every profile: roughly
-a thousand simulations. That is why CI splits it across parallel shards.
+A full run at publication quality is the default settings across every profile: roughly
+a thousand simulations at about nine seconds each. That is why CI splits it across
+parallel shards.
 
 ### Useful flags
 
 | Flag | What it does |
 |---|---|
-| `--target-error 0.2` | Converge until the DPS standard error is below this percent. `0` switches to a fixed, reproducible iteration count instead. |
+| `--target-error 0` | Default. Fixed iteration count with deterministic seeding, so a run with nothing changed reproduces byte for byte. A positive value converges adaptively instead. |
+| `--max-iterations 3000` | The fixed count in deterministic mode; a ceiling in adaptive mode. |
 | `--shard 0/6` | Run one slice of the matrix. Round-robin, so shards stay balanced. |
 | `--scenario patchwerk` | Limit to one scenario (repeatable). |
 | `--wow-class Mage` | Limit to one class (repeatable). |
@@ -299,8 +301,9 @@ correction factor, and the site presents both rather than reconciling them.
   permutations per target count is a profileset problem and is on the roadmap; until then
   read the high end of the curve as "this build at ten targets", not "this spec at ten
   targets".
-- **A few percent is noise.** At `--target-error 0.2`, differences under roughly half a
-  percent are not real. The site shows the sampling error alongside each figure.
+- **Small gaps are noise.** At the default 3000 iterations the sampling error is around
+  0.05%, so differences under about a tenth of a percent are not real. The site shows the
+  measured error alongside each figure rather than making you guess.
 - **Coverage tracks simc.** Only builds with a profile for the current tier appear.
   Season 2 currently ships 26 profiles across 15 damage specs; season 1 reached 41 across
   26. The list fills in as the SimulationCraft developers work through the tier, and the

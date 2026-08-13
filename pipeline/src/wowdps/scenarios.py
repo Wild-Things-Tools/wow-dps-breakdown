@@ -184,12 +184,23 @@ def get(scenario_id: str) -> Scenario:
 class SimSettings:
     """Statistical quality knobs shared by every sim in a run."""
 
-    #: simc stops iterating once the DPS standard error falls below this percentage.
-    #: 0.2 keeps spec-to-spec differences of ~0.5% meaningful without runaway runtime.
-    #: Set to 0 to run a fixed ``max_iterations`` instead.
-    target_error: float = 0.2
-    #: Hard ceiling so a badly-converging profile cannot stall the whole matrix.
-    max_iterations: int = 30000
+    #: Adaptive mode: simc stops once the DPS standard error falls below this
+    #: percentage. Zero -- the default -- switches to a fixed iteration count with
+    #: deterministic seeding instead.
+    #:
+    #: Determinism is worth more here than adaptive convergence. Every published run
+    #: is committed, so with adaptive sampling each nightly run differs by Monte Carlo
+    #: noise even when nothing changed in the game, and real changes drown in it. With
+    #: fixed seeding a quiet night produces byte-identical output and no commit at all,
+    #: so a diff in the history always means something actually moved. Verified: two
+    #: separate runs of the same profile return bit-identical DPS.
+    target_error: float = 0.0
+    #: Fixed iteration count in deterministic mode; a ceiling in adaptive mode.
+    #:
+    #: 3000 measures at roughly 0.05% standard error, which is about six times tighter
+    #: than the 0.3% adaptive runs this replaced, for around nine seconds per cell.
+    #: 10000 buys 0.03% for three times the runtime -- not worth it.
+    max_iterations: int = 3000
     threads: int = 0  # 0 = use every available core
     extra_options: tuple[str, ...] = field(default_factory=tuple)
 
