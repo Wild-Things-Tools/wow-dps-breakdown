@@ -86,10 +86,17 @@ export interface ScenarioMeta {
   id: string
   label: string
   description: string
-  fightStyle: string
+  fightStyle: string | null
   targetCounts: number[]
   maxTime: number
   supportsFunnel: boolean
+  /**
+   * Scenario id whose single-target cell funnel gain divides by. "self" means this
+   * scenario's own 1-target run; null means gain is not computable here.
+   */
+  funnelBaseline?: string | null
+  /** False when the scenario runs at one target count only. */
+  sweepsTargets?: boolean
 }
 
 export interface SimcMeta {

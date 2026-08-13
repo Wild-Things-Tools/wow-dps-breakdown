@@ -46,7 +46,7 @@ class SpecResult:
     def add(self, scenario_id: str, cell: Cell) -> None:
         self.cells.setdefault(scenario_id, {})[cell.targets] = cell
 
-    def compute_funnel_gain(self) -> None:
+    def compute_funnel_gain(self, scenarios: list[Scenario]) -> None:
         """Fill in each cell's funnel gain against its scenario's single-target run.
 
         Funnel gain is main-target damage at N targets divided by damage at one
@@ -57,10 +57,18 @@ class SpecResult:
         This cannot live in ``parse_cell`` because one simc report has no idea what
         the same profile does at a single target.
         """
-        for by_target in self.cells.values():
-            baseline = by_target.get(1)
+        for scenario in scenarios:
+            if scenario.funnel_baseline is None:
+                continue
+            by_target = self.cells.get(scenario.id)
+            if not by_target:
+                continue
+
+            source = scenario.id if scenario.funnel_baseline == "self" else scenario.funnel_baseline
+            baseline = (self.cells.get(source) or {}).get(1)
             if not baseline or baseline.dps <= 0:
                 continue
+
             for cell in by_target.values():
                 if cell.priority_dps is not None:
                     cell.funnel_gain = cell.priority_dps / baseline.dps
@@ -170,7 +178,7 @@ def run_spec(
                 time.monotonic() - started,
             )
 
-    result.compute_funnel_gain()
+    result.compute_funnel_gain(scenarios)
     return result
 
 
@@ -209,6 +217,10 @@ def write_manifest(
                 "targetCounts": list(s.target_counts),
                 "maxTime": s.max_time,
                 "supportsFunnel": s.supports_funnel,
+                # Which scenario's single-target run the gain divides by, so the UI
+                # can show "alone it would take" without re-deriving the rule.
+                "funnelBaseline": s.funnel_baseline,
+                "sweepsTargets": len(s.target_counts) > 1,
             }
             for s in scenarios
         ],

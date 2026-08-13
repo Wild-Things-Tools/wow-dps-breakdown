@@ -109,7 +109,10 @@ class Cell:
         if self.priority_dps is not None:
             out["priorityDps"] = round(self.priority_dps, 1)
             out["priorityShare"] = round(self.priority_share or 0.0, 5)
-            out["concentration"] = round(self.concentration or 0.0, 4)
+        # Concentration is absent, not zero, when the target count is not fixed --
+        # writing 0.0 there would render as "0.00x an even spread", which is false.
+        if self.concentration is not None:
+            out["concentration"] = round(self.concentration, 4)
         if self.funnel_gain is not None:
             out["funnelGain"] = round(self.funnel_gain, 4)
         if self.timeline is not None:
@@ -278,16 +281,22 @@ def parse_cell(
     priority_share: float | None = None
     concentration: float | None = None
 
-    if supports_funnel and targets > 1:
+    if supports_funnel:
+        # simc emits prioritydps whenever enemy_targets > 1, which includes targets
+        # that arrive from raid events rather than from desired_targets. Gating on
+        # the configured count would silently drop those scenarios, so trust the
+        # field's presence instead.
         raw_priority = collected.get("prioritydps")
         if raw_priority:
             priority_dps = _sample(raw_priority)
             priority_share = priority_dps / dps
-            # 1.0 = damage spread evenly across targets; N = everything on the main
-            # target. Normalising by target count makes the number comparable across
-            # the whole sweep. This is distribution only -- see the module docstring
-            # for why it is not the same thing as funnelling.
-            concentration = priority_share * targets
+            if targets > 1:
+                # 1.0 = damage spread evenly across targets; N = everything on the
+                # main target. Only meaningful when the target count is fixed and
+                # known -- with adds arriving and leaving there is no N to divide by.
+                # Distribution only; see the module docstring for why that is not
+                # the same thing as funnelling.
+                concentration = priority_share * targets
 
     timeline: list[float] | None = None
     bin_size = 1.0

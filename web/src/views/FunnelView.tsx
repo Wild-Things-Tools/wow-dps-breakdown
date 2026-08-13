@@ -21,6 +21,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell as RBCell,
   Line,
   LineChart,
   ReferenceLine,
@@ -77,12 +78,23 @@ export function FunnelView({
   colorOf: (id: string) => string
 }) {
   const [metric, setMetric] = useState<Metric>('gain')
+
+  // Which scenario's single-target run the gain divides by. Scenarios whose extra
+  // targets arrive from raid events have no add-free cell of their own and borrow
+  // Patchwerk's; "self" means the sweep provides its own.
+  const baselineId =
+    scenario.funnelBaseline === 'self' ? scenario.id : (scenario.funnelBaseline ?? null)
+
+  // A swept scenario shows funnel data from two targets up. A scenario that runs at
+  // one configured target but spawns adds shows it at that single count -- simc
+  // reports priority damage whenever more than one enemy exists, however it arrived.
+  const sweeps = scenario.targetCounts.length > 1
   const funnelTargets = useMemo(
-    () => scenario.targetCounts.filter((count) => count > 1),
-    [scenario],
+    () => (sweeps ? scenario.targetCounts.filter((count) => count > 1) : scenario.targetCounts),
+    [scenario, sweeps],
   )
   const [splitAt, setSplitAt] = useState(5)
-  const effectiveSplit = funnelTargets.includes(splitAt) ? splitAt : (funnelTargets[0] ?? 2)
+  const effectiveSplit = funnelTargets.includes(splitAt) ? splitAt : (funnelTargets[0] ?? 1)
 
   if (details.length === 0) {
     return (
@@ -136,12 +148,14 @@ export function FunnelView({
         <PanelHeader
           title={
             metric === 'gain'
-              ? 'Main-target damage as targets are added'
+              ? sweeps
+                ? 'Main-target damage as targets are added'
+                : 'Main-target damage with the adds present'
               : 'How the damage is distributed'
           }
           subtitle={
             metric === 'gain'
-              ? 'Relative to the same build at a single target. Above the line, the adds are feeding the main target.'
+              ? 'Relative to the same build with no adds at all. Above 1.0, having the adds up makes the main target die faster.'
               : 'Relative to an even spread across every target. This says nothing about whether the adds helped — only where the damage went.'
           }
           actions={
@@ -160,12 +174,21 @@ export function FunnelView({
             />
           }
         />
-        <MetricChart
-          details={details}
-          scenarioId={scenario.id}
-          colorOf={colorOf}
-          metric={metric}
-        />
+        {sweeps ? (
+          <MetricChart
+            details={details}
+            scenarioId={scenario.id}
+            colorOf={colorOf}
+            metric={metric}
+          />
+        ) : (
+          <SinglePointChart
+            details={details}
+            scenarioId={scenario.id}
+            colorOf={colorOf}
+            metric={metric}
+          />
+        )}
         <Legend
           items={details.map((detail) => ({
             id: detail.id,
@@ -183,25 +206,42 @@ export function FunnelView({
 
       <Panel>
         <PanelHeader
-          title={`Where the damage lands at ${effectiveSplit} targets`}
+          title={
+            sweeps
+              ? `Where the damage lands at ${effectiveSplit} targets`
+              : 'Where the damage lands'
+          }
           subtitle="Damage per second split between the main target and everything else."
           actions={
-            <Select
-              label="Targets"
-              value={effectiveSplit}
-              onChange={setSplitAt}
-              options={funnelTargets.map((count) => ({ value: count, label: String(count) }))}
-            />
+            funnelTargets.length > 1 ? (
+              <Select
+                label="Targets"
+                value={effectiveSplit}
+                onChange={setSplitAt}
+                options={funnelTargets.map((count) => ({ value: count, label: String(count) }))}
+              />
+            ) : null
           }
         />
-        <SplitChart details={details} scenarioId={scenario.id} targets={effectiveSplit} />
+        <SplitChart
+          details={details}
+          scenarioId={scenario.id}
+          targets={effectiveSplit}
+          baselineId={baselineId}
+        />
         <Legend
           items={[
             { id: 'main', label: 'Main target', color: MAIN_COLOR },
             { id: 'rest', label: 'All other targets', color: REST_COLOR },
           ]}
         />
-        <SplitTable details={details} scenarioId={scenario.id} targets={effectiveSplit} />
+        <SplitTable
+          details={details}
+          scenarioId={scenario.id}
+          targets={effectiveSplit}
+          baselineId={baselineId}
+          fixedTargets={sweeps}
+        />
       </Panel>
     </div>
   )
@@ -355,6 +395,112 @@ function MetricChart({
   )
 }
 
+/**
+ * One value per build, for scenarios that run at a single target configuration.
+ *
+ * A line chart needs an x-axis to sweep; an add-wave scenario has one measurement,
+ * so the honest form is a ranked comparison. The 1.0 reference line is what makes
+ * it readable -- crossing it is the whole question.
+ */
+function SinglePointChart({
+  details,
+  scenarioId,
+  colorOf,
+  metric,
+}: {
+  details: SpecDetail[]
+  scenarioId: string
+  colorOf: (id: string) => string
+  metric: Metric
+}) {
+  const rows = useMemo(() => {
+    const out: Array<{ id: string; label: string; value: number }> = []
+    for (const detail of details) {
+      const cell = detail.scenarios[scenarioId]?.targets[0]
+      const value = metric === 'gain' ? cell?.funnelGain : cell?.concentration
+      if (value === undefined) continue
+      out.push({ id: detail.id, label: detail.displayName, value })
+    }
+    return out.sort((a, b) => b.value - a.value)
+  }, [details, scenarioId, metric])
+
+  if (rows.length === 0) {
+    return (
+      <EmptyState>
+        {metric === 'gain'
+          ? 'No funnel gain for these builds in this scenario.'
+          : 'Concentration needs a fixed target count, and this scenario’s adds come and go. Switch to funnel gain.'}
+      </EmptyState>
+    )
+  }
+
+  const min = Math.min(...rows.map((row) => row.value), 1)
+  const max = Math.max(...rows.map((row) => row.value), 1)
+
+  return (
+    <div className="px-2 py-4">
+      <ResponsiveContainer width="100%" height={Math.max(180, rows.length * 40 + 50)}>
+        <BarChart data={rows} layout="vertical" margin={{ top: 4, right: 40, bottom: 4, left: 8 }}>
+          <CartesianGrid {...GRID} vertical horizontal={false} />
+          <XAxis
+            type="number"
+            domain={[Math.min(min, 0.9) - 0.05, Math.max(max, 1.1) + 0.05]}
+            tick={AXIS_TICK}
+            axisLine={AXIS_LINE}
+            tickLine={false}
+            tickFormatter={(value: number) => `${value.toFixed(2)}x`}
+          />
+          <YAxis
+            type="category"
+            dataKey="label"
+            width={210}
+            tick={AXIS_TICK}
+            axisLine={false}
+            tickLine={false}
+          />
+          <Tooltip
+            cursor={CURSOR_FILL}
+            content={({ active, payload }) => {
+              if (!active || !payload?.length) return null
+              const row = payload[0]?.payload as { label: string; value: number } | undefined
+              if (!row) return null
+              return (
+                <TooltipCard
+                  title={row.label}
+                  rows={[
+                    {
+                      id: 'value',
+                      label: metric === 'gain' ? 'Funnel gain' : 'Concentration',
+                      value: `${row.value.toFixed(3)}x`,
+                      hint: metric === 'gain' ? describeFunnelGain(row.value) : undefined,
+                    },
+                  ]}
+                />
+              )
+            }}
+          />
+          <ReferenceLine
+            x={1}
+            stroke="var(--baseline)"
+            strokeDasharray="4 4"
+            label={{
+              value: metric === 'gain' ? 'No gain' : 'Even',
+              position: 'insideTopRight',
+              fill: 'var(--text-muted)',
+              fontSize: 11,
+            }}
+          />
+          <Bar dataKey="value" barSize={16} radius={[0, 4, 4, 0]} isAnimationActive={false}>
+            {rows.map((row) => (
+              <RBCell key={row.id} fill={colorOf(row.id)} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  )
+}
+
 interface SplitRow {
   id: string
   label: string
@@ -363,17 +509,29 @@ interface SplitRow {
   total: number
   singleTarget: number
   share: number
-  concentration: number
+  concentration?: number
   gain?: number
 }
 
-function splitRows(details: SpecDetail[], scenarioId: string, targets: number): SplitRow[] {
+function splitRows(
+  details: SpecDetail[],
+  scenarioId: string,
+  targets: number,
+  baselineId: string | null,
+): SplitRow[] {
   const rows: SplitRow[] = []
   for (const detail of details) {
     const cells = detail.scenarios[scenarioId]?.targets ?? []
     const cell = cells.find((entry) => entry.targets === targets)
-    const single = cells.find((entry) => entry.targets === 1)
-    if (!cell || cell.priorityDps === undefined || cell.concentration === undefined) continue
+    // The add-free reference. For a swept scenario that is its own 1-target cell;
+    // for an add-wave scenario it lives in Patchwerk, because this scenario has no
+    // run without adds.
+    const single = baselineId
+      ? (detail.scenarios[baselineId]?.targets ?? []).find((entry) => entry.targets === 1)
+      : undefined
+    // Concentration is absent when the target count is not fixed, which is exactly
+    // the add-wave case -- so it must not gate the row.
+    if (!cell || cell.priorityDps === undefined) continue
     rows.push({
       id: detail.id,
       label: detail.displayName,
@@ -394,14 +552,16 @@ function SplitChart({
   details,
   scenarioId,
   targets,
+  baselineId,
 }: {
   details: SpecDetail[]
   scenarioId: string
   targets: number
+  baselineId: string | null
 }) {
   const rows = useMemo(
-    () => splitRows(details, scenarioId, targets),
-    [details, scenarioId, targets],
+    () => splitRows(details, scenarioId, targets, baselineId),
+    [details, scenarioId, targets, baselineId],
   )
 
   if (rows.length === 0) {
@@ -511,14 +671,18 @@ function SplitTable({
   details,
   scenarioId,
   targets,
+  baselineId,
+  fixedTargets,
 }: {
   details: SpecDetail[]
   scenarioId: string
   targets: number
+  baselineId: string | null
+  fixedTargets: boolean
 }) {
   const rows = useMemo(
-    () => splitRows(details, scenarioId, targets),
-    [details, scenarioId, targets],
+    () => splitRows(details, scenarioId, targets, baselineId),
+    [details, scenarioId, targets, baselineId],
   )
   if (rows.length === 0) return null
 
@@ -562,8 +726,8 @@ function SplitTable({
                   {row.gain !== undefined ? `${row.gain.toFixed(2)}x` : '—'}
                 </td>
                 <td className="tnum px-4 py-2 text-right text-ink-secondary">
-                  {row.concentration.toFixed(2)}x
-                  <span className="ml-1.5 text-ink-muted">({percent(row.share, 0)})</span>
+                  {row.concentration !== undefined ? `${row.concentration.toFixed(2)}x ` : ''}
+                  <span className="text-ink-muted">({percent(row.share, 0)} on main)</span>
                 </td>
                 <td className="px-4 py-2 text-ink-secondary">
                   {row.gain !== undefined ? describeFunnelGain(row.gain) : '—'}
@@ -574,11 +738,22 @@ function SplitTable({
         </table>
       </div>
       <Note>
-        Funnel gain compares main-target damage at {targets} targets against the same
-        build at one target. Concentration compares it against an even split across all{' '}
-        {targets}. A build can score high on one and low on the other — high
-        concentration with no gain just means the build has little area damage to
-        spend global cooldowns on.
+        {fixedTargets ? (
+          <>
+            Funnel gain compares main-target damage at {targets} targets against the same
+            build alone. Concentration compares it against an even split across all{' '}
+            {targets}. A build can score high on one and low on the other — high
+            concentration with no gain just means the build has little area damage to
+            spend global cooldowns on.
+          </>
+        ) : (
+          <>
+            Funnel gain compares main-target damage with the adds present against the same
+            build with no adds at all. Concentration is not shown here: the adds arrive and
+            leave, so there is no fixed target count to compare an even split against — only
+            the share landing on the main target.
+          </>
+        )}
       </Note>
       <Note>
         Two caveats worth knowing. SimulationCraft's rotations are written to maximise
