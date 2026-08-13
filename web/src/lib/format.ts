@@ -1,0 +1,78 @@
+/** Number and label formatting shared by tables, axes and tooltips. */
+
+const COMPACT = new Intl.NumberFormat('en-US', {
+  notation: 'compact',
+  maximumFractionDigits: 1,
+})
+
+const FULL = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 })
+
+/** Axis ticks and dense table cells: 1.2M, 587.4k. */
+export function compactNumber(value: number): string {
+  return COMPACT.format(value)
+}
+
+/** Tooltips and detail rows, where the exact figure matters: 587,407. */
+export function fullNumber(value: number): string {
+  return FULL.format(value)
+}
+
+export function percent(value: number, digits = 1): string {
+  return `${(value * 100).toFixed(digits)}%`
+}
+
+/**
+ * Concentration, phrased the way it should be read.
+ *
+ * Describes *distribution* only — how the damage is spread across the targets that
+ * are present. Deliberately avoids the word "funnel", which means something else
+ * (see describeFunnelGain).
+ */
+export function describeConcentration(index: number, targets: number): string {
+  if (index <= 1.08) return 'Spread evenly'
+  if (index >= targets * 0.92) return 'Almost all on main target'
+  if (index >= targets * 0.6) return 'Very concentrated'
+  if (index >= 1.6) return 'Concentrated'
+  return 'Slightly favours main target'
+}
+
+/**
+ * Funnel gain, phrased the way it should be read.
+ *
+ * 1.0 means the main target takes exactly what it would take if it were alone.
+ * Above that, the extra targets are feeding it. Below, area damage is costing it.
+ */
+export function describeFunnelGain(gain: number): string {
+  if (gain >= 1.1) return 'Strong funnel'
+  if (gain >= 1.02) return 'Funnels onto the main target'
+  if (gain >= 0.98) return 'Main target unaffected'
+  if (gain >= 0.85) return 'Slight cost to the main target'
+  return 'Main target loses out'
+}
+
+export function describeBurst(ratio: number): string {
+  if (ratio >= 2.2) return 'Heavy burst window'
+  if (ratio >= 1.6) return 'Noticeable burst'
+  if (ratio >= 1.25) return 'Mild burst'
+  return 'Steady output'
+}
+
+export function formatDate(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  return date.toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  })
+}
+
+export function relativeAge(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ''
+  const hours = Math.round((Date.now() - date.getTime()) / 36e5)
+  if (hours < 1) return 'just now'
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.round(hours / 24)
+  return days === 1 ? 'yesterday' : `${days} days ago`
+}

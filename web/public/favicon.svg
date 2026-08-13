@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="7" fill="#0d0d0d" />
+  <!-- Three bars: the main target taking more than its share, then the rest. -->
+  <rect x="7" y="7" width="18" height="5" rx="2" fill="#3987e5" />
+  <rect x="7" y="14" width="11" height="5" rx="2" fill="#7d7c76" />
+  <rect x="7" y="21" width="11" height="5" rx="2" fill="#7d7c76" />
+</svg>
