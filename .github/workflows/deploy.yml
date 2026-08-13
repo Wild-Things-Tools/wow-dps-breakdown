@@ -1,12 +1,17 @@
 name: Deploy
 
-# The source repository is private, and GitHub Pages will not serve a private repo
-# without an Enterprise plan. So the build is published into a separate *public* hub
-# repository instead: only the compiled site travels, the code stays private.
+# The site is published into the wt-gate repository, which is a Cloudflare Pages
+# project sitting behind a Discord login. Pushing there is the whole job: Cloudflare
+# rebuilds wt-gate on its own, and everything under its public/ directory ends up
+# served from the site root.
 #
-# Requires a repository secret HUB_PAGES_TOKEN — a fine-grained personal access token
-# with "Contents: read and write" on the hub repository. Without it this workflow
-# stops with a clear message rather than failing obscurely.
+# Why not GitHub Pages: this repository is private, and Pages will not serve a
+# private repo without Enterprise. Cloudflare has no such restriction, so the source
+# stays private either way.
+#
+# Going public later is a variable change, not a rewrite. Point SITE_BASE and
+# HUB_PATH at an ungated Cloudflare project (or set SITE_BASE=/ for a project root)
+# and nothing else moves — the built output is identical.
 on:
   push:
     branches: [main]
@@ -20,13 +25,17 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Where the built site is published, and under which sub-path. The hub can host
-  # several tools side by side, so the path is what keeps them apart.
+  # All three are overridable with repository variables (Settings -> Secrets and
+  # variables -> Actions -> Variables).
   #
-  # Both are overridable with repository variables (Settings -> Secrets and variables
-  # -> Actions -> Variables), so renaming or moving the hub needs no code change.
-  HUB_REPO: ${{ vars.HUB_REPO || 'Wild-Things-Tools/wt-pages' }}
-  HUB_PATH: ${{ vars.HUB_PATH || 'wow-dps-breakdown' }}
+  # HUB_PATH is a path *inside* the hub repository; SITE_BASE is the URL prefix the
+  # site is served under. They are deliberately independent: Cloudflare serves
+  # wt-gate's public/ from the domain root, so public/wow-dps maps to /wow-dps/.
+  # Deriving one from the other would produce /wt-gate/public/wow-dps/ and every
+  # asset would 404.
+  HUB_REPO: ${{ vars.HUB_REPO || 'Wild-Things-Tools/wt-gate' }}
+  HUB_PATH: ${{ vars.HUB_PATH || 'public/wow-dps' }}
+  SITE_BASE: ${{ vars.SITE_BASE || '/wow-dps/' }}
 
 jobs:
   publish:
@@ -34,13 +43,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check the hub is configured
+      - name: Check the destination is configured
         env:
           HUB_PAGES_TOKEN: ${{ secrets.HUB_PAGES_TOKEN }}
         run: |
-          echo "Publishing to $HUB_REPO under /$HUB_PATH/"
+          echo "Publishing into $HUB_REPO at $HUB_PATH, served from $SITE_BASE"
+          case "$SITE_BASE" in
+            /*/ | /) ;;
+            *) echo "::error::SITE_BASE must start and end with a slash, e.g. /wow-dps/ — got '$SITE_BASE'"; exit 1 ;;
+          esac
           if [ -z "$HUB_PAGES_TOKEN" ]; then
-            echo "::error::HUB_PAGES_TOKEN is not set. Create a fine-grained PAT with Contents: read and write on $HUB_REPO and add it as a repository secret. If the hub lives elsewhere, set the HUB_REPO repository variable."
+            echo "::error::HUB_PAGES_TOKEN is not set. Create a fine-grained PAT with Contents: read and write on $HUB_REPO and add it as a repository secret."
             exit 1
           fi
 
@@ -63,11 +76,7 @@ jobs:
 
       - name: Build
         working-directory: web
-        run: |
-          # The hub serves from https://<owner>.github.io/<hub repo>/ and this tool
-          # sits in a sub-path of that, so assets need both segments.
-          HUB_NAME="${HUB_REPO##*/}"
-          BASE_PATH="/$HUB_NAME/$HUB_PATH/" npm run build
+        run: BASE_PATH="$SITE_BASE" npm run build
 
       - name: Publish into the hub repository
         env:
@@ -77,29 +86,29 @@ jobs:
           git clone --depth 1 \
             "https://x-access-token:${HUB_PAGES_TOKEN}@github.com/${HUB_REPO}.git" hub
 
-          # Replace this tool's directory wholesale so files deleted from the build
-          # do not linger, and leave every sibling tool in the hub untouched.
+          # Replace our directory wholesale so files dropped from the build do not
+          # linger, and leave everything else in the hub untouched — it is somebody
+          # else's project with its own app, functions and assets.
           rm -rf "hub/${HUB_PATH}"
           mkdir -p "hub/${HUB_PATH}"
           cp -r web/dist/. "hub/${HUB_PATH}/"
-
-          # Pages would otherwise run Jekyll over the output and drop files whose
-          # names begin with an underscore.
-          touch hub/.nojekyll
 
           cd hub
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
           git add -A
           if git diff --staged --quiet; then
-            echo "site unchanged"
+            echo "site unchanged — nothing to publish"
             exit 0
           fi
-          git commit -m "${HUB_PATH}: publish from ${GITHUB_SHA::7}"
+          git commit -m "wow-dps: publish from ${GITHUB_SHA::7}"
           git push
 
       - name: Summary
         run: |
-          HUB_OWNER="${HUB_REPO%%/*}"
-          HUB_NAME="${HUB_REPO##*/}"
-          echo "Published to https://${HUB_OWNER,,}.github.io/${HUB_NAME}/${HUB_PATH}/" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "Pushed to \`$HUB_REPO\` at \`$HUB_PATH\`."
+            echo ""
+            echo "Cloudflare rebuilds that project on push; the site will be live at"
+            echo "\`<wt-gate domain>$SITE_BASE\` once the build finishes, behind the Discord login."
+          } >> "$GITHUB_STEP_SUMMARY"
