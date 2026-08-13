@@ -208,10 +208,22 @@ def summarise_rankings(encounter: dict) -> dict | None:
 
 def cmd_verify(args: argparse.Namespace) -> int:
     """Fetch rankings for every spec in the dataset and write a comparison file."""
-    data_dir = Path(args.data)
+    # The dataset is namespaced by tier; verify whichever tier was asked for, or the
+    # current one if not told.
+    root = Path(args.data)
+    tiers_path = root / "tiers.json"
+    if not tiers_path.is_file():
+        log.error("no tier index at %s -- run `wowdps build` first", tiers_path)
+        return 1
+
+    tier = args.tier
+    if not tier or tier == "latest":
+        tier = json.loads(tiers_path.read_text(encoding="utf-8"))["current"]
+
+    data_dir = root / tier
     manifest_path = data_dir / "index.json"
     if not manifest_path.is_file():
-        log.error("no dataset manifest at %s -- run `wowdps build` first", manifest_path)
+        log.error("no dataset manifest at %s -- run `wowdps build --tier %s`", manifest_path, tier)
         return 1
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
