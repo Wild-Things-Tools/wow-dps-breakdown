@@ -1,0 +1,94 @@
+# Notes for Claude
+
+Context that is expensive to rediscover. Read this before changing the pipeline or the
+charts.
+
+## The one thing not to break
+
+The funnel measurement rests on SimulationCraft's `prioritydps` field. Facts about it:
+
+- It is emitted **only when `enemy_targets > 1`**, which in practice means
+  `desired_targets > 1`. Single-target cells legitimately have no funnel data.
+- It counts damage whose target is `sim->target` (the primary), **except** in
+  `DungeonSlice` and `DungeonRoute`, where it counts damage to *bosses* instead. See
+  `engine/action/action.cpp`, `action_t::assess_damage`. This is why
+  `Scenario.supports_funnel` is `False` for Dungeon Slice — the number exists but means
+  something else, and presenting it alongside the others would be wrong.
+- simc has **no** per-target damage breakdown otherwise
+  ([issue #1091](https://github.com/simulationcraft/simc/issues/1091), open since 2012).
+  If you find yourself wanting one, `prioritydps` is the answer.
+
+## simc option gotchas, all learned the hard way
+
+- `min_iterations` **does not exist**. simc warns and ignores it.
+- `deterministic=1` and a non-zero `target_error` are **mutually exclusive** — simc exits
+  with a setup failure. `SimSettings.as_simc_options` picks one or the other.
+- Options must come **after** the profile path on the command line to override it.
+- `fixed_time=1` appears in the JSON options by default but does *not* mean fixed fight
+  length. `vary_combat_length` (default ±20%) still applies, so fight lengths are spread
+  uniformly over `[0.8 × max_time, 1.2 × max_time]`.
+- Report metadata (`version`, `build_date`, `git_revision`) is at the **top level** of the
+  JSON, not under `sim`.
+
+## Timeline handling
+
+`collected_data.timeline_dmg.data` is mean damage per one-second bucket **across the
+iterations that reached that bucket** — it is not divided by total iterations. Past the
+shortest fight, the mean is drawn only from long iterations and stops being comparable,
+so `extract_timeline` truncates at `fight_length.min`. That is assumption-free; do not
+replace it with a distributional correction without a good reason.
+
+Note that `timeline_dmg` is *not* in simc's `adjust()` list (unlike `timeline_dmg_taken`),
+which is why this has to be handled here.
+
+## Profile identification
+
+- simc's class tokens are `deathknight` and `demonhunter` (**no underscore**) in the
+  profile body, while profile *names* use `Death_Knight` / `Demon_Hunter`. `CLASS_TOKENS`
+  maps both forms; you need both.
+- The hero-talent build comes from the profile name **inside the file**, not the filename.
+  `MID1_Death_Knight_Unholy.simc` declares itself `MID1_Death_Knight_Unholy_Rider`.
+- simc splits one player-visible spell across several stat entries (a cast and its cleave
+  component). `extract_abilities` merges by spell name — otherwise the breakdown lists
+  "Arcane Barrage" twice and the reader has to add the rows up.
+- Use `actual_amount`, not `compound_amount`, for ability shares. Compound amounts roll
+  child actions into their parent, so summing them double-counts and shares stop adding
+  to 1.
+
+## Charts
+
+Read the `dataviz` skill before touching chart code. The short version of what applies
+here:
+
+- The categorical palette is validated **as an ordered set**. Assign slots in fixed order,
+  never cycle, and keep a spec's slot stable while it stays selected (`SeriesPalette`).
+- Three light-mode slots are below 3:1 on the light surface. That obliges direct labels or
+  a table view on every multi-series chart — both are shipped; do not remove them.
+- Never a dual y-axis. Absolute DPS and indexed DPS are two modes of one chart, not two
+  scales on one chart.
+- Re-run the validator if you change any palette value:
+  `node scripts/validate_palette.js "<hex,…>" --mode light` (and `--mode dark`) from the
+  skill's directory.
+
+## Verifying a change
+
+```bash
+cd pipeline && ruff check . && ruff format --check . && pytest -q
+cd web && npm run typecheck && npm run build
+```
+
+To actually look at the result, build a small dataset and screenshot it — the type
+checker will not catch a clipped label or a collided axis:
+
+```bash
+cd web && npx vite preview --port 4173 &
+node shot.mjs   # if present; uses /opt/pw-browsers/chromium, do NOT run `playwright install`
+```
+
+## Conventions
+
+- Dataset JSON is committed under `web/public/data/`. Raw simc reports are not — they are
+  tens of megabytes and fully reproducible.
+- The site is in English; WoW terminology is English regardless of audience.
+- Numbers in the UI always carry their uncertainty or a plain-language reading beside
+  them. A bare figure that looks more precise than it is counts as a bug here.

@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+web/dist/
+*.local
+
+# Pipeline scratch: raw simc output is huge and reproducible, only the
+# distilled dataset under web/public/data is committed.
+.work/
+simc-bin/
+*.simc.out
+*.raw.json
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Local screenshot helper (see CLAUDE.md); not part of the app
+web/shot.mjs

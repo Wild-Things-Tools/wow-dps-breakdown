@@ -1,0 +1,181 @@
+name: Simulations
+
+# The whole point of the project: nobody runs these by hand. Simulations rebuild
+# nightly against the newest SimulationCraft commit, so a balance patch or an APL
+# fix shows up on the site the next morning.
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      target_error:
+        description: 'DPS standard error to converge to, in percent'
+        default: '0.2'
+      shards:
+        description: 'How many parallel simulation jobs to split the matrix across'
+        default: '6'
+      tier:
+        description: "Tier profile directory, or 'latest'"
+        default: 'latest'
+
+concurrency:
+  group: sims
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  TARGET_ERROR: ${{ inputs.target_error || '0.2' }}
+  SHARDS: ${{ inputs.shards || '6' }}
+  TIER: ${{ inputs.tier || 'latest' }}
+
+jobs:
+  build-simc:
+    name: Build SimulationCraft
+    runs-on: ubuntu-latest
+    outputs:
+      simc-sha: ${{ steps.simc.outputs.sha }}
+      shards: ${{ steps.matrix.outputs.shards }}
+    steps:
+      - name: Checkout SimulationCraft
+        id: simc
+        run: |
+          git clone --depth 1 https://github.com/simulationcraft/simc.git simc
+          echo "sha=$(git -C simc rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache build tree
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: simc/build
+          key: simc-build-${{ runner.os }}-${{ steps.simc.outputs.sha }}
+          # A tree from a previous commit still makes most object files reusable,
+          # which turns a ~10 minute cold build into a couple of minutes.
+          restore-keys: simc-build-${{ runner.os }}-
+
+      - name: Build
+        run: |
+          cmake -B simc/build -S simc \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSC_NO_NETWORKING=ON \
+            -DBUILD_GUI=OFF
+          cmake --build simc/build -j"$(nproc)"
+
+      - name: Package binary and profiles
+        run: |
+          mkdir -p bundle
+          cp simc/build/simc bundle/simc
+          strip bundle/simc || true
+          cp -r simc/profiles bundle/profiles
+          bundle/simc bundle/profiles/MID1/MID1_Mage_Fire.simc iterations=10 threads=2 html= \
+            || { echo "smoke test failed"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: simc-bundle
+          path: bundle
+          retention-days: 1
+          compression-level: 6
+
+      - name: Compute shard matrix
+        id: matrix
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          count = int(os.environ["SHARDS"])
+          print("shards=" + json.dumps(list(range(count))))
+          PY
+
+  simulate:
+    name: Simulate (shard ${{ matrix.shard }})
+    needs: build-simc
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJson(needs.build-simc.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: simc-bundle
+          path: bundle
+
+      - name: Install pipeline
+        run: |
+          chmod +x bundle/simc
+          pip install -e ./pipeline
+
+      - name: Run simulations
+        run: |
+          wowdps build \
+            --simc bundle/simc \
+            --profiles bundle/profiles \
+            --tier "$TIER" \
+            --shard "${{ matrix.shard }}/$SHARDS" \
+            --target-error "$TARGET_ERROR" \
+            --out "shard-${{ matrix.shard }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: data-shard-${{ matrix.shard }}
+          path: shard-${{ matrix.shard }}
+          retention-days: 3
+
+  publish:
+    name: Merge and commit dataset
+    needs: [build-simc, simulate]
+    # Publish whatever finished: a single spec that fails to converge should not
+    # cost the site a whole day of fresh data.
+    if: always() && needs.simulate.result != 'cancelled'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: data-shard-*
+          path: shards
+
+      - name: Install pipeline
+        run: pip install -e ./pipeline
+
+      - name: Merge shards
+        run: |
+          shopt -s nullglob
+          dirs=(shards/data-shard-*)
+          if [ ${#dirs[@]} -eq 0 ]; then
+            echo "::error::no shard produced any data"
+            exit 1
+          fi
+          wowdps merge "${dirs[@]}" --out web/public/data
+          python3 -c "
+          import json, pathlib
+          manifest = json.loads(pathlib.Path('web/public/data/index.json').read_text())
+          print('::notice::merged dataset:', len(manifest['specs']), 'specs, tier', manifest['tier'])
+          "
+
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add web/public/data
+          if git diff --staged --quiet; then
+            echo "dataset unchanged"
+            exit 0
+          fi
+          git commit -m "data: refresh simulations $(date -u +%Y-%m-%d)"
+          git push

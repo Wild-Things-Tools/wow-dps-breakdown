@@ -1,0 +1,62 @@
+name: Warcraft Logs verification
+
+# Optional cross-check: pulls ranking medians from Warcraft Logs and writes a
+# comparison file the site can show next to the sims. Skips itself cleanly when
+# the API credentials are not configured, so the repo works without them.
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: logs-verification
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check credentials
+        id: creds
+        env:
+          WCL_CLIENT_ID: ${{ secrets.WCL_CLIENT_ID }}
+        run: |
+          if [ -z "$WCL_CLIENT_ID" ]; then
+            echo "::notice::WCL_CLIENT_ID is not set — skipping. Add WCL_CLIENT_ID and WCL_CLIENT_SECRET as repository secrets to enable this, see https://www.warcraftlogs.com/api/clients/"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.creds.outputs.enabled == 'true'
+        with:
+          python-version: '3.12'
+
+      - name: Install pipeline
+        if: steps.creds.outputs.enabled == 'true'
+        run: pip install -e ./pipeline
+
+      - name: Fetch rankings
+        if: steps.creds.outputs.enabled == 'true'
+        env:
+          WCL_CLIENT_ID: ${{ secrets.WCL_CLIENT_ID }}
+          WCL_CLIENT_SECRET: ${{ secrets.WCL_CLIENT_SECRET }}
+        run: wowdps verify --data web/public/data
+
+      - name: Commit
+        if: steps.creds.outputs.enabled == 'true'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add web/public/data/logs-verification.json
+          if git diff --staged --quiet; then
+            echo "no change"
+            exit 0
+          fi
+          git commit -m "data: refresh Warcraft Logs comparison $(date -u +%Y-%m-%d)"
+          git push

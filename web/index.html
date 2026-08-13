@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <title>WoW DPS Breakdown</title>
+    <meta
+      name="description"
+      content="How World of Warcraft specs actually deal damage: throughput by target count, how much of it funnels onto the main target, and when it lands. Built from SimulationCraft."
+    />
+    <script>
+      // Apply the stored theme before first paint so the page never flashes the
+      // wrong background.
+      ;(() => {
+        try {
+          const stored = localStorage.getItem('wowdps-theme')
+          if (stored === 'dark' || stored === 'light') {
+            document.documentElement.dataset.theme = stored
+          }
+        } catch {
+          /* private mode: fall back to the OS setting */
+        }
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
