@@ -211,8 +211,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--shard",
         help="run only part of the matrix, as INDEX/COUNT (zero-based), e.g. 0/6",
     )
-    p_build.add_argument("--target-error", type=float, default=0.2)
-    p_build.add_argument("--max-iterations", type=int, default=30000)
+    p_build.add_argument(
+        "--target-error",
+        type=float,
+        default=0.0,
+        help="converge until the DPS standard error is below this percent; "
+        "0 (default) runs a fixed, deterministic iteration count instead",
+    )
+    p_build.add_argument(
+        "--max-iterations",
+        type=int,
+        default=3000,
+        help="fixed iteration count in deterministic mode, ceiling in adaptive mode",
+    )
     p_build.add_argument("--threads", type=int, default=0)
     p_build.add_argument("--timeout", type=int, default=1800)
     p_build.set_defaults(func=cmd_build)

@@ -207,6 +207,12 @@ def write_manifest(
         "settings": {
             "targetError": settings.target_error,
             "maxIterations": settings.max_iterations,
+            "deterministic": settings.target_error == 0,
+            # The error actually measured, rather than the one that was asked for.
+            # In deterministic mode nobody asks for one, and reporting the requested
+            # 0 would read as "no error at all" -- which is false and exactly the kind
+            # of falsely precise number this project treats as a bug.
+            "medianDpsError": _median_dps_error(results),
         },
         "scenarios": [
             {
@@ -229,6 +235,22 @@ def write_manifest(
     path = out_dir / "index.json"
     path.write_text(json.dumps(manifest, separators=(",", ":")) + "\n", encoding="utf-8")
     return path
+
+
+def _median_dps_error(results: list[SpecResult]) -> float | None:
+    """Median per-cell standard error across the whole run, in percent."""
+    errors = sorted(
+        cell.dps_error
+        for result in results
+        for by_target in result.cells.values()
+        for cell in by_target.values()
+        if cell.dps_error > 0
+    )
+    if not errors:
+        return None
+    middle = len(errors) // 2
+    median = errors[middle] if len(errors) % 2 else (errors[middle - 1] + errors[middle]) / 2
+    return round(median, 4)
 
 
 def merge_shards(shard_dirs: list[Path], out_dir: Path) -> None:

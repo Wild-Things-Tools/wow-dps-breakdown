@@ -36,9 +36,27 @@ no incentive to hold single-target spenders for the boss. Enhancement Shaman is 
 exception; its APL has explicit `expected_lb_funnel` / `expected_cl_funnel` variables.
 
 So the published number is "what funnelling costs or pays while playing the standard
-rotation", not "the funnel ceiling". Quantifying the ceiling would need a second pass
-with `profileset_metric=prioritydps` or a modified APL — a real future feature, not a
-bug in the current number.
+rotation", not "the funnel ceiling". Quantifying the ceiling is a real future feature, not
+a bug in the current number.
+
+### `profileset_metric` does not optimise anything
+
+Easy to get wrong, and the roadmap once said so in print. `profileset_metric=prioritydps`
+does **not** make simc optimise for priority damage. simc never optimises: it runs a fixed
+APL and reports the result. The option only selects which metric profilesets are reported
+and ranked by (`SCALE_METRIC_DPSP` in `engine/util/util.cpp`, consumed in
+`profileset.cpp`).
+
+A ceiling therefore requires *variants to compare* — talent permutations, or hand-written
+APL variants that hold single-target spenders for the boss. Which means the "funnel
+ceiling" feature and the "sweep talents per target count" feature are **the same
+machinery**: build profilesets over build variants once, and rank them twice.
+`profileset_metric` takes a list, so a single sweep yields the best build by `dps` and the
+best build by `prioritydps` together. Do not plan them as two projects.
+
+Budget accordingly: N variants multiply a cell that already costs ~9s at 3000 deterministic
+iterations, so a talent sweep will have to be restricted to selected target counts (1, 5,
+10) rather than all ten.
 
 ## The one thing not to break
 
@@ -69,7 +87,15 @@ Both measurements rest on SimulationCraft's `prioritydps` field. Facts about it:
   with no funnel data at all.
 - `min_iterations` **does not exist**. simc warns and ignores it.
 - `deterministic=1` and a non-zero `target_error` are **mutually exclusive** — simc exits
-  with a setup failure. `SimSettings.as_simc_options` picks one or the other.
+  with a setup failure. `SimSettings.as_simc_options` picks one or the other. The default
+  is the deterministic branch: every run gets committed, so adaptive sampling would bury
+  real changes under a fresh layer of Monte Carlo noise every night. Measured on Affliction
+  Warlock at five targets: 3000 iterations gives 0.053% standard error in 8.9s, 10000 gives
+  0.029% in 26.2s, and two separate 3000-iteration runs with `deterministic=1` returned
+  bit-identical DPS *and* priority damage. Note that determinism was not bought with
+  precision: the adaptive setting it replaced converged at `target_error=0.3` and often
+  stopped after ~105 iterations, so the fixed count is roughly six times more precise as
+  well as reproducible.
 - Options must come **after** the profile path on the command line to override it.
 - `fixed_time=1` appears in the JSON options by default but does *not* mean fixed fight
   length. `vary_combat_length` (default ±20%) still applies, so fight lengths are spread
@@ -132,10 +158,47 @@ cd web && npx vite preview --port 4173 &
 node shot.mjs   # if present; uses /opt/pw-browsers/chromium, do NOT run `playwright install`
 ```
 
+## Deploy target (`Wild-Things-Tools/wt-gate`)
+
+Facts about the thing on the other end of `deploy.yml`, none of which are visible from
+this repository:
+
+- It is a **Cloudflare Pages** project, not GitHub Pages. Cloudflare builds from private
+  repositories; GitHub Pages needs Enterprise for that. This is the whole reason this
+  repository can stay private, so do not "simplify" the deploy to GitHub Pages.
+- It is a **Discord login gate**: `functions/_middleware.ts` sends anything outside its
+  public prefixes through Discord OAuth and checks guild roles. The published site is
+  guild-internal. The middleware runs before *every* request, static assets included, so
+  Cloudflare Functions invocations are counted per asset, not per page view. The arithmetic
+  is in the README; the conclusion is that quota is not the binding constraint, git history
+  growth is.
+- Its `_redirects` carries an SPA fallback `/*  /index.html  200`. Real files still win, so
+  a subdirectory of built files under `public/wow-dps/` is served correctly. Do not add
+  redirect rules to work around a problem that does not exist.
+- **Organisation secrets do not work here.** On GitHub Free for organisations, org secrets
+  are unavailable to private repositories entirely — the settings page offers only "Public
+  repositories" and "Selected repositories", and a private repo cannot land in either. An
+  org secret of the right name can exist and still be invisible to this workflow, which
+  presents exactly like a mis-scoped secret. The token lives as a **repository** secret on
+  this repo.
+- Verified working end to end: deploy run #8 pushed `5a805c0 wow-dps: publish from 919b8ac`
+  into `wt-gate` with all 31 files.
+
 ## Conventions
 
 - Dataset JSON is committed under `web/public/data/`. Raw simc reports are not — they are
   tens of megabytes and fully reproducible.
+- Novelty claims are constrained by what was actually checked. `docs/prior-art.md` separates
+  the verified findings from the snippet-sourced ones (two of which turned out to be wrong).
+  "The first published systematic measurement" is defensible; "the first funnel analysis" is
+  not, and neither is anything about azortharion.com until someone re-checks it from an
+  unblocked network.
 - The site is in English; WoW terminology is English regardless of audience.
 - Numbers in the UI always carry their uncertainty or a plain-language reading beside
   them. A bare figure that looks more precise than it is counts as a bug here.
+- Corollary, already shipped as a bug once: **never display `settings.targetError` as the
+  precision of the run.** In deterministic mode nothing is requested, so it is 0, and the
+  footer duly announced "converged to 0% standard error". The manifest carries
+  `settings.medianDpsError` — the median error actually *measured* across every cell — and
+  `settings.deterministic`; `samplingError()` and `describeConvergence()` in
+  `web/src/lib/format.ts` are the only things that should phrase either.

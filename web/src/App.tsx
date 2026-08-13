@@ -3,6 +3,7 @@ import { AppHeader, type ViewId } from './components/AppHeader'
 import { SpecPicker } from './components/SpecPicker'
 import { ErrorState, Panel, Spinner } from './components/ui'
 import { loadManifest, loadSpecs } from './lib/data'
+import { describeConvergence, samplingError } from './lib/format'
 import { MAX_SERIES, SeriesPalette } from './lib/palette'
 import type { Manifest, SpecDetail } from './lib/types'
 import { FunnelView } from './views/FunnelView'
@@ -283,9 +284,10 @@ function Footer({ manifest }: { manifest: Manifest }) {
     <footer className="border-t border-hairline pt-5 text-[12.5px] leading-relaxed text-ink-muted">
       <p className="max-w-3xl">
         Every number here comes from SimulationCraft {simc.simcVersion ?? ''} running its own{' '}
-        {tier} tier profiles, converged to {settings.targetError}% standard error. Sims model a
-        stationary target and perfect play; real fights add movement, mechanics and mistakes.
-        Use this to understand the shape of a spec, not to predict your own parse.
+        {tier} tier profiles: {describeConvergence(settings)}, which measures DPS to about{' '}
+        {samplingError(settings)} standard error. Sims model a stationary target and perfect
+        play; real fights add movement, mechanics and mistakes. Use this to understand the
+        shape of a spec, not to predict your own parse.
       </p>
       <p className="mt-2">
         Not affiliated with Blizzard Entertainment. World of Warcraft is a trademark of

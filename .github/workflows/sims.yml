@@ -9,8 +9,11 @@ on:
   workflow_dispatch:
     inputs:
       target_error:
-        description: 'DPS standard error to converge to, in percent'
-        default: '0.2'
+        description: 'DPS standard error to converge to, in percent (0 = deterministic)'
+        default: '0'
+      iterations:
+        description: 'Fixed iteration count when target_error is 0'
+        default: '3000'
       shards:
         description: 'How many parallel simulation jobs to split the matrix across'
         default: '6'
@@ -26,7 +29,12 @@ permissions:
   contents: write
 
 env:
-  TARGET_ERROR: ${{ inputs.target_error || '0.2' }}
+  # Deterministic by default. Every run is committed, so adaptive sampling would put
+  # a fresh layer of Monte Carlo noise into the history each night and bury the real
+  # changes. With fixed seeding a quiet night produces byte-identical output, the
+  # commit step finds nothing to do, and any diff means something actually moved.
+  TARGET_ERROR: ${{ inputs.target_error || '0' }}
+  ITERATIONS: ${{ inputs.iterations || '3000' }}
   SHARDS: ${{ inputs.shards || '6' }}
   TIER: ${{ inputs.tier || 'latest' }}
 
@@ -121,6 +129,7 @@ jobs:
             --tier "$TIER" \
             --shard "${{ matrix.shard }}/$SHARDS" \
             --target-error "$TARGET_ERROR" \
+            --max-iterations "$ITERATIONS" \
             --out "shard-${{ matrix.shard }}"
 
       - uses: actions/upload-artifact@v4
