@@ -581,11 +581,13 @@ function SplitTable({
         spend global cooldowns on.
       </Note>
       <Note>
-        One caveat worth knowing: SimulationCraft's rotations are written to maximise
-        total damage, and in these fights no target ever dies. A player deliberately
+        Two caveats worth knowing. SimulationCraft's rotations are written to maximise
+        total damage, and in these fights no target ever dies — a player deliberately
         funnelling would hold single-target spenders for the boss and score higher than
-        this. Read these numbers as what funnelling costs or pays while playing the
-        standard rotation.
+        this. And the talent build is held fixed across the whole sweep, because
+        SimulationCraft ships one build per spec: the rotation adapts to the target
+        count, the talents do not. At high target counts these are raid single-target
+        builds, so a spec whose real area-damage build differs will read low here.
       </Note>
     </>
   )
