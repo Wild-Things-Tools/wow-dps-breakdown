@@ -217,22 +217,32 @@ a thousand simulations. That is why CI splits it across parallel shards.
 - **Nightly** (`sims.yml`): clones the latest SimulationCraft, builds it with a cached
   build tree, splits the profile matrix across parallel jobs, merges the results and
   commits the dataset. A balance patch or an APL fix is on the site the next morning.
-- **On every push to `main`** (`deploy.yml`): rebuilds the SPA and publishes it into a
-  separate **public** hub repository — including the data commits the nightly job makes.
-  The source repository stays private; only the compiled site travels.
+- **On every push to `main`** (`deploy.yml`): rebuilds the site and pushes it into the
+  `wt-gate` repository under `public/wow-dps/`. `wt-gate` is a Cloudflare Pages project
+  behind a Discord login, so Cloudflare rebuilds it on that push and the site appears at
+  `<wt-gate domain>/wow-dps/` — visible to guild members with an allowed role, and to
+  nobody else.
 
-  Needs a `HUB_PAGES_TOKEN` secret: a fine-grained PAT with *Contents: read and write*
-  on the hub repo. The destination defaults to `Wild-Things-Tools/wt-pages` under
-  `/wow-dps-breakdown/` and is overridable with the `HUB_REPO` and `HUB_PATH` repository
-  variables, so moving or renaming the hub needs no code change.
+  This is also why the repository can stay private: Cloudflare Pages serves from private
+  repositories, unlike GitHub Pages, which needs Enterprise for that.
 
-  The hub repository must be **public** — GitHub Pages will not serve a private repo
-  without an Enterprise plan, which is the whole reason for this arrangement. Set its
-  Pages source to *Deploy from a branch* (`main`, root), not *GitHub Actions*: this
-  workflow pushes finished files, it does not run a build there.
+  Needs a `HUB_PAGES_TOKEN` secret — a fine-grained PAT with *Contents: read and write*
+  on the hub repository. Three repository variables override the destination, and they
+  are deliberately independent:
 
-  If the source repo is ever made public, native GitHub Pages is simpler and the
-  workflow can be pointed back at it.
+  | Variable | Default | Meaning |
+  |---|---|---|
+  | `HUB_REPO` | `Wild-Things-Tools/wt-gate` | Repository to push into |
+  | `HUB_PATH` | `public/wow-dps` | Path *inside* that repository |
+  | `SITE_BASE` | `/wow-dps/` | URL prefix the site is served under |
+
+  `HUB_PATH` and `SITE_BASE` differ because Cloudflare serves `wt-gate`'s `public/` from
+  the domain root, so `public/wow-dps` becomes `/wow-dps/`. Deriving one from the other
+  would produce `/wt-gate/public/wow-dps/` and every asset would 404.
+
+  **Publishing it openly later is a variable change, not a rewrite**: point the three at
+  an ungated Cloudflare project and the built output is byte-identical.
+
 - **Weekly, optional** (`logs-verification.yml`): pulls ranking medians from Warcraft
   Logs for a reality check. Skips itself cleanly if credentials are not configured.
 
