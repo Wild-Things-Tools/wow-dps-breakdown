@@ -1,6 +1,6 @@
 /** Loading the static dataset, with a small in-memory cache. */
 
-import type { LogsVerification, Manifest, SpecDetail } from './types'
+import type { LogsVerification, Manifest, SpecDetail, TierIndex } from './types'
 
 const BASE = import.meta.env.BASE_URL
 
@@ -16,31 +16,39 @@ async function fetchJson<T>(path: string): Promise<T> {
   return (await response.json()) as T
 }
 
-export function loadManifest(): Promise<Manifest> {
-  return fetchJson<Manifest>('index.json')
+/** Which tiers exist. Loaded once, before anything else can be fetched. */
+export function loadTierIndex(): Promise<TierIndex> {
+  return fetchJson<TierIndex>('tiers.json')
 }
 
+export function loadManifest(tier: string): Promise<Manifest> {
+  return fetchJson<Manifest>(`${tier}/index.json`)
+}
+
+// Keyed by tier as well as spec: the same spec id exists in several tiers and
+// means something different in each.
 const specCache = new Map<string, Promise<SpecDetail>>()
 
-export function loadSpec(id: string): Promise<SpecDetail> {
-  let pending = specCache.get(id)
+export function loadSpec(tier: string, id: string): Promise<SpecDetail> {
+  const key = `${tier}/${id}`
+  let pending = specCache.get(key)
   if (!pending) {
-    pending = fetchJson<SpecDetail>(`specs/${id}.json`)
+    pending = fetchJson<SpecDetail>(`${tier}/specs/${id}.json`)
     // A failed load must not poison the cache: a retry should hit the network.
-    pending.catch(() => specCache.delete(id))
-    specCache.set(id, pending)
+    pending.catch(() => specCache.delete(key))
+    specCache.set(key, pending)
   }
   return pending
 }
 
-export function loadSpecs(ids: string[]): Promise<SpecDetail[]> {
-  return Promise.all(ids.map(loadSpec))
+export function loadSpecs(tier: string, ids: string[]): Promise<SpecDetail[]> {
+  return Promise.all(ids.map((id) => loadSpec(tier, id)))
 }
 
 /** Optional: absent until the Warcraft Logs verification job has run. */
-export async function loadLogsVerification(): Promise<LogsVerification | null> {
+export async function loadLogsVerification(tier: string): Promise<LogsVerification | null> {
   try {
-    return await fetchJson<LogsVerification>('logs-verification.json')
+    return await fetchJson<LogsVerification>(`${tier}/logs-verification.json`)
   } catch {
     return null
   }

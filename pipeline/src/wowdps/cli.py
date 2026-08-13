@@ -22,9 +22,16 @@ def _configure_logging(verbose: bool) -> None:
 
 
 def _resolve_tier(profiles_dir: Path, requested: str | None) -> str:
-    if requested and requested != "latest":
-        return requested
-    return profiles.latest_tier(profiles_dir)
+    """``latest`` and ``previous`` resolve against what simc ships; anything else is literal.
+
+    Both tokens exist so a scheduled run can say what it means -- "the current tier",
+    "last season" -- and keep meaning it after the next tier ships.
+    """
+    if not requested or requested == "latest":
+        return profiles.latest_tier(profiles_dir)
+    if requested == "previous":
+        return profiles.previous_tier(profiles_dir)
+    return requested
 
 
 def _parse_shard(spec: str | None) -> tuple[int, int] | None:
@@ -80,7 +87,9 @@ def cmd_build(args: argparse.Namespace) -> int:
     profiles_dir = Path(args.profiles)
     tier = _resolve_tier(profiles_dir, args.tier)
     simc = simc_runner.find_simc(args.simc)
-    out_dir = Path(args.out)
+    # Datasets are namespaced by tier: a tier is a different game state, not a filter.
+    out_root = Path(args.out)
+    out_dir = out_root / tier
 
     selected_scenarios = (
         [scenarios.get(s) for s in args.scenario]
@@ -147,6 +156,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     manifest = dataset.write_manifest(
         out_dir, results, selected_scenarios, tier, simc_meta, settings
     )
+    dataset.write_tier_index(out_root)
     failed = sum(len(r.errors) for r in results)
     logging.info("wrote %s (%d specs, %d failed cells)", manifest, len(results), failed)
     return 0
@@ -158,7 +168,20 @@ def cmd_merge(args: argparse.Namespace) -> int:
     if missing:
         logging.error("shard directories not found: %s", missing)
         return 1
-    dataset.merge_shards(shard_dirs, Path(args.out))
+
+    # Shards are written by `build`, so each one already carries its tier directory.
+    # Merging is per tier; the union of the tiers present across the shards tells us
+    # which ones to merge without the caller having to say.
+    out_root = Path(args.out)
+    tiers = sorted({d.name for shard in shard_dirs for d in shard.iterdir() if d.is_dir()})
+    if not tiers:
+        logging.error("no tier directories inside %s", shard_dirs)
+        return 1
+
+    for tier in tiers:
+        sources = [shard / tier for shard in shard_dirs if (shard / tier).is_dir()]
+        dataset.merge_shards(sources, out_root / tier)
+    dataset.write_tier_index(out_root)
     return 0
 
 
@@ -237,6 +260,11 @@ def build_parser() -> argparse.ArgumentParser:
         "verify", help="cross-check sim output against Warcraft Logs rankings"
     )
     p_verify.add_argument("--data", default=str(DEFAULT_OUT), help="dataset directory")
+    p_verify.add_argument(
+        "--tier",
+        default="latest",
+        help="which tier of the dataset to verify, or 'latest' (default)",
+    )
     p_verify.add_argument(
         "--encounter", type=int, action="append", help="encounter id (repeatable)"
     )

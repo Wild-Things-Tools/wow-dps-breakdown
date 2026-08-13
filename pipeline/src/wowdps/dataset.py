@@ -2,17 +2,25 @@
 
 Layout written under ``<out>/``::
 
-    index.json          manifest: metadata, scenarios, and a summary row per spec
-    specs/<id>.json     full detail for one spec (every scenario x target count)
+    tiers.json               which tiers exist and which one is current
+    <tier>/index.json        manifest: metadata, scenarios, a summary row per spec
+    <tier>/specs/<id>.json   full detail for one spec (every scenario x target count)
 
 The manifest carries enough to render the ranking and comparison views without
 fetching anything else; per-spec files are loaded lazily when a spec is opened.
+
+Everything is namespaced by tier because a tier is a different *game state*, not a
+different filter: season 1 and season 2 profiles carry different gear, different
+talents and a different spec list. ``tiers.json`` is regenerated from whatever tier
+directories are present, so adding a tier is a build with ``--tier``, not a code
+change.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -20,7 +28,7 @@ from pathlib import Path
 
 from . import simc_runner
 from .parse import Cell, parse_cell
-from .profiles import SpecProfile
+from .profiles import SpecProfile, tier_label
 from .scenarios import Scenario, SimSettings
 
 log = logging.getLogger(__name__)
@@ -251,6 +259,45 @@ def _median_dps_error(results: list[SpecResult]) -> float | None:
     middle = len(errors) // 2
     median = errors[middle] if len(errors) % 2 else (errors[middle - 1] + errors[middle]) / 2
     return round(median, 4)
+
+
+def write_tier_index(out_dir: Path) -> Path:
+    """(Re)generate ``tiers.json`` from the tier directories that actually exist.
+
+    Derived rather than accumulated: a tier that has been deleted disappears from the
+    index, and a tier built for the first time appears without anything having to
+    register it. The current tier is the highest-numbered one present, matching how
+    ``profiles.latest_tier`` picks the tier to simulate.
+    """
+    tiers: list[dict] = []
+    for entry in sorted(out_dir.iterdir()):
+        manifest_path = entry / "index.json"
+        if not entry.is_dir() or not manifest_path.is_file():
+            continue
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        tiers.append(
+            {
+                "id": entry.name,
+                "label": tier_label(entry.name),
+                "generatedAt": manifest.get("generatedAt"),
+                "specCount": len(manifest.get("specs", [])),
+                "simcVersion": (manifest.get("simc") or {}).get("simcVersion"),
+            }
+        )
+
+    if not tiers:
+        raise FileNotFoundError(f"no tier directories with an index.json under {out_dir}")
+
+    tiers.sort(key=lambda t: _tier_sort_key(t["id"]))
+    index = {"current": tiers[-1]["id"], "tiers": tiers}
+    path = out_dir / "tiers.json"
+    path.write_text(json.dumps(index, separators=(",", ":")) + "\n", encoding="utf-8")
+    return path
+
+
+def _tier_sort_key(tier: str) -> tuple[str, int]:
+    match = re.fullmatch(r"([A-Za-z]+)(\d+)", tier)
+    return (match.group(1), int(match.group(2))) if match else (tier, 0)
 
 
 def merge_shards(shard_dirs: list[Path], out_dir: Path) -> None:

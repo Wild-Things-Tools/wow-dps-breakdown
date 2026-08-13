@@ -63,10 +63,23 @@ jobs:
 
       - name: Check the dataset is present
         run: |
-          if [ ! -f web/public/data/index.json ]; then
-            echo "::error::web/public/data/index.json is missing — run the Simulations workflow first"
+          if [ ! -f web/public/data/tiers.json ]; then
+            echo "::error::web/public/data/tiers.json is missing — run the Simulations workflow first"
             exit 1
           fi
+          # The tier index can list a tier whose manifest never made it into the commit;
+          # the site would then load and fail on the first fetch, which is worse than
+          # failing here.
+          python3 - <<'PY'
+          import json, pathlib, sys
+          root = pathlib.Path("web/public/data")
+          index = json.loads((root / "tiers.json").read_text())
+          missing = [t["id"] for t in index["tiers"] if not (root / t["id"] / "index.json").is_file()]
+          if missing or not index["tiers"]:
+              print(f"::error::tiers.json lists tiers with no manifest: {missing or 'none listed at all'}")
+              sys.exit(1)
+          print(f"::notice::publishing {len(index['tiers'])} tier(s), current {index['current']}")
+          PY
 
       - uses: actions/setup-node@v4
         with:

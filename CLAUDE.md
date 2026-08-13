@@ -227,10 +227,32 @@ this repository:
 - Verified working end to end: deploy run #8 pushed `5a805c0 wow-dps: publish from 919b8ac`
   into `wt-gate` with all 31 files.
 
+## The tier axis
+
+- Datasets are namespaced: `web/public/data/<tier>/index.json` and `<tier>/specs/*.json`,
+  with `tiers.json` at the root naming which tiers exist and which is current. There is no
+  flat top-level `index.json` any more — several things pointed at one and had to move
+  (the deploy workflow's presence check, `wowdps verify`, the web loader).
+- `tiers.json` is **derived, never accumulated**: `write_tier_index` rebuilds it from the
+  directories that are actually there, so deleting a tier directory removes it from the
+  site and building a new one adds it, with no registration step.
+- `latest` and `previous` are resolved against the tiers simc ships (`profiles.available_tiers`),
+  which is why the weekly sim run can say "this season and last" once and keep meaning it
+  after the next tier lands. Do not hard-code `MID1` into a schedule.
+- Sharded CI output already carries its own `<tier>/` subdirectory, so `wowdps merge` finds
+  the tiers by looking rather than being told which ones ran.
+- **Absolute DPS does not travel between tiers** — the gap is mostly item level, not
+  balance. What travels is the within-run ratios: funnel gain, concentration, burst ratio,
+  the shape of the scaling curve. Any future side-by-side tier view must be restricted to
+  those, or it will present a gear difference as a balance change.
+- Switching tier prunes selections the new tier has no profile for. The count of what was
+  dropped is reported rather than swallowed; a comparison quietly missing a line is the
+  kind of silent wrongness this project treats as a bug.
+
 ## Conventions
 
-- Dataset JSON is committed under `web/public/data/`. Raw simc reports are not — they are
-  tens of megabytes and fully reproducible.
+- Dataset JSON is committed under `web/public/data/<tier>/`. Raw simc reports are not —
+  they are tens of megabytes and fully reproducible.
 - Novelty claims are constrained by what was actually checked. `docs/prior-art.md` separates
   the verified findings from the snippet-sourced ones (two of which turned out to be wrong).
   "The first published systematic measurement" is defensible; "the first funnel analysis" is

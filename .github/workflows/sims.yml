@@ -5,7 +5,13 @@ name: Simulations
 # fix shows up on the site the next morning.
 on:
   schedule:
+    # Nightly: the current tier, so a balance patch shows up the next morning.
     - cron: '0 4 * * *'
+    # Weekly: every tier we publish. Past tiers do not change, but the spell data
+    # they run against does -- which is exactly what "how did last season's setup
+    # fare under current balance" asks. Nightly for both would double the cost for
+    # a number that only moves on patch days.
+    - cron: '0 5 * * 0'
   workflow_dispatch:
     inputs:
       target_error:
@@ -17,8 +23,8 @@ on:
       shards:
         description: 'How many parallel simulation jobs to split the matrix across'
         default: '6'
-      tier:
-        description: "Tier profile directory, or 'latest'"
+      tiers:
+        description: "Space-separated tiers to simulate: names, 'latest', 'previous'"
         default: 'latest'
 
 concurrency:
@@ -36,7 +42,9 @@ env:
   TARGET_ERROR: ${{ inputs.target_error || '0' }}
   ITERATIONS: ${{ inputs.iterations || '3000' }}
   SHARDS: ${{ inputs.shards || '6' }}
-  TIER: ${{ inputs.tier || 'latest' }}
+  # 'latest' and 'previous' resolve against the tiers simc ships, so the weekly run
+  # keeps meaning "this season and last" once the next tier lands.
+  TIERS: ${{ inputs.tiers || (github.event.schedule == '0 5 * * 0' && 'latest previous') || 'latest' }}
 
 jobs:
   build-simc:
@@ -44,7 +52,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       simc-sha: ${{ steps.simc.outputs.sha }}
-      shards: ${{ steps.matrix.outputs.shards }}
+      jobs: ${{ steps.matrix.outputs.jobs }}
     steps:
       - name: Checkout SimulationCraft
         id: simc
@@ -86,24 +94,26 @@ jobs:
           retention-days: 1
           compression-level: 6
 
-      - name: Compute shard matrix
+      - name: Compute the (tier x shard) matrix
         id: matrix
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os
           count = int(os.environ["SHARDS"])
-          print("shards=" + json.dumps(list(range(count))))
+          tiers = os.environ["TIERS"].split() or ["latest"]
+          jobs = [{"tier": t, "shard": s} for t in tiers for s in range(count)]
+          print("jobs=" + json.dumps(jobs))
           PY
 
   simulate:
-    name: Simulate (shard ${{ matrix.shard }})
+    name: Simulate ${{ matrix.tier }} (shard ${{ matrix.shard }})
     needs: build-simc
     runs-on: ubuntu-latest
     timeout-minutes: 330
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJson(needs.build-simc.outputs.shards) }}
+        include: ${{ fromJson(needs.build-simc.outputs.jobs) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -126,16 +136,18 @@ jobs:
           wowdps build \
             --simc bundle/simc \
             --profiles bundle/profiles \
-            --tier "$TIER" \
+            --tier "${{ matrix.tier }}" \
             --shard "${{ matrix.shard }}/$SHARDS" \
             --target-error "$TARGET_ERROR" \
             --max-iterations "$ITERATIONS" \
-            --out "shard-${{ matrix.shard }}"
+            --out shard
 
+      # Each shard directory already holds its own <tier>/ subdirectory, so the merge
+      # step reassembles the tiers without having to be told which ones ran.
       - uses: actions/upload-artifact@v4
         with:
-          name: data-shard-${{ matrix.shard }}
-          path: shard-${{ matrix.shard }}
+          name: data-shard-${{ matrix.tier }}-${{ matrix.shard }}
+          path: shard
           retention-days: 3
 
   publish:
@@ -173,8 +185,9 @@ jobs:
           wowdps merge "${dirs[@]}" --out web/public/data
           python3 -c "
           import json, pathlib
-          manifest = json.loads(pathlib.Path('web/public/data/index.json').read_text())
-          print('::notice::merged dataset:', len(manifest['specs']), 'specs, tier', manifest['tier'])
+          index = json.loads(pathlib.Path('web/public/data/tiers.json').read_text())
+          for tier in index['tiers']:
+              print('::notice::merged', tier['id'], '--', tier['specCount'], 'specs')
           "
 
       - name: Commit

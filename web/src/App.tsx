@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AppHeader, type ViewId } from './components/AppHeader'
 import { SpecPicker } from './components/SpecPicker'
-import { ErrorState, Panel, Spinner } from './components/ui'
-import { loadManifest, loadSpecs } from './lib/data'
+import { ErrorState, Note, Panel, Spinner } from './components/ui'
+import { loadManifest, loadSpecs, loadTierIndex } from './lib/data'
 import { describeConvergence, samplingError } from './lib/format'
 import { MAX_SERIES, SeriesPalette } from './lib/palette'
-import type { Manifest, SpecDetail } from './lib/types'
+import type { Manifest, SpecDetail, TierIndex } from './lib/types'
 import { BuildsView, groupBySpec } from './views/BuildsView'
 import { FunnelView } from './views/FunnelView'
 import { OverviewView } from './views/OverviewView'
@@ -19,6 +19,8 @@ type Theme = 'light' | 'dark' | 'system'
 /** URL state, so a configured comparison is a link somebody can share. */
 interface UrlState {
   view: ViewId
+  /** Which tier's dataset is loaded. Null follows whichever tier is current. */
+  tier: string | null
   scenario: string | null
   selected: string[]
   focus: string | null
@@ -32,6 +34,7 @@ function readUrl(): UrlState {
   const selected = params.get('specs')
   return {
     view: VIEWS.includes(view as ViewId) ? (view as ViewId) : 'overview',
+    tier: params.get('tier'),
     scenario: params.get('scenario'),
     selected: selected ? selected.split(',').filter(Boolean).slice(0, MAX_SERIES) : [],
     focus: params.get('spec'),
@@ -42,6 +45,7 @@ function readUrl(): UrlState {
 function writeUrl(state: UrlState): void {
   const params = new URLSearchParams()
   if (state.view !== 'overview') params.set('view', state.view)
+  if (state.tier) params.set('tier', state.tier)
   if (state.scenario) params.set('scenario', state.scenario)
   if (state.selected.length) params.set('specs', state.selected.join(','))
   if (state.focus) params.set('spec', state.focus)
@@ -51,9 +55,17 @@ function writeUrl(state: UrlState): void {
   window.history.replaceState(null, '', next)
 }
 
+function describeLoadFailure(error: unknown): string {
+  return error instanceof Error
+    ? `${error.message}. If this is a fresh checkout, the dataset has not been generated yet — see the README for how to run the simulations.`
+    : 'Could not load the dataset.'
+}
+
 export default function App() {
   const initial = useRef(readUrl()).current
 
+  const [tierIndex, setTierIndex] = useState<TierIndex | null>(null)
+  const [tier, setTier] = useState<string | null>(initial.tier)
   const [manifest, setManifest] = useState<Manifest | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [reloadToken, setReloadToken] = useState(0)
@@ -68,25 +80,45 @@ export default function App() {
   const [detailsLoading, setDetailsLoading] = useState(false)
   const [theme, setTheme] = useState<Theme>(readTheme)
 
+  // The tier index comes first: it decides which tier's files to fetch, and an
+  // unknown tier in the URL falls back to the current one rather than 404ing.
   useEffect(() => {
     let cancelled = false
     setLoadError(null)
-    loadManifest()
-      .then((data) => {
-        if (!cancelled) setManifest(data)
+    loadTierIndex()
+      .then((index) => {
+        if (cancelled) return
+        setTierIndex(index)
+        setTier((current) =>
+          current && index.tiers.some((entry) => entry.id === current) ? current : index.current,
+        )
       })
       .catch((error: unknown) => {
         if (cancelled) return
-        setLoadError(
-          error instanceof Error
-            ? `${error.message}. If this is a fresh checkout, the dataset has not been generated yet — see the README for how to run the simulations.`
-            : 'Could not load the dataset.',
-        )
+        setLoadError(describeLoadFailure(error))
       })
     return () => {
       cancelled = true
     }
   }, [reloadToken])
+
+  useEffect(() => {
+    if (!tier) return
+    let cancelled = false
+    setLoadError(null)
+    setManifest(null)
+    loadManifest(tier)
+      .then((data) => {
+        if (!cancelled) setManifest(data)
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        setLoadError(describeLoadFailure(error))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [tier, reloadToken])
 
   const scenarios = manifest?.scenarios ?? []
   const scenario = useMemo(
@@ -103,13 +135,13 @@ export default function App() {
   // Views other than the overview need the full per-spec files.
   const needsDetails = view === 'scaling' || view === 'funnel' || view === 'timing'
   useEffect(() => {
-    if (!needsDetails || selected.length === 0) {
+    if (!tier || !needsDetails || selected.length === 0) {
       setDetails([])
       return
     }
     let cancelled = false
     setDetailsLoading(true)
-    loadSpecs(selected)
+    loadSpecs(tier, selected)
       .then((loaded) => {
         if (!cancelled) setDetails(loaded)
       })
@@ -122,16 +154,16 @@ export default function App() {
     return () => {
       cancelled = true
     }
-  }, [needsDetails, selected])
+  }, [needsDetails, selected, tier])
 
   const [focusDetail, setFocusDetail] = useState<SpecDetail | null>(null)
   useEffect(() => {
-    if (view !== 'spec' || !focus) {
+    if (!tier || view !== 'spec' || !focus) {
       setFocusDetail(null)
       return
     }
     let cancelled = false
-    loadSpecs([focus])
+    loadSpecs(tier, [focus])
       .then(([loaded]) => {
         if (!cancelled) setFocusDetail(loaded ?? null)
       })
@@ -141,7 +173,7 @@ export default function App() {
     return () => {
       cancelled = true
     }
-  }, [view, focus])
+  }, [view, focus, tier])
 
   // The builds view compares one spec's own hero-talent builds, so it is addressed
   // by a spec id rather than through the shared multi-spec picker.
@@ -157,13 +189,13 @@ export default function App() {
   const [buildDetails, setBuildDetails] = useState<SpecDetail[]>([])
   const [buildsLoading, setBuildsLoading] = useState(false)
   useEffect(() => {
-    if (view !== 'builds' || !buildKey) {
+    if (!tier || view !== 'builds' || !buildKey) {
       setBuildDetails([])
       return
     }
     let cancelled = false
     setBuildsLoading(true)
-    loadSpecs(buildKey.split(','))
+    loadSpecs(tier, buildKey.split(','))
       .then((loaded) => {
         if (!cancelled) setBuildDetails(loaded)
       })
@@ -176,11 +208,27 @@ export default function App() {
     return () => {
       cancelled = true
     }
-  }, [view, buildKey])
+  }, [view, buildKey, tier])
+
+  // Switching tier changes the spec list: season 1 has builds season 2 does not,
+  // and vice versa. Selections the new tier does not contain have to go, or the
+  // views fail their fetches -- but dropping them silently would leave a comparison
+  // quietly missing a line, so the count is reported until the next change.
+  const [droppedBuilds, setDroppedBuilds] = useState(0)
+  useEffect(() => {
+    if (!manifest) return
+    const available = new Set(manifest.specs.map((spec) => spec.id))
+    setSelected((current) => {
+      const kept = current.filter((id) => available.has(id))
+      setDroppedBuilds(current.length - kept.length)
+      return kept.length === current.length ? current : kept
+    })
+    setFocus((current) => (current && !available.has(current) ? null : current))
+  }, [manifest])
 
   useEffect(() => {
-    writeUrl({ view, scenario: scenario?.id ?? null, selected, focus, buildSpec })
-  }, [view, scenario, selected, focus, buildSpec])
+    writeUrl({ view, tier, scenario: scenario?.id ?? null, selected, focus, buildSpec })
+  }, [view, tier, scenario, selected, focus, buildSpec])
 
   useEffect(() => {
     if (theme === 'system') delete document.documentElement.dataset.theme
@@ -194,6 +242,7 @@ export default function App() {
   }, [theme])
 
   const toggleSpec = useCallback((id: string) => {
+    setDroppedBuilds(0)
     setSelected((current) =>
       current.includes(id)
         ? current.filter((entry) => entry !== id)
@@ -210,7 +259,16 @@ export default function App() {
 
   if (loadError) {
     return (
-      <Shell theme={theme} onThemeToggle={() => setTheme(nextTheme)} view={view} onViewChange={setView} manifest={null}>
+      <Shell
+        theme={theme}
+        onThemeToggle={() => setTheme(nextTheme)}
+        view={view}
+        onViewChange={setView}
+        manifest={null}
+        tierIndex={tierIndex}
+        tier={tier}
+        onTierChange={setTier}
+      >
         <Panel>
           <ErrorState error={loadError} onRetry={() => setReloadToken((token) => token + 1)} />
         </Panel>
@@ -220,7 +278,16 @@ export default function App() {
 
   if (!manifest || !scenario) {
     return (
-      <Shell theme={theme} onThemeToggle={() => setTheme(nextTheme)} view={view} onViewChange={setView} manifest={manifest}>
+      <Shell
+        theme={theme}
+        onThemeToggle={() => setTheme(nextTheme)}
+        view={view}
+        onViewChange={setView}
+        manifest={manifest}
+        tierIndex={tierIndex}
+        tier={tier}
+        onTierChange={setTier}
+      >
         <Panel>
           <Spinner label="Loading simulation data…" />
         </Panel>
@@ -229,6 +296,8 @@ export default function App() {
   }
 
   const comparisonView = needsDetails
+  const tierLabel =
+    tierIndex?.tiers.find((entry) => entry.id === tier)?.label ?? `tier ${manifest.tier}`
 
   return (
     <Shell
@@ -237,16 +306,32 @@ export default function App() {
       view={view}
       onViewChange={setView}
       manifest={manifest}
+      tierIndex={tierIndex}
+      tier={tier}
+      onTierChange={setTier}
     >
       {comparisonView ? (
         <SpecPicker
           specs={manifest.specs}
           selected={selected}
           onToggle={toggleSpec}
-          onClear={() => setSelected([])}
+          onClear={() => {
+            setDroppedBuilds(0)
+            setSelected([])
+          }}
           colorOf={colorOf}
           max={MAX_SERIES}
         />
+      ) : null}
+
+      {droppedBuilds > 0 ? (
+        <Panel>
+          <Note>
+            {droppedBuilds === 1 ? 'One build was' : `${droppedBuilds} builds were`} dropped
+            from the comparison: SimulationCraft ships no profile for{' '}
+            {droppedBuilds === 1 ? 'it' : 'them'} in {tierLabel}.
+          </Note>
+        </Panel>
       ) : null}
 
       {view === 'overview' ? (
@@ -309,6 +394,9 @@ export default function App() {
 function Shell({
   children,
   manifest,
+  tierIndex,
+  tier,
+  onTierChange,
   view,
   onViewChange,
   theme,
@@ -316,6 +404,9 @@ function Shell({
 }: {
   children: React.ReactNode
   manifest: Manifest | null
+  tierIndex: TierIndex | null
+  tier: string | null
+  onTierChange: (tier: string) => void
   view: ViewId
   onViewChange: (view: ViewId) => void
   theme: Theme
@@ -325,6 +416,9 @@ function Shell({
     <div className="min-h-dvh bg-page">
       <AppHeader
         manifest={manifest}
+        tierIndex={tierIndex}
+        tier={tier}
+        onTierChange={onTierChange}
         view={view}
         onViewChange={onViewChange}
         theme={theme}

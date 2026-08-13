@@ -133,6 +133,34 @@ style simc counts priority damage against *bosses* rather than against the prima
 target, so the figure would not mean the same thing. The site says so rather than showing
 a number that looks comparable and is not.
 
+### Seasons are separate datasets, not a filter
+
+The dataset is namespaced by tier — `data/MID2/`, `data/MID1/`, with `data/tiers.json`
+naming which one is current — and the site loads one tier at a time, with a switcher in
+the header once there is more than one to switch to.
+
+Separate rather than merged because a tier is a different *game state*: different gear,
+different talent loadouts, a different spec list (season 2 currently ships 26 profiles
+where season 1 reached 41). Mixing them into one ranking would compare characters that
+never existed at the same time.
+
+Which is also the limit on reading across them. A tier's profiles run against **today's**
+spell data, so `MID1` answers "how does last season's setup fare under current balance" —
+not "what was season 1 like". And the absolute DPS gap between two tiers is mostly the
+item level gap, so it is not a balance comparison. What does travel between tiers is the
+*ratios*: funnel gain, concentration, burst ratio and the shape of the target-scaling
+curve are all measured within a single run, so a change in one of those is a change in
+how the spec behaves rather than in how much gear it is wearing.
+
+A true historical reconstruction — simc checked out at a dated commit, with the spell
+data and rotations as they were — is a different and much more expensive feature. See
+Planned.
+
+The nightly run simulates the current tier. A weekly run simulates the current tier and
+the one before it, since past profiles do not change but the spell data they run against
+does. Both tiers resolve by position (`latest`, `previous`) rather than by name, so
+nothing needs editing when the next tier ships.
+
 ### Hero talents come for free
 
 simc's tier profiles encode the hero talent build in the profile name
@@ -186,6 +214,8 @@ pipeline/          Python: profile discovery, simc orchestration, metric extract
     warcraftlogs.py  optional cross-check against real raid logs
 web/               React SPA (Vite, TypeScript, Tailwind v4, Recharts)
   public/data/       the generated dataset, committed
+    tiers.json         which tiers exist, and which one is current
+    <tier>/            one dataset per tier: manifest plus per-spec detail files
 .github/workflows/
   ci.yml             lint, typecheck, test on every push
   sims.yml           nightly simulation matrix → commits fresh data
@@ -244,7 +274,7 @@ parallel shards.
 | `--shard 0/6` | Run one slice of the matrix. Round-robin, so shards stay balanced. |
 | `--scenario patchwerk` | Limit to one scenario (repeatable). |
 | `--wow-class Mage` | Limit to one class (repeatable). |
-| `--tier MID2` | Pin a tier directory instead of using the newest non-empty one. |
+| `--tier MID2` | Which tier to simulate. Also takes `latest` (default) and `previous`, which resolve against what simc ships so a scheduled run keeps meaning what it said. |
 | `--include-tanks` | Also simulate tank specs, which are excluded by default. |
 
 ---
@@ -254,6 +284,10 @@ parallel shards.
 - **Nightly** (`sims.yml`): clones the latest SimulationCraft, builds it with a cached
   build tree, splits the profile matrix across parallel jobs, merges the results and
   commits the dataset. A balance patch or an APL fix is on the site the next morning.
+- **Weekly** (`sims.yml`, Sunday): the same, for the current tier *and* the one before
+  it. Past profiles do not change, but the spell data they run against does — which is
+  the whole content of "how does last season's setup fare under current balance". Nightly
+  for both would double the cost for a number that only moves on patch days.
 - **On every push to `main`** (`deploy.yml`): rebuilds the site and pushes it into the
   `wt-gate` repository under `public/wow-dps/`. `wt-gate` is a Cloudflare Pages project
   behind a Discord login, so Cloudflare rebuilds it on that push and the site appears at
@@ -437,19 +471,17 @@ Cost is the other constraint. Each variant adds roughly ten seconds to a cell th
 takes about nine, so the first version will cover selected target counts — 1, 5 and 10,
 say — rather than all ten.
 
-**Patch-over-patch comparison.** Two forms, and they are not equally easy:
+**True historical reconstruction.** The tier axis ships, so last season's setup can be
+looked at under current balance. What it cannot do is show the game *as it was*: every
+tier runs against today's spell data. That needs SimulationCraft checked out at a dated
+commit, which gives the spell data and the rotations of the time. Feasible — the build is
+scripted — but each point in time costs a full rebuild plus a full simulation matrix, so
+it is a deliberate archive rather than something to run nightly.
 
-- *Tier comparison* (cheap): the `MID1` profiles for season 1 are still in the
-  SimulationCraft tree, so `--tier MID1` simulates season 1 gear and talents against
-  today's spell data. That answers "how did the season 1 setup change under current
-  balance", and it works today.
-- *True historical reconstruction* (expensive): checking out SimulationCraft at a dated
-  commit gives the spell data and rotations **as they were**, which is what "how did this
-  patch change the spec" actually requires. Feasible — the build is scripted — but each
-  point in time costs a full rebuild plus a full simulation matrix.
-
-Either way the dataset format needs a tier axis before this can ship; right now one
-dataset is one tier.
+The natural next step short of that is a **side-by-side tier diff** rather than a
+switcher: two tiers on one chart, restricted to the measurements that survive the
+comparison. Absolute DPS does not — the gap is mostly item level — but funnel gain,
+concentration, burst ratio and the scaling curve are all within-run ratios and do.
 
 **Popular talent builds** beyond SimulationCraft's defaults, imported from published
 loadout strings.

@@ -78,6 +78,27 @@ def _prettify(raw: str) -> str:
     return raw.replace("_", " ").replace("-", "-").strip()
 
 
+# Expansion prefixes of simc's tier directories, for display. A prefix we do not
+# know is shown verbatim rather than guessed at, so a new expansion needs no code
+# change to appear -- only to appear prettily.
+TIER_EXPANSIONS: dict[str, str] = {
+    "MID": "Midnight",
+    "TWW": "The War Within",
+    "DF": "Dragonflight",
+    "SL": "Shadowlands",
+    "BFA": "Battle for Azeroth",
+}
+
+
+def tier_label(tier: str) -> str:
+    """``MID2`` -> ``Midnight Season 2``; unknown prefixes are returned as-is."""
+    match = re.fullmatch(r"([A-Za-z]+)(\d+)", tier)
+    if not match:
+        return tier
+    expansion = TIER_EXPANSIONS.get(match.group(1).upper())
+    return f"{expansion} Season {match.group(2)}" if expansion else tier
+
+
 def slugify(*parts: str) -> str:
     joined = "_".join(p for p in parts if p)
     slug = re.sub(r"[^a-z0-9]+", "_", joined.lower())
@@ -194,11 +215,12 @@ def discover(profiles_dir: Path, tier: str, dps_only: bool = True) -> list[SpecP
     return found
 
 
-def latest_tier(profiles_dir: Path) -> str:
-    """Newest tier directory that actually contains profiles.
+def available_tiers(profiles_dir: Path) -> list[str]:
+    """Every non-empty tier directory, oldest first.
 
-    Tier directories are named like ``MID1``, ``MID2``. We take the highest-numbered
-    one that is non-empty, so the site follows the current raid tier by itself.
+    Tier directories are named like ``MID1``, ``MID2``. Directories that do not follow
+    that shape (``PreRaids``, ``generators``) are not tiers and are skipped, so the
+    ordering is well defined.
     """
     candidates: list[tuple[str, int, str]] = []
     for entry in profiles_dir.iterdir():
@@ -211,8 +233,27 @@ def latest_tier(profiles_dir: Path) -> str:
             continue
         candidates.append((match.group(1), int(match.group(2)), entry.name))
 
-    if not candidates:
-        raise FileNotFoundError(f"no tier profile directories found under {profiles_dir}")
-
     candidates.sort(key=lambda c: (c[0], c[1]))
-    return candidates[-1][2]
+    return [c[2] for c in candidates]
+
+
+def latest_tier(profiles_dir: Path) -> str:
+    """Newest tier that actually contains profiles, so the site follows the raid tier."""
+    tiers = available_tiers(profiles_dir)
+    if not tiers:
+        raise FileNotFoundError(f"no tier profile directories found under {profiles_dir}")
+    return tiers[-1]
+
+
+def previous_tier(profiles_dir: Path) -> str:
+    """The tier before the current one.
+
+    Named rather than hard-coded so that scheduled runs asking for "last season" keep
+    meaning last season after the next tier ships.
+    """
+    tiers = available_tiers(profiles_dir)
+    if len(tiers) < 2:
+        raise FileNotFoundError(
+            f"only {len(tiers)} tier(s) under {profiles_dir}; there is no previous one"
+        )
+    return tiers[-2]

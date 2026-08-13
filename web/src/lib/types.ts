@@ -109,6 +109,28 @@ export interface SimcMeta {
   reportVersion?: string
 }
 
+export interface TierMeta {
+  /** simc's tier directory name, e.g. "MID2". */
+  id: string
+  /** Human form, e.g. "Midnight Season 2". */
+  label: string
+  generatedAt: string | null
+  specCount: number
+  simcVersion?: string | null
+}
+
+/**
+ * Which tiers the dataset holds, oldest first, and which one is current.
+ *
+ * A tier is a different game state rather than a filter: the profiles carry
+ * different gear, different talents and a different spec list, so the site shows
+ * one tier at a time instead of mixing them into a single ranking.
+ */
+export interface TierIndex {
+  current: string
+  tiers: TierMeta[]
+}
+
 export interface RunSettings {
   /** Requested standard error in percent. 0 means the run was deterministic instead. */
   targetError: number

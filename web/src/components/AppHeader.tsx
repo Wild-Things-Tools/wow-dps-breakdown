@@ -1,6 +1,6 @@
 import { formatDate, relativeAge } from '../lib/format'
-import type { Manifest } from '../lib/types'
-import { Button, cx } from './ui'
+import type { Manifest, TierIndex } from '../lib/types'
+import { Button, Select, cx } from './ui'
 
 export type ViewId = 'overview' | 'scaling' | 'funnel' | 'builds' | 'timing' | 'spec'
 
@@ -15,17 +15,26 @@ const VIEWS: Array<{ id: ViewId; label: string; blurb: string }> = [
 
 export function AppHeader({
   manifest,
+  tierIndex,
+  tier,
+  onTierChange,
   view,
   onViewChange,
   theme,
   onThemeToggle,
 }: {
   manifest: Manifest | null
+  tierIndex: TierIndex | null
+  tier: string | null
+  onTierChange: (tier: string) => void
   view: ViewId
   onViewChange: (view: ViewId) => void
   theme: 'light' | 'dark' | 'system'
   onThemeToggle: () => void
 }) {
+  // One tier is the normal case; the switcher only earns its space once there is
+  // something to switch to.
+  const showTiers = (tierIndex?.tiers.length ?? 0) > 1
   return (
     <header className="border-b border-hairline bg-surface">
       <div className="mx-auto flex max-w-[1400px] flex-wrap items-center justify-between gap-4 px-5 pt-5 pb-4">
@@ -39,7 +48,18 @@ export function AppHeader({
         </div>
 
         <div className="flex items-center gap-3">
-          {manifest ? <Provenance manifest={manifest} /> : null}
+          {showTiers && tierIndex && tier ? (
+            <Select
+              label="Tier"
+              value={tier}
+              onChange={onTierChange}
+              options={[...tierIndex.tiers].reverse().map((entry) => ({
+                value: entry.id,
+                label: entry.id === tierIndex.current ? `${entry.label} (current)` : entry.label,
+              }))}
+            />
+          ) : null}
+          {manifest ? <Provenance manifest={manifest} tierIndex={tierIndex} /> : null}
           <Button
             onClick={onThemeToggle}
             title={`Theme: ${theme}. Click to change.`}
@@ -75,10 +95,17 @@ export function AppHeader({
   )
 }
 
-function Provenance({ manifest }: { manifest: Manifest }) {
+function Provenance({
+  manifest,
+  tierIndex,
+}: {
+  manifest: Manifest
+  tierIndex: TierIndex | null
+}) {
   const { simc, tier, generatedAt } = manifest
+  const label = tierIndex?.tiers.find((entry) => entry.id === tier)?.label ?? `Tier ${tier}`
   const parts = [
-    `Tier ${tier}`,
+    label,
     simc.simcVersion ? `simc ${simc.simcVersion}` : null,
     simc.ptr ? 'PTR data' : null,
   ].filter(Boolean)
