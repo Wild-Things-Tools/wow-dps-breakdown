@@ -1,14 +1,19 @@
 /**
- * Funnel: how much of a build's damage lands on the main target.
+ * Funnel: does the main target take more damage because the other targets exist?
  *
- * The underlying number is SimulationCraft's own priority-target damage
- * accounting -- every damage event aimed at the primary target is accumulated
- * separately, so `priorityDps / dps` is a measured share, not an estimate.
+ * Two distinct numbers live here, and keeping them apart is the whole point of the
+ * view:
  *
- * Two framings, because the raw share is misleading on its own: at ten targets a
- * 30% share sounds low but is three times what an even spread would give. The
- * index normalises by target count so 1.0 always means "spread evenly" and N
- * always means "everything on the main target", whatever N is.
+ * **Funnel gain** -- main-target damage at N targets divided by damage at one
+ * target. Above 1.0 the adds are feeding the priority target (resources from
+ * damage-over-time effects, procs); below 1.0 the global cooldowns spent on area
+ * damage are costing it. This is what players mean by funnelling.
+ *
+ * **Concentration** -- how the damage is distributed across the targets present.
+ * 1.0 is an even spread, N is everything on the main target. Useful, but a spec with
+ * no area damage scores high here while gaining nothing from the adds.
+ *
+ * Both come from simc's `prioritydps`, which is measured rather than estimated.
  */
 
 import { useMemo, useState } from 'react'
@@ -41,17 +46,26 @@ import {
   Note,
   Panel,
   PanelHeader,
+  SegmentedControl,
   Select,
   StatTile,
 } from '../components/ui'
-import { compactNumber, describeFunnel, fullNumber, percent } from '../lib/format'
+import {
+  compactNumber,
+  describeConcentration,
+  describeFunnelGain,
+  fullNumber,
+  percent,
+} from '../lib/format'
 import type { ScenarioMeta, SpecDetail } from '../lib/types'
 
 const MAIN_COLOR = 'var(--series-1)'
 const REST_COLOR = 'var(--baseline)'
 
-/** Plot area of the index chart: its 340px height less margins and the x-axis. */
+/** Plot area of the line chart: its 340px height less margins and the x-axis. */
 const CHART_PLOT_HEIGHT = 280
+
+type Metric = 'gain' | 'concentration'
 
 export function FunnelView({
   details,
@@ -62,6 +76,7 @@ export function FunnelView({
   scenario: ScenarioMeta
   colorOf: (id: string) => string
 }) {
+  const [metric, setMetric] = useState<Metric>('gain')
   const funnelTargets = useMemo(
     () => scenario.targetCounts.filter((count) => count > 1),
     [scenario],
@@ -72,9 +87,10 @@ export function FunnelView({
   if (details.length === 0) {
     return (
       <Panel>
-        <PanelHeader title="Funnel" subtitle={FUNNEL_EXPLAINER} />
+        <PanelHeader title="Funnel" subtitle={EXPLAINER} />
         <EmptyState>
-          Pick a build above to see how much of its damage it can aim at the main target.
+          Pick a build above to see whether extra targets help or hurt its damage on the
+          main target.
         </EmptyState>
       </Panel>
     )
@@ -83,11 +99,11 @@ export function FunnelView({
   if (!scenario.supportsFunnel || funnelTargets.length === 0) {
     return (
       <Panel>
-        <PanelHeader title="Funnel" subtitle={FUNNEL_EXPLAINER} />
+        <PanelHeader title="Funnel" subtitle={EXPLAINER} />
         <EmptyState>
-          {scenario.label} does not produce a comparable main-target share — SimulationCraft
-          counts priority damage against bosses rather than the primary target in this fight
-          style. Switch to Patchwerk for the clean measurement.
+          {scenario.label} does not produce a comparable main-target number —
+          SimulationCraft counts priority damage against bosses rather than the primary
+          target in this fight style. Switch to Patchwerk for the clean measurement.
         </EmptyState>
       </Panel>
     )
@@ -96,32 +112,60 @@ export function FunnelView({
   return (
     <div className="space-y-4">
       <Panel>
-        <PanelHeader title="How concentrated is the damage?" subtitle={FUNNEL_EXPLAINER} />
+        <PanelHeader title="Do extra targets help the main target?" subtitle={EXPLAINER} />
         <div className="grid gap-3 px-5 pb-5 sm:grid-cols-3">
           <StatTile
-            label="Index 1.0"
-            value="Even"
-            caption="Every target takes the same damage. Pure area damage looks like this."
-          />
-          <StatTile
-            label={`Index ${effectiveSplit}.0`}
-            value="All on main"
-            caption="Nothing lands on the other targets at all — a build with no area damage."
-          />
-          <StatTile
-            label="In between"
+            label="Gain above 1.0"
             value="Funnel"
-            caption="The main target takes more than its share. The higher the index, the more the build concentrates."
+            caption="The main target takes more damage than it would if it stood alone. Damage-over-time effects on the adds feed resources and procs back into it."
+          />
+          <StatTile
+            label="Gain of 1.0"
+            value="Neutral"
+            caption="The adds neither help nor hurt. Whatever the spec does to them is on top."
+          />
+          <StatTile
+            label="Gain below 1.0"
+            value="Dilution"
+            caption="Global cooldowns go into area damage, so the main target dies slower than it would alone."
           />
         </div>
       </Panel>
 
       <Panel>
         <PanelHeader
-          title="Concentration as targets are added"
-          subtitle="Above the flat line, the main target is taking more than an even share."
+          title={
+            metric === 'gain'
+              ? 'Main-target damage as targets are added'
+              : 'How the damage is distributed'
+          }
+          subtitle={
+            metric === 'gain'
+              ? 'Relative to the same build at a single target. Above the line, the adds are feeding the main target.'
+              : 'Relative to an even spread across every target. This says nothing about whether the adds helped — only where the damage went.'
+          }
+          actions={
+            <SegmentedControl
+              label="Metric"
+              value={metric}
+              onChange={setMetric}
+              options={[
+                { value: 'gain', label: 'Funnel gain', title: 'Main-target DPS vs single target' },
+                {
+                  value: 'concentration',
+                  label: 'Concentration',
+                  title: 'Share on main target vs an even spread',
+                },
+              ]}
+            />
+          }
         />
-        <FunnelIndexChart details={details} scenarioId={scenario.id} colorOf={colorOf} />
+        <MetricChart
+          details={details}
+          scenarioId={scenario.id}
+          colorOf={colorOf}
+          metric={metric}
+        />
         <Legend
           items={details.map((detail) => ({
             id: detail.id,
@@ -129,6 +173,12 @@ export function FunnelView({
             color: colorOf(detail.id),
           }))}
         />
+        {metric === 'concentration' ? (
+          <Note>
+            A build with little area damage scores high here without the extra targets
+            having done anything for it. Switch to funnel gain for that question.
+          </Note>
+        ) : null}
       </Panel>
 
       <Panel>
@@ -140,10 +190,7 @@ export function FunnelView({
               label="Targets"
               value={effectiveSplit}
               onChange={setSplitAt}
-              options={funnelTargets.map((count) => ({
-                value: count,
-                label: String(count),
-              }))}
+              options={funnelTargets.map((count) => ({ value: count, label: String(count) }))}
             />
           }
         />
@@ -160,47 +207,55 @@ export function FunnelView({
   )
 }
 
-const FUNNEL_EXPLAINER =
-  'Two builds can do identical total damage and still be worth very different amounts, depending on whether that damage lands on the target that matters. The funnel index answers that: 1.0 means the damage is spread evenly across every target, and the target count itself means all of it lands on the main target.'
+const EXPLAINER =
+  'Funnelling is when the main target takes more damage because the other targets are there — damage-over-time effects on adds generating resources and procs that get spent on the priority target. That is a different question from how the damage happens to be distributed, and the two often disagree.'
 
-function FunnelIndexChart({
+interface Point {
+  targets: number
+  [specId: string]: number
+}
+
+function MetricChart({
   details,
   scenarioId,
   colorOf,
+  metric,
 }: {
   details: SpecDetail[]
   scenarioId: string
   colorOf: (id: string) => string
+  metric: Metric
 }) {
   const data = useMemo(() => {
-    const byTargets = new Map<number, Record<string, number>>()
+    const byTargets = new Map<number, Point>()
     for (const detail of details) {
       for (const cell of detail.scenarios[scenarioId]?.targets ?? []) {
-        if (cell.funnelIndex === undefined) continue
+        const value = metric === 'gain' ? cell.funnelGain : cell.concentration
+        if (value === undefined) continue
         let row = byTargets.get(cell.targets)
         if (!row) {
           row = { targets: cell.targets }
           byTargets.set(cell.targets, row)
         }
-        row[detail.id] = cell.funnelIndex
+        row[detail.id] = value
       }
     }
-    return [...byTargets.values()].sort((a, b) => (a.targets ?? 0) - (b.targets ?? 0))
-  }, [details, scenarioId])
+    return [...byTargets.values()].sort((a, b) => a.targets - b.targets)
+  }, [details, scenarioId, metric])
 
-  // Lines converge as target counts rise, so their end labels need pushing apart.
   const labelOffsets = useMemo(() => {
     const last = data[data.length - 1]
     if (!last) return new Map<string, number>()
     const finals = details
       .map((detail) => ({ id: detail.id, value: last[detail.id] ?? 0 }))
       .filter((entry) => entry.value > 0)
-    const max = Math.max(...finals.map((entry) => entry.value), 1)
-    return resolveLabelOffsets(finals, [1, max], CHART_PLOT_HEIGHT)
-  }, [data, details])
+    const values = finals.map((entry) => entry.value)
+    const min = metric === 'gain' ? Math.min(...values, 1) : 1
+    return resolveLabelOffsets(finals, [min, Math.max(...values, min + 0.1)], CHART_PLOT_HEIGHT)
+  }, [data, details, metric])
 
   if (data.length === 0) {
-    return <EmptyState>No funnel data for this scenario yet.</EmptyState>
+    return <EmptyState>No data for this scenario yet.</EmptyState>
   }
 
   return (
@@ -226,15 +281,17 @@ function FunnelIndexChart({
             axisLine={false}
             tickLine={false}
             width={46}
-            domain={[1, 'auto']}
+            domain={metric === 'gain' ? ['auto', 'auto'] : [1, 'auto']}
             tickFormatter={(value: number) => `${value.toFixed(1)}x`}
           />
+          {/* The meaningful zero line: 1.0 is "no effect" for gain and "even spread"
+              for concentration. Either way it is where the reading flips. */}
           <ReferenceLine
             y={1}
             stroke="var(--baseline)"
             strokeDasharray="4 4"
             label={{
-              value: 'Even spread',
+              value: metric === 'gain' ? 'No gain' : 'Even spread',
               position: 'insideBottomRight',
               fill: 'var(--text-muted)',
               fontSize: 11,
@@ -251,15 +308,23 @@ function FunnelIndexChart({
               return (
                 <TooltipCard
                   title={`${targets} targets`}
-                  subtitle={`Even spread would be 1.0x · all on main would be ${targets}.0x`}
+                  subtitle={
+                    metric === 'gain'
+                      ? 'Main-target damage vs the same build at one target'
+                      : `Even spread = 1.0x · all on main = ${targets}.0x`
+                  }
                   rows={sorted.map((entry) => {
-                    const index = Number(entry.value ?? 0)
+                    const value = Number(entry.value ?? 0)
                     return {
                       id: String(entry.dataKey),
                       label: String(entry.name),
                       color: entry.color,
-                      value: `${index.toFixed(2)}x`,
-                      hint: `${entry.name}: ${percent(index / targets)} on main target — ${describeFunnel(index, targets)}`,
+                      value: `${value.toFixed(2)}x`,
+                      hint: `${entry.name}: ${
+                        metric === 'gain'
+                          ? describeFunnelGain(value)
+                          : describeConcentration(value, targets)
+                      }`,
                     }
                   })}
                 />
@@ -296,26 +361,33 @@ interface SplitRow {
   main: number
   rest: number
   total: number
+  singleTarget: number
   share: number
-  index: number
+  concentration: number
+  gain?: number
 }
 
 function splitRows(details: SpecDetail[], scenarioId: string, targets: number): SplitRow[] {
   const rows: SplitRow[] = []
   for (const detail of details) {
-    const cell = detail.scenarios[scenarioId]?.targets.find((entry) => entry.targets === targets)
-    if (!cell || cell.priorityDps === undefined || cell.funnelIndex === undefined) continue
+    const cells = detail.scenarios[scenarioId]?.targets ?? []
+    const cell = cells.find((entry) => entry.targets === targets)
+    const single = cells.find((entry) => entry.targets === 1)
+    if (!cell || cell.priorityDps === undefined || cell.concentration === undefined) continue
     rows.push({
       id: detail.id,
       label: detail.displayName,
       main: cell.priorityDps,
       rest: Math.max(0, cell.dps - cell.priorityDps),
       total: cell.dps,
-      share: cell.funnelShare ?? 0,
-      index: cell.funnelIndex,
+      singleTarget: single?.dps ?? 0,
+      share: cell.priorityShare ?? 0,
+      concentration: cell.concentration,
+      gain: cell.funnelGain,
     })
   }
-  return rows.sort((a, b) => b.main - a.main)
+  // Sorted by funnel gain, so the builds that actually benefit from adds come first.
+  return rows.sort((a, b) => (b.gain ?? 0) - (a.gain ?? 0))
 }
 
 function SplitChart({
@@ -369,17 +441,33 @@ function SplitChart({
               return (
                 <TooltipCard
                   title={row.label}
-                  subtitle={describeFunnel(row.index, targets)}
+                  subtitle={row.gain !== undefined ? describeFunnelGain(row.gain) : undefined}
                   rows={[
-                    { id: 'main', label: 'Main target', color: MAIN_COLOR, value: fullNumber(row.main) },
-                    { id: 'rest', label: 'Other targets', color: REST_COLOR, value: fullNumber(row.rest) },
-                    { id: 'total', label: 'Total', value: fullNumber(row.total) },
                     {
-                      id: 'share',
-                      label: 'Main-target share',
-                      value: percent(row.share),
-                      hint: `An even spread across ${targets} targets would be ${percent(1 / targets, 0)}.`,
+                      id: 'main',
+                      label: 'Main target',
+                      color: MAIN_COLOR,
+                      value: fullNumber(row.main),
                     },
+                    {
+                      id: 'rest',
+                      label: 'Other targets',
+                      color: REST_COLOR,
+                      value: fullNumber(row.rest),
+                    },
+                    { id: 'total', label: 'Total', value: fullNumber(row.total) },
+                    ...(row.singleTarget > 0
+                      ? [
+                          {
+                            id: 'single',
+                            label: 'Alone it would take',
+                            value: fullNumber(row.singleTarget),
+                            hint: `So the adds ${
+                              row.main >= row.singleTarget ? 'add' : 'cost'
+                            } ${fullNumber(Math.abs(row.main - row.singleTarget))} DPS on the main target.`,
+                          },
+                        ]
+                      : []),
                   ]}
                 />
               )
@@ -405,6 +493,14 @@ function SplitChart({
             stroke="var(--surface-1)"
             strokeWidth={1}
           />
+          {/* Where the main target would sit with no adds at all. Crossing to the
+              right of this line is exactly what funnelling means. */}
+          <ReferenceLine
+            x={rows[0]?.singleTarget}
+            stroke="var(--text-muted)"
+            strokeDasharray="3 3"
+            ifOverflow="extendDomain"
+          />
         </BarChart>
       </ResponsiveContainer>
     </div>
@@ -426,12 +522,10 @@ function SplitTable({
   )
   if (rows.length === 0) return null
 
-  const even = 1 / targets
-
   return (
     <>
       <div className="overflow-x-auto px-1 pb-2">
-        <table className="w-full min-w-[640px] border-collapse text-[13px]">
+        <table className="w-full min-w-[760px] border-collapse text-[13px]">
           <thead>
             <tr className="border-b border-hairline text-left text-[11.5px] tracking-wide text-ink-muted uppercase">
               <th scope="col" className="px-4 py-2.5 font-medium">
@@ -441,13 +535,13 @@ function SplitTable({
                 Main target
               </th>
               <th scope="col" className="px-4 py-2.5 text-right font-medium">
-                Other targets
+                Alone it would take
               </th>
               <th scope="col" className="px-4 py-2.5 text-right font-medium">
-                Share on main
+                Funnel gain
               </th>
               <th scope="col" className="px-4 py-2.5 text-right font-medium">
-                Index
+                Concentration
               </th>
               <th scope="col" className="px-4 py-2.5 font-medium">
                 Reading
@@ -462,16 +556,17 @@ function SplitTable({
                   {fullNumber(row.main)}
                 </td>
                 <td className="tnum px-4 py-2 text-right text-ink-secondary">
-                  {fullNumber(row.rest)}
-                </td>
-                <td className="tnum px-4 py-2 text-right text-ink-secondary">
-                  {percent(row.share)}
+                  {row.singleTarget > 0 ? fullNumber(row.singleTarget) : '—'}
                 </td>
                 <td className="tnum px-4 py-2 text-right font-medium text-ink">
-                  {row.index.toFixed(2)}x
+                  {row.gain !== undefined ? `${row.gain.toFixed(2)}x` : '—'}
+                </td>
+                <td className="tnum px-4 py-2 text-right text-ink-secondary">
+                  {row.concentration.toFixed(2)}x
+                  <span className="ml-1.5 text-ink-muted">({percent(row.share, 0)})</span>
                 </td>
                 <td className="px-4 py-2 text-ink-secondary">
-                  {describeFunnel(row.index, targets)}
+                  {row.gain !== undefined ? describeFunnelGain(row.gain) : '—'}
                 </td>
               </tr>
             ))}
@@ -479,10 +574,18 @@ function SplitTable({
         </table>
       </div>
       <Note>
-        With {targets} targets, an even spread puts {percent(even, 0)} of the damage on the
-        main target. Anything above that is the build concentrating — from extra single-target
-        abilities, damage-over-time spread mechanics, or pets and procs that stay on the
-        primary target.
+        Funnel gain compares main-target damage at {targets} targets against the same
+        build at one target. Concentration compares it against an even split across all{' '}
+        {targets}. A build can score high on one and low on the other — high
+        concentration with no gain just means the build has little area damage to
+        spend global cooldowns on.
+      </Note>
+      <Note>
+        One caveat worth knowing: SimulationCraft's rotations are written to maximise
+        total damage, and in these fights no target ever dies. A player deliberately
+        funnelling would hold single-target spenders for the boss and score higher than
+        this. Read these numbers as what funnelling costs or pays while playing the
+        standard rotation.
       </Note>
     </>
   )

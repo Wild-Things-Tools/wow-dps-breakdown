@@ -6,7 +6,8 @@ Turns SimulationCraft into the static JSON the site reads.
 profiles.py    → which builds exist (class, spec, hero talent) from simc's tier profiles
 scenarios.py   → which fights to run them in, and at how many targets
 simc_runner.py → invoke simc, collect json2
-parse.py       → the metrics: funnel, ability shares, timeline, burst
+parse.py       → the metrics: concentration, ability shares, timeline, burst
+                 (funnel gain is derived in dataset.py — it needs the 1-target baseline)
 dataset.py     → write index.json + specs/<id>.json
 warcraftlogs.py→ optional cross-check against real raid rankings
 ```
@@ -39,6 +40,7 @@ pip install -e '.[dev]'
 pytest -q
 ```
 
-The suite covers the funnel arithmetic against hand-computed cases, profile
+The suite covers funnel gain versus concentration (including the cases where they
+disagree), the arithmetic against hand-computed values, profile
 identification against every simc class token, timeline truncation, ability merging, and
 that sharding partitions the matrix exactly once however it is split.

@@ -1,18 +1,32 @@
 """Distilling a SimulationCraft json2 report into the metrics the site shows.
 
-Three questions drive everything here:
-
-1. *How much* damage -- ``dps``.
-2. *Where* does it land -- ``prioritydps`` versus ``dps`` (the funnel question).
-3. *When* does it land -- the damage timeline (burst versus sustain).
-
-The funnel numbers rest on ``prioritydps``, which simc accumulates in
+Everything rests on ``prioritydps``, which simc accumulates in
 ``action_t::assess_damage``: every damage event whose target is the sim's primary
-target adds to ``priority_iteration_dmg``. So for a Patchwerk fight with N identical
-targets, ``prioritydps / dps`` is exactly the fraction of a spec's throughput that
-lands on the main target. simc only emits the field when more than one enemy is
-present, which is why single-target cells carry no funnel data (they trivially have
-100% of damage on the main target).
+target adds to ``priority_iteration_dmg``. simc only emits the field when more than
+one enemy is present, so single-target cells carry none (trivially, all of it lands
+on the only target).
+
+Two *different* questions come out of that number, and conflating them is a mistake:
+
+**Concentration** -- ``prioritydps / dps x N``. How the damage is distributed across
+the targets that are there. 1.0 means an even spread, N means everything lands on the
+main target. A spec with no area damage at all scores N here, which says nothing
+about whether extra targets helped it.
+
+**Funnel gain** -- ``prioritydps(N) / dps(1)``. Whether the main target actually takes
+*more* damage because the other targets exist. This is what "funnel" means in play:
+damage-over-time effects on adds feeding resources or procs that get spent on the
+priority target. Above 1.0 the adds are making the boss die faster; below 1.0 the
+global cooldowns spent on area damage are costing the boss damage.
+
+They come apart badly. Beast Mastery Hunter concentrates hard (about 3.1x an even
+spread at five targets) while gaining nothing on the boss (0.99x its single-target
+damage) -- it simply has little area damage to dilute with. Unholy Death Knight
+concentrates far less (1.8-2.0x) but genuinely funnels (1.05-1.06x). Only the second
+number answers "do I want adds up when I need the boss dead".
+
+Funnel gain needs the single-target baseline, which one report does not contain, so it
+is computed in ``dataset.py`` once a spec's whole target sweep is in hand.
 """
 
 from __future__ import annotations
@@ -68,14 +82,19 @@ class Cell:
     dps_error: float
     dps_stddev: float
     priority_dps: float | None
-    funnel_share: float | None
-    funnel_index: float | None
+    #: Fraction of total damage landing on the main target.
+    priority_share: float | None
+    #: priority_share x targets. 1.0 = even spread, N = everything on the main target.
+    concentration: float | None
     iterations: int
     fight_length_mean: float
     abilities: list[Ability] = field(default_factory=list)
     timeline: list[float] | None = None
     timeline_bin: float = 1.0
     burst_ratio: float | None = None
+    #: priority_dps / single-target dps. Filled in by dataset.py, which is the first
+    #: place that has the whole target sweep and therefore the baseline.
+    funnel_gain: float | None = None
 
     def to_json(self) -> dict:
         out: dict = {
@@ -89,8 +108,10 @@ class Cell:
         }
         if self.priority_dps is not None:
             out["priorityDps"] = round(self.priority_dps, 1)
-            out["funnelShare"] = round(self.funnel_share or 0.0, 5)
-            out["funnelIndex"] = round(self.funnel_index or 0.0, 4)
+            out["priorityShare"] = round(self.priority_share or 0.0, 5)
+            out["concentration"] = round(self.concentration or 0.0, 4)
+        if self.funnel_gain is not None:
+            out["funnelGain"] = round(self.funnel_gain, 4)
         if self.timeline is not None:
             out["timeline"] = [round(v, 1) for v in self.timeline]
             out["timelineBin"] = self.timeline_bin
@@ -254,18 +275,19 @@ def parse_cell(
         raise ValueError("simc report has zero DPS -- profile or scenario is broken")
 
     priority_dps: float | None = None
-    funnel_share: float | None = None
-    funnel_index: float | None = None
+    priority_share: float | None = None
+    concentration: float | None = None
 
     if supports_funnel and targets > 1:
         raw_priority = collected.get("prioritydps")
         if raw_priority:
             priority_dps = _sample(raw_priority)
-            funnel_share = priority_dps / dps
+            priority_share = priority_dps / dps
             # 1.0 = damage spread evenly across targets; N = everything on the main
             # target. Normalising by target count makes the number comparable across
-            # the whole sweep.
-            funnel_index = funnel_share * targets
+            # the whole sweep. This is distribution only -- see the module docstring
+            # for why it is not the same thing as funnelling.
+            concentration = priority_share * targets
 
     timeline: list[float] | None = None
     bin_size = 1.0
@@ -282,8 +304,8 @@ def parse_cell(
         dps_error=_sample(collected.get("dps"), "mean_std_dev") / dps * 100 if dps else 0.0,
         dps_stddev=_sample(collected.get("dps"), "std_dev"),
         priority_dps=priority_dps,
-        funnel_share=funnel_share,
-        funnel_index=funnel_index,
+        priority_share=priority_share,
+        concentration=concentration,
         # dps.count is how many iterations actually ran, which differs from the
         # configured ceiling whenever target_error converges early.
         iterations=int(_sample(collected.get("dps"), "count")),

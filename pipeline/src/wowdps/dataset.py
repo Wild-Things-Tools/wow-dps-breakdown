@@ -46,6 +46,25 @@ class SpecResult:
     def add(self, scenario_id: str, cell: Cell) -> None:
         self.cells.setdefault(scenario_id, {})[cell.targets] = cell
 
+    def compute_funnel_gain(self) -> None:
+        """Fill in each cell's funnel gain against its scenario's single-target run.
+
+        Funnel gain is main-target damage at N targets divided by damage at one
+        target: above 1.0 the extra targets are actively feeding the priority target
+        (resources from damage-over-time effects, procs), below 1.0 the global
+        cooldowns spent on area damage are costing it.
+
+        This cannot live in ``parse_cell`` because one simc report has no idea what
+        the same profile does at a single target.
+        """
+        for by_target in self.cells.values():
+            baseline = by_target.get(1)
+            if not baseline or baseline.dps <= 0:
+                continue
+            for cell in by_target.values():
+                if cell.priority_dps is not None:
+                    cell.funnel_gain = cell.priority_dps / baseline.dps
+
     def to_json(self) -> dict:
         return {
             "id": self.profile.id,
@@ -86,9 +105,11 @@ class SpecResult:
                 if cell:
                     entry["dps"][str(targets)] = round(cell.dps, 1)
             funnel_cell = by_target.get(SUMMARY_FUNNEL_TARGETS)
-            if funnel_cell and funnel_cell.funnel_index is not None:
-                entry["funnelIndex"] = round(funnel_cell.funnel_index, 4)
-                entry["funnelShare"] = round(funnel_cell.funnel_share or 0.0, 5)
+            if funnel_cell and funnel_cell.concentration is not None:
+                entry["concentration"] = round(funnel_cell.concentration, 4)
+                entry["priorityShare"] = round(funnel_cell.priority_share or 0.0, 5)
+            if funnel_cell and funnel_cell.funnel_gain is not None:
+                entry["funnelGain"] = round(funnel_cell.funnel_gain, 4)
             single = by_target.get(1)
             if single and single.burst_ratio is not None:
                 entry["burstRatio"] = round(single.burst_ratio, 4)
@@ -140,15 +161,16 @@ def run_spec(
                     result.caveats.append(caveat)
 
             log.info(
-                "  %-16s %2dT  dps=%9.0f  funnel=%s  (%d iters, %.1fs)",
+                "  %-16s %2dT  dps=%9.0f  conc=%s  (%d iters, %.1fs)",
                 scenario.id,
                 targets,
                 cell.dps,
-                f"{cell.funnel_index:.2f}" if cell.funnel_index is not None else "  - ",
+                f"{cell.concentration:.2f}" if cell.concentration is not None else "  - ",
                 cell.iterations,
                 time.monotonic() - started,
             )
 
+    result.compute_funnel_gain()
     return result
 
 

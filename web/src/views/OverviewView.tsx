@@ -26,7 +26,7 @@ import {
   SegmentedControl,
   Select,
 } from '../components/ui'
-import { compactNumber, describeFunnel, fullNumber, percent } from '../lib/format'
+import { compactNumber, describeFunnelGain, fullNumber, percent } from '../lib/format'
 import { classColor } from '../lib/palette'
 import type { Manifest, ScenarioMeta, SpecSummary } from '../lib/types'
 
@@ -39,8 +39,8 @@ interface Row {
   label: string
   wowClass: string
   dps: number
-  funnelIndex?: number
-  funnelShare?: number
+  funnelGain?: number
+  priorityShare?: number
 }
 
 export function OverviewView({
@@ -142,8 +142,8 @@ function buildRows(specs: SpecSummary[], scenarioId: string, targets: number): R
       label: spec.displayName,
       wowClass: spec.class,
       dps,
-      funnelIndex: entry?.funnelIndex,
-      funnelShare: entry?.funnelShare,
+      funnelGain: entry?.funnelGain,
+      priorityShare: entry?.priorityShare,
     })
   }
   rows.sort((a, b) => b.dps - a.dps)
@@ -195,12 +195,13 @@ function RankingChart({
                   subtitle={`${percent(row.dps / best, 0)} of the top build`}
                   rows={[
                     { id: 'dps', label: 'DPS', value: fullNumber(row.dps) },
-                    ...(row.funnelShare !== undefined
+                    ...(row.funnelGain !== undefined
                       ? [
                           {
                             id: 'funnel',
-                            label: 'On main target',
-                            value: percent(row.funnelShare),
+                            label: 'Funnel gain at 5T',
+                            value: `${row.funnelGain.toFixed(2)}x`,
+                            hint: describeFunnelGain(row.funnelGain),
                           },
                         ]
                       : []),
@@ -260,7 +261,7 @@ function RankingTable({
               vs top
             </th>
             <th scope="col" className="px-4 py-2.5 text-right font-medium">
-              On main target
+              Funnel gain at 5T
             </th>
           </tr>
         </thead>
@@ -285,11 +286,11 @@ function RankingTable({
                 {percent(row.dps / best, 0)}
               </td>
               <td className="px-4 py-2 text-right text-ink-secondary">
-                {row.funnelShare !== undefined && row.funnelIndex !== undefined ? (
+                {row.funnelGain !== undefined ? (
                   <span className="tnum">
-                    {percent(row.funnelShare)}
+                    {row.funnelGain.toFixed(2)}x
                     <span className="ml-1.5 text-ink-muted">
-                      {describeFunnel(row.funnelIndex, 5)}
+                      {describeFunnelGain(row.funnelGain)}
                     </span>
                   </span>
                 ) : (

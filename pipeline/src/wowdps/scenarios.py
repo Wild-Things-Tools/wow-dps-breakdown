@@ -8,14 +8,16 @@ The three scenarios are chosen so each answers a different question:
 
 ``patchwerk``
     Static targets that all live for the whole fight. This is the clean laboratory
-    measurement -- with N identical targets standing still, ``prioritydps / dps``
-    is an unpolluted read on how much of a spec's throughput it can aim at one
-    target. This is the scenario the funnel view is built on.
+    measurement: with N identical targets standing still, comparing ``prioritydps``
+    against the same profile's single-target DPS is an unpolluted read on whether the
+    extra targets help or hurt the main target. This is the scenario the funnel view
+    is built on, and the only one swept across target counts -- funnel gain needs the
+    single-target baseline to divide by.
 
 ``hecticaddcleave``
     A boss plus adds that spawn and despawn (driven by simc's own raid events).
-    Realistic raid cleave: the funnel number here reflects how well a spec keeps
-    priority damage up while adds come and go, including ramp/refresh cost.
+    Realistic raid cleave: reflects how well a spec keeps priority damage up while
+    adds come and go, including ramp and refresh cost.
 
 ``dungeonslice``
     simc's Mythic+ approximation -- roughly a six-minute slice of a M+ dungeon with
@@ -99,7 +101,8 @@ DUNGEON_SLICE = Scenario(
     # In DungeonSlice, simc counts damage as "priority" when the target is a *boss*
     # rather than when it is the primary target (see action_t::assess_damage). The
     # number is still meaningful, but it answers "how much lands on bosses" rather
-    # than "how much lands on the main target", so we do not surface it as funnel.
+    # than "how much lands on the main target", so neither funnel gain nor
+    # concentration would mean what they mean elsewhere.
     supports_funnel=False,
     timeline_at=(1,),
 )

@@ -20,12 +20,22 @@ export interface Cell {
   /** Damage per second landing on the main target. Absent at one target. */
   priorityDps?: number
   /** priorityDps / dps, i.e. the fraction landing on the main target. */
-  funnelShare?: number
+  priorityShare?: number
   /**
-   * funnelShare x targets. 1.0 = damage spread evenly across all targets;
+   * priorityShare x targets. 1.0 = damage spread evenly across all targets;
    * N = every point of damage lands on the main target.
+   *
+   * Distribution only. A spec with no area damage scores N here without the extra
+   * targets having helped it at all — for that question use funnelGain.
    */
-  funnelIndex?: number
+  concentration?: number
+  /**
+   * priorityDps at N targets / dps at one target. Above 1.0 the extra targets are
+   * actively feeding the main target (resources from damage-over-time effects,
+   * procs); below 1.0 the global cooldowns spent on area damage cost it damage.
+   * This is what "funnel" means in play.
+   */
+  funnelGain?: number
   /** Mean damage per second, one value per timelineBin seconds. */
   timeline?: number[]
   timelineBin?: number
@@ -53,8 +63,10 @@ export interface SpecDetail {
 
 export interface SpecSummaryScenario {
   dps: Record<string, number>
-  funnelIndex?: number
-  funnelShare?: number
+  /** Measured at five targets. */
+  concentration?: number
+  priorityShare?: number
+  funnelGain?: number
   burstRatio?: number
 }
 

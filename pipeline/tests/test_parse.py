@@ -37,46 +37,46 @@ def make_report(
     }
 
 
-def test_funnel_share_and_index_at_five_targets():
+def test_priority_share_and_concentration_at_five_targets():
     # 28.3% of damage on the main target when an even split would be 20%.
     report = make_report(dps=500_000, priority_dps=141_500)
     cell = parse_cell(report, targets=5)
 
     assert cell.priority_dps == pytest.approx(141_500)
-    assert cell.funnel_share == pytest.approx(0.283)
-    assert cell.funnel_index == pytest.approx(1.415)
+    assert cell.priority_share == pytest.approx(0.283)
+    assert cell.concentration == pytest.approx(1.415)
 
 
-def test_even_spread_yields_index_of_one():
+def test_even_spread_yields_concentration_of_one():
     report = make_report(dps=400_000, priority_dps=100_000)
     cell = parse_cell(report, targets=4)
 
-    assert cell.funnel_index == pytest.approx(1.0)
+    assert cell.concentration == pytest.approx(1.0)
 
 
-def test_pure_single_target_damage_yields_index_of_n():
+def test_pure_single_target_damage_yields_concentration_of_n():
     """A spec with no AoE at all puts everything on the main target."""
     report = make_report(dps=300_000, priority_dps=300_000)
     cell = parse_cell(report, targets=8)
 
-    assert cell.funnel_share == pytest.approx(1.0)
-    assert cell.funnel_index == pytest.approx(8.0)
+    assert cell.priority_share == pytest.approx(1.0)
+    assert cell.concentration == pytest.approx(8.0)
 
 
-def test_single_target_cell_has_no_funnel_data():
+def test_single_target_cell_has_no_concentration_data():
     """simc omits prioritydps at one target, and the number would be meaningless."""
     report = make_report(dps=300_000)
     cell = parse_cell(report, targets=1)
 
-    assert cell.funnel_share is None
-    assert "funnelIndex" not in cell.to_json()
+    assert cell.priority_share is None
+    assert "concentration" not in cell.to_json()
 
 
 def test_funnel_suppressed_when_scenario_does_not_support_it():
     report = make_report(dps=500_000, priority_dps=200_000)
     cell = parse_cell(report, targets=5, supports_funnel=False)
 
-    assert cell.funnel_index is None
+    assert cell.concentration is None
 
 
 def test_zero_dps_report_is_rejected():

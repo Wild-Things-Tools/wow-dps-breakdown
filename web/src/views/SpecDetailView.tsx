@@ -8,7 +8,7 @@
 
 import { useMemo, useState } from 'react'
 import { EmptyState, Note, Panel, PanelHeader, Select, StatTile } from '../components/ui'
-import { describeBurst, describeFunnel, fullNumber, percent } from '../lib/format'
+import { describeBurst, describeFunnelGain, fullNumber, percent } from '../lib/format'
 import { sequentialStep } from '../lib/palette'
 import type { ScenarioMeta, SpecDetail } from '../lib/types'
 
@@ -76,12 +76,12 @@ export function SpecDetailView({
               caption={`±${cell.dpsError.toFixed(2)}% sampling error over ${fullNumber(cell.iterations)} pulls`}
             />
             <StatTile
-              label="On main target"
-              value={cell.funnelShare !== undefined ? percent(cell.funnelShare) : '—'}
+              label="Funnel gain"
+              value={cell.funnelGain !== undefined ? `${cell.funnelGain.toFixed(2)}x` : '—'}
               caption={
-                cell.funnelIndex !== undefined
-                  ? `${cell.funnelIndex.toFixed(2)}x an even spread — ${describeFunnel(cell.funnelIndex, effective)}`
-                  : 'Everything lands on the only target there is.'
+                cell.funnelGain !== undefined
+                  ? `${describeFunnelGain(cell.funnelGain)}. Main target takes ${percent(cell.priorityShare ?? 0)} of total damage, ${(cell.concentration ?? 0).toFixed(2)}x an even spread.`
+                  : 'Only one target, so there is nothing to funnel from.'
               }
             />
             <StatTile

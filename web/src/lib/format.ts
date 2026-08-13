@@ -22,18 +22,32 @@ export function percent(value: number, digits = 1): string {
 }
 
 /**
- * Funnel index, phrased the way it should be read.
+ * Concentration, phrased the way it should be read.
  *
- * The raw number is "how many times more damage the main target takes than an
- * even split would give it", which is not self-explanatory, so the UI always
- * pairs it with this wording.
+ * Describes *distribution* only — how the damage is spread across the targets that
+ * are present. Deliberately avoids the word "funnel", which means something else
+ * (see describeFunnelGain).
  */
-export function describeFunnel(index: number, targets: number): string {
+export function describeConcentration(index: number, targets: number): string {
   if (index <= 1.08) return 'Spread evenly'
   if (index >= targets * 0.92) return 'Almost all on main target'
-  if (index >= targets * 0.6) return 'Heavily funnelled'
-  if (index >= 1.6) return 'Funnels to main target'
+  if (index >= targets * 0.6) return 'Very concentrated'
+  if (index >= 1.6) return 'Concentrated'
   return 'Slightly favours main target'
+}
+
+/**
+ * Funnel gain, phrased the way it should be read.
+ *
+ * 1.0 means the main target takes exactly what it would take if it were alone.
+ * Above that, the extra targets are feeding it. Below, area damage is costing it.
+ */
+export function describeFunnelGain(gain: number): string {
+  if (gain >= 1.1) return 'Strong funnel'
+  if (gain >= 1.02) return 'Funnels onto the main target'
+  if (gain >= 0.98) return 'Main target unaffected'
+  if (gain >= 0.85) return 'Slight cost to the main target'
+  return 'Main target loses out'
 }
 
 export function describeBurst(ratio: number): string {
