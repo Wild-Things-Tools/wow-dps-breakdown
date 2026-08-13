@@ -109,12 +109,27 @@ export interface SimcMeta {
   reportVersion?: string
 }
 
+export interface RunSettings {
+  /** Requested standard error in percent. 0 means the run was deterministic instead. */
+  targetError: number
+  /** Fixed iteration count in deterministic mode, ceiling in adaptive mode. */
+  maxIterations: number
+  /** True when simc ran a fixed, reproducibly seeded iteration count. */
+  deterministic?: boolean
+  /**
+   * Median standard error actually measured across every cell of the run, in
+   * percent. This is the honest figure: in deterministic mode nobody requests an
+   * error, so `targetError` is 0 and says nothing about how precise the run is.
+   */
+  medianDpsError?: number | null
+}
+
 export interface Manifest {
   schemaVersion: number
   generatedAt: string
   tier: string
   simc: SimcMeta
-  settings: { targetError: number; maxIterations: number }
+  settings: RunSettings
   scenarios: ScenarioMeta[]
   specs: SpecSummary[]
 }

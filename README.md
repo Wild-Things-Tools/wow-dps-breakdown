@@ -97,8 +97,13 @@ explicitly is Enhancement Shaman, which carries `expected_lb_funnel` and
 `expected_cl_funnel` variables comparing Lightning Bolt against Chain Lightning.
 
 So read these numbers as *what funnelling costs or pays while playing the standard
-rotation*, not as the funnel ceiling. Measuring the ceiling would need a second pass
-optimised for priority damage — see Planned, below.
+rotation*, not as the funnel ceiling. Measuring the ceiling would need a second pass over
+build or rotation variants ranked by priority damage — see Planned, below.
+
+Whether anyone else publishes this measurement is a fair question to ask of a project that
+exists because of it. [docs/prior-art.md](docs/prior-art.md) records what a search of the
+open-source tooling found, which parts of it were actually verified, and which parts turned
+out to be wrong on a second look.
 
 ---
 
@@ -154,7 +159,7 @@ web/               React SPA (Vite, TypeScript, Tailwind v4, Recharts)
 .github/workflows/
   ci.yml             lint, typecheck, test on every push
   sims.yml           nightly simulation matrix → commits fresh data
-  deploy.yml         builds and publishes to GitHub Pages
+  deploy.yml         builds and pushes the site into the gated hub repository
   logs-verification.yml   optional weekly Warcraft Logs comparison
 scripts/build-simc.sh     local SimulationCraft build
 ```
@@ -232,11 +237,18 @@ parallel shards.
   (matching what the other Wild Things repos call theirs) or `HUB_PAGES_TOKEN` — a
   fine-grained PAT with *Contents: read and write* on the hub repository.
 
-  Either an **organisation secret** shared with this repository, or a **repository
-  secret** on it. Organisation secrets carry a repository-access setting, so one scoped
-  to "Selected repositories" has to list this repo explicitly. A *repository* secret
-  living in a different repository is not visible here — Actions cannot read secrets
-  across repositories.
+  On a paid organisation plan that can be an **organisation secret** shared with this
+  repository — they carry a repository-access setting, so one scoped to "Selected
+  repositories" has to list this repo explicitly.
+
+  On **GitHub Free for organisations it cannot**: organisation secrets are not available
+  to private repositories at all. The org secret settings page says so outright and offers
+  only "Public repositories" and "Selected repositories", neither of which a private repo
+  can end up in. An org secret of the right name can therefore exist and still be invisible
+  to this workflow, which looks exactly like a mis-scoped secret and is not. The fix is to
+  add the token as a **repository secret** on this repository. A repository secret living
+  in some *other* repository is no help either — Actions cannot read secrets across
+  repositories.
 
   Three repository variables override the destination, and they are deliberately
   independent:
@@ -249,7 +261,14 @@ parallel shards.
 
   `HUB_PATH` and `SITE_BASE` differ because Cloudflare serves `wt-gate`'s `public/` from
   the domain root, so `public/wow-dps` becomes `/wow-dps/`. Deriving one from the other
-  would produce `/wt-gate/public/wow-dps/` and every asset would 404.
+  would produce `/wt-gate/public/wow-dps/` and every asset would 404. `public/` is where
+  `wt-gate`'s own README nominates that generated pages land, alongside its `handbuch/`
+  and `components/` placeholders.
+
+  `wt-gate` has a single-page-app fallback in its `_redirects` (`/*  /index.html  200`),
+  which sounds like it would swallow a subdirectory of built files. It does not: real files
+  take precedence over the fallback, so `/wow-dps/` and its assets are served as
+  themselves.
 
   **Publishing it openly later is a variable change, not a rewrite**: point the three at
   an ungated Cloudflare project and the built output is byte-identical.
@@ -260,6 +279,26 @@ parallel shards.
 The nightly job publishes whatever finished. One spec that fails to converge costs that
 spec's cell, not the whole day's data, and the failure is recorded in the spec's own file
 so the site can show it.
+
+### What this costs to host
+
+Nothing, with a lot of headroom, and it is worth knowing where the real limit sits.
+
+Cloudflare Pages' free tier gives unlimited bandwidth, 500 builds per month and 100,000
+Functions requests per day. The gate middleware runs before **every** request, including
+static assets — that is what makes the gate a gate rather than a suggestion — so the daily
+limit is counted in asset requests, not page views. A page view costs about five requests
+(HTML, JS, CSS, favicon, `data/index.json`) and about nine when four specs are being
+compared, one extra JSON per spec. At eight requests per view that is roughly 12,500 page
+views a day before the limit binds. Guild-internal traffic is nowhere near that; a thousand
+visitors a day would use around 8% of the quota. Nightly deploys use about 30 of the 500
+monthly builds.
+
+So Cloudflare is not the scaling risk. The real one is git history: `wt-gate` and this
+repository both accumulate a commit per night, and a dataset of committed JSON that
+re-randomises every night grows history for no information gain. That is a large part of
+why the simulations are deterministic — a night with no upstream change produces
+byte-identical output and therefore no commit at all.
 
 ### Enabling the Warcraft Logs cross-check
 
@@ -324,11 +363,27 @@ correction factor, and the site presents both rather than reconciling them.
 
 ## Planned
 
-**Funnel ceiling.** The current number is funnel gain under the standard rotation. Running
-a second pass with `profileset_metric=prioritydps` — which makes SimulationCraft optimise
-for priority-target damage instead of total damage — would give the ceiling a player
-deliberately funnelling could reach. The gap between the two is arguably the more
-interesting number.
+**Funnel ceiling and the talent sweep — one feature, not two.** The current number is
+funnel gain under the standard rotation. The ceiling a player deliberately funnelling could
+reach is arguably the more interesting number, and the gap between the two even more so.
+
+The thing to be clear about first, because the option name invites the opposite reading:
+`profileset_metric=prioritydps` does **not** make SimulationCraft optimise for priority
+damage. SimulationCraft never optimises anything. It simulates a fixed action priority list
+and reports what happened; the option only selects which metric profilesets are reported
+and ranked by. A ceiling therefore cannot come from a flag — it needs *variants to compare*,
+either talent permutations or hand-written rotation variants that hold single-target
+spenders for the boss.
+
+Which makes this the same machinery as the fixed-talents limitation above. Build profilesets
+over build variants once, then rank them twice: `profileset_metric` accepts a list, so one
+sweep yields both the best build for total damage at each target count and the best build
+for boss damage. Planning them as two separate projects would build the expensive part
+twice.
+
+The cost is the constraint. N variants multiply a cell that already takes about nine
+seconds at 3000 deterministic iterations, so the first version will almost certainly cover
+selected target counts — 1, 5 and 10, say — rather than all ten.
 
 **Patch-over-patch comparison.** Two forms, and they are not equally easy:
 

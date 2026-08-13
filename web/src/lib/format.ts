@@ -1,5 +1,7 @@
 /** Number and label formatting shared by tables, axes and tooltips. */
 
+import type { RunSettings } from './types'
+
 const COMPACT = new Intl.NumberFormat('en-US', {
   notation: 'compact',
   maximumFractionDigits: 1,
@@ -75,4 +77,28 @@ export function relativeAge(iso: string): string {
   if (hours < 24) return `${hours}h ago`
   const days = Math.round(hours / 24)
   return days === 1 ? 'yesterday' : `${days} days ago`
+}
+
+/**
+ * How precise a run is, in a form that can sit in a sentence.
+ *
+ * Reports the error that was *measured*, not the one that was requested. A
+ * deterministic run asks for no target error at all, so quoting the request would
+ * read as "0% error" — precision the numbers do not have.
+ */
+export function samplingError(settings: RunSettings): string {
+  const measured = settings.medianDpsError
+  if (typeof measured === 'number' && measured > 0) {
+    return `${measured < 0.1 ? measured.toFixed(2) : measured.toFixed(1)}%`
+  }
+  // Older datasets carry only the requested error.
+  return `${settings.targetError}%`
+}
+
+/** "3,000 deterministic iterations per sim" / "adaptive sampling down to 0.3%". */
+export function describeConvergence(settings: RunSettings): string {
+  if (settings.deterministic ?? settings.targetError === 0) {
+    return `${fullNumber(settings.maxIterations)} deterministic iterations per sim`
+  }
+  return `adaptive sampling down to ${settings.targetError}% standard error`
 }

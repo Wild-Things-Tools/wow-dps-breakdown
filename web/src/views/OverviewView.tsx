@@ -26,7 +26,13 @@ import {
   SegmentedControl,
   Select,
 } from '../components/ui'
-import { compactNumber, describeFunnelGain, fullNumber, percent } from '../lib/format'
+import {
+  compactNumber,
+  describeFunnelGain,
+  fullNumber,
+  percent,
+  samplingError,
+} from '../lib/format'
 import { classColor } from '../lib/palette'
 import type { Manifest, ScenarioMeta, SpecSummary } from '../lib/types'
 
@@ -124,7 +130,7 @@ export function OverviewView({
         <Note>
           Simulated damage per second against a stationary target with no external buffs,
           using SimulationCraft's own tier profiles. Treat gaps under a few percent as a
-          tie — the sampling error alone is around {manifest.settings.targetError}%.
+          tie — the sampling error alone is around {samplingError(manifest.settings)}.
         </Note>
       </Panel>
     </div>
