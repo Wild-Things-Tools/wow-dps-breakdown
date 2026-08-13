@@ -16,6 +16,7 @@ import pytest
 from wowdps.dataset import SpecResult
 from wowdps.parse import Cell
 from wowdps.profiles import SpecProfile
+from wowdps.scenarios import ADD_WAVES, HECTIC_ADD_CLEAVE, PATCHWERK
 
 
 def profile() -> SpecProfile:
@@ -47,16 +48,16 @@ def cell(targets: int, dps: float, priority_dps: float | None = None) -> Cell:
     )
 
 
-def result_with(cells: list[Cell]) -> SpecResult:
+def result_with(cells: list[Cell], scenario_id: str = "patchwerk") -> SpecResult:
     result = SpecResult(profile=profile())
     for entry in cells:
-        result.add("patchwerk", entry)
-    result.compute_funnel_gain()
+        result.add(scenario_id, entry)
+    result.compute_funnel_gain([PATCHWERK, ADD_WAVES, HECTIC_ADD_CLEAVE])
     return result
 
 
-def gains(result: SpecResult) -> dict[int, float | None]:
-    return {c.targets: c.funnel_gain for c in result.cells["patchwerk"].values()}
+def gains(result: SpecResult, scenario_id: str = "patchwerk") -> dict[int, float | None]:
+    return {c.targets: c.funnel_gain for c in result.cells[scenario_id].values()}
 
 
 def test_adds_feeding_the_main_target_gives_gain_above_one():
@@ -126,3 +127,57 @@ def test_gain_reaches_the_json_payload():
     assert five["funnelGain"] == pytest.approx(1.06)
     assert five["concentration"] == pytest.approx(2.465, rel=1e-3)
     assert "funnelGain" not in payload[0]  # the single-target cell
+
+
+def test_add_wave_scenario_borrows_the_patchwerk_baseline():
+    """addwaves has no add-free cell of its own, so it divides by Patchwerk at 1T."""
+    result = SpecResult(profile=profile())
+    result.add("patchwerk", cell(1, 200_000))
+    # Nominally one target; the adds arrive from raid events, so simc still reports
+    # priority damage even though the configured count is 1.
+    result.add("addwaves", cell(1, 290_000, 210_000))
+    result.compute_funnel_gain([PATCHWERK, ADD_WAVES, HECTIC_ADD_CLEAVE])
+
+    assert result.cells["addwaves"][1].funnel_gain == pytest.approx(1.05)
+
+
+def test_add_wave_gain_is_not_self_referential():
+    """Dividing addwaves by its own cell would always give the priority share."""
+    result = SpecResult(profile=profile())
+    result.add("patchwerk", cell(1, 200_000))
+    result.add("addwaves", cell(1, 290_000, 210_000))
+    result.compute_funnel_gain([PATCHWERK, ADD_WAVES, HECTIC_ADD_CLEAVE])
+
+    own_share = 210_000 / 290_000
+    assert result.cells["addwaves"][1].funnel_gain != pytest.approx(own_share)
+
+
+def test_hectic_add_cleave_reports_no_gain():
+    """Its movement events would be charged to the adds, so no baseline applies."""
+    result = SpecResult(profile=profile())
+    result.add("patchwerk", cell(1, 200_000))
+    result.add("hecticaddcleave", cell(1, 270_000, 156_000))
+    result.compute_funnel_gain([PATCHWERK, ADD_WAVES, HECTIC_ADD_CLEAVE])
+
+    entry = result.cells["hecticaddcleave"][1]
+    assert entry.funnel_gain is None
+    assert entry.priority_share == pytest.approx(156_000 / 270_000)
+
+
+def test_missing_baseline_scenario_is_survivable():
+    """A shard that ran addwaves but not patchwerk must not crash the build."""
+    result = SpecResult(profile=profile())
+    result.add("addwaves", cell(1, 290_000, 210_000))
+    result.compute_funnel_gain([PATCHWERK, ADD_WAVES, HECTIC_ADD_CLEAVE])
+
+    assert result.cells["addwaves"][1].funnel_gain is None
+
+
+def test_concentration_is_omitted_when_the_target_count_is_not_fixed():
+    """Adds that come and go have no N to divide by; 0.0 would read as "even spread"."""
+    entry = cell(1, 290_000, 210_000)
+    entry.concentration = None
+    payload = entry.to_json()
+
+    assert "concentration" not in payload
+    assert payload["priorityShare"] == pytest.approx(210_000 / 290_000, abs=1e-5)

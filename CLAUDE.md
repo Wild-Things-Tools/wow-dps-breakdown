@@ -44,8 +44,9 @@ bug in the current number.
 
 Both measurements rest on SimulationCraft's `prioritydps` field. Facts about it:
 
-- It is emitted **only when `enemy_targets > 1`**, which in practice means
-  `desired_targets > 1`. Single-target cells legitimately have no funnel data.
+- It is emitted **only when `enemy_targets > 1`**. That is *not* the same as
+  `desired_targets > 1` — targets spawned by raid events count too. A genuinely
+  single-enemy cell legitimately has no funnel data.
 - It counts damage whose target is `sim->target` (the primary), **except** in
   `DungeonSlice` and `DungeonRoute`, where it counts damage to *bosses* instead. See
   `engine/action/action.cpp`, `action_t::assess_damage`. This is why
@@ -57,6 +58,15 @@ Both measurements rest on SimulationCraft's `prioritydps` field. Facts about it:
 
 ## simc option gotchas, all learned the hard way
 
+- **Naming a fight style destroys custom raid events.** `sim_t::init_fight_style` calls
+  `raid_events_str.clear()` for Patchwerk, so `fight_style=Patchwerk` plus
+  `raid_events=...` (or `+=`) silently yields a plain single-target sim. Verified both
+  ways. A scenario that builds its own encounter must leave `Scenario.fight_style` as
+  `None` — simc defaults to Patchwerk anyway.
+- **`prioritydps` appears whenever `enemy_targets > 1`, not `desired_targets > 1`.**
+  Targets that arrive from raid events count. Gating extraction on the configured target
+  count silently drops those scenarios — that bug shipped once and left Hectic Add Cleave
+  with no funnel data at all.
 - `min_iterations` **does not exist**. simc warns and ignores it.
 - `deterministic=1` and a non-zero `target_error` are **mutually exclusive** — simc exits
   with a setup failure. `SimSettings.as_simc_options` picks one or the other.

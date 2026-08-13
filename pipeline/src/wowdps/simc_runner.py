@@ -64,10 +64,12 @@ def build_command(
     return [
         str(simc),
         str(request.profile.path),
-        f"fight_style={scenario.fight_style}",
+        # command_options() supplies the fight style only when the scenario names one;
+        # scenarios that build their own encounter must not, or simc clears their
+        # raid events. See Scenario.fight_style.
+        *scenario.command_options(),
         f"desired_targets={request.targets}",
         f"max_time={scenario.max_time}",
-        *scenario.extra_options,
         *settings.as_simc_options(),
         f"json2={out_json}",
     ]

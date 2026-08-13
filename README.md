@@ -104,18 +104,25 @@ optimised for priority damage — see Planned, below.
 
 ## What gets simulated
 
-Three scenarios, chosen so each answers something different:
+Four scenarios, chosen so each answers something different:
 
 | Scenario | Fight style | Targets | What it is for |
 |---|---|---|---|
-| **Patchwerk** | `Patchwerk` | swept 1 → 10 | The clean laboratory measurement. Static targets, all alive the whole fight, and the only scenario swept across target counts — funnel gain needs the single-target baseline to divide by. |
-| **Hectic Add Cleave** | `HecticAddCleave` | boss + spawning adds | Realistic raid cleave, including the ramp and refresh cost of moving damage between targets. |
+| **Patchwerk** | `Patchwerk` | swept 1 → 10 | The clean laboratory measurement. Static targets, all alive the whole fight, and the only scenario swept across target counts. |
+| **Add Waves** | *(none — built here)* | boss + waves of 5 adds | What funnelling is actually about: a boss that matters throughout, adds that come and go. Its baseline is Patchwerk at one target — identical settings apart from the adds. |
+| **Hectic Add Cleave** | `HecticAddCleave` | boss + spawning adds | simc's own add style. Reports the main-target share but no funnel gain: it layers movement events on the adds, so there is no add-free run with the same movement to divide by. |
 | **Dungeon Slice** | `DungeonSlice` | simc's M+ approximation | Roughly a six-minute slice of a Mythic+ dungeon, averaging about four targets. |
+
+Add Waves is built here rather than taken from a simc fight style for one reason: every
+built-in add style bundles movement events, which would charge movement downtime to the
+adds and make the comparison against single target meaningless. Ours is a boss plus five
+adds arriving every sixty seconds and staying twenty — about a third of the fight with
+adds up, and nothing else changed.
 
 Dungeon Slice deliberately reports neither funnel gain nor concentration: in that fight
 style simc counts priority damage against *bosses* rather than against the primary
-target, so the figure would not mean the same thing. The site says so rather than showing a number that
-looks comparable and is not.
+target, so the figure would not mean the same thing. The site says so rather than showing
+a number that looks comparable and is not.
 
 ### Hero talents come for free
 
@@ -210,8 +217,12 @@ a thousand simulations. That is why CI splits it across parallel shards.
 - **Nightly** (`sims.yml`): clones the latest SimulationCraft, builds it with a cached
   build tree, splits the profile matrix across parallel jobs, merges the results and
   commits the dataset. A balance patch or an APL fix is on the site the next morning.
-- **On every push to `main`** (`deploy.yml`): rebuilds the SPA and publishes to GitHub
-  Pages — including the data commits the nightly job makes.
+- **On every push to `main`** (`deploy.yml`): rebuilds the SPA and publishes it into a
+  separate **public** hub repository — including the data commits the nightly job makes.
+  The source repository stays private; only the compiled site travels. This needs a
+  `HUB_PAGES_TOKEN` secret (a fine-grained PAT with *Contents: read and write* on the hub
+  repo). If the source repo is ever made public, native GitHub Pages is simpler and the
+  workflow can be pointed back at it.
 - **Weekly, optional** (`logs-verification.yml`): pulls ranking medians from Warcraft
   Logs for a reality check. Skips itself cleanly if credentials are not configured.
 

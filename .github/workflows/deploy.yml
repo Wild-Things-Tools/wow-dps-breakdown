@@ -1,8 +1,12 @@
 name: Deploy
 
-# Publishes the SPA to GitHub Pages. Runs on every push to main, which includes
-# the dataset commits the Simulations workflow makes, so fresh sims go live on
-# their own.
+# The source repository is private, and GitHub Pages will not serve a private repo
+# without an Enterprise plan. So the build is published into a separate *public* hub
+# repository instead: only the compiled site travels, the code stays private.
+#
+# Requires a repository secret HUB_PAGES_TOKEN — a fine-grained personal access token
+# with "Contents: read and write" on the hub repository. Without it this workflow
+# stops with a clear message rather than failing obscurely.
 on:
   push:
     branches: [main]
@@ -10,18 +14,38 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: pages
+  group: deploy
   cancel-in-progress: true
 
+env:
+  # Where the built site is published, and under which sub-path. The hub can host
+  # several tools side by side, so the path is what keeps them apart.
+  HUB_REPO: Wild-Things-Tools/wt-pages
+  HUB_PATH: wow-dps-breakdown
+
 jobs:
-  build:
+  publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check the hub token is configured
+        env:
+          HUB_PAGES_TOKEN: ${{ secrets.HUB_PAGES_TOKEN }}
+        run: |
+          if [ -z "$HUB_PAGES_TOKEN" ]; then
+            echo "::error::HUB_PAGES_TOKEN is not set. Create a fine-grained PAT with Contents: read and write on $HUB_REPO and add it as a repository secret."
+            exit 1
+          fi
+
+      - name: Check the dataset is present
+        run: |
+          if [ ! -f web/public/data/index.json ]; then
+            echo "::error::web/public/data/index.json is missing — run the Simulations workflow first"
+            exit 1
+          fi
 
       - uses: actions/setup-node@v4
         with:
@@ -33,32 +57,45 @@ jobs:
         working-directory: web
         run: npm ci
 
-      - name: Check the dataset is present
-        run: |
-          if [ ! -f web/public/data/index.json ]; then
-            echo "::error::web/public/data/index.json is missing — run the Simulations workflow first"
-            exit 1
-          fi
-
       - name: Build
         working-directory: web
+        run: |
+          # The hub serves from https://<owner>.github.io/<hub repo>/ and this tool
+          # sits in a sub-path of that, so assets need both segments.
+          HUB_NAME="${HUB_REPO##*/}"
+          BASE_PATH="/$HUB_NAME/$HUB_PATH/" npm run build
+
+      - name: Publish into the hub repository
         env:
-          # Pages serves the site from /<repo>/ unless a custom domain is set.
-          BASE_PATH: /${{ github.event.repository.name }}/
-        run: npm run build
+          HUB_PAGES_TOKEN: ${{ secrets.HUB_PAGES_TOKEN }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 \
+            "https://x-access-token:${HUB_PAGES_TOKEN}@github.com/${HUB_REPO}.git" hub
 
-      - uses: actions/configure-pages@v5
+          # Replace this tool's directory wholesale so files deleted from the build
+          # do not linger, and leave every sibling tool in the hub untouched.
+          rm -rf "hub/${HUB_PATH}"
+          mkdir -p "hub/${HUB_PATH}"
+          cp -r web/dist/. "hub/${HUB_PATH}/"
 
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: web/dist
+          # Pages would otherwise run Jekyll over the output and drop files whose
+          # names begin with an underscore.
+          touch hub/.nojekyll
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+          cd hub
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --staged --quiet; then
+            echo "site unchanged"
+            exit 0
+          fi
+          git commit -m "${HUB_PATH}: publish from ${GITHUB_SHA::7}"
+          git push
+
+      - name: Summary
+        run: |
+          HUB_OWNER="${HUB_REPO%%/*}"
+          HUB_NAME="${HUB_REPO##*/}"
+          echo "Published to https://${HUB_OWNER,,}.github.io/${HUB_NAME}/${HUB_PATH}/" >> "$GITHUB_STEP_SUMMARY"

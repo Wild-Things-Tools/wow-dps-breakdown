@@ -14,10 +14,22 @@ The three scenarios are chosen so each answers a different question:
     is built on, and the only one swept across target counts -- funnel gain needs the
     single-target baseline to divide by.
 
+``addwaves``
+    A boss that stands for the whole fight plus waves of adds that arrive, soak
+    damage and leave. This is the scenario funnelling is actually about: the boss is
+    the target that matters, the adds are optional damage, and the question is
+    whether having them up makes the boss die faster or slower.
+
+    Built here rather than taken from a simc fight style, because the built-in add
+    styles bundle movement events -- which would mix add pressure together with
+    movement downtime and make the comparison against single target meaningless.
+    Its funnel baseline is Patchwerk at one target: same profile, same fight length,
+    same (default) fight style, no adds. That is a controlled comparison.
+
 ``hecticaddcleave``
-    A boss plus adds that spawn and despawn (driven by simc's own raid events).
-    Realistic raid cleave: reflects how well a spec keeps priority damage up while
-    adds come and go, including ramp and refresh cost.
+    simc's own boss-plus-adds style. Kept for reference, but it layers movement
+    events on top of the adds, so it reports the main-target share without a funnel
+    gain -- there is no add-free run with the same movement to divide by.
 
 ``dungeonslice``
     simc's Mythic+ approximation -- roughly a six-minute slice of a M+ dungeon with
@@ -44,7 +56,13 @@ class Scenario:
     id: str
     label: str
     description: str
-    fight_style: str
+    #: simc fight style, or None to leave simc on its default (Patchwerk).
+    #:
+    #: Passing a fight style is NOT harmless when the scenario supplies its own
+    #: raid events: ``sim_t::init_fight_style`` calls ``raid_events_str.clear()``
+    #: for Patchwerk, which wipes them -- with ``raid_events=`` and ``+=`` alike.
+    #: Scenarios that build their own encounter must leave this None.
+    fight_style: str | None
     target_counts: tuple[int, ...] = DEFAULT_TARGET_COUNTS
     max_time: int = 300
     #: Extra ``key=value`` simc options appended to every sim of this scenario.
@@ -52,12 +70,27 @@ class Scenario:
     #: False when simc's priority-damage accounting does not produce a number we
     #: can interpret as "share landing on the main target".
     supports_funnel: bool = True
+    #: Which scenario's single-target cell funnel gain divides by.
+    #:
+    #: "self" uses this scenario's own 1-target run, which is right when the sweep
+    #: itself varies the target count. Naming another scenario borrows its baseline,
+    #: which is what a scenario whose extra targets come from raid events needs --
+    #: it has no add-free cell of its own. None means gain is not computable here.
+    funnel_baseline: str | None = "self"
     #: Target counts for which we keep the full damage timeline. Timelines are the
     #: bulkiest part of the payload, so we only keep a representative few.
     timeline_at: tuple[int, ...] = (1, 5, 10)
 
     def sims(self) -> list[int]:
         return list(self.target_counts)
+
+    def command_options(self) -> list[str]:
+        """simc options that define this scenario, fight style included if set."""
+        options = []
+        if self.fight_style:
+            options.append(f"fight_style={self.fight_style}")
+        options.extend(self.extra_options)
+        return options
 
 
 PATCHWERK = Scenario(
@@ -70,6 +103,28 @@ PATCHWERK = Scenario(
     fight_style="Patchwerk",
     target_counts=DEFAULT_TARGET_COUNTS,
     max_time=300,
+)
+
+# Roughly a third of the fight has adds up: five adds arrive every 60 seconds and
+# stay for 20. Long enough to be worth global cooldowns, transient enough that the
+# boss is still the target that matters.
+ADD_WAVES = Scenario(
+    id="addwaves",
+    label="Add Waves",
+    description=(
+        "A boss for the whole fight plus waves of five adds arriving every minute and "
+        "staying twenty seconds. The scenario funnelling is actually about: does having "
+        "adds up make the boss die faster, or does the area damage cost it?"
+    ),
+    # Deliberately no fight style: naming one makes simc clear the raid events below.
+    fight_style=None,
+    target_counts=(1,),
+    max_time=300,
+    extra_options=("raid_events+=/adds,count=5,first=20,cooldown=60,duration=20",),
+    # No add-free cell of its own, so gain divides by Patchwerk at one target --
+    # identical settings apart from the adds.
+    funnel_baseline="patchwerk",
+    timeline_at=(1,),
 )
 
 HECTIC_ADD_CLEAVE = Scenario(
@@ -85,6 +140,11 @@ HECTIC_ADD_CLEAVE = Scenario(
     # independent add sources on top of each other and make the number unreadable.
     target_counts=(1,),
     max_time=300,
+    # The style also injects movement events (25 yards on the add cycle, 8 yards
+    # throughout). Dividing its main-target damage by a stationary single-target run
+    # would attribute movement downtime to the adds, so no gain is reported here --
+    # addwaves exists to answer that question cleanly.
+    funnel_baseline=None,
     timeline_at=(1,),
 )
 
@@ -107,7 +167,7 @@ DUNGEON_SLICE = Scenario(
     timeline_at=(1,),
 )
 
-ALL_SCENARIOS: tuple[Scenario, ...] = (PATCHWERK, HECTIC_ADD_CLEAVE, DUNGEON_SLICE)
+ALL_SCENARIOS: tuple[Scenario, ...] = (PATCHWERK, ADD_WAVES, HECTIC_ADD_CLEAVE, DUNGEON_SLICE)
 
 BY_ID: dict[str, Scenario] = {s.id: s for s in ALL_SCENARIOS}
 
