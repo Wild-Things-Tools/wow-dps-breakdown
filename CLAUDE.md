@@ -58,6 +58,41 @@ Budget accordingly: N variants multiply a cell that already costs ~9s at 3000 de
 iterations, so a talent sweep will have to be restricted to selected target counts (1, 5,
 10) rather than all ten.
 
+### Profileset mechanics, measured
+
+Verified against Arcane Mage at five targets, MID2, 3000 deterministic iterations:
+
+- Syntax is `profileset.<name>=<option>=<value>`, repeatable with `+=`. Results land in
+  `sim.profilesets.results[]`; the second and later entries of `profileset_metric` appear
+  per result under `additional_metrics`, keyed by simc's display name (`Damage per Second
+  to Priority Target/Boss`). So one run really does yield both rankings.
+- **Profilesets run at `iterations / threads`.** 3000 iterations on 4 threads gave each
+  profileset 750, i.e. half the precision of the baseline, silently. `profileset_work_threads=1`
+  fixes it: each profileset then gets a whole thread and the full 3000, and simc runs
+  `threads` of them in parallel. Always set it.
+- The baseline actor is **not** perturbed by adding profilesets — it returned DPS identical
+  to the standalone run to the tenth. And a profileset whose talents equal the base profile's
+  reproduces the baseline to 0.03%, inside its own 0.10% error. Both worth re-checking if the
+  numbers ever look off.
+- Cost: baseline plus two variants at 3000 iterations took 31s where the baseline alone takes
+  ~9s, on four cores. Roughly 10s per variant, and it parallelises across profilesets.
+
+### Hero builds differ in gear, not just talents
+
+`profileset.X=talents=<hash>` swaps **only** the talents, leaving the base profile's gear.
+simc's shipped builds for one spec differ in both: MID2 Arcane Spellslinger and Sunfury carry
+different rings and noticeably different secondary stats. So the talents-only profileset gave
+474,898 DPS where the shipped Sunfury profile gives 481,249 -- a 1.3% gap, far outside the
+0.13% error, and neither number is wrong. They answer different questions:
+
+- *Shipped profile* (what the dataset's spec rows contain): each build on the gear simc's
+  authors picked for it. The right answer to "which build should I play".
+- *Talents-only profileset*: one gear set, talents varied. The right answer to "what do these
+  talents do", with gear held constant.
+
+The APLs are identical across a spec's hero builds -- they branch on `talent.` internally --
+so swapping the hash under one APL is legitimate. Confirmed by diffing the two Arcane profiles.
+
 ## The one thing not to break
 
 Both measurements rest on SimulationCraft's `prioritydps` field. Facts about it:
@@ -142,6 +177,14 @@ here:
 - Re-run the validator if you change any palette value:
   `node scripts/validate_palette.js "<hex,…>" --mode light` (and `--mode dark`) from the
   skill's directory.
+- The Builds view assigns slots by the build's index within its spec (`slotColor`), not
+  through `SeriesPalette` — there are only ever two or three builds and the set changes
+  wholesale when the spec picker changes, so there is nothing to keep stable across a
+  filter.
+- Its "tie" rule is the project's uncertainty convention in code: a lead is only reported
+  as a lead when the margin exceeds `hypot(errorA, errorB)`, the two means' errors added
+  in quadrature. Do not replace this with a fixed percentage threshold — the whole point
+  is that it tracks the precision the run actually achieved.
 
 ## Verifying a change
 
