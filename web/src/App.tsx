@@ -6,13 +6,14 @@ import { loadManifest, loadSpecs } from './lib/data'
 import { describeConvergence, samplingError } from './lib/format'
 import { MAX_SERIES, SeriesPalette } from './lib/palette'
 import type { Manifest, SpecDetail } from './lib/types'
+import { BuildsView, groupBySpec } from './views/BuildsView'
 import { FunnelView } from './views/FunnelView'
 import { OverviewView } from './views/OverviewView'
 import { ScalingView } from './views/ScalingView'
 import { SpecDetailView } from './views/SpecDetailView'
 import { TimingView } from './views/TimingView'
 
-const VIEWS: ViewId[] = ['overview', 'scaling', 'funnel', 'timing', 'spec']
+const VIEWS: ViewId[] = ['overview', 'scaling', 'funnel', 'builds', 'timing', 'spec']
 type Theme = 'light' | 'dark' | 'system'
 
 /** URL state, so a configured comparison is a link somebody can share. */
@@ -21,6 +22,8 @@ interface UrlState {
   scenario: string | null
   selected: string[]
   focus: string | null
+  /** Builds view: which spec's builds are being compared. */
+  buildSpec: string | null
 }
 
 function readUrl(): UrlState {
@@ -32,6 +35,7 @@ function readUrl(): UrlState {
     scenario: params.get('scenario'),
     selected: selected ? selected.split(',').filter(Boolean).slice(0, MAX_SERIES) : [],
     focus: params.get('spec'),
+    buildSpec: params.get('buildSpec'),
   }
 }
 
@@ -41,6 +45,7 @@ function writeUrl(state: UrlState): void {
   if (state.scenario) params.set('scenario', state.scenario)
   if (state.selected.length) params.set('specs', state.selected.join(','))
   if (state.focus) params.set('spec', state.focus)
+  if (state.buildSpec) params.set('buildSpec', state.buildSpec)
   const query = params.toString()
   const next = query ? `${window.location.pathname}?${query}` : window.location.pathname
   window.history.replaceState(null, '', next)
@@ -57,6 +62,7 @@ export default function App() {
   const [scenarioId, setScenarioId] = useState<string | null>(initial.scenario)
   const [selected, setSelected] = useState<string[]>(initial.selected)
   const [focus, setFocus] = useState<string | null>(initial.focus)
+  const [buildSpec, setBuildSpec] = useState<string | null>(initial.buildSpec)
 
   const [details, setDetails] = useState<SpecDetail[]>([])
   const [detailsLoading, setDetailsLoading] = useState(false)
@@ -137,9 +143,44 @@ export default function App() {
     }
   }, [view, focus])
 
+  // The builds view compares one spec's own hero-talent builds, so it is addressed
+  // by a spec id rather than through the shared multi-spec picker.
+  const buildGroups = useMemo(() => groupBySpec(manifest?.specs ?? []), [manifest])
+  const activeBuildSpec = buildSpec ?? buildGroups[0]?.specId ?? null
+  const buildIds = useMemo(
+    () =>
+      buildGroups.find((group) => group.specId === activeBuildSpec)?.builds.map((b) => b.id) ??
+      [],
+    [buildGroups, activeBuildSpec],
+  )
+  const buildKey = buildIds.join(',')
+  const [buildDetails, setBuildDetails] = useState<SpecDetail[]>([])
+  const [buildsLoading, setBuildsLoading] = useState(false)
   useEffect(() => {
-    writeUrl({ view, scenario: scenario?.id ?? null, selected, focus })
-  }, [view, scenario, selected, focus])
+    if (view !== 'builds' || !buildKey) {
+      setBuildDetails([])
+      return
+    }
+    let cancelled = false
+    setBuildsLoading(true)
+    loadSpecs(buildKey.split(','))
+      .then((loaded) => {
+        if (!cancelled) setBuildDetails(loaded)
+      })
+      .catch(() => {
+        if (!cancelled) setBuildDetails([])
+      })
+      .finally(() => {
+        if (!cancelled) setBuildsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [view, buildKey])
+
+  useEffect(() => {
+    writeUrl({ view, scenario: scenario?.id ?? null, selected, focus, buildSpec })
+  }, [view, scenario, selected, focus, buildSpec])
 
   useEffect(() => {
     if (theme === 'system') delete document.documentElement.dataset.theme
@@ -229,6 +270,22 @@ export default function App() {
 
       {view === 'funnel' && !detailsLoading ? (
         <FunnelView details={details} scenario={scenario} colorOf={colorOf} />
+      ) : null}
+
+      {view === 'builds' ? (
+        buildsLoading ? (
+          <Panel>
+            <Spinner label="Loading builds…" />
+          </Panel>
+        ) : (
+          <BuildsView
+            specs={manifest.specs}
+            specId={activeBuildSpec}
+            onSpecChange={setBuildSpec}
+            details={buildDetails}
+            scenario={scenario}
+          />
+        )
       ) : null}
 
       {view === 'timing' && !detailsLoading ? (

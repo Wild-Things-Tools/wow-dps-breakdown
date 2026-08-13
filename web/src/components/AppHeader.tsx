@@ -2,12 +2,13 @@ import { formatDate, relativeAge } from '../lib/format'
 import type { Manifest } from '../lib/types'
 import { Button, cx } from './ui'
 
-export type ViewId = 'overview' | 'scaling' | 'funnel' | 'timing' | 'spec'
+export type ViewId = 'overview' | 'scaling' | 'funnel' | 'builds' | 'timing' | 'spec'
 
 const VIEWS: Array<{ id: ViewId; label: string; blurb: string }> = [
   { id: 'overview', label: 'Overview', blurb: 'Rank every spec at one target count' },
   { id: 'scaling', label: 'Target scaling', blurb: 'How DPS changes from 1 to 10 targets' },
   { id: 'funnel', label: 'Funnel', blurb: 'How much damage lands on the main target' },
+  { id: 'builds', label: 'Builds', blurb: 'Which hero-talent build leads, and where that flips' },
   { id: 'timing', label: 'Timing', blurb: 'When during a fight the damage happens' },
   { id: 'spec', label: 'Spec detail', blurb: 'Ability breakdown for one build' },
 ]
