@@ -190,6 +190,9 @@ def _probe_fight(
         for a in actors
         if isinstance(a.get("id"), int) and isinstance(a.get("gameID"), int)
     }
+    player_ids = frozenset(
+        a["id"] for a in actors if isinstance(a.get("id"), int) and a.get("type") == "Player"
+    )
     ability_names = {
         a["gameID"]: a.get("name") or str(a["gameID"])
         for a in (master.get("abilities") or [])
@@ -236,6 +239,7 @@ def _probe_fight(
         damage_table=damage_table,
         player_table=player_table,
         truncated=truncated,
+        player_ids=player_ids,
         significant_share=settings.significant_share,
     )
 
@@ -479,19 +483,48 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
     print(text)
 
     log.info("wrote %s and %s", json_path, text_path)
-    spent = ledger.get("pointsSpentThisRun")
-    if spent is not None:
-        per_encounter = spent / len(observations) if observations else spent
-        log.info(
-            "cost: %.1f points for %d encounter(s) = %.1f each; a nine-boss pass "
-            "would be about %.0f of %s points",
-            spent,
-            len(observations),
-            per_encounter,
-            per_encounter * 9,
-            ledger.get("limitPerHour"),
-        )
+    _report_cost(ledger, len(observations))
     return 0 if not aborted else 2
+
+
+def _report_cost(ledger: dict, encounters: int) -> None:
+    """State what the pass cost, or that the counter refused to say.
+
+    ``pointsSpentThisHour`` did not move at all on the first real run -- first and
+    last reading identical, so the delta was exactly 0. Printing "0 points for a
+    nine-boss pass" out of that would be the worst kind of wrong: a number that
+    reads as a measurement and is actually the absence of one, inviting somebody
+    to conclude the API is free. Either the counter lags behind the responses it
+    rides on, or the hour had just reset. Both mean *unmeasured*, and the raw
+    readings are printed so the next run can tell which.
+    """
+    spent = ledger.get("pointsSpentThisRun")
+    limit = ledger.get("limitPerHour")
+    if spent is None:
+        log.info("cost: no rate-limit reading came back, so this pass is unmeasured")
+        return
+
+    if spent <= 0:
+        log.info(
+            "cost: UNMEASURED -- the hourly counter did not move (readings %s -> %s of %s). "
+            "That is not the same as free; treat the cost of a full pass as unknown "
+            "until a run moves it.",
+            ledger.get("firstReading"),
+            ledger.get("lastReading"),
+            limit,
+        )
+        return
+
+    per_encounter = spent / encounters if encounters else spent
+    log.info(
+        "cost: %.1f points for %d encounter(s) = %.1f each; a nine-boss pass "
+        "would be about %.0f of %s points",
+        spent,
+        encounters,
+        per_encounter,
+        per_encounter * 9,
+        limit,
+    )
 
 
 def _current_zone_encounters(client: WarcraftLogsClient) -> list[int]:

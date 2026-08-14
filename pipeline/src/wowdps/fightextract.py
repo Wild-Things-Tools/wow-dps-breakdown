@@ -116,6 +116,10 @@ class AuraWindow:
     start: float
     end: float
     truncated: bool
+    #: Actor that applied it, when the event carried one. Needed to tell an aura
+    #: the *encounter* puts on its own add from a debuff a player put there --
+    #: both land on an enemy, and both arrive in the same event stream.
+    source_id: int | None = None
 
     @property
     def duration(self) -> float:
@@ -253,6 +257,10 @@ class FightObservation:
     #: from the tail of the fight is incomplete rather than absent.
     truncated: bool = False
     warnings: tuple[str, ...] = ()
+    #: Actor ids the report lists as players. Auras applied by one of these are
+    #: player debuffs on an enemy, not something the encounter does, and they must
+    #: not be offered as candidates for an encounter's own amplification window.
+    player_ids: frozenset[int] = frozenset()
 
     def to_json(self) -> dict:
         return {
@@ -474,7 +482,7 @@ def aura_windows(
     names = ability_names or {}
     duration = _seconds(fight_end_ms, fight_start_ms)
 
-    open_windows: dict[tuple[int, int, int], float] = {}
+    open_windows: dict[tuple[int, int, int], tuple[float, int | None]] = {}
     windows: list[AuraWindow] = []
     for event in sorted(events, key=lambda e: e.get("timestamp", 0)):
         kind = event.get("type")
@@ -485,12 +493,14 @@ def aura_windows(
         actor_id, instance = key_actor
         key = (ability, actor_id, instance)
         when = _seconds(event.get("timestamp", fight_start_ms), fight_start_ms)
+        source = event.get("sourceID")
+        source = source if isinstance(source, int) else None
 
         if kind in AURA_START_TYPES:
-            open_windows.setdefault(key, when)
+            open_windows.setdefault(key, (when, source))
         elif kind in AURA_END_TYPES:
-            start = open_windows.pop(key, None)
-            if start is None:
+            opened = open_windows.pop(key, None)
+            if opened is None:
                 # Removal with no application: the aura was already up when the
                 # fight (or the event page) started. Its start is unknown, so the
                 # window runs from zero and is flagged rather than dropped.
@@ -503,9 +513,11 @@ def aura_windows(
                         0.0,
                         when,
                         True,
+                        source,
                     )
                 )
                 continue
+            start, opened_by = opened
             windows.append(
                 AuraWindow(
                     ability,
@@ -515,13 +527,21 @@ def aura_windows(
                     start,
                     when,
                     False,
+                    opened_by if opened_by is not None else source,
                 )
             )
 
-    for (ability, actor_id, instance), start in open_windows.items():
+    for (ability, actor_id, instance), (start, opened_by) in open_windows.items():
         windows.append(
             AuraWindow(
-                ability, names.get(ability, str(ability)), actor_id, instance, start, duration, True
+                ability,
+                names.get(ability, str(ability)),
+                actor_id,
+                instance,
+                start,
+                duration,
+                True,
+                opened_by,
             )
         )
 
@@ -661,6 +681,7 @@ def observe_fight(
     damage_table: dict | None = None,
     player_table: dict | None = None,
     truncated: bool = False,
+    player_ids: frozenset[int] = frozenset(),
     significant_share: float = DEFAULT_SIGNIFICANT_SHARE,
 ) -> FightObservation:
     """Assemble one fight's observations from the payloads that describe it."""
@@ -703,6 +724,7 @@ def observe_fight(
         active_time_fraction=active_time_fraction(player_table, duration),
         truncated=truncated,
         warnings=tuple(warnings),
+        player_ids=player_ids,
     )
 
 
@@ -820,16 +842,29 @@ class EncounterObservation:
         pooled.sort(key=lambda entry: -((entry["damageShare"] or {}).get("median", 0.0)))
         return pooled
 
-    def pooled_auras(self, min_fights: int = 2) -> list[dict]:
+    def pooled_auras(self, min_fights: int = 2, encounter_only: bool = True) -> list[dict]:
         """Auras on enemies seen in at least ``min_fights`` of the sampled fights.
 
         A one-off is dropped by default because a single fight cannot separate
         "this encounter does this" from "this pull went badly". Raising the floor
         is the knob; inventing a window from one observation is not.
+
+        ``encounter_only`` drops auras a *player* applied. Both a boss buffing its
+        own add and a warrior landing Colossus Smash put an aura on an enemy and
+        arrive in the same stream, so without this the nearest-window search
+        happily nominates a player cooldown as the encounter's amplification --
+        it nominated Avenging Wrath on the first real run. An aura whose event
+        carried no source is kept: unknown is not the same as "a player did it".
         """
         buckets: dict[int, list[tuple[str, AuraWindow]]] = {}
         for fight in self.fights:
             for aura in fight.auras:
+                if (
+                    encounter_only
+                    and aura.source_id is not None
+                    and aura.source_id in fight.player_ids
+                ):
+                    continue
                 buckets.setdefault(aura.ability_id, []).append((fight.report_code, aura))
 
         pooled: list[dict] = []

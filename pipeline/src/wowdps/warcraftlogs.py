@@ -88,9 +88,16 @@ query RateLimit {
 # server has already loaded: the schema notes that fetching fights and phases
 # together does not double-charge.
 #
-# `masterData.actors(type: "NPC")` is what turns the numeric actor ids in event
-# payloads into names, and `abilities` does the same for aura ids. Both are per
-# report rather than per fight, so one fetch serves every fight in it.
+# `masterData.actors` is what turns the numeric actor ids in event payloads into
+# names, and `abilities` does the same for aura ids. Both are per report rather
+# than per fight, so one fetch serves every fight in it.
+#
+# Deliberately unfiltered. Restricting it to `type: "NPC"` reads as an obvious
+# saving -- the events we care about are on enemies -- but then the payload holds
+# no player ids, and there is no way left to tell an aura the encounter puts on
+# its own add from a debuff a player put there. Both land on an enemy and both
+# arrive in the same stream. Without the player list the nearest-window search
+# nominated a Paladin cooldown as an encounter mechanic on the first real run.
 FIGHT_STRUCTURE_QUERY = """
 query FightStructure($code: String!, $encounterId: Int!, $difficulty: Int!) {
   reportData {
@@ -101,7 +108,7 @@ query FightStructure($code: String!, $encounterId: Int!, $difficulty: Int!) {
       endTime
       phases { encounterID separatesWipes phases { id name isIntermission } }
       masterData(translate: true) {
-        actors(type: "NPC") { id gameID name subType type petOwner }
+        actors { id gameID name subType type petOwner }
         abilities { gameID name type }
       }
       fights(encounterID: $encounterId, difficulty: $difficulty, killType: Encounters) {
@@ -249,6 +256,10 @@ class PointLedger:
             "limitPerHour": self.limit_per_hour,
             "pointsSpentThisRun": self.spent,
             "pointsSpentThisHour": self.last_reading,
+            # Both ends of the bracket, so a run total of zero can be read as
+            # "the counter never moved" rather than "the queries were free".
+            "firstReading": self.first_reading,
+            "lastReading": self.last_reading,
             "pointsResetIn": self.resets_in,
             "queries": len([entry for entry in self.entries if not entry[2]]),
             "cacheHits": len([entry for entry in self.entries if entry[2]]),

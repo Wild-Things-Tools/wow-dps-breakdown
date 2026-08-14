@@ -500,6 +500,22 @@ built from them is *speed-kill shaped*, which is not what the median parse the s
 compares against experienced. `--page` samples lower; the probe states the bias in its own
 output.
 
+### Two things the first real probe run exposed
+
+- **`masterData.actors(type: "NPC")` looks like an obvious saving and is a bug.** The
+  events we want are on enemies, so filtering to NPCs reads as free — but then the payload
+  carries no player ids, and there is no way left to tell an aura the *encounter* puts on
+  its own add from a debuff a *player* put there. Both land on an enemy and both arrive in
+  the same stream. Unfiltered, the nearest-window search nominated **Avenging Wrath**, a
+  Paladin cooldown, as Lightblinded Vanguard's amplification mechanic. `pooled_auras` now
+  drops player-sourced auras by default; an aura whose event carried no source is kept,
+  because unknown is not the same as "a player did it".
+- **`pointsSpentThisHour` did not move at all.** First and last reading identical, so the
+  delta was exactly 0 and the probe printed "0 points for a nine-boss pass". That is the
+  worst kind of wrong — a number that reads as a measurement and is the absence of one,
+  inviting the conclusion that the API is free. A zero delta is now reported as
+  **UNMEASURED** with both raw readings printed. Do not turn it back into a number.
+
 ### Cost is metered in points, and the cost function is not published
 
 Warcraft Logs' own advice is to read `rateLimitData` and find out. So `PointLedger` asks
@@ -554,7 +570,15 @@ Verified: everything offline. The extraction against hand-written fixtures, the 
 → simc mapping, the point ledger arithmetic, the whole command end to end with a stubbed
 client (`test_fightprobe.py`).
 
-**Not verified: a single real API call.** Credentials are Actions secrets. The GraphQL
+**Verified on 14 August 2026, one encounter, three reports:** the queries are correct
+against the live schema, and the extraction reproduced the owner's hand facts for
+Lightblinded Vanguard — 3 targets observed 3-3, raid size 20-20, and an amplification
+window measured at 0.97-20.99s against the stated "about 20 seconds". Fight length came
+out at 288s (285-334) where the profile assumes 300. The `table` payload shape held.
+
+Still unverified: everything past one encounter, and the point cost (see above).
+
+**Previously not verified: a single real API call.** Credentials are Actions secrets. The GraphQL
 documents were written against a third-party mirror of the v2 schema
 (`ToppleTheNun/mchammer`, which carries `phases`/`archiveStatus`, so it is recent) because
 `warcraftlogs.com/v2-api-docs` is 403 without a session. Field names, argument names and
