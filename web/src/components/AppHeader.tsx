@@ -1,8 +1,16 @@
 import { formatDate, relativeAge } from '../lib/format'
 import type { Manifest, TierIndex } from '../lib/types'
-import { Button, Select, cx } from './ui'
+import { Select, cx } from './ui'
 
-export type ViewId = 'overview' | 'scaling' | 'funnel' | 'builds' | 'gear' | 'timing' | 'spec'
+export type ViewId =
+  | 'overview'
+  | 'scaling'
+  | 'funnel'
+  | 'builds'
+  | 'gear'
+  | 'fights'
+  | 'timing'
+  | 'spec'
 
 const VIEWS: Array<{ id: ViewId; label: string; blurb: string }> = [
   { id: 'overview', label: 'Overview', blurb: 'Rank every spec at one target count' },
@@ -13,6 +21,11 @@ const VIEWS: Array<{ id: ViewId; label: string; blurb: string }> = [
     id: 'gear',
     label: 'Loot',
     blurb: 'Which raid drops beat the Mythic+ trinkets a build already wears',
+  },
+  {
+    id: 'fights',
+    label: 'Fights',
+    blurb: 'What each boss actually looks like, and what the sim would run for it',
   },
   { id: 'timing', label: 'Timing', blurb: 'When during a fight the damage happens' },
   { id: 'spec', label: 'Spec detail', blurb: 'Ability breakdown for one build' },
@@ -25,8 +38,6 @@ export function AppHeader({
   onTierChange,
   view,
   onViewChange,
-  theme,
-  onThemeToggle,
 }: {
   manifest: Manifest | null
   tierIndex: TierIndex | null
@@ -34,8 +45,6 @@ export function AppHeader({
   onTierChange: (tier: string) => void
   view: ViewId
   onViewChange: (view: ViewId) => void
-  theme: 'light' | 'dark' | 'system'
-  onThemeToggle: () => void
 }) {
   // One tier is the normal case; the switcher only earns its space once there is
   // something to switch to.
@@ -65,12 +74,6 @@ export function AppHeader({
             />
           ) : null}
           {manifest ? <Provenance manifest={manifest} tierIndex={tierIndex} /> : null}
-          <Button
-            onClick={onThemeToggle}
-            title={`Theme: ${theme}. Click to change.`}
-          >
-            {theme === 'dark' ? 'Dark' : theme === 'light' ? 'Light' : 'Auto'}
-          </Button>
         </div>
       </div>
 

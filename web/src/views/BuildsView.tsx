@@ -1,5 +1,5 @@
 /**
- * Build comparison: within one spec, which hero-talent build is ahead, and where
+ * Build comparison: within each spec, which hero-talent build is ahead, and where
  * that changes.
  *
  * Two rankings over the same runs, kept as separate modes rather than two axes on
@@ -11,6 +11,16 @@
  * They disagree often, and that disagreement is the point of the view. So is the
  * crossover: a build that wins on one target and loses on eight is two different
  * recommendations, and a single headline number hides exactly that.
+ *
+ * This view used to ask for a spec before it would show anything. It now shows
+ * every spec that has more than one build, as a small multiple each -- the
+ * comparison is only ever two or three lines wide, so the honest form is a grid
+ * of them rather than one plot behind a picker. The table at the bottom is the
+ * whole tier's answer in one place.
+ *
+ * Two builds of one spec share a class colour *and* a spec icon, because they are
+ * the same class and the same spec. What separates them is the hero-talent tree:
+ * its emblem, its name written out, and a stroke dash on the chart.
  *
  * Honesty constraint specific to this view: simc's shipped builds for one spec
  * differ in gear as well as talents (verified -- MID2 Arcane's two builds carry
@@ -30,103 +40,61 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import {
-  AXIS_LINE,
-  AXIS_TICK,
-  CURSOR_LINE,
-  GRID,
-  TooltipCard,
-  makeEndLabel,
-  resolveLabelOffsets,
-  shortLabel,
-} from '../components/chart'
-import {
-  Dot,
-  EmptyState,
-  Legend,
-  Note,
-  Panel,
-  PanelHeader,
-  SegmentedControl,
-  Select,
-  StatTile,
-} from '../components/ui'
+import { AXIS_LINE, AXIS_TICK, CURSOR_LINE, GRID, TooltipCard } from '../components/chart'
+import { HeroTreeBadge, SpecIcon, buildName, heroLabel } from '../components/BuildIdentity'
+import { EmptyState, Note, Panel, PanelHeader, SegmentedControl } from '../components/ui'
 import { compactNumber, fullNumber, percent } from '../lib/format'
-import { slotColor } from '../lib/palette'
+import { buildDash, classColor } from '../lib/palette'
 import type { Cell, ScenarioMeta, SpecDetail, SpecSummary } from '../lib/types'
 
 type Metric = 'dps' | 'priority'
 
-/** Plot area of the chart: its 380px height less margins and the x-axis. */
-const PLOT_HEIGHT = 320
-
 export function BuildsView({
-  specs,
-  specId,
-  onSpecChange,
   details,
   scenario,
 }: {
-  specs: SpecSummary[]
-  specId: string | null
-  onSpecChange: (specId: string) => void
   details: SpecDetail[]
   scenario: ScenarioMeta
 }) {
   const [metric, setMetric] = useState<Metric>('dps')
-
-  const groups = useMemo(() => groupBySpec(specs), [specs])
-  const current = specId ?? groups[0]?.specId ?? null
   const sweeps = scenario.sweepsTargets ?? false
 
-  // Slots follow the build's position within the spec. Unlike the shared picker
-  // there is nothing to keep stable across a filter: the set changes wholesale
-  // when another spec is chosen.
-  const colorOf = useMemo(() => {
-    const slots = new Map(details.map((detail, index) => [detail.id, slotColor(index)]))
-    return (id: string) => slots.get(id) ?? slotColor(0)
+  // Only specs simc ships more than one build for have anything to compare.
+  const groups = useMemo(() => {
+    const byId = new Map<string, SpecDetail[]>()
+    for (const detail of details) {
+      const bucket = byId.get(detail.specId)
+      if (bucket) bucket.push(detail)
+      else byId.set(detail.specId, [detail])
+    }
+    return [...byId.values()]
+      .filter((builds) => builds.length > 1)
+      .sort((a, b) => buildName(a[0]!).localeCompare(buildName(b[0]!)))
   }, [details])
 
-  const { data, series } = useMemo(
-    () => buildSeries(details, scenario.id, metric),
-    [details, scenario.id, metric],
+  const summaries = useMemo(
+    () => groups.map((builds) => summarise(builds, scenario.id, metric)),
+    [groups, scenario.id, metric],
   )
+  const withData = summaries.filter((entry) => entry.leads.length > 0)
 
-  const labelOffsets = useMemo(() => {
-    const last = data[data.length - 1]
-    if (!last) return new Map<string, number>()
-    const finals = series
-      .map((entry) => ({ id: entry.id, value: Number(last[entry.id] ?? 0) }))
-      .filter((entry) => entry.value > 0)
-    const values = finals.map((entry) => entry.value)
-    return resolveLabelOffsets(finals, [0, Math.max(...values, 1)], PLOT_HEIGHT)
-  }, [data, series])
-
-  const leads = useMemo(
-    () => buildLeads(details, scenario.id, metric),
-    [details, scenario.id, metric],
-  )
-  const story = useMemo(() => describeCrossover(leads), [leads])
-
-  const picker = (
-    <Select
-      label="Spec"
-      value={current ?? ''}
-      onChange={onSpecChange}
-      options={groups.map((group) => ({
-        value: group.specId,
-        label: `${group.label}${group.builds.length > 1 ? '' : ' (one build)'}`,
-      }))}
-    />
-  )
-
-  if (details.length < 2) {
+  if (details.length === 0) {
     return (
       <Panel>
-        <PanelHeader title="Build comparison" actions={picker} />
+        <PanelHeader title="Build comparison" />
+        <EmptyState>No per-build data has been generated for this tier yet.</EmptyState>
+      </Panel>
+    )
+  }
+
+  if (withData.length === 0) {
+    return (
+      <Panel>
+        <PanelHeader title="Build comparison" />
         <EmptyState>
-          SimulationCraft ships a single build for this spec, so there is nothing to
-          compare. Pick a spec with two hero-talent builds — most have them.
+          {metric === 'priority'
+            ? `${scenario.label} reports no main-target damage to rank by — priority damage only exists once there is more than one enemy.`
+            : `No ${scenario.label} data for these builds yet.`}
         </EmptyState>
       </Panel>
     )
@@ -136,148 +104,159 @@ export function BuildsView({
     <div className="space-y-4">
       <Panel>
         <PanelHeader
-          title="Build comparison"
+          title="Which hero-talent build leads"
           subtitle={
             metric === 'dps'
-              ? 'Total damage per second for each of the spec’s hero-talent builds.'
-              : 'Damage per second landing on the main target — which build kills the boss fastest while the rest of the pack is up.'
+              ? 'Every spec SimulationCraft ships more than one build for, ranked by total damage per second.'
+              : 'Every spec SimulationCraft ships more than one build for, ranked by damage landing on the main target — which build kills the boss fastest while the rest of the pack is up.'
           }
           actions={
-            <div className="flex flex-wrap items-center gap-3">
-              {picker}
-              <SegmentedControl
-                label="Rank by"
-                value={metric}
-                onChange={setMetric}
-                options={[
-                  { value: 'dps', label: 'Total DPS' },
-                  { value: 'priority', label: 'Boss DPS' },
-                ]}
-              />
-            </div>
+            <SegmentedControl
+              label="Rank by"
+              value={metric}
+              onChange={setMetric}
+              options={[
+                { value: 'dps', label: 'Total DPS' },
+                { value: 'priority', label: 'Boss DPS' },
+              ]}
+            />
           }
         />
-
-        {data.length === 0 ? (
-          <EmptyState>
-            {metric === 'priority'
-              ? `${scenario.label} reports no main-target damage to rank by — priority damage only exists once there is more than one enemy.`
-              : `No ${scenario.label} data for these builds yet.`}
-          </EmptyState>
-        ) : (
-          <>
-            <div className="grid gap-3 px-2 py-4 sm:grid-cols-2 xl:grid-cols-4">
-              {story.map((tile) => (
-                <StatTile
-                  key={tile.label}
-                  label={tile.label}
-                  value={tile.value}
-                  caption={tile.caption}
-                  accent={tile.buildId ? colorOf(tile.buildId) : undefined}
-                />
-              ))}
-            </div>
-
-            {sweeps ? (
-              <div className="px-2 pb-4">
-                <ResponsiveContainer width="100%" height={380}>
-                  <LineChart data={data} margin={{ top: 8, right: 130, bottom: 8, left: 8 }}>
-                    <CartesianGrid {...GRID} />
-                    <XAxis
-                      dataKey="targets"
-                      tick={AXIS_TICK}
-                      axisLine={AXIS_LINE}
-                      tickLine={false}
-                      label={{
-                        value: 'Targets',
-                        position: 'insideBottom',
-                        offset: -4,
-                        fill: 'var(--text-muted)',
-                        fontSize: 11.5,
-                      }}
-                    />
-                    <YAxis
-                      tick={AXIS_TICK}
-                      axisLine={false}
-                      tickLine={false}
-                      width={56}
-                      tickFormatter={(value: number) => compactNumber(value)}
-                    />
-                    <Tooltip
-                      cursor={CURSOR_LINE}
-                      content={({ active, payload, label }) => {
-                        if (!active || !payload?.length) return null
-                        const sorted = [...payload].sort(
-                          (a, b) => Number(b.value ?? 0) - Number(a.value ?? 0),
-                        )
-                        return (
-                          <TooltipCard
-                            title={`${label} ${Number(label) === 1 ? 'target' : 'targets'}`}
-                            rows={sorted.map((entry) => ({
-                              id: String(entry.dataKey),
-                              label: String(entry.name),
-                              color: entry.color,
-                              value: fullNumber(Number(entry.value ?? 0)),
-                            }))}
-                          />
-                        )
-                      }}
-                    />
-                    {series.map((entry) => (
-                      <Line
-                        key={entry.id}
-                        type="monotone"
-                        dataKey={entry.id}
-                        name={entry.label}
-                        stroke={colorOf(entry.id)}
-                        strokeWidth={2}
-                        dot={false}
-                        activeDot={{ r: 4, strokeWidth: 2, stroke: 'var(--surface-1)' }}
-                        isAnimationActive={false}
-                        label={makeEndLabel(
-                          shortLabel(entry.label),
-                          data.length - 1,
-                          labelOffsets.get(entry.id) ?? 0,
-                        )}
-                      />
-                    ))}
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            ) : null}
-
-            <Legend
-              items={series.map((entry) => ({
-                id: entry.id,
-                label: entry.label,
-                color: colorOf(entry.id),
-              }))}
-            />
-          </>
-        )}
+        <LeadTable summaries={withData} sweeps={sweeps} />
+        <Note>
+          A margin shown as a tie is smaller than the two runs’ combined sampling error, so
+          the ranking at that target count is not evidence of anything. These are
+          SimulationCraft’s own recommended builds, which differ in gear as well as talents
+          — read a gap as “this build the way simc plays it”, not as the value of the
+          talents alone.
+        </Note>
       </Panel>
 
-      {leads.length > 0 ? (
+      {sweeps ? (
         <Panel>
           <PanelHeader
-            title="Where the lead changes hands"
-            subtitle={`Ranked by ${
-              metric === 'dps' ? 'total damage' : 'damage on the main target'
-            } at each target count, with the margin over the runner-up.`}
+            title="The whole sweep, spec by spec"
+            subtitle="One panel per spec. Both builds wear the class colour, because they are the same class — the hero tree, named under each panel, is what tells them apart, and the line dash follows it."
           />
-          <LeadTable leads={leads} colorOf={colorOf} sweeps={sweeps} />
-          <Note>
-            A margin shown as a tie is smaller than the two runs’ combined sampling error,
-            so the ranking at that target count is not evidence of anything. These are
-            SimulationCraft’s own recommended builds, which differ in gear as well as
-            talents — read a gap as “this build the way simc plays it”, not as the value of
-            the talents alone.
-          </Note>
+          <div className="grid gap-4 px-5 pb-5 lg:grid-cols-2 2xl:grid-cols-3">
+            {withData.map((entry) => (
+              <SpecPanel key={entry.specId} summary={entry} scenarioId={scenario.id} metric={metric} />
+            ))}
+          </div>
         </Panel>
       ) : null}
     </div>
   )
 }
+
+// --------------------------------------------------------------------------------
+// Per-spec panel
+// --------------------------------------------------------------------------------
+
+function SpecPanel({
+  summary,
+  scenarioId,
+  metric,
+}: {
+  summary: SpecSummaryRow
+  scenarioId: string
+  metric: Metric
+}) {
+  const { data } = useMemo(
+    () => buildSeries(summary.builds, scenarioId, metric),
+    [summary.builds, scenarioId, metric],
+  )
+  const first = summary.builds[0]
+  if (!first || data.length === 0) return null
+
+  return (
+    <figure className="rounded-lg border border-hairline px-3 pt-3 pb-2">
+      <figcaption className="flex items-center gap-2">
+        <SpecIcon build={first} size={20} labelled />
+        <span className="font-medium" style={{ color: classColor(first.class) }}>
+          {buildName(first)}
+        </span>
+        <span className="ml-auto text-[12px] text-ink-muted">{summary.verdict}</span>
+      </figcaption>
+
+      <ResponsiveContainer width="100%" height={150}>
+        <LineChart data={data} margin={{ top: 10, right: 8, bottom: 4, left: 0 }}>
+          <CartesianGrid {...GRID} />
+          <XAxis
+            dataKey="targets"
+            tick={AXIS_TICK}
+            axisLine={AXIS_LINE}
+            tickLine={false}
+            interval="preserveStartEnd"
+          />
+          <YAxis
+            tick={AXIS_TICK}
+            axisLine={false}
+            tickLine={false}
+            width={44}
+            tickFormatter={(value: number) => compactNumber(value)}
+          />
+          <Tooltip
+            cursor={CURSOR_LINE}
+            content={({ active, payload, label }) => {
+              if (!active || !payload?.length) return null
+              const sorted = [...payload].sort((a, b) => Number(b.value ?? 0) - Number(a.value ?? 0))
+              return (
+                <TooltipCard
+                  title={`${label} ${Number(label) === 1 ? 'target' : 'targets'}`}
+                  subtitle={buildName(first)}
+                  rows={sorted.map((entry) => ({
+                    id: String(entry.dataKey),
+                    label: String(entry.name),
+                    color: classColor(first.class),
+                    value: fullNumber(Number(entry.value ?? 0)),
+                  }))}
+                />
+              )
+            }}
+          />
+          {summary.builds.map((build, index) => (
+            <Line
+              key={build.id}
+              type="monotone"
+              dataKey={build.id}
+              name={build.heroTalent}
+              stroke={classColor(build.class)}
+              strokeWidth={2}
+              strokeDasharray={buildDash(index)}
+              dot={false}
+              activeDot={{ r: 4, strokeWidth: 2, stroke: 'var(--surface-1)' }}
+              isAnimationActive={false}
+            />
+          ))}
+        </LineChart>
+      </ResponsiveContainer>
+
+      <ul className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+        {summary.builds.map((build, index) => (
+          <li key={build.id} className="flex items-center gap-1.5">
+            <svg width="18" height="8" aria-hidden className="shrink-0">
+              <line
+                x1="0"
+                y1="4"
+                x2="18"
+                y2="4"
+                stroke={classColor(build.class)}
+                strokeWidth="2"
+                strokeDasharray={buildDash(index)}
+              />
+            </svg>
+            <HeroTreeBadge build={build} />
+          </li>
+        ))}
+      </ul>
+    </figure>
+  )
+}
+
+// --------------------------------------------------------------------------------
+// The tier-wide table
+// --------------------------------------------------------------------------------
 
 interface Lead {
   targets: number
@@ -291,54 +270,94 @@ interface Lead {
   noise: number
 }
 
-function LeadTable({
-  leads,
-  colorOf,
-  sweeps,
-}: {
+interface SpecSummaryRow {
+  specId: string
+  builds: SpecDetail[]
   leads: Lead[]
-  colorOf: (id: string) => string
-  sweeps: boolean
-}) {
+  verdict: string
+}
+
+function summarise(builds: SpecDetail[], scenarioId: string, metric: Metric): SpecSummaryRow {
+  const leads = buildLeads(builds, scenarioId, metric)
+  const decisive = leads.filter((lead) => lead.margin > lead.noise)
+  const first = decisive[0]
+  const flip = first ? decisive.find((lead) => lead.winnerId !== first.winnerId) : undefined
+  const verdict = !first
+    ? 'Too close to call anywhere'
+    : flip
+      ? `Lead changes at ${flip.targets} targets`
+      : 'One build ahead throughout'
+  return { specId: builds[0]?.specId ?? '', builds, leads, verdict }
+}
+
+function LeadTable({ summaries, sweeps }: { summaries: SpecSummaryRow[]; sweeps: boolean }) {
+  const columns = sweeps ? [1, 5, 10] : [summaries[0]?.leads[0]?.targets ?? 1]
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[520px] text-[13px]">
+    <div className="overflow-x-auto pb-2">
+      <table className="w-full min-w-[760px] border-collapse text-[13px]">
         <thead>
           <tr className="border-b border-hairline text-left text-[11.5px] tracking-wide text-ink-muted uppercase">
-            {sweeps ? <th className="py-2 pr-4 pl-4 font-medium">Targets</th> : null}
-            <th className="py-2 pr-4 font-medium">Ahead</th>
-            <th className="py-2 pr-4 text-right font-medium">DPS</th>
-            <th className="py-2 pr-4 text-right font-medium">Margin</th>
-            <th className="py-2 pr-4 font-medium">Over</th>
+            <th scope="col" className="py-2.5 pr-4 pl-5 font-medium">
+              Spec
+            </th>
+            {columns.map((count) => (
+              <th key={count} scope="col" className="py-2.5 pr-4 font-medium">
+                {count === 1 ? 'Single target' : `${count} targets`}
+              </th>
+            ))}
+            <th scope="col" className="py-2.5 pr-5 font-medium">
+              Crossover
+            </th>
           </tr>
         </thead>
         <tbody>
-          {leads.map((lead) => {
-            const tie = lead.margin <= lead.noise
+          {summaries.map((entry) => {
+            const first = entry.builds[0]
+            if (!first) return null
             return (
-              <tr key={lead.targets} className="border-b border-hairline/60 last:border-0">
-                {sweeps ? (
-                  <td className="py-2 pr-4 pl-4 tabular-nums text-ink-secondary">
-                    {lead.targets}
-                  </td>
-                ) : null}
-                <td className="py-2 pr-4">
+              <tr key={entry.specId} className="border-b border-hairline/60 last:border-0">
+                <td className="py-2 pr-4 pl-5">
                   <span className="inline-flex items-center gap-2">
-                    <Dot color={colorOf(lead.winnerId)} />
-                    <span className="text-ink">{lead.winnerLabel}</span>
+                    <SpecIcon build={first} size={18} labelled />
+                    <span className="font-medium" style={{ color: classColor(first.class) }}>
+                      {buildName(first)}
+                    </span>
                   </span>
                 </td>
-                <td className="py-2 pr-4 text-right tabular-nums text-ink">
-                  {fullNumber(lead.winnerValue)}
-                </td>
-                <td
-                  className={`py-2 pr-4 text-right tabular-nums ${
-                    tie ? 'text-ink-muted' : 'text-ink'
-                  }`}
-                >
-                  {tie ? 'tie' : `+${percent(lead.margin)}`}
-                </td>
-                <td className="py-2 pr-4 text-ink-secondary">{lead.runnerUpLabel}</td>
+                {columns.map((count) => {
+                  const lead = entry.leads.find((item) => item.targets === count)
+                  if (!lead) {
+                    return (
+                      <td key={count} className="py-2 pr-4 text-ink-muted">
+                        —
+                      </td>
+                    )
+                  }
+                  const tie = lead.margin <= lead.noise
+                  const winner = entry.builds.find((build) => build.id === lead.winnerId)
+                  return (
+                    <td key={count} className="py-2 pr-4">
+                      {tie ? (
+                        <span className="text-ink-muted">
+                          tie — {heroLabel(lead.winnerLabel)} and{' '}
+                          {heroLabel(lead.runnerUpLabel)} inside each other’s error
+                        </span>
+                      ) : (
+                        <span className="flex flex-col leading-tight">
+                          {winner ? (
+                            <HeroTreeBadge build={winner} />
+                          ) : (
+                            <span className="text-ink">{heroLabel(lead.winnerLabel)}</span>
+                          )}
+                          <span className="tnum text-[11.5px] text-ink-muted">
+                            +{percent(lead.margin)} over {heroLabel(lead.runnerUpLabel)}
+                          </span>
+                        </span>
+                      )}
+                    </td>
+                  )
+                })}
+                <td className="py-2 pr-5 text-ink-secondary">{entry.verdict}</td>
               </tr>
             )
           })}
@@ -347,6 +366,10 @@ function LeadTable({
     </div>
   )
 }
+
+// --------------------------------------------------------------------------------
+// Shaping
+// --------------------------------------------------------------------------------
 
 interface SpecGroup {
   specId: string
@@ -365,8 +388,6 @@ export function groupBySpec(specs: SpecSummary[]): SpecGroup[] {
     }
     group.builds.push(spec)
   }
-  // Specs with something to compare first, then alphabetically, so the picker opens
-  // on a spec that actually has a comparison to show.
   return [...byId.values()].sort(
     (a, b) => b.builds.length - a.builds.length || a.label.localeCompare(b.label),
   )
@@ -377,8 +398,6 @@ function valueOf(cell: Cell, metric: Metric): number | undefined {
 }
 
 function buildSeries(details: SpecDetail[], scenarioId: string, metric: Metric) {
-  const series = details.map((detail) => ({ id: detail.id, label: detail.heroTalent }))
-
   const byTargets = new Map<number, Record<string, number | string>>()
   for (const detail of details) {
     for (const cell of detail.scenarios[scenarioId]?.targets ?? []) {
@@ -392,9 +411,8 @@ function buildSeries(details: SpecDetail[], scenarioId: string, metric: Metric) 
       row[detail.id] = value
     }
   }
-
   const data = [...byTargets.values()].sort((a, b) => Number(a.targets) - Number(b.targets))
-  return { data, series }
+  return { data }
 }
 
 function buildLeads(details: SpecDetail[], scenarioId: string, metric: Metric): Lead[] {
@@ -431,56 +449,4 @@ function buildLeads(details: SpecDetail[], scenarioId: string, metric: Metric): 
     })
   }
   return leads
-}
-
-interface StoryTile {
-  label: string
-  value: string
-  caption: string
-  buildId?: string
-}
-
-/**
- * What belongs above the chart: who leads at the target counts people plan around,
- * and whether the answer changes across the sweep.
- */
-function describeCrossover(leads: Lead[]): StoryTile[] {
-  if (leads.length === 0) return []
-
-  const tiles: StoryTile[] = []
-  for (const count of [1, 5, 10]) {
-    const lead = leads.find((entry) => entry.targets === count)
-    if (!lead) continue
-    const clear = lead.margin > lead.noise
-    tiles.push({
-      label: count === 1 ? 'Single target' : `${count} targets`,
-      value: clear ? lead.winnerLabel : 'Too close to call',
-      caption: clear
-        ? `${percent(lead.margin)} ahead of ${lead.runnerUpLabel}.`
-        : `${lead.winnerLabel} and ${lead.runnerUpLabel} land inside each other’s sampling error.`,
-      buildId: clear ? lead.winnerId : undefined,
-    })
-  }
-
-  // Leads run in target order, so the first entry whose winner differs from the
-  // first decisive one is where the lead changed hands.
-  const decisive = leads.filter((lead) => lead.margin > lead.noise)
-  const first = decisive[0]
-  const flip = first ? decisive.find((lead) => lead.winnerId !== first.winnerId) : undefined
-
-  if (first && flip) {
-    tiles.push({
-      label: 'Crossover',
-      value: `${flip.targets} targets`,
-      caption: `${first.winnerLabel} leads below that, ${flip.winnerLabel} from there up. Which build is “better” depends on the content.`,
-    })
-  } else if (first) {
-    tiles.push({
-      label: 'Crossover',
-      value: 'None',
-      caption: `${first.winnerLabel} is ahead everywhere the gap clears the sampling error.`,
-    })
-  }
-
-  return tiles
 }

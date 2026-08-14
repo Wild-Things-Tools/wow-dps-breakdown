@@ -34,3 +34,6 @@ web/shot.mjs
 
 # Git worktrees created for parallel agent runs. Tooling state, not project content.
 .claude/worktrees/
+
+# Screenshot output from the local helper above.
+web/shots*/

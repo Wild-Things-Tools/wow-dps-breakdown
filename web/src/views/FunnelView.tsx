@@ -14,6 +14,11 @@
  * no area damage scores high here while gaining nothing from the adds.
  *
  * Both come from simc's `prioritydps`, which is measured rather than estimated.
+ *
+ * Form: the headline is a *diverging* bar around 1.0, one bar per build, every
+ * build in the tier. 1.0 is where the reading flips, so it is the baseline the
+ * bars grow from rather than a line drawn across a chart anchored at zero. The
+ * per-target curves are small multiples underneath, for the scenario that sweeps.
  */
 
 import { useMemo, useState } from 'react'
@@ -22,8 +27,6 @@ import {
   BarChart,
   CartesianGrid,
   Cell as RBCell,
-  Line,
-  LineChart,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -34,13 +37,11 @@ import {
   AXIS_LINE,
   AXIS_TICK,
   CURSOR_FILL,
-  CURSOR_LINE,
   GRID,
   TooltipCard,
-  makeEndLabel,
-  resolveLabelOffsets,
-  shortLabel,
 } from '../components/chart'
+import { BuildIdentity, makeBuildTick } from '../components/BuildIdentity'
+import { SmallMultiples, type SparkPanel } from '../components/SmallMultiples'
 import {
   EmptyState,
   Legend,
@@ -58,24 +59,24 @@ import {
   fullNumber,
   percent,
 } from '../lib/format'
+import { classColor } from '../lib/palette'
 import type { ScenarioMeta, SpecDetail } from '../lib/types'
 
 const MAIN_COLOR = 'var(--series-1)'
 const REST_COLOR = 'var(--baseline)'
 
-/** Plot area of the line chart: its 340px height less margins and the x-axis. */
-const CHART_PLOT_HEIGHT = 280
+/** Two lines of tick text plus the icon. */
+const ROW_HEIGHT = 32
+const TICK_WIDTH = 205
 
 type Metric = 'gain' | 'concentration'
 
 export function FunnelView({
   details,
   scenario,
-  colorOf,
 }: {
   details: SpecDetail[]
   scenario: ScenarioMeta
-  colorOf: (id: string) => string
 }) {
   const [metric, setMetric] = useState<Metric>('gain')
 
@@ -93,17 +94,23 @@ export function FunnelView({
     () => (sweeps ? scenario.targetCounts.filter((count) => count > 1) : scenario.targetCounts),
     [scenario, sweeps],
   )
-  const [splitAt, setSplitAt] = useState(5)
-  const effectiveSplit = funnelTargets.includes(splitAt) ? splitAt : (funnelTargets[0] ?? 1)
+  const [readAt, setReadAt] = useState(5)
+  const effectiveTargets = funnelTargets.includes(readAt) ? readAt : (funnelTargets[0] ?? 1)
+
+  const ranked = useMemo(
+    () => rankRows(details, scenario.id, effectiveTargets, metric, sweeps),
+    [details, scenario.id, effectiveTargets, metric, sweeps],
+  )
+  const panels = useMemo(
+    () => (sweeps ? gainPanels(details, scenario.id, metric) : []),
+    [details, scenario.id, metric, sweeps],
+  )
 
   if (details.length === 0) {
     return (
       <Panel>
         <PanelHeader title="Funnel" subtitle={EXPLAINER} />
-        <EmptyState>
-          Pick a build above to see whether extra targets help or hurt its damage on the
-          main target.
-        </EmptyState>
+        <EmptyState>No per-build data has been generated for this tier yet.</EmptyState>
       </Panel>
     )
   }
@@ -120,6 +127,16 @@ export function FunnelView({
       </Panel>
     )
   }
+
+  const targetSelect =
+    funnelTargets.length > 1 ? (
+      <Select
+        label="Targets"
+        value={effectiveTargets}
+        onChange={setReadAt}
+        options={funnelTargets.map((count) => ({ value: count, label: String(count) }))}
+      />
+    ) : null
 
   return (
     <div className="space-y-4">
@@ -149,53 +166,46 @@ export function FunnelView({
           title={
             metric === 'gain'
               ? sweeps
-                ? 'Main-target damage as targets are added'
+                ? `Main-target damage at ${effectiveTargets} targets`
                 : 'Main-target damage with the adds present'
-              : 'How the damage is distributed'
+              : `How the damage is distributed at ${effectiveTargets} targets`
           }
           subtitle={
             metric === 'gain'
-              ? 'Relative to the same build with no adds at all. Above 1.0, having the adds up makes the main target die faster.'
+              ? 'Relative to the same build with no adds at all. Bars grow from 1.0 in both directions: right of it, having the adds up makes the main target die faster.'
               : 'Relative to an even spread across every target. This says nothing about whether the adds helped — only where the damage went.'
           }
           actions={
-            <SegmentedControl
-              label="Metric"
-              value={metric}
-              onChange={setMetric}
-              options={[
-                { value: 'gain', label: 'Funnel gain', title: 'Main-target DPS vs single target' },
-                {
-                  value: 'concentration',
-                  label: 'Concentration',
-                  title: 'Share on main target vs an even spread',
-                },
-              ]}
-            />
+            <>
+              {targetSelect}
+              <SegmentedControl
+                label="Metric"
+                value={metric}
+                onChange={setMetric}
+                options={[
+                  { value: 'gain', label: 'Funnel gain', title: 'Main-target DPS vs single target' },
+                  {
+                    value: 'concentration',
+                    label: 'Concentration',
+                    title: 'Share on main target vs an even spread',
+                  },
+                ]}
+              />
+            </>
           }
         />
-        {sweeps ? (
-          <MetricChart
-            details={details}
-            scenarioId={scenario.id}
-            colorOf={colorOf}
-            metric={metric}
-          />
+        {ranked.length === 0 ? (
+          <EmptyState>
+            {metric === 'gain'
+              ? 'No funnel gain for these builds in this scenario.'
+              : 'Concentration needs a fixed target count, and this scenario’s adds come and go. Switch to funnel gain.'}
+          </EmptyState>
         ) : (
-          <SinglePointChart
-            details={details}
-            scenarioId={scenario.id}
-            colorOf={colorOf}
-            metric={metric}
-          />
+          <>
+            <DivergingChart rows={ranked} metric={metric} targets={effectiveTargets} />
+            <RankTable rows={ranked} metric={metric} targets={effectiveTargets} />
+          </>
         )}
-        <Legend
-          items={details.map((detail) => ({
-            id: detail.id,
-            label: detail.displayName,
-            color: colorOf(detail.id),
-          }))}
-        />
         {metric === 'concentration' ? (
           <Note>
             A build with little area damage scores high here without the extra targets
@@ -204,29 +214,42 @@ export function FunnelView({
         ) : null}
       </Panel>
 
+      {panels.length ? (
+        <Panel>
+          <PanelHeader
+            title={
+              metric === 'gain'
+                ? 'How the gain moves as targets are added'
+                : 'How concentration moves as targets are added'
+            }
+            subtitle="One panel per build, all on one scale, with the median build drawn faint behind each curve."
+          />
+          <SmallMultiples
+            panels={panels}
+            formatX={(value) => `${value} targets`}
+            formatY={(value) => `${value.toFixed(2)}x`}
+            referenceY={metric === 'gain' ? 1 : undefined}
+            referenceLabel={
+              metric === 'gain'
+                ? 'Dashed line is 1.0x, where the adds neither help nor hurt.'
+                : 'Concentration rises with the target count by construction — 1.0x is always an even spread, and the ceiling is the number of targets.'
+            }
+          />
+        </Panel>
+      ) : null}
+
       <Panel>
         <PanelHeader
           title={
-            sweeps
-              ? `Where the damage lands at ${effectiveSplit} targets`
-              : 'Where the damage lands'
+            sweeps ? `Where the damage lands at ${effectiveTargets} targets` : 'Where the damage lands'
           }
           subtitle="Damage per second split between the main target and everything else."
-          actions={
-            funnelTargets.length > 1 ? (
-              <Select
-                label="Targets"
-                value={effectiveSplit}
-                onChange={setSplitAt}
-                options={funnelTargets.map((count) => ({ value: count, label: String(count) }))}
-              />
-            ) : null
-          }
+          actions={targetSelect}
         />
         <SplitChart
           details={details}
           scenarioId={scenario.id}
-          targets={effectiveSplit}
+          targets={effectiveTargets}
           baselineId={baselineId}
         />
         <Legend
@@ -238,7 +261,7 @@ export function FunnelView({
         <SplitTable
           details={details}
           scenarioId={scenario.id}
-          targets={effectiveSplit}
+          targets={effectiveTargets}
           baselineId={baselineId}
           fixedTargets={sweeps}
         />
@@ -250,219 +273,87 @@ export function FunnelView({
 const EXPLAINER =
   'Funnelling is when the main target takes more damage because the other targets are there — damage-over-time effects on adds generating resources and procs that get spent on the priority target. That is a different question from how the damage happens to be distributed, and the two often disagree.'
 
-interface Point {
+// --------------------------------------------------------------------------------
+// Ranked diverging bars
+// --------------------------------------------------------------------------------
+
+interface RankRow {
+  build: SpecDetail
+  label: string
+  value: number
+  /** value - 1: what the bar draws, so the mark grows from the meaningful baseline. */
+  delta: number
+}
+
+function rankRows(
+  details: SpecDetail[],
+  scenarioId: string,
+  targets: number,
+  metric: Metric,
+  sweeps: boolean,
+): RankRow[] {
+  const rows: RankRow[] = []
+  for (const detail of details) {
+    const cells = detail.scenarios[scenarioId]?.targets ?? []
+    const cell = sweeps ? cells.find((entry) => entry.targets === targets) : cells[0]
+    const value = metric === 'gain' ? cell?.funnelGain : cell?.concentration
+    if (value === undefined) continue
+    rows.push({ build: detail, label: detail.displayName, value, delta: value - 1 })
+  }
+  return rows.sort((a, b) => b.value - a.value)
+}
+
+function DivergingChart({
+  rows,
+  metric,
+  targets,
+}: {
+  rows: RankRow[]
+  metric: Metric
   targets: number
-  [specId: string]: number
-}
-
-function MetricChart({
-  details,
-  scenarioId,
-  colorOf,
-  metric,
-}: {
-  details: SpecDetail[]
-  scenarioId: string
-  colorOf: (id: string) => string
-  metric: Metric
 }) {
-  const data = useMemo(() => {
-    const byTargets = new Map<number, Point>()
-    for (const detail of details) {
-      for (const cell of detail.scenarios[scenarioId]?.targets ?? []) {
-        const value = metric === 'gain' ? cell.funnelGain : cell.concentration
-        if (value === undefined) continue
-        let row = byTargets.get(cell.targets)
-        if (!row) {
-          row = { targets: cell.targets }
-          byTargets.set(cell.targets, row)
-        }
-        row[detail.id] = value
-      }
-    }
-    return [...byTargets.values()].sort((a, b) => a.targets - b.targets)
-  }, [details, scenarioId, metric])
-
-  const labelOffsets = useMemo(() => {
-    const last = data[data.length - 1]
-    if (!last) return new Map<string, number>()
-    const finals = details
-      .map((detail) => ({ id: detail.id, value: last[detail.id] ?? 0 }))
-      .filter((entry) => entry.value > 0)
-    const values = finals.map((entry) => entry.value)
-    const min = metric === 'gain' ? Math.min(...values, 1) : 1
-    return resolveLabelOffsets(finals, [min, Math.max(...values, min + 0.1)], CHART_PLOT_HEIGHT)
-  }, [data, details, metric])
-
-  if (data.length === 0) {
-    return <EmptyState>No data for this scenario yet.</EmptyState>
-  }
+  const byLabel = useMemo(() => new Map(rows.map((row) => [row.label, row.build])), [rows])
+  const tick = useMemo(() => makeBuildTick(byLabel, { width: TICK_WIDTH }), [byLabel])
+  // Asymmetric on purpose: the data is lopsided (a lot of dilution, very little
+  // gain), and a symmetric domain would spend half the plot on empty space.
+  const low = Math.min(0, ...rows.map((row) => row.delta))
+  const high = Math.max(0, ...rows.map((row) => row.delta))
+  const pad = Math.max((high - low) * 0.08, 0.01)
 
   return (
     <div className="px-2 py-4">
-      <ResponsiveContainer width="100%" height={340}>
-        <LineChart data={data} margin={{ top: 8, right: 130, bottom: 8, left: 8 }}>
-          <CartesianGrid {...GRID} />
-          <XAxis
-            dataKey="targets"
-            tick={AXIS_TICK}
-            axisLine={AXIS_LINE}
-            tickLine={false}
-            label={{
-              value: 'Targets',
-              position: 'insideBottom',
-              offset: -4,
-              fill: 'var(--text-muted)',
-              fontSize: 11.5,
-            }}
-          />
-          <YAxis
-            tick={AXIS_TICK}
-            axisLine={false}
-            tickLine={false}
-            width={46}
-            domain={metric === 'gain' ? ['auto', 'auto'] : [1, 'auto']}
-            tickFormatter={(value: number) => `${value.toFixed(1)}x`}
-          />
-          {/* The meaningful zero line: 1.0 is "no effect" for gain and "even spread"
-              for concentration. Either way it is where the reading flips. */}
-          <ReferenceLine
-            y={1}
-            stroke="var(--baseline)"
-            strokeDasharray="4 4"
-            label={{
-              value: metric === 'gain' ? 'No gain' : 'Even spread',
-              position: 'insideBottomRight',
-              fill: 'var(--text-muted)',
-              fontSize: 11,
-            }}
-          />
-          <Tooltip
-            cursor={CURSOR_LINE}
-            content={({ active, payload, label }) => {
-              if (!active || !payload?.length) return null
-              const targets = Number(label)
-              const sorted = [...payload].sort(
-                (a, b) => Number(b.value ?? 0) - Number(a.value ?? 0),
-              )
-              return (
-                <TooltipCard
-                  title={`${targets} targets`}
-                  subtitle={
-                    metric === 'gain'
-                      ? 'Main-target damage vs the same build at one target'
-                      : `Even spread = 1.0x · all on main = ${targets}.0x`
-                  }
-                  rows={sorted.map((entry) => {
-                    const value = Number(entry.value ?? 0)
-                    return {
-                      id: String(entry.dataKey),
-                      label: String(entry.name),
-                      color: entry.color,
-                      value: `${value.toFixed(2)}x`,
-                      hint: `${entry.name}: ${
-                        metric === 'gain'
-                          ? describeFunnelGain(value)
-                          : describeConcentration(value, targets)
-                      }`,
-                    }
-                  })}
-                />
-              )
-            }}
-          />
-          {details.map((detail) => (
-            <Line
-              key={detail.id}
-              type="monotone"
-              dataKey={detail.id}
-              name={detail.displayName}
-              stroke={colorOf(detail.id)}
-              strokeWidth={2}
-              dot={false}
-              activeDot={{ r: 4, strokeWidth: 2, stroke: 'var(--surface-1)' }}
-              isAnimationActive={false}
-              label={makeEndLabel(
-                shortLabel(detail.displayName),
-                data.length - 1,
-                labelOffsets.get(detail.id) ?? 0,
-              )}
-            />
-          ))}
-        </LineChart>
-      </ResponsiveContainer>
-    </div>
-  )
-}
-
-/**
- * One value per build, for scenarios that run at a single target configuration.
- *
- * A line chart needs an x-axis to sweep; an add-wave scenario has one measurement,
- * so the honest form is a ranked comparison. The 1.0 reference line is what makes
- * it readable -- crossing it is the whole question.
- */
-function SinglePointChart({
-  details,
-  scenarioId,
-  colorOf,
-  metric,
-}: {
-  details: SpecDetail[]
-  scenarioId: string
-  colorOf: (id: string) => string
-  metric: Metric
-}) {
-  const rows = useMemo(() => {
-    const out: Array<{ id: string; label: string; value: number }> = []
-    for (const detail of details) {
-      const cell = detail.scenarios[scenarioId]?.targets[0]
-      const value = metric === 'gain' ? cell?.funnelGain : cell?.concentration
-      if (value === undefined) continue
-      out.push({ id: detail.id, label: detail.displayName, value })
-    }
-    return out.sort((a, b) => b.value - a.value)
-  }, [details, scenarioId, metric])
-
-  if (rows.length === 0) {
-    return (
-      <EmptyState>
-        {metric === 'gain'
-          ? 'No funnel gain for these builds in this scenario.'
-          : 'Concentration needs a fixed target count, and this scenario’s adds come and go. Switch to funnel gain.'}
-      </EmptyState>
-    )
-  }
-
-  const min = Math.min(...rows.map((row) => row.value), 1)
-  const max = Math.max(...rows.map((row) => row.value), 1)
-
-  return (
-    <div className="px-2 py-4">
-      <ResponsiveContainer width="100%" height={Math.max(180, rows.length * 40 + 50)}>
-        <BarChart data={rows} layout="vertical" margin={{ top: 4, right: 40, bottom: 4, left: 8 }}>
+      <ResponsiveContainer width="100%" height={Math.max(220, rows.length * ROW_HEIGHT + 50)}>
+        <BarChart
+          data={rows}
+          layout="vertical"
+          margin={{ top: 4, right: 40, bottom: 4, left: 8 }}
+          barCategoryGap={4}
+        >
           <CartesianGrid {...GRID} vertical horizontal={false} />
           <XAxis
             type="number"
-            domain={[Math.min(min, 0.9) - 0.05, Math.max(max, 1.1) + 0.05]}
+            domain={[low - pad, high + pad]}
             tick={AXIS_TICK}
             axisLine={AXIS_LINE}
             tickLine={false}
-            tickFormatter={(value: number) => `${value.toFixed(2)}x`}
+            tickFormatter={(value: number) => `${(1 + value).toFixed(2)}x`}
           />
           <YAxis
             type="category"
             dataKey="label"
-            width={210}
-            tick={AXIS_TICK}
+            width={TICK_WIDTH}
+            tick={tick}
             axisLine={false}
             tickLine={false}
           />
+          {/* 1.0 is the meaningful zero: no gain for one metric, an even spread for
+              the other. The bars grow from it, so a bar's direction is the reading. */}
+          <ReferenceLine x={0} stroke="var(--baseline)" />
           <Tooltip
             cursor={CURSOR_FILL}
             content={({ active, payload }) => {
               if (!active || !payload?.length) return null
-              const row = payload[0]?.payload as { label: string; value: number } | undefined
+              const row = payload[0]?.payload as RankRow | undefined
               if (!row) return null
               return (
                 <TooltipCard
@@ -471,28 +362,21 @@ function SinglePointChart({
                     {
                       id: 'value',
                       label: metric === 'gain' ? 'Funnel gain' : 'Concentration',
+                      color: classColor(row.build.class),
                       value: `${row.value.toFixed(3)}x`,
-                      hint: metric === 'gain' ? describeFunnelGain(row.value) : undefined,
+                      hint:
+                        metric === 'gain'
+                          ? describeFunnelGain(row.value)
+                          : describeConcentration(row.value, targets),
                     },
                   ]}
                 />
               )
             }}
           />
-          <ReferenceLine
-            x={1}
-            stroke="var(--baseline)"
-            strokeDasharray="4 4"
-            label={{
-              value: metric === 'gain' ? 'No gain' : 'Even',
-              position: 'insideTopRight',
-              fill: 'var(--text-muted)',
-              fontSize: 11,
-            }}
-          />
-          <Bar dataKey="value" barSize={16} radius={[0, 4, 4, 0]} isAnimationActive={false}>
+          <Bar dataKey="delta" barSize={14} radius={2} isAnimationActive={false}>
             {rows.map((row) => (
-              <RBCell key={row.id} fill={colorOf(row.id)} />
+              <RBCell key={row.build.id} fill={classColor(row.build.class)} />
             ))}
           </Bar>
         </BarChart>
@@ -501,8 +385,90 @@ function SinglePointChart({
   )
 }
 
+function RankTable({
+  rows,
+  metric,
+  targets,
+}: {
+  rows: RankRow[]
+  metric: Metric
+  targets: number
+}) {
+  return (
+    <div className="overflow-x-auto pb-2">
+      <table className="w-full min-w-[620px] border-collapse text-[13px]">
+        <thead>
+          <tr className="border-b border-hairline text-left text-[11.5px] tracking-wide text-ink-muted uppercase">
+            <th scope="col" className="py-2.5 pr-4 pl-5 font-medium">
+              Build
+            </th>
+            <th scope="col" className="py-2.5 pr-4 text-right font-medium">
+              {metric === 'gain' ? 'Funnel gain' : 'Concentration'}
+            </th>
+            <th scope="col" className="py-2.5 pr-5 font-medium">
+              Reading
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.build.id} className="border-b border-hairline/60 last:border-0">
+              <td className="py-2 pr-4 pl-5">
+                <BuildIdentity build={row.build} />
+              </td>
+              <td className="tnum py-2 pr-4 text-right font-medium text-ink">
+                {row.value.toFixed(2)}x
+              </td>
+              <td className="py-2 pr-5 text-ink-secondary">
+                {metric === 'gain'
+                  ? describeFunnelGain(row.value)
+                  : describeConcentration(row.value, targets)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function gainPanels(details: SpecDetail[], scenarioId: string, metric: Metric): SparkPanel[] {
+  const panels: SparkPanel[] = []
+  for (const detail of details) {
+    const points: Array<{ x: number; y: number }> = []
+    for (const cell of detail.scenarios[scenarioId]?.targets ?? []) {
+      const value = metric === 'gain' ? cell.funnelGain : cell.concentration
+      if (value === undefined) continue
+      points.push({ x: cell.targets, y: value })
+    }
+    if (points.length < 2) continue
+    points.sort((a, b) => a.x - b.x)
+    const last = points[points.length - 1]
+    if (!last) continue
+    panels.push({
+      build: detail,
+      points,
+      headline: `${last.y.toFixed(2)}x`,
+      caption:
+        metric === 'gain'
+          ? describeFunnelGain(last.y)
+          : describeConcentration(last.y, last.x),
+    })
+  }
+  return panels.sort((a, b) => {
+    const av = a.points[a.points.length - 1]?.y ?? 0
+    const bv = b.points[b.points.length - 1]?.y ?? 0
+    return bv - av
+  })
+}
+
+// --------------------------------------------------------------------------------
+// Main target vs everything else
+// --------------------------------------------------------------------------------
+
 interface SplitRow {
   id: string
+  build: SpecDetail
   label: string
   main: number
   rest: number
@@ -522,7 +488,7 @@ function splitRows(
   const rows: SplitRow[] = []
   for (const detail of details) {
     const cells = detail.scenarios[scenarioId]?.targets ?? []
-    const cell = cells.find((entry) => entry.targets === targets)
+    const cell = cells.find((entry) => entry.targets === targets) ?? cells[0]
     // The add-free reference. For a swept scenario that is its own 1-target cell;
     // for an add-wave scenario it lives in Patchwerk, because this scenario has no
     // run without adds.
@@ -534,6 +500,7 @@ function splitRows(
     if (!cell || cell.priorityDps === undefined) continue
     rows.push({
       id: detail.id,
+      build: detail,
       label: detail.displayName,
       main: cell.priorityDps,
       rest: Math.max(0, cell.dps - cell.priorityDps),
@@ -563,6 +530,8 @@ function SplitChart({
     () => splitRows(details, scenarioId, targets, baselineId),
     [details, scenarioId, targets, baselineId],
   )
+  const byLabel = useMemo(() => new Map(rows.map((row) => [row.label, row.build])), [rows])
+  const tick = useMemo(() => makeBuildTick(byLabel, { width: TICK_WIDTH }), [byLabel])
 
   if (rows.length === 0) {
     return <EmptyState>No split data at {targets} targets for these builds.</EmptyState>
@@ -570,12 +539,8 @@ function SplitChart({
 
   return (
     <div className="px-2 py-4">
-      <ResponsiveContainer width="100%" height={Math.max(200, rows.length * 44 + 50)}>
-        <BarChart
-          data={rows}
-          layout="vertical"
-          margin={{ top: 4, right: 24, bottom: 4, left: 8 }}
-        >
+      <ResponsiveContainer width="100%" height={Math.max(200, rows.length * ROW_HEIGHT + 50)}>
+        <BarChart data={rows} layout="vertical" margin={{ top: 4, right: 24, bottom: 4, left: 8 }}>
           <CartesianGrid {...GRID} vertical horizontal={false} />
           <XAxis
             type="number"
@@ -587,8 +552,8 @@ function SplitChart({
           <YAxis
             type="category"
             dataKey="label"
-            width={210}
-            tick={AXIS_TICK}
+            width={TICK_WIDTH}
+            tick={tick}
             axisLine={false}
             tickLine={false}
           />
@@ -633,12 +598,13 @@ function SplitChart({
               )
             }}
           />
-          {/* 2px surface gap between the stacked segments, per the mark spec. */}
+          {/* Two segments of one whole, so this is the one chart here whose colour is
+              not class identity: it encodes which part of the damage, not whose. */}
           <Bar
             dataKey="main"
             stackId="dps"
             fill={MAIN_COLOR}
-            barSize={18}
+            barSize={16}
             isAnimationActive={false}
             stroke="var(--surface-1)"
             strokeWidth={1}
@@ -647,7 +613,7 @@ function SplitChart({
             dataKey="rest"
             stackId="dps"
             fill={REST_COLOR}
-            barSize={18}
+            barSize={16}
             radius={[0, 4, 4, 0]}
             isAnimationActive={false}
             stroke="var(--surface-1)"
@@ -689,7 +655,7 @@ function SplitTable({
   return (
     <>
       <div className="overflow-x-auto px-1 pb-2">
-        <table className="w-full min-w-[760px] border-collapse text-[13px]">
+        <table className="w-full min-w-[820px] border-collapse text-[13px]">
           <thead>
             <tr className="border-b border-hairline text-left text-[11.5px] tracking-wide text-ink-muted uppercase">
               <th scope="col" className="px-4 py-2.5 font-medium">
@@ -715,7 +681,9 @@ function SplitTable({
           <tbody>
             {rows.map((row) => (
               <tr key={row.id} className="border-b border-hairline/60 last:border-0">
-                <td className="px-4 py-2 text-ink">{row.label}</td>
+                <td className="px-4 py-2">
+                  <BuildIdentity build={row.build} />
+                </td>
                 <td className="tnum px-4 py-2 text-right font-medium text-ink">
                   {fullNumber(row.main)}
                 </td>

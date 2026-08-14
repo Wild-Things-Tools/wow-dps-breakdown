@@ -1,0 +1,408 @@
+/**
+ * How a build is named on screen: icon, class colour, written-out name.
+ *
+ * Everything that draws a spec, a class or a hero-talent tree goes through here,
+ * so the three rules the site now runs on are enforced in one place rather than
+ * re-decided per view:
+ *
+ * 1. **Colour is the class colour** -- and it is never the only identity, because
+ *    thirteen class colours cannot be told apart under colour-blindness (see
+ *    lib/palette.ts for the measurements).
+ * 2. **Every icon carries an accessible name.** An icon standing alone gets a
+ *    real `alt`; an icon sitting beside its own written name gets `alt=""` and a
+ *    `title`, so a screen reader hears the name once rather than twice. No
+ *    control and no row is ever identified by an image alone.
+ * 3. **A hero tree is icon *plus* written name, always.** Class and spec icons
+ *    are recognisable enough to stand on their own where space is tight; hero
+ *    tree emblems are new and are not, so the name goes with them everywhere.
+ *
+ * If the icon CDN is blocked or offline, every icon leaves behind the
+ * class-coloured tile it was drawn over, with the entity's initials in it. The
+ * layout does not move and no meaning is lost.
+ */
+
+import { type CSSProperties, type ReactNode } from 'react'
+import {
+  NO_HERO_TREE,
+  classIconUrl,
+  heroTreeIconUrl,
+  iconInitials,
+  specIconUrl,
+} from '../lib/gameIcons'
+import { classColor, classWash } from '../lib/palette'
+import { cx } from './ui'
+
+/**
+ * The fields identity needs, and no more.
+ *
+ * Structural on purpose: `SpecSummary`, `SpecDetail` and `GearSpecResult` all
+ * satisfy it, so a view hands over whichever one it already has.
+ */
+export interface BuildLike {
+  id: string
+  class: string
+  spec: string
+  specId: string
+  heroTalent: string
+  displayName: string
+}
+
+/** "Frost Death Knight" -- the spec, without the hero tree in brackets. */
+export function buildName(build: Pick<BuildLike, 'spec' | 'class'>): string {
+  return `${build.spec} ${build.class}`
+}
+
+/**
+ * A hero tree's name in running prose.
+ *
+ * simc writes `Default` where it ships one build for a spec. That is not a tree,
+ * so it must not appear in a sentence as if it were the name of one.
+ */
+export function heroLabel(heroTalent: string): string {
+  return heroTalent === NO_HERO_TREE ? 'the single build' : heroTalent
+}
+
+/** "Frost Death Knight · Rider of the Apocalypse", for titles and alt text. */
+export function fullBuildName(build: Pick<BuildLike, 'spec' | 'class' | 'heroTalent'>): string {
+  return build.heroTalent === NO_HERO_TREE
+    ? buildName(build)
+    : `${buildName(build)} · ${build.heroTalent}`
+}
+
+// --------------------------------------------------------------------------------
+// Icons
+// --------------------------------------------------------------------------------
+
+/**
+ * One icon over a class-coloured tile.
+ *
+ * The tile is not a placeholder that gets replaced -- it is drawn first and the
+ * image sits on top of it, so a failed load degrades to a coloured, lettered
+ * mark instead of a broken-image glyph.
+ */
+function GameIcon({
+  url,
+  name,
+  wowClass,
+  size,
+  labelled,
+  round,
+}: {
+  url: string | null
+  name: string
+  wowClass: string
+  size: number
+  /** True when the name is written out beside this icon. */
+  labelled: boolean
+  round?: boolean
+}) {
+  const style: CSSProperties = {
+    width: size,
+    height: size,
+    background: classWash(wowClass, 22),
+    borderColor: classColor(wowClass),
+    color: classColor(wowClass),
+    fontSize: Math.max(7, Math.round(size * 0.42)),
+  }
+  return (
+    <span
+      className={cx(
+        'relative inline-flex shrink-0 items-center justify-center overflow-hidden',
+        'border font-semibold',
+        round ? 'rounded-full' : 'rounded-[3px]',
+      )}
+      style={style}
+      // An icon beside its own name must not be announced twice, but it should
+      // still answer a hover.
+      title={labelled ? name : undefined}
+      role={labelled ? undefined : 'img'}
+      aria-label={labelled ? undefined : name}
+    >
+      <span aria-hidden className="leading-none select-none">
+        {iconInitials(name)}
+      </span>
+      {url ? (
+        <img
+          src={url}
+          alt=""
+          aria-hidden
+          loading="lazy"
+          decoding="async"
+          width={size}
+          height={size}
+          className={cx('absolute inset-0 size-full object-cover', round && 'rounded-full')}
+          onError={(event) => {
+            event.currentTarget.style.display = 'none'
+          }}
+        />
+      ) : null}
+    </span>
+  )
+}
+
+export function ClassIcon({
+  wowClass,
+  size = 16,
+  labelled = false,
+}: {
+  wowClass: string
+  size?: number
+  labelled?: boolean
+}) {
+  return (
+    <GameIcon
+      url={classIconUrl(wowClass)}
+      name={wowClass}
+      wowClass={wowClass}
+      size={size}
+      labelled={labelled}
+      round
+    />
+  )
+}
+
+export function SpecIcon({
+  build,
+  size = 18,
+  labelled = false,
+}: {
+  build: BuildLike
+  size?: number
+  labelled?: boolean
+}) {
+  return (
+    <GameIcon
+      url={specIconUrl(build.specId) ?? classIconUrl(build.class)}
+      name={buildName(build)}
+      wowClass={build.class}
+      size={size}
+      labelled={labelled}
+    />
+  )
+}
+
+/**
+ * The hero-talent tree: emblem plus name, never emblem alone.
+ *
+ * `Default` is simc's marker for a spec it ships a single build for. It is not a
+ * hero tree, so it gets no emblem and no invented name -- just a muted pill
+ * saying what it actually means, which is that there is nothing to choose here.
+ */
+export function HeroTreeBadge({
+  build,
+  size = 15,
+  className,
+}: {
+  build: Pick<BuildLike, 'class' | 'heroTalent'>
+  size?: number
+  className?: string
+}) {
+  if (build.heroTalent === NO_HERO_TREE) {
+    return (
+      <span
+        className={cx(
+          'inline-flex items-center rounded-full border border-hairline px-1.5 py-px',
+          'text-[11px] text-ink-muted',
+          className,
+        )}
+        title="SimulationCraft ships one build for this spec, so there is no hero tree to pick"
+      >
+        Single build
+      </span>
+    )
+  }
+  const url = heroTreeIconUrl(build.heroTalent)
+  return (
+    <span className={cx('inline-flex items-center gap-1 text-[11.5px] text-ink-secondary', className)}>
+      <GameIcon
+        url={url}
+        name={build.heroTalent}
+        wowClass={build.class}
+        size={size}
+        labelled
+        round
+      />
+      {build.heroTalent}
+    </span>
+  )
+}
+
+// --------------------------------------------------------------------------------
+// Composites
+// --------------------------------------------------------------------------------
+
+/**
+ * The full identity of one build: spec icon, spec name in the class colour, and
+ * the hero tree written out beneath or beside it.
+ *
+ * This is the component to reach for in a table row, a card header or a legend.
+ * `layout="stacked"` puts the hero tree on its own line, which is what a narrow
+ * table column wants; `"inline"` keeps it on one line.
+ */
+export function BuildIdentity({
+  build,
+  size = 20,
+  layout = 'stacked',
+  hero = true,
+  trailing,
+  className,
+}: {
+  build: BuildLike
+  size?: number
+  layout?: 'stacked' | 'inline'
+  /** Drop the hero tree where the surrounding context already names it. */
+  hero?: boolean
+  trailing?: ReactNode
+  className?: string
+}) {
+  const showHero = hero
+  return (
+    <span className={cx('inline-flex min-w-0 items-center gap-2', className)}>
+      <SpecIcon build={build} size={size} labelled />
+      <span
+        className={cx(
+          'min-w-0',
+          layout === 'stacked' ? 'flex flex-col leading-tight' : 'inline-flex items-baseline gap-2',
+        )}
+      >
+        <span className="truncate font-medium" style={{ color: classColor(build.class) }}>
+          {buildName(build)}
+        </span>
+        {showHero ? <HeroTreeBadge build={build} /> : null}
+        {trailing}
+      </span>
+    </span>
+  )
+}
+
+/**
+ * One line, for legends and tight cells: spec icon, spec name in class colour,
+ * hero tree after it. Same rules, less vertical space.
+ */
+export function BuildChip({
+  build,
+  dash,
+  className,
+}: {
+  build: BuildLike
+  /** Stroke dash of this build's line, drawn as a key. */
+  dash?: string
+  className?: string
+}) {
+  return (
+    <span className={cx('inline-flex min-w-0 items-center gap-1.5 text-[12.5px]', className)}>
+      {dash !== undefined ? (
+        <svg width="16" height="8" aria-hidden className="shrink-0">
+          <line
+            x1="0"
+            y1="4"
+            x2="16"
+            y2="4"
+            stroke={classColor(build.class)}
+            strokeWidth="2"
+            strokeDasharray={dash}
+          />
+        </svg>
+      ) : null}
+      <SpecIcon build={build} size={15} labelled />
+      <span className="truncate" style={{ color: classColor(build.class) }}>
+        {buildName(build)}
+      </span>
+      <HeroTreeBadge build={build} size={13} />
+    </span>
+  )
+}
+
+// --------------------------------------------------------------------------------
+// Recharts axis ticks
+// --------------------------------------------------------------------------------
+
+/**
+ * A category-axis tick that draws the spec icon and the build's name.
+ *
+ * Wowhead's tooltip script can never reach a chart axis -- it only enriches HTML
+ * anchors -- but an SVG `<image>` with a URL of our own is a different matter, so
+ * the icon that is impossible for an item name is straightforward here.
+ *
+ * The name is still drawn as text beside it. The icon is a second channel, not
+ * the identity: an axis tick cannot be focused or hovered for an accessible
+ * name, so the text is what has to carry it, and the table twin below every
+ * chart carries it again.
+ */
+export function makeBuildTick(
+  builds: Map<string, BuildLike>,
+  { width, iconSize = 15 }: { width: number; iconSize?: number },
+) {
+  // Recharts types a tick's coordinates as `string | number`, so they are
+  // narrowed here rather than asserted.
+  return function BuildTick(props: {
+    x?: string | number
+    y?: string | number
+    payload?: { value?: string | number }
+  }) {
+    const { x, y, payload } = props
+    if (typeof x !== 'number' || typeof y !== 'number') return null
+    const label = String(payload?.value ?? '')
+    const build = builds.get(label)
+    const url = build ? (specIconUrl(build.specId) ?? classIconUrl(build.class)) : null
+    const color = build ? classColor(build.class) : 'var(--text-muted)'
+    // Ticks arrive right-aligned against the plot: lay the row out from the left
+    // edge of the reserved width so icons line up in a column.
+    const left = x - width
+    const gap = iconSize + 6
+    return (
+      <g>
+        <rect
+          x={left}
+          y={y - iconSize / 2}
+          width={iconSize}
+          height={iconSize}
+          rx={3}
+          fill={color}
+          fillOpacity={0.22}
+          stroke={color}
+          strokeWidth={1}
+        />
+        {/* Initials under the image, exactly as the HTML icon does it: an opaque
+            icon covers them, a blocked CDN leaves a lettered tile. */}
+        <text
+          x={left + iconSize / 2}
+          y={y}
+          dy={3}
+          textAnchor="middle"
+          fill={color}
+          fontSize={7.5}
+          fontWeight={600}
+        >
+          {iconInitials(build ? buildName(build) : label)}
+        </text>
+        {url ? (
+          <image
+            href={url}
+            x={left}
+            y={y - iconSize / 2}
+            width={iconSize}
+            height={iconSize}
+            clipPath="inset(0 round 3px)"
+            preserveAspectRatio="xMidYMid slice"
+          />
+        ) : null}
+        <text
+          x={left + gap}
+          y={y}
+          dy={build && build.heroTalent !== NO_HERO_TREE ? -1 : 4}
+          fill={color}
+          fontSize={11.5}
+          fontWeight={500}
+        >
+          {build ? buildName(build) : label}
+        </text>
+        {build && build.heroTalent !== NO_HERO_TREE ? (
+          <text x={left + gap} y={y} dy={11} fill="var(--text-muted)" fontSize={10.5}>
+            {build.heroTalent}
+          </text>
+        ) : null}
+      </g>
+    )
+  }
+}

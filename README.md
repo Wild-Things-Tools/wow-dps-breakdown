@@ -337,13 +337,15 @@ pipeline/          Python: profile discovery, simc orchestration, metric extract
     fightextract.py  reading fight structure out of Warcraft Logs event payloads
     fightprofile.py  per-boss fight shapes, with provenance, and the simc options they make
     fightprobe.py    `wowdps fight-probe`: measuring a boss's shape from real logs
+    fightdataset.py  `wowdps fights`: publishing the asserted and measured halves together
     data/
       gear_pools.json      curated item pools per tier
       fight_profiles.json  per-boss fight shapes: measured and asserted facts, marked
 web/               React SPA (Vite, TypeScript, Tailwind v4, Recharts)
   public/data/       the generated dataset, committed
     tiers.json         which tiers exist, and which one is current
-    <tier>/            one dataset per tier: manifest, per-spec detail files, gear.json
+    <tier>/            one dataset per tier: manifest, per-spec detail files, gear.json,
+                       fights.json
 .github/workflows/
   ci.yml             lint, typecheck, test on every push
   sims.yml           weekly simulation matrix → commits fresh data
@@ -503,9 +505,11 @@ parallel shards.
 
 - **On demand** (`fight-probe.yml`): reads a handful of real logs per boss and reports what
   its fights actually look like — target counts over time, add lifetimes, phase
-  boundaries, auras on enemies, raid size. Commits nothing; it uploads evidence. Not on a
+  boundaries, auras on enemies, raid size. It uploads evidence, and with its `publish`
+  input ticked it also commits `fights.json` so the Fights view shows the run. Not on a
   schedule because the Warcraft Logs point budget is shared with the weekly check above,
-  and because turning the output into a fight profile is a judgement rather than a merge.
+  and because turning the output into a *fight profile* is still a judgement rather than a
+  merge — the published dataset keeps the asserted and measured halves apart instead.
 
 The nightly job publishes whatever finished. One spec that fails to converge costs that
 spec's cell, not the whole day's data, and the failure is recorded in the spec's own file
@@ -679,12 +683,48 @@ dropped.
 | Damage-amplification *magnitude* | **not available.** Nothing in the API says what an aura does. That 20% is somebody's word, and is marked as such |
 | Downtime | **not available as such.** The nearest is Warcraft Logs' own `activeTime`, which counts a player as active while doing anything at all |
 
+### The Fights view is where you check the machine
+
+Everything above is only worth having if somebody who plays these fights can look at it
+and say *no, that's wrong*. So the profiles and the measurements are published as
+`web/public/data/<tier>/fights.json` and drawn in the **Fights** view, one boss at a time:
+
+- **A step chart of how many things are alive, and when.** What the simulation would have
+  alive against what one real pull had alive, on one axis, with phase boundaries and
+  measured aura windows marked. This is the thing to eyeball.
+- **Asserted against measured, side by side**, with the difference and no verdict. A
+  disagreement is a finding; the likelier culprit is the extraction.
+- **The SimulationCraft scenario the profile produces**, and what it cannot express.
+- Sample size and the top-parse bias sit next to the numbers, not in a footnote.
+
+A boss nobody has measured or asserted anything about reads as *nothing measured or
+asserted yet* — never as a default of one target. Eight of the nine are in that state, and
+that gap is the most useful thing on the page: it says where to aim the next probe.
+
+The chart's logged line is **one real pull, drawn whole**, chosen as the sampled fight
+whose time-weighted mean target count sits nearest the pooled median. It is deliberately
+not a per-second average across pulls: kills differ in length, so an average produces a
+shape no pull had — a wave arriving at 88s in one log and 96s in another comes out as a
+two-step ramp — and past the shortest fight it would be drawn from fewer and fewer
+samples. The other sampled pulls are drawn faintly beside it, and the pooled claims (mean
+targets, peak targets, kill time) stay as medians with the range they came from.
+
+Nothing in this file is simulated yet. Nine bosses across twenty-six builds is a cost
+decision, and these shapes are one boss deep; the view exists so that decision can be
+made with the shapes in front of you.
+
 ### Running the probe
 
 `wowdps fight-probe` needs the same credentials as the cross-check, so it runs in CI:
 the **Fight probe** workflow, on demand, uploading a readable dump and the raw response
-cache as an artifact. It commits nothing — the output is evidence for writing a profile by
-hand, not a dataset.
+cache as an artifact. By default it commits nothing — the dump is evidence for writing a
+profile by hand. Tick its `publish` input and it also writes and commits
+`web/public/data/<tier>/fights.json`, which is what puts a measurement on the site.
+
+`wowdps fights` builds the same file offline, with no credentials: without `--probe` it
+publishes the assertions alone (every measured column empty, which is the true state of a
+fresh checkout), and with `--probe fight-probe-<tier>.json` pointed at a downloaded CI
+artifact it fills in the measured half for nothing.
 
 The API meters by *points* per hour rather than requests, and does not publish a cost
 function, so the probe measures its own cost from `rateLimitData` and stops at 80% of the
@@ -700,26 +740,38 @@ which is not the shape the median parse the site compares against experienced.
 
 ## Design and accessibility notes
 
-- Series colours come from a palette validated for colour-blind separation and contrast
-  in both light and dark mode. Slots are assigned in fixed order and follow the entity,
-  so filtering a chart never repaints the remaining series.
-- Three light-mode slots sit below 3:1 against the light surface, so every multi-series
-  chart ships direct labels at the line ends *and* a table view — identity never rests on
-  colour alone.
-- WoW class colours are a strong domain convention but are nowhere near colour-blind safe
-  as a set of thirteen, so they appear only as a secondary cue (a dot beside a name),
-  never as the series encoding.
-- Dark mode is a separately chosen set of steps validated against the dark surface, not
-  an automatic inversion.
+- **Nothing is selected before anything is shown.** There is no spec picker: every view
+  renders every build in the tier and lets you filter afterwards. That changed what the
+  charts could be — twenty-six lines on one plot is a smear — so the comparison views are
+  small multiples, ranked bars and tables rather than a multi-line plot behind a chooser.
+- **The site is dark only.** One surface, one set of tokens, one set of measurements.
+- **Class colour is the primary identity encoding**, the way Warcraft Logs does it. As a
+  set of thirteen those colours are not colour-blind safe and never can be — measured
+  against the dataviz validator they fail its lightness, chroma and separation checks
+  outright. So colour is redundant, and identity is carried by a class icon, a spec icon,
+  a hero-talent-tree icon, the name written out beside them, and the table twin under
+  every chart. Ten of the thirteen are Blizzard's canonical values; three (Death Knight,
+  Demon Hunter, Shaman) sat below the 4.5:1 text floor on this surface and are lifted
+  along their own hue until they clear it.
+- Class, spec and hero-tree icons are a presentation mapping in the web code, not a
+  dataset field — simc ships no icon data and the dataset's value is that it is derived
+  from simc and reproducible. The images come from Wowhead's CDN, and every icon is drawn
+  over a class-coloured tile with the entity's initials, so a blocked CDN costs the
+  picture and nothing else. Every icon carries an accessible name, and a hero tree is
+  always icon *plus* written name, because those emblems are new and not yet recognisable.
+- The eight validated series colours are still used where a mark is not a build — main
+  target versus everything else, gain versus loss — assigned in fixed order, never cycled.
 - Wowhead tooltips and icons are an enhancement on top of a page that is complete
   without them: a name is a name, in the cell's own ink, with the icon's space reserved
   so nothing moves when the icon arrives or never does. Quality colouring stays off —
   every trinket in the sweep is an epic, so it would be a constant, and text colour in
   those tables already means something (a muted cell is a tie).
-- Only HTML can carry a tooltip: the script enriches `document.links`, and an SVG
-  anchor is in neither that collection nor its `nodeName` check. So chart axis labels
-  stay plain text and every chart that names items is paired with a table that links
-  them — which the palette's relief rule already required for other reasons.
+- Only HTML can carry a Wowhead tooltip: the script enriches `document.links`, and an
+  SVG anchor is in neither that collection nor its `nodeName` check. So chart axis
+  labels never link an item, and every chart that names items is paired with a table
+  that does. Class and spec icons *are* drawn inside the SVG — an `<image>` with a URL
+  we control needs nothing from Wowhead's script. What cannot go in a chart is a
+  third-party lookup, not a picture.
 
 ---
 

@@ -246,3 +246,84 @@ def test_discover_items_ignores_effect_rows_with_no_item(tmp_path):
     # bonus id. Counting those as "this item has an effect" would mark everything.
     found = equipment.discover_items(fake_simc(tmp_path), 1)
     assert [(i.item_id, i.has_effect) for i in found] == [(271874, False)]
+
+
+def _pool_with(rotation, dungeons):
+    """A two-item Mythic+ pool, so rotation filtering can be exercised directly."""
+    from wowdps.equipment import SLOTS_BY_ID, GearItem, ItemLevel, SlotPool
+
+    items = tuple(
+        GearItem(
+            item_id=1000 + index,
+            name=f"Trinket {index}",
+            slug=f"trinket_{index}",
+            primary_stat=None,
+            secondary_stat=None,
+            source="mythicplus",
+            base_ilevel=108,
+            base_quality=3,
+            dungeon=dungeon,
+        )
+        for index, dungeon in enumerate(dungeons)
+    )
+    return SlotPool(
+        tier="MID2",
+        slot=SLOTS_BY_ID["trinket"],
+        items=items,
+        item_levels=(ItemLevel(id="heroic", label="Heroic", ilevel=334, evidence=""),),
+        baseline_source="mythicplus",
+        candidate_source="raid",
+        rotation=tuple(rotation),
+    )
+
+
+def test_an_undeclared_rotation_filters_nothing():
+    """Dropping every item whose dungeon is merely unrecorded would empty the pool."""
+    pool = _pool_with([], [None, "Some Dungeon"])
+    assert len(pool.baseline_candidates("intellect")) == 2
+    assert pool.rotation_is_stated() is False
+
+
+def test_a_declared_rotation_drops_what_this_season_cannot_farm():
+    pool = _pool_with(["Dungeon A"], ["Dungeon A", "Dungeon B"])
+    kept = pool.baseline_candidates("intellect")
+    assert [item.dungeon for item in kept] == ["Dungeon A"]
+
+
+def test_a_declared_rotation_reports_items_nobody_placed():
+    """An unplaced item is silently excluded, so it has to be countable."""
+    pool = _pool_with(["Dungeon A"], ["Dungeon A", None])
+    assert [item.item_id for item in pool.unplaced()] == [1001]
+    assert len(pool.baseline_candidates("intellect")) == 1
+
+
+def test_rotation_never_filters_the_raid_pool():
+    """A raid drop is not gated on the dungeon rotation."""
+    from wowdps.equipment import GearItem
+
+    pool = _pool_with(["Dungeon A"], ["Dungeon A"])
+    raid_item = GearItem(
+        item_id=270160,
+        name="Raid Trinket",
+        slug="raid_trinket",
+        primary_stat=None,
+        secondary_stat=None,
+        source="raid",
+        base_ilevel=219,
+        base_quality=4,
+    )
+    assert pool.in_rotation(raid_item) is True
+
+
+def test_a_named_rotation_with_nothing_placed_still_filters_nothing():
+    """Naming the dungeons before tagging the items must not empty the pool."""
+    pool = _pool_with(["Dungeon A", "Dungeon B"], [None, None])
+    assert pool.rotation_is_stated() is True
+    assert len(pool.baseline_candidates("intellect")) == 2
+    assert len(pool.unplaced()) == 2
+
+
+def test_filtering_switches_on_once_something_is_placed():
+    pool = _pool_with(["Dungeon A"], ["Dungeon A", None])
+    kept = pool.baseline_candidates("intellect")
+    assert [item.dungeon for item in kept] == ["Dungeon A"]

@@ -3,6 +3,10 @@
  *
  * Reads only the manifest, so it renders without fetching per-spec files. That
  * is why the target count is restricted to the four the manifest summarises.
+ *
+ * Nothing is selected here and nothing ever was -- this view is the precedent
+ * the rest of the site was rebuilt against. Every build in the tier, sorted,
+ * with its class colour, its spec icon and its hero tree written out.
  */
 
 import { useMemo, useState } from 'react'
@@ -17,8 +21,8 @@ import {
   YAxis,
 } from 'recharts'
 import { AXIS_LINE, AXIS_TICK, CURSOR_FILL, GRID, TooltipCard } from '../components/chart'
+import { BuildIdentity, makeBuildTick } from '../components/BuildIdentity'
 import {
-  Dot,
   EmptyState,
   Note,
   Panel,
@@ -38,12 +42,16 @@ import type { Manifest, ScenarioMeta, SpecSummary } from '../lib/types'
 
 const SUMMARY_TARGETS = [1, 3, 5, 10]
 
+/** Two lines of tick text plus the icon need more room than a bare name. */
+const ROW_HEIGHT = 32
+const TICK_WIDTH = 205
+
 type Mode = 'chart' | 'table'
 
 interface Row {
   id: string
   label: string
-  wowClass: string
+  build: SpecSummary
   dps: number
   funnelGain?: number
   priorityShare?: number
@@ -130,7 +138,9 @@ export function OverviewView({
         <Note>
           Simulated damage per second against a stationary target with no external buffs,
           using SimulationCraft's own tier profiles. Treat gaps under a few percent as a
-          tie — the sampling error alone is around {samplingError(manifest.settings)}.
+          tie — the sampling error alone is around {samplingError(manifest.settings)}. Bars
+          carry each build's class colour; the icon and the name beside it are what
+          identify it.
         </Note>
       </Panel>
     </div>
@@ -146,7 +156,7 @@ function buildRows(specs: SpecSummary[], scenarioId: string, targets: number): R
     rows.push({
       id: spec.id,
       label: spec.displayName,
-      wowClass: spec.class,
+      build: spec,
       dps,
       funnelGain: entry?.funnelGain,
       priorityShare: entry?.priorityShare,
@@ -167,7 +177,9 @@ function RankingChart({
 }) {
   // Horizontal bars: the labels are long spec names, which read far better along
   // the y-axis than rotated under a vertical chart.
-  const height = Math.max(280, rows.length * 26 + 40)
+  const height = Math.max(280, rows.length * ROW_HEIGHT + 40)
+  const byLabel = useMemo(() => new Map(rows.map((row) => [row.label, row.build])), [rows])
+  const tick = useMemo(() => makeBuildTick(byLabel, { width: TICK_WIDTH }), [byLabel])
 
   return (
     <div className="px-2 py-4">
@@ -184,8 +196,8 @@ function RankingChart({
           <YAxis
             type="category"
             dataKey="label"
-            width={210}
-            tick={AXIS_TICK}
+            width={TICK_WIDTH}
+            tick={tick}
             axisLine={false}
             tickLine={false}
           />
@@ -200,7 +212,12 @@ function RankingChart({
                   title={row.label}
                   subtitle={`${percent(row.dps / best, 0)} of the top build`}
                   rows={[
-                    { id: 'dps', label: 'DPS', value: fullNumber(row.dps) },
+                    {
+                      id: 'dps',
+                      label: 'DPS',
+                      color: classColor(row.build.class),
+                      value: fullNumber(row.dps),
+                    },
                     ...(row.funnelGain !== undefined
                       ? [
                           {
@@ -216,14 +233,13 @@ function RankingChart({
               )
             }}
           />
-          {/* One accent colour, not a ramp: bar length already encodes magnitude, so
-              colouring by the same value would say it twice and push the leaders into
-              a near-black step. */}
+          {/* Class colour, per the site's identity rule: the bar length carries the
+              magnitude, the hue carries which class it belongs to, and the icon and
+              name on the axis carry which build. */}
           <Bar
             dataKey="dps"
             radius={[0, 4, 4, 0]}
             barSize={16}
-            fill="var(--series-1)"
             isAnimationActive={false}
             onClick={(entry: unknown) => {
               const row = (entry as { payload?: Row } | undefined)?.payload
@@ -231,7 +247,7 @@ function RankingChart({
             }}
           >
             {rows.map((row) => (
-              <Cell key={row.id} cursor="pointer" />
+              <Cell key={row.id} cursor="pointer" fill={classColor(row.build.class)} />
             ))}
           </Bar>
         </BarChart>
@@ -251,7 +267,7 @@ function RankingTable({
 }) {
   return (
     <div className="overflow-x-auto px-1 pb-2">
-      <table className="w-full min-w-[560px] border-collapse text-[13px]">
+      <table className="w-full min-w-[640px] border-collapse text-[13px]">
         <thead>
           <tr className="border-b border-hairline text-left text-[11.5px] tracking-wide text-ink-muted uppercase">
             <th scope="col" className="px-4 py-2.5 font-medium">
@@ -279,10 +295,9 @@ function RankingTable({
                 <button
                   type="button"
                   onClick={() => onOpenSpec(row.id)}
-                  className="flex items-center gap-2 text-left text-ink hover:underline"
+                  className="text-left hover:underline"
                 >
-                  <Dot color={classColor(row.wowClass)} ring />
-                  {row.label}
+                  <BuildIdentity build={row.build} />
                 </button>
               </td>
               <td className="tnum px-4 py-2 text-right font-medium text-ink">

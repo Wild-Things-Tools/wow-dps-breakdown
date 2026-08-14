@@ -16,6 +16,17 @@
      "evidence": "bonus_id 13848, the top of the Midnight upgrade ladder and the highest item level any MID2 profile equips."
     }
    ],
+   "dungeonRotation": [
+    "Altar of Fangs",
+    "Murder Row",
+    "Den of Nalorakk",
+    "The Blinding Vale",
+    "Voidscar Arena",
+    "Kings' Rest",
+    "Temple of Sethraliss",
+    "Ruby Life Pools"
+   ],
+   "dungeonRotationNote": "Blizzard's own announcement 'The Shadows Deepen: Midnight Season 2 Begins August 18' (news article 24294369), corroborated independently by Method, Icy Veins and Conquest Capped, which agree on all eight. Five are Midnight dungeons; Kings' Rest and Temple of Sethraliss return from Battle for Azeroth and Ruby Life Pools from Dragonflight. Filtering stays OFF until at least one mythicplus item carries a 'dungeon' (see SlotPool.in_rotation): naming the rotation without placing the items would exclude everything. Assign dungeons per item to switch it on.",
    "slots": {
     "trinket": {
      "baselineSource": "mythicplus",
