@@ -915,6 +915,15 @@ output.
 
 ### Two things the first real probe run exposed
 
+- **Friendly means players *and everything they own*, and this is now measured.**
+  The six-pull MID2 pass after the fix reports **`sourced` = 100% on every aura
+  window of every boss**, so the source test can fire on everything and the pet gap
+  was the entire cause of the pollution. Lightblinded Vanguard's list went from 31
+  entries to 15 and Imperator Averzian's from 16 to 4, with Blood Plague, Bloodshed,
+  Frostbolt, Mind Flay, Mind Sear, Rend Flesh and Legion Strike all gone.
+  Consequence: the "unknown source is not a player" branch is not carrying any real
+  weight today, so if auras ever look wrong again, check the *ownership* resolution
+  before suspecting missing source ids.
 - **Friendly means players *and everything they own*.** `masterData.actors` types a
   hunter's pet, a mage's Mirror Image and a boss's summoned add all as `Pet`, so the
   type separates nothing -- what separates them is whose `petOwner` they carry.
@@ -1163,6 +1172,29 @@ reader — on the way past, and leave a profile that always agreed with the extr
 measurement's condition can change next run; a withheld measurement is never
 reported as "disagreeing" with a person, since a number the fetch never finished
 reading has not earned the word.
+
+### What the six-pull pass found, and it is the answer to the carrier question
+
+MID2, six reports per boss, `--max-pages 12`, 2026-08-14. Event coverage is **1.0
+on eight of nine bosses** (Midnight Falls 0.946), so these are whole-fight numbers
+rather than the prefix the first pass measured.
+
+| | |
+|---|---|
+| Lightblinded Vanguard | mean 2.89, peak 3, one pattern over all six pulls -- the owner's permanent-three assertion, reproduced |
+| Vorasius | mean 1.0, peak 1: a genuine single-target fight |
+| Vaelgor & Ezzorak | **two patterns**: four pulls reach three targets once, two reach it twice over a 100s longer kill |
+| Belo'ren | three pulls share a shape that reaches three targets *four times* |
+| Imperator Averzian | only two of six pulls matched anything -- the add-wave boss is the variable one |
+
+**The carrier question is answered.** `Light Infused` (ids 1258659 and 1258662)
+sits on **General Amias Bellamy**, in six pulls of six, one instance each. It is not
+the shape the profile asserts, though: it runs the whole fight (0s and 26s to the
+end) where the hand fact says ~20% for ~20s at the pull. The only 20-second windows
+on this encounter are `Zealous Spirit`, and those rotate over all three enemies
+starting around 84s, 112s and 136s. Magnitude is never in the API, so the 20% stays
+an assertion either way. Per this file's own rule the disagreement is a finding and
+the profile is untouched.
 
 ### Which enemy carries an aura, and which enemy is the boss
 

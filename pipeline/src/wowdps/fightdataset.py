@@ -661,11 +661,38 @@ def _pull_block(fight: dict, pooled: list[dict]) -> dict:
     }
 
 
+#: Words for how many times a shape reaches its own peak. Past this many the count
+#: is written as a number, because "peaks at 3 seven times" reads as a measurement
+#: and "peaks at 3 many times" reads as a shrug.
+_TIMES = {1: "once", 2: "twice", 3: "three times", 4: "four times"}
+
+
+def _peak_visits(steps: list, peak: float) -> int:
+    """How many separate times the target count rises to the shape's own peak.
+
+    This is what tells two patterns apart when their peak and mean do not. Vaelgor
+    & Ezzorak's six sampled pulls split into a 237s kill that reaches three targets
+    once and a 337s kill that reaches three twice; both label as "peaks at 3, 2.1 on
+    average" without it, and a chooser offering two identical-looking options is
+    worse than no chooser.
+    """
+    visits = 0
+    above = False
+    for step in steps:
+        if not isinstance(step, (list, tuple)) or len(step) < 2:
+            continue
+        at_peak = float(step[1]) >= peak
+        if at_peak and not above:
+            visits += 1
+        above = at_peak
+    return visits
+
+
 def _pattern_label(pull: dict) -> str:
     """A factual name for a shape, never an interpretation of it.
 
     "Three targets throughout" is a reading somebody could disagree with; "peaks at
-    3, 2.9 on average" is what was measured. The view writes the sentence.
+    3 twice, 2.2 on average" is what was measured. The view writes the sentence.
     """
     peak = pull.get("peak")
     mean = pull.get("mean")
@@ -673,7 +700,11 @@ def _pattern_label(pull: dict) -> str:
         return "unmeasured shape"
     if pull.get("constant"):
         return f"{int(peak)} target{'' if int(peak) == 1 else 's'} throughout"
-    return f"peaks at {int(peak)}, {float(mean):.1f} on average"
+    visits = _peak_visits(pull.get("steps") or [], float(peak))
+    how_often = _TIMES.get(visits, f"{visits} times") if visits else ""
+    return (
+        f"peaks at {int(peak)}{f' {how_often}' if how_often else ''}, {float(mean):.1f} on average"
+    )
 
 
 def _patterns(payload: dict, pooled: list[dict]) -> list[dict]:
