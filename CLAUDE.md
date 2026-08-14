@@ -124,6 +124,34 @@ source column from any item database that reads `JournalEncounterItem` (Wowhead,
 Raidbots, a local DB2 dump). It slots into the pool file's `source` field with no
 code change. `wowdps gear-candidates` prints every other column already.
 
+### The Mythic+ pool is a proxy for the wrong thing, in both directions
+
+A Mythic+ season runs a **fixed rotation of eight dungeons**, and only their loot can
+be farmed. The pool rule ("rare-base trinkets at the expansion's dungeon item level")
+does not express that:
+
+- it covers *every* dungeon of the expansion, so it can include trinkets nobody can
+  obtain this season, and
+- modern rotations mix in dungeons from **older expansions**, whose trinkets carry
+  ids and base item levels from a different block entirely — so it can also *miss*
+  obtainable ones.
+
+This matters because the M+ pool is what the baseline is built from: an unobtainable
+trinket anchoring "what the character already wears" makes every raid comparison
+against it meaningless. Blast radius is narrower than the pool though — only **8 of
+the 25** M+ trinkets ever win a baseline slot across all 26 builds, so those are the
+ones to check first.
+
+`SlotPool.rotation` and `GearItem.dungeon` exist for the fix, and `dungeonRotation`
+in `gear_pools.json` is declared but **empty**. An empty rotation filters nothing, on
+purpose: dropping every item whose dungeon is merely unrecorded would silently empty
+the pool. Fill in the dungeons and tag the items and the pool narrows with no code
+change; `SlotPool.unplaced()` reports items the rotation would exclude only because
+nobody assigned them.
+
+Do not try to derive the rotation from simc. It is not there — this is the same
+absence as item source, one level further.
+
 ### The item level ladder is measurable, the track names are not
 
 Equipping one trinket under each bonus id of the Midnight upgrade family (item_bonus

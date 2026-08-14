@@ -183,6 +183,11 @@ class GearItem:
     #: Extra bonus ids to pass alongside ``ilevel``. Empty for trinkets, which need
     #: none; rings and necks will need their socket bonuses here.
     bonus_ids: tuple[int, ...] = ()
+    #: Which dungeon drops it, when somebody has said. ``None`` means unknown, and
+    #: unknown is why ``SlotPool.rotation`` exists: a Mythic+ season runs a fixed
+    #: rotation of dungeons and only their loot is obtainable. simc ships no item
+    #: source at all, so this cannot be derived -- it is asserted or it is absent.
+    dungeon: str | None = None
 
     def usable_by(self, primary: str) -> bool:
         if self.primary_stat is None:
@@ -222,13 +227,53 @@ class SlotPool:
     baseline_source: str
     #: Which source the candidates being judged are drawn from.
     candidate_source: str
+    #: The dungeons this season actually runs, when declared. Empty means "not
+    #: stated", and then nothing is filtered -- see ``in_rotation``.
+    rotation: tuple[str, ...] = ()
     note: str = ""
 
+    def in_rotation(self, item: GearItem) -> bool:
+        """Is this item obtainable this season?
+
+        A Mythic+ season runs a fixed set of dungeons, so a trinket from a dungeon
+        outside it cannot be farmed and has no business anchoring a baseline the
+        loot council reasons from. The pool is selected structurally (rare-base
+        trinkets at the expansion's dungeon item level), which captures *every*
+        dungeon of the expansion rather than this season's rotation -- and, because
+        modern rotations mix in older dungeons, may also miss obtainable trinkets
+        whose ids and base item levels belong to a previous expansion entirely. The
+        rule is a proxy for the wrong thing in both directions.
+
+        With no rotation declared nothing is filtered, because dropping every item
+        whose dungeon is merely unrecorded would silently empty the pool. That is
+        the state to fix by naming the dungeons, not by loosening this.
+        """
+        if not self.rotation or item.source != "mythicplus":
+            return True
+        return item.dungeon in self.rotation
+
+    def rotation_is_stated(self) -> bool:
+        return bool(self.rotation)
+
+    def unplaced(self) -> list[GearItem]:
+        """Rotation-relevant items nobody has assigned a dungeon to yet."""
+        if not self.rotation:
+            return []
+        return [i for i in self.items if i.source == "mythicplus" and i.dungeon is None]
+
     def baseline_candidates(self, primary: str) -> list[GearItem]:
-        return [i for i in self.items if i.source == self.baseline_source and i.usable_by(primary)]
+        return [
+            i
+            for i in self.items
+            if i.source == self.baseline_source and i.usable_by(primary) and self.in_rotation(i)
+        ]
 
     def candidates(self, primary: str) -> list[GearItem]:
-        return [i for i in self.items if i.source == self.candidate_source and i.usable_by(primary)]
+        return [
+            i
+            for i in self.items
+            if i.source == self.candidate_source and i.usable_by(primary) and self.in_rotation(i)
+        ]
 
     def baseline_ilevel(self) -> ItemLevel:
         """The baseline is worn at the lower of the two levels.
@@ -289,6 +334,7 @@ def load_pools(tier: str, path: Path | None = None) -> GearPools:
                 base_ilevel=int(item.get("baseIlevel", 0)),
                 base_quality=int(item.get("baseQuality", 0)),
                 bonus_ids=tuple(item.get("bonusIds") or ()),
+                dungeon=item.get("dungeon"),
             )
             for item in slot_entry["items"]
         )
@@ -299,6 +345,7 @@ def load_pools(tier: str, path: Path | None = None) -> GearPools:
             item_levels=levels,
             baseline_source=slot_entry["baselineSource"],
             candidate_source=slot_entry["candidateSource"],
+            rotation=tuple(entry.get("dungeonRotation") or ()),
             note=slot_entry.get("note", ""),
         )
 
