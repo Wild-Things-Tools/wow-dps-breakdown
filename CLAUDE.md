@@ -990,6 +990,24 @@ disagrees, fix the extraction — do not edit the profile.
 `web/public/data/<tier>/fights.json`, which `views/FightsView.tsx` draws. Decisions in it
 that are easy to get wrong a second time:
 
+- **Sampled pulls are clustered by shape, and a shape only becomes a preset when at
+  least two pulls share it.** Pulls of one boss are genuinely different fights -- a
+  wave killed before the next spawns in half the logs and overlapping in the other
+  half is two patterns, and publishing only the pull nearest the median answers a
+  question nobody asked. Curves are resampled onto 60 buckets of *normalised* fight
+  time (so a longer pull of the same shape is one pattern, not two) and two pulls are
+  the same shape when they are a whole target apart on less than **20%** of the fight.
+  That threshold is **calibrated, not derived** -- the full pairwise table from the
+  MID2 probe is in the code comment beside it, and the gap it sits in is 0.15 to 0.28.
+  Redo it when the sample grows. Two things it is sensitive to: three pulls per boss
+  cannot establish a distribution, and a pull whose event fetch stopped early differs
+  from a complete one over exactly the part it never read, so check `coverage` on both
+  before believing a split. A pull that matches nothing stays context; it never becomes
+  a preset of one.
+- **Not a mean absolute difference.** That was the first attempt and the fixtures
+  caught it: a real add wave is large but short, so averaging it over the fight buries
+  it. Imperator Averzian peaks at seven targets for 4% of its length, which is 0.25 on
+  a mean -- under any threshold coarse enough to ignore jitter.
 - **The published timeline is one real pull, not an average of pulls.** A per-second
   median across kills of different lengths yields a shape no pull had — a wave arriving at
   88s in one log and 96s in another comes out as a two-step ramp — and past the shortest
