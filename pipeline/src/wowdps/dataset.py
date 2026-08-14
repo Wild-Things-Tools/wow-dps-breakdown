@@ -241,24 +241,89 @@ def write_manifest(
         "specs": [r.summary() for r in results],
     }
     path = out_dir / "index.json"
-    path.write_text(json.dumps(manifest, separators=(",", ":")) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(_settle_provenance(manifest, path), separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
     return path
+
+
+#: Manifest fields that describe *the run*, not the data it produced.
+_PROVENANCE = ("generatedAt", "simc")
+
+
+def _settle_provenance(manifest: dict, path: Path) -> dict:
+    """Keep the published provenance when nothing about the dataset changed.
+
+    Deterministic sims exist so that a run with no upstream change reproduces byte
+    for byte, leaves nothing to commit, and makes any diff in the history mean that
+    something actually moved. A wall-clock timestamp in the manifest defeats that on
+    its own: every run would rewrite `generatedAt`, every run would commit, and the
+    property the determinism was bought for would be worth nothing.
+
+    So the timestamp and the simc build are refreshed only when the rest of the
+    manifest differs -- the numbers, the settings, the scenario definitions. When
+    they do not, the manifest already on disk still describes the data that is still
+    there, and it is left exactly as it is.
+
+    `generatedAt` therefore reads as "when this data last changed", which is also the
+    more honest thing to show next to figures that have not moved.
+    """
+    try:
+        published = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return manifest
+
+    if {k: v for k, v in published.items() if k not in _PROVENANCE} != {
+        k: v for k, v in manifest.items() if k not in _PROVENANCE
+    }:
+        return manifest
+
+    settled = dict(manifest)
+    for key in _PROVENANCE:
+        if key in published:
+            settled[key] = published[key]
+    log.info("dataset unchanged; keeping generatedAt %s", settled.get("generatedAt"))
+    return settled
+
+
+def _median(errors: list[float]) -> float | None:
+    if not errors:
+        return None
+    errors = sorted(errors)
+    middle = len(errors) // 2
+    median = errors[middle] if len(errors) % 2 else (errors[middle - 1] + errors[middle]) / 2
+    return round(median, 4)
 
 
 def _median_dps_error(results: list[SpecResult]) -> float | None:
     """Median per-cell standard error across the whole run, in percent."""
-    errors = sorted(
-        cell.dps_error
-        for result in results
-        for by_target in result.cells.values()
-        for cell in by_target.values()
-        if cell.dps_error > 0
+    return _median(
+        [
+            cell.dps_error
+            for result in results
+            for by_target in result.cells.values()
+            for cell in by_target.values()
+            if cell.dps_error > 0
+        ]
     )
-    if not errors:
-        return None
-    middle = len(errors) // 2
-    median = errors[middle] if len(errors) % 2 else (errors[middle - 1] + errors[middle]) / 2
-    return round(median, 4)
+
+
+def _median_dps_error_of_files(specs_dir: Path) -> float | None:
+    """The same figure, recovered from spec files already on disk.
+
+    Needed by the shard merge: each shard only ever saw its own slice of the
+    matrix, so no shard's manifest carries a median that describes the whole run.
+    """
+    errors: list[float] = []
+    for path in sorted(specs_dir.glob("*.json")):
+        spec = json.loads(path.read_text(encoding="utf-8"))
+        for scenario in spec.get("scenarios", {}).values():
+            for cell in scenario.get("targets", []):
+                error = cell.get("dpsError") or 0
+                if error > 0:
+                    errors.append(error)
+    return _median(errors)
 
 
 def write_tier_index(out_dir: Path) -> Path:
@@ -341,6 +406,13 @@ def merge_shards(shard_dirs: list[Path], out_dir: Path) -> None:
         for spec in manifest.get("specs", []):
             by_id[spec["id"]] = spec
     merged["specs"] = [by_id[key] for key in sorted(by_id)]
+
+    # Taking the newest shard's manifest wholesale would publish *that shard's*
+    # measured error as the precision of the whole run -- one sixth of the cells
+    # describing all of them. Recompute it from what actually landed on disk.
+    settings = dict(merged.get("settings") or {})
+    settings["medianDpsError"] = _median_dps_error_of_files(out_specs)
+    merged["settings"] = settings
 
     (out_dir / "index.json").write_text(
         json.dumps(merged, separators=(",", ":")) + "\n", encoding="utf-8"
