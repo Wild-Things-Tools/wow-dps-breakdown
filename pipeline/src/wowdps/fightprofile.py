@@ -655,6 +655,19 @@ DEFAULT_MIN_FIGHTS = 3
 #: dependency on the extraction.
 _CONSTANT_SHARE = 0.95
 
+#: How much of a fight the event fetch must have reached before a count taken over
+#: that fight may become a profile fact.
+#:
+#: This is not a tuning knob, it is a bug guard with a measurement behind it. The
+#: first real nine-boss pass fetched enemy damage-taken with a page budget that a
+#: twenty-player Mythic pull exhausts in the first minute or two, so four of nine
+#: bosses reported a *mean* concurrent target count below 1.0 -- impossible for a
+#: boss that is present throughout. Coverage ran 0.11 on Midnight Falls to 1.00 on
+#: Chimaerus, and the reported means tracked it almost exactly. Anything averaged
+#: over a fight is meaningless below this line; anything read off the fight's own
+#: metadata (its length, its group size) is untouched by it.
+MIN_EVENT_COVERAGE = 0.95
+
 
 @dataclass(frozen=True)
 class Promotion:
@@ -780,19 +793,46 @@ class _Proposal:
 
 
 def _targets_promotion(observation) -> _Proposal | None:
+    """A target count from the logs -- from the *peak*, never from the mean.
+
+    The mean concurrent target count is the obvious candidate and is the wrong
+    one twice over. It is the statistic the truncated event fetch destroys (see
+    ``MIN_EVENT_COVERAGE``), and even on a complete fetch it counts an enemy only
+    while it is *being damaged*: on Lightblinded Vanguard, where all three targets
+    are up for the whole pull, the raid stops hitting one of them part-way through
+    and the mean falls to 2.15 for a reason that has nothing to do with how many
+    things are alive. The peak has neither problem -- it is the largest count
+    observed, so a shorter read and an early target switch can only ever make it
+    too small, and never quietly wrong.
+    """
     peak = getattr(observation, "peak_targets", None)
     if peak is None:
         return None
     share = getattr(observation, "peak_share", None)
+    coverage = getattr(observation, "event_coverage", None)
     constant = bool(share and share.median >= _CONSTANT_SHARE)
     baseline = int(round(peak.median))
+
     withheld = None
-    if peak.low != peak.high:
+    if coverage is None:
+        withheld = (
+            "this probe run predates the event-coverage measurement, so there is no "
+            "way to tell whether the counts describe whole fights or the first "
+            "minute of them; re-probe before promoting a target count"
+        )
+    elif coverage.low < MIN_EVENT_COVERAGE:
+        withheld = (
+            f"the event fetch reached only {_share_text(coverage)} of the sampled "
+            f"fights, so every count taken over them is a reading of a prefix. "
+            f"Raise --max-pages on the probe and re-run before promoting this"
+        )
+    elif peak.low != peak.high:
         withheld = (
             f"the sampled fights did not agree on the peak target count "
             f"({peak.low:g}-{peak.high:g}); a single number for the profile would "
             f"be a choice, not a measurement"
         )
+
     return _Proposal(
         key="targets",
         label="Targets at the pull",
@@ -800,7 +840,11 @@ def _targets_promotion(observation) -> _Proposal | None:
         summary=f"{baseline} target(s), {'constant' if constant else 'varying'}",
         evidence=(
             f"peak concurrent enemies above the significance floor: "
-            f"{_spread_text(peak)}; time at that peak {_share_text(share)}"
+            f"{_spread_text(peak)}; time at that peak {_share_text(share)}; "
+            f"event fetch covered {_share_text(coverage)} of each fight. The peak "
+            f"is used and the mean is not: an enemy counts only while it is being "
+            f"damaged, so the mean falls when the raid switches targets and falls "
+            f"again when the fetch stops early"
         ),
         withheld=withheld,
     )
@@ -813,12 +857,21 @@ def _fight_length_promotion(observation) -> _Proposal | None:
     # No agreement gate here, unlike the target count: kills legitimately differ in
     # length, so a spread is the expected result rather than a warning sign. The
     # spread travels in the evidence so the median never reads as exact.
+    #
+    # No coverage gate either, and that is not an oversight: fight length comes
+    # from the report's own startTime/endTime, which is metadata about the pull
+    # rather than something counted out of the event stream. A fetch that stopped
+    # at 20% still knows exactly how long the fight ran.
     return _Proposal(
         key="fightLengthSeconds",
         label="Fight length",
         value=int(round(duration.median)),
         summary=f"{duration.median:.0f}s",
-        evidence=f"kill time {_spread_text(duration, 0, 's')}",
+        evidence=(
+            f"kill time {_spread_text(duration, 0, 's')}, from the report's own "
+            f"start and end times -- metadata, so a bounded event fetch does not "
+            f"affect it"
+        ),
     )
 
 
@@ -836,7 +889,10 @@ def _raid_size_promotion(observation) -> _Proposal | None:
         label="Raid size",
         value=int(round(size.median)),
         summary=f"{size.median:.0f} players",
-        evidence=f"the log's own group size: {_spread_text(size)}",
+        evidence=(
+            f"the log's own group size: {_spread_text(size)}. Metadata on the "
+            f"fight, so unaffected by how much of the event stream was fetched"
+        ),
         withheld=withheld,
     )
 
@@ -921,7 +977,17 @@ def _decide(
     # A blanks-fill changes the stored value and contradicts nothing in it, so it
     # is not a disagreement. Reporting it as one would put the loudest word on the
     # page next to the one case where profile and logs are in complete accord.
-    disagrees = stored is not None and not proposal.fills_blanks and current != proposal.value
+    #
+    # Nor is a withheld measurement a disagreement. "The logs say two where you say
+    # three" is the finding this project cares most about, and spending that
+    # sentence on a number the fetch never finished reading would teach a reader to
+    # ignore it by the third time.
+    disagrees = (
+        stored is not None
+        and not proposal.fills_blanks
+        and not proposal.withheld
+        and current != proposal.value
+    )
 
     def promotion(eligible: bool, reason: str, blocked_by: str | None = None) -> Promotion:
         return Promotion(
@@ -939,6 +1005,24 @@ def _decide(
             disagrees=disagrees,
         )
 
+    # A person's statement is checked first because it is the permanent answer:
+    # the measurement's own condition can change on the next run, and this cannot.
+    if source == SOURCE_HAND and not proposal.fills_blanks:
+        reason = "a person stated this, and a measurement never overwrites a person. "
+        if proposal.withheld:
+            reason += (
+                f"This measurement is in no condition to argue with it in any case: "
+                f"{proposal.withheld}."
+            )
+        elif disagrees:
+            reason += (
+                "The two disagree, which under this project's rule means the "
+                "extraction is the likelier culprit -- fix that before editing the "
+                "profile."
+            )
+        else:
+            reason += "The two agree, so there is nothing to gain by rewriting it."
+        return promotion(False, reason, blocked_by=SOURCE_HAND)
     if sample < min_fights:
         return promotion(
             False,
@@ -947,19 +1031,6 @@ def _decide(
         )
     if proposal.withheld:
         return promotion(False, proposal.withheld)
-    if source == SOURCE_HAND and not proposal.fills_blanks:
-        return promotion(
-            False,
-            "a person stated this, and a measurement never overwrites a person. "
-            + (
-                "The two disagree, which under this project's rule means the "
-                "extraction is the likelier culprit -- fix that before editing the "
-                "profile."
-                if disagrees
-                else "The two agree, so there is nothing to gain by rewriting it."
-            ),
-            blocked_by=SOURCE_HAND,
-        )
     if proposal.fills_blanks:
         return promotion(
             True,

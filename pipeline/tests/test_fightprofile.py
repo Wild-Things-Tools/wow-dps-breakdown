@@ -360,13 +360,20 @@ def pooled_observation(
     *,
     amp_on: int | None = None,
     boss_share: float = 1.0,
+    read_share: float = 1.0,
 ) -> fightextract.EncounterObservation:
-    """Several pulls of one encounter, so a promotion has a sample to stand on."""
+    """Several pulls of one encounter, so a promotion has a sample to stand on.
+
+    ``read_share`` simulates the bounded event fetch: the enemies stop taking
+    damage that fraction of the way in, which is what a page-limited fetch looks
+    like from the extraction's side.
+    """
     observation = fightextract.EncounterObservation(3180, "Lightblinded Vanguard", 5)
     observation.fights = []
     for index, duration in enumerate(durations):
         start, end = 1_000_000, 1_000_000 + int(duration * 1000)
         actors = list(range(10, 10 + peak))
+        last_event = start + int((end - start) * read_share) - 500
         events = [
             {
                 "timestamp": when,
@@ -375,7 +382,7 @@ def pooled_observation(
                 "amount": 1000 * (boss_share if actor == actors[0] else 1.0),
             }
             for actor in actors
-            for when in (start + 500, end - 500)
+            for when in (start + 500, last_event)
         ]
         auras: list[dict] = []
         if amp_on is not None:
@@ -567,3 +574,71 @@ def test_a_filled_in_amplification_stops_being_offered():
         fightprofile.plan_promotions(stated, pooled_observation(3, 20, amp_on=10, boss_share=8.0))
     )
     assert "amplifications" not in plan
+
+
+def test_a_target_count_from_a_partly_fetched_fight_is_refused():
+    """The bug the first real nine-boss pass shipped, caught at the promotion gate.
+
+    Enemy damage-taken is paginated and bounded; a twenty-player Mythic pull
+    outruns the budget and the fetch stops. Every count taken over such a fight
+    describes its first minute or two. Midnight Falls was read for 11% of its
+    length and reported a mean of 0.34 concurrent targets -- and would, without
+    this, have offered that as a fact about the encounter.
+    """
+    plan = by_key(
+        fightprofile.plan_promotions(profile(), pooled_observation(3, 20, read_share=0.2))
+    )
+
+    assert plan["targets"].eligible is False
+    assert "event fetch reached only" in plan["targets"].reason
+    assert "--max-pages" in plan["targets"].reason
+
+
+def test_fight_length_and_raid_size_survive_a_partly_fetched_fight():
+    """They are metadata on the pull, not counted out of the event stream."""
+    plan = by_key(
+        fightprofile.plan_promotions(profile(), pooled_observation(3, 20, read_share=0.2))
+    )
+
+    assert plan["fightLengthSeconds"].eligible is True
+    assert plan["raidSize"].eligible is True
+    assert "metadata" in plan["fightLengthSeconds"].evidence
+
+
+def test_a_run_that_never_measured_coverage_cannot_promote_a_target_count():
+    """An older probe artifact has no way to say how much of each fight it read."""
+
+    class Older:
+        fights_sampled = 5
+        reports = ["a", "b", "c", "d", "e"]
+        peak_targets = fightextract.Spread(3.0, 3.0, 3.0, 5)
+        peak_share = fightextract.Spread(0.99, 0.99, 0.99, 5)
+        duration = fightextract.Spread(300.0, 290.0, 310.0, 5)
+        raid_size = fightextract.Spread(20.0, 20.0, 20.0, 5)
+        event_coverage = None
+
+        def pooled_auras(self):
+            return []
+
+    plan = by_key(fightprofile.plan_promotions(profile(), Older()))
+    assert plan["targets"].eligible is False
+    assert "predates the event-coverage measurement" in plan["targets"].reason
+
+
+def test_the_target_count_promotion_says_it_uses_the_peak_and_not_the_mean():
+    """Both reasons are on the page, because both cost a day to find."""
+    plan = by_key(fightprofile.plan_promotions(profile(), pooled_observation(3, 20)))
+    evidence = plan["targets"].evidence
+
+    assert "peak is used and the mean is not" in evidence
+    assert "switches targets" in evidence
+
+
+def test_a_withheld_measurement_is_not_reported_as_disagreeing_with_a_person():
+    """A number the fetch never finished reading has not earned the word."""
+    stated = profile(targets=hand({"baseline": 3, "constant": True}))
+    plan = by_key(fightprofile.plan_promotions(stated, pooled_observation(2, 20, read_share=0.2)))
+
+    assert plan["targets"].disagrees is False
+    assert plan["targets"].blocked_by == SOURCE_HAND
+    assert "in no condition to argue" in plan["targets"].reason

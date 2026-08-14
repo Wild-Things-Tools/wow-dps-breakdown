@@ -410,6 +410,50 @@ new and are not. `heroTalent === 'Default'` is simc's marker for a spec it ships
 build for — it is not a hero tree, gets no invented emblem, and renders as a muted
 "Single build" pill.
 
+### Boss icons come from Warcraft Logs, and that is not laziness
+
+`bossIconUrl` in `lib/gameIcons.ts`:
+
+```
+https://assets.rpglogs.com/img/warcraft/bosses/<wclEncounterId>-icon.jpg
+```
+
+There is a three-id problem here and this is the one path that does not have it.
+`fight_profiles.json` carries **Warcraft Logs** encounter ids, because the probe
+reaches its logs through `worldData.encounter(id)`. Blizzard's Encounter Journal
+uses its own journal ids, and its artwork is addressed by a *third* id again — a
+creature display id. Every Blizzard-side portrait path therefore needs a mapping
+this repository does not have and could not keep current: a new raid tier arrives
+as nine WCL ids with no journal ids beside them, and the icons would silently stop
+appearing for exactly the tier somebody is looking at. Warcraft Logs' own asset
+host is keyed on the id we already hold, so there is **no mapping at all** and a
+new tier's icons work the day its ids are written down.
+
+Verified by request on 14 August 2026, the same way the class/spec map was: all
+nine MID2 encounters return 200, ~2 KB, 56x56 JPEG, and **nine distinct hashes** —
+a CDN handing back one placeholder for every id looks identical from a status code
+alone, so check the hashes. An id with no asset returns **403**, so a wrong id
+degrades to the lettered tile rather than to a picture of the wrong boss. Two
+alternatives were checked and do not work: `wow.zamimg.com/images/wow/journal/...`
+404s (it is keyed on a texture slug, not an id) and
+`render.worldofwarcraft.com/us/npcs/zoom/creature-display-<id>.jpg` 403s on an
+encounter id, because it wants a display id.
+
+This is a **second CDN host**, which the class/spec icons deliberately avoided. It
+earns the exception: the data on that view *is* Warcraft Logs data, so their asset
+host is not a new third party the way an unrelated image host would be. `BOSS_BASE`
+is the one line to change to self-host.
+
+No per-boss colour. Nine invented hues would be nine categorical slots this project
+does not have; the tile is the de-emphasis grey and the name is written out beside
+the icon everywhere it appears.
+
+`GameIcon` in `BuildIdentity.tsx` is now exported as **`EntityIcon`** and takes a
+colour rather than a class, because a boss has a portrait and no class. Everything
+with a class passes `classTile(wowClass)` and behaves exactly as before. Use it for
+anything new with an icon — it is what makes a blocked CDN cost the picture and
+nothing else.
+
 ### The reusable pieces
 
 Anything drawing a build should use these rather than re-deriving them:
@@ -424,7 +468,8 @@ Anything drawing a build should use these rather than re-deriving them:
 | `BuildLike` | the structural type all three dataset shapes satisfy |
 | `components/SmallMultiples.tsx` → `SmallMultiples` | the faceted grid, shared domain and median context curve |
 | `lib/palette.ts` → `classColor` / `classWash` / `buildDash` | colour and the same-spec separator |
-| `lib/gameIcons.ts` → `classIconUrl` / `specIconUrl` / `heroTreeIconUrl` | the URLs |
+| `lib/gameIcons.ts` → `classIconUrl` / `specIconUrl` / `heroTreeIconUrl` / `bossIconUrl` | the URLs |
+| `components/BuildIdentity.tsx` → `EntityIcon` | icon over a lettered tile, for anything at all |
 
 Two builds of one spec share a class colour *and* a spec icon, because they are the
 same class and the same spec. The hero-tree emblem, its name, and `buildDash` on a
@@ -624,9 +669,19 @@ Two things nearly threw it away, both fixed, both worth not reintroducing:
   first five profiles and passes if any one of them runs.
 - Switching tier changes the spec list, and nothing is selected any more, so there is
   no longer a selection to prune — the views re-render against whatever the new tier
-  ships. The one thing that still carries across is the open build on Spec detail, and
-  a build the new tier has no profile for is dropped back to the default rather than
-  left pointing at a missing file.
+  ships. Two things still carry across and are pruned explicitly: the open build on
+  Spec detail, and the open boss on Fights. A build or an encounter the new tier has
+  no entry for is dropped back to the default rather than left pointing at a missing
+  file.
+- **"Season" and "tier" are the same axis, and there is exactly one control for it.**
+  The Fights view needs a season picker more than any other view — the boss list *is*
+  the season — but it does not get its own. `FightsView` takes `tier`/`onTierChange`
+  and writes to the same app state the header switcher does, so there is one `tier=`
+  in the URL and a shared link cannot open one season's bosses under another season's
+  heading. Both controls are labelled **Season**, because the dataset labels already
+  read "Midnight Season 2" and two words for one axis reads as two axes. The header
+  hides its switcher when only one tier exists; the Fights view instead states the
+  season as a label, because there it is the subject rather than context.
 
 ## Fight patterns per boss — what Warcraft Logs can and cannot tell you
 
@@ -784,6 +839,159 @@ the two lines land on identical pixels, and a 2px line under a 2px line reads as
 that failed to draw. Context pulls are also drawn *first*, so the two identity series sit
 on top of them.
 
+### The event fetch is bounded, and it silently destroyed every mean
+
+**This is the most expensive thing on this page. Read it before trusting any count
+that came out of a probe run.**
+
+Enemy damage-taken is the only stream that sees every target, and it is also the
+largest one a twenty-player Mythic pull produces. `--max-pages` × `--events-limit`
+defaults to 30,000 events per fight, and a real pull outruns that in the first
+minute or two. When it does, every enemy's last recorded hit is the *cut point*
+rather than its death, the step function falls to zero there, and anything averaged
+over the fight length counts the unread remainder as an empty room.
+
+Measured on the first nine-boss pass (five reports each, Mythic, page 1):
+
+```
+                        coverage      mean targets reported     peak
+Midnight Falls          11%-22%       0.34                      2
+Crown of the Cosmos     27%-55%       0.74                      3
+Vorasius                52%-100%      0.59                      1   <- single-target boss
+Fallen-King Salhadaar   34%-100%      0.81                      3
+Belo'ren                42%-82%       1.02                      3
+Imperator Averzian      50%-100%      1.52                      4
+Vaelgor & Ezzorak       97%-100%      1.47                      3
+Lightblinded Vanguard   93%-100%      2.15                      3
+Chimaerus               70%-100%      1.30                      2
+```
+
+A mean concurrent target count below 1.0 on a boss that is present throughout is
+not a property of the encounter; it is a division by the wrong denominator. The
+old caveat — "at least one event fetch stopped at its page limit" — was true and
+useless, because nothing said *how much* was missed.
+
+What changed:
+
+- `TargetCountTimeline` now carries **`observed`** as well as `duration`, and
+  `mean`/`peak_share` are computed over `observed`. `coverage` (`observed/duration`)
+  is published per fight and pooled per encounter as `eventCoverage`. Vorasius comes
+  out at 1.0 after this, as it must.
+- The caveat is quantitative: "the event fetch reached 11%-22% of these fights".
+- `plan_promotions` **refuses** a target-count promotion below
+  `MIN_EVENT_COVERAGE` (0.95), and refuses outright on a probe payload that has no
+  `eventCoverage` at all — an older run cannot support a whole-fight claim.
+- The view derives the same figure from the published per-pull steps when the field
+  is absent, because the dataset on the site right now predates it and a reader
+  should not have to wait for the next probe run to be told.
+
+Two things are **not** affected and are still promotable from a partial fetch:
+`fightLengthSeconds` and `raidSize` come from the report's own `startTime`/`endTime`
+and `size`. Those are metadata about the pull, not counted out of the event stream.
+
+**The real fix is a bigger page budget**, and that is a points decision nobody has
+made yet. `--max-pages 3` is the current default. Raise it and re-measure before
+concluding anything about a long fight.
+
+### The mean counts what is being *fought*, not what is alive
+
+Separate from truncation and not fixable by fetching more. An enemy is counted from
+its first damage to its last hit, so a target the raid switches off drops out of the
+count while still standing there. Lightblinded Vanguard is read at 93-100% coverage
+and still reports a mean of 2.15 on a fight the owner states is a permanent
+three-target fight: the steps run `3` for the first ~69s, then `2` until ~264s, then
+`1`. All three enemies are `presentAtPull`, all three have lifetimes near the fight
+length. The raid simply stops hitting one of them.
+
+Both claims are true and they are different claims. This is why **the promotion path
+uses `peak`, never `mean`** — a shorter read and an early target switch can only ever
+make the peak too small, never quietly wrong — and why the "Targets, mean" tile says
+what it counts.
+
+### Player auras got back into the encounter list, by a second route
+
+CLAUDE.md already recorded this being fixed once: `pooled_auras` drops auras a
+*player applied*, so a Paladin cooldown could not be nominated as a boss mechanic.
+The first nine-boss pass shipped **Avenging Wrath and Divine Shield in Lightblinded
+Vanguard's published aura list anyway**, alongside Blood Plague and Bloodshed. And
+Avenging Wrath lasts twenty seconds and is cast at the pull — precisely the shape of
+the amplification the profile asserts, so the nearest-window search would have
+offered it again.
+
+The source test only fires when the event carries a `sourceID`, and **a self-buff
+frequently carries none**. "Unknown is not the same as a player did it" then keeps
+it. The fix is a second, source-independent test in
+`FightObservation.is_encounter_aura`: **an aura on a player actor is never an
+encounter mechanic on an enemy**, whatever applied it. Both tests need
+`player_ids`; when the report lists no players at all the fight now warns that the
+filter is inoperative, because that condition is otherwise invisible in the output.
+
+Consequence for the validation case, once the filter is right: no aura in the
+sampled Vanguard fights sits within tolerance of the asserted 0-20s window
+(the nearest genuine candidate, "Light Infused", runs the whole fight). The honest
+answer is "no match", not Avenging Wrath.
+
+### Promoting a measurement into a profile fact
+
+`fightprofile.plan_promotions` (pure) + `fightpromote.py` (`wowdps fight-promote`).
+The rule, which is the whole design:
+
+| Current fact | What happens |
+|---|---|
+| absent (`default`) | the measurement fills the gap. Eligible. |
+| `logs` | a newer measurement supersedes it. Eligible. |
+| `hand` | **never** overwritten, even when the numbers agree. Reported as blocked. |
+
+The one thing written into a hand fact is a **blank the person left**: an
+amplification's `abilityId` and `target`. Filling a blank is not overwriting a
+statement, and `multiplier`, `first` and `duration` are never touched. The measured
+half arrives as *field-level* provenance (`targetSource`/`targetEvidence`) beside
+the existing `magnitudeSource`, and the fact's own `provenance.detail` — somebody's
+sentence about what they stated — is deliberately left as written, because it
+records what was said rather than what the value is now.
+
+Promotions are **published to the site and applied only by a command**. `fights.json`
+carries a `promotions` block per encounter with the value, the evidence, whether it
+is eligible and what blocks it, plus the exact `promoteCommand`. Nothing is written
+without `--write`. An automatic promotion would consume the single most valuable
+output of this whole subsystem — a disagreement between an assertion and the log
+reader — on the way past, and leave a profile that always agreed with the extraction.
+
+`_decide` checks the hand block *first*, because it is the permanent answer where a
+measurement's condition can change next run; a withheld measurement is never
+reported as "disagreeing" with a person, since a number the fetch never finished
+reading has not earned the word.
+
+### Which enemy carries an aura, and which enemy is the boss
+
+`nominate_priority_enemy` answers "is this the priority target or an add", in three
+steps, and the third is a refusal:
+
+1. an enemy **named for the encounter** (WCL names the fight after its boss);
+2. otherwise the enemy that took **clearly** the most damage — `PRIORITY_DAMAGE_MARGIN`
+   is 1.25x the next one;
+3. otherwise **nothing is nominated**, with the reason. Three enemies hit about
+   equally is the shape of a permanent multi-target fight, and picking the largest of
+   three near-equal numbers would manufacture the fact this exists to establish.
+
+`pooled_auras` entries now carry `carriedBy` (the enemies, pooled on game id because
+actor ids are report-local), a combined `role`, and `roleEvidence`. That is the
+answer to "which of the three targets does the amplification sit on" — asked of the
+owner twice — read out of the events instead. `mixed` means one NPC was the priority
+target in one pull and an add in another, which is a finding about the extraction
+rather than about the encounter.
+
+### Aura bands are capped, in both the pipeline and the view
+
+A shaded `ReferenceArea` is a heavy mark and an aura has no natural limit on how
+often it lands. The published MID2 run carries roughly two hundred windows on the
+drawn pull, and at 14% opacity each they cover the step lines completely — the chart
+was a solid orange block. So: overlapping windows of one ability are merged (one
+buff on five copies of an add is one thing happening), each ability contributes at
+most three bands, and the chart draws at most six. Everything dropped is counted in
+the legend. The view repeats the pipeline's logic because the committed dataset
+predates it; re-merging merged windows is a no-op.
+
 ### What is verified and what is not
 
 Verified: everything offline. The extraction against hand-written fixtures, the profile
@@ -796,7 +1004,27 @@ Lightblinded Vanguard — 3 targets observed 3-3, raid size 20-20, and an amplif
 window measured at 0.97-20.99s against the stated "about 20 seconds". Fight length came
 out at 288s (285-334) where the profile assumes 300. The `table` payload shape held.
 
-Still unverified: everything past one encounter, and the point cost (see above).
+**Verified on 14 August 2026, all nine MID2 encounters, five reports each.** The
+queries hold across the whole zone and the pass completed without aborting. What it
+exposed is above: the event fetch is bounded and every mean was computed over the
+wrong denominator; player self-buffs were back in the encounter aura list; and the
+chart's aura bands had no cap. Peak target counts look right throughout — Vanguard
+peaks at 3 in all five pulls, matching the owner's statement.
+
+Still unverified:
+
+- **The point cost.** `pointsSpentThisHour` moved from 1.0 to 1.0 over 445 queries,
+  so the run total is still UNMEASURED. Do not read that as free.
+- **Anything published after the fixes on this branch.** The committed `fights.json`
+  is the output of the pre-fix run: its `meanTargets` and `peakTargetShare` are
+  averaged over whole fights that were only partly read, and its aura lists carry
+  player abilities. The view flags the first and caps the second; neither is
+  corrected in the data. **Re-probe before drawing conclusions from that file**, and
+  raise `--max-pages` when you do.
+- **The carrier extraction against real events.** `carriedBy`, `priorityEnemy` and
+  the promotion block are pinned against synthetic fixtures only. No probe run has
+  produced them yet, so `fights.json` has no `promotions` key at all and the view
+  says so rather than showing an empty panel.
 
 **Previously not verified: a single real API call.** Credentials are Actions secrets. The GraphQL
 documents were written against a third-party mirror of the v2 schema

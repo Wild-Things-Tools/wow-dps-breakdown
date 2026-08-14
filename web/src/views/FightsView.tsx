@@ -42,6 +42,7 @@ import {
   YAxis,
 } from 'recharts'
 import { AXIS_LINE, AXIS_TICK, CURSOR_LINE, GRID, TooltipCard } from '../components/chart'
+import { EntityIcon } from '../components/BuildIdentity'
 import {
   Dot,
   EmptyState,
@@ -49,16 +50,21 @@ import {
   Note,
   Panel,
   PanelHeader,
+  Select,
   StatTile,
   cx,
 } from '../components/ui'
 import { percent } from '../lib/format'
+import { bossIconUrl } from '../lib/gameIcons'
 import type {
   FightAmplification,
+  FightAuraWindow,
   FightEncounter,
+  FightPromotion,
   FightSpread,
   FightsDataset,
   MeasuredFight,
+  TierIndex,
 } from '../lib/types'
 
 /** Colour of the line the simulation would draw. Slot 1, fixed. */
@@ -77,10 +83,16 @@ export function FightsView({
   fights,
   encounterId,
   onEncounterChange,
+  tierIndex,
+  tier,
+  onTierChange,
 }: {
   fights: FightsDataset | null
   encounterId: number | null
   onEncounterChange: (id: number) => void
+  tierIndex: TierIndex | null
+  tier: string | null
+  onTierChange: (tier: string) => void
 }) {
   const encounters = fights?.encounters ?? []
   const selected =
@@ -90,12 +102,14 @@ export function FightsView({
     encounters[0] ??
     null
 
+  const season = <Season tierIndex={tierIndex} tier={tier} onTierChange={onTierChange} />
+
   if (!fights) {
     return (
       <Panel>
-        <PanelHeader title="Fights" subtitle={PURPOSE} />
+        <PanelHeader title="Fights" subtitle={PURPOSE} actions={season} />
         <EmptyState>
-          No fight data has been published for this tier yet. Run{' '}
+          No fight data has been published for this season yet. Run{' '}
           <code>wowdps fights</code> to publish what the fight profiles assert, or{' '}
           <code>wowdps fight-probe --publish</code> in CI to measure the encounters from
           Warcraft Logs and publish both halves together.
@@ -106,9 +120,95 @@ export function FightsView({
 
   return (
     <div className="space-y-4">
-      <Overview fights={fights} selected={selected} onSelect={onEncounterChange} />
+      <Overview
+        fights={fights}
+        selected={selected}
+        onSelect={onEncounterChange}
+        season={season}
+      />
       {selected ? <Encounter encounter={selected} fights={fights} /> : null}
     </div>
+  )
+}
+
+/**
+ * The season control -- which is the *tier* control, deliberately not a second one.
+ *
+ * A season and a tier are the same axis here. `fights.json` is already namespaced
+ * per tier, `tiers.json` is the only registry of which ones exist, and the header
+ * already carries a tier switcher wired to one piece of app state that the URL's
+ * `tier=` parameter round-trips. Giving this view its own idea of "season" would
+ * create a second source of truth able to disagree with the header, with the URL,
+ * and with every other view -- and a link somebody shared would then open on one
+ * season's bosses under another season's heading.
+ *
+ * So this writes to the same state the header does. The boss list is filtered by
+ * construction: it is whatever `fights.json` for that tier contains, never two
+ * seasons at once.
+ *
+ * When only one season exists the header hides its switcher, because there is
+ * nothing to switch to. This does not hide: on every other view the tier is
+ * context, and here it *is* the subject -- the boss list is the season -- so it
+ * is stated as a label rather than offered as an inert dropdown.
+ */
+function Season({
+  tierIndex,
+  tier,
+  onTierChange,
+}: {
+  tierIndex: TierIndex | null
+  tier: string | null
+  onTierChange: (tier: string) => void
+}) {
+  const seasons = tierIndex?.tiers ?? []
+  const current = seasons.find((entry) => entry.id === tier)
+  if (!tier || seasons.length === 0) return null
+
+  if (seasons.length === 1) {
+    return (
+      <span className="text-[13px] text-ink-secondary">
+        Season{' '}
+        <span className="font-medium text-ink">{current?.label ?? tier}</span>
+        <span className="text-ink-muted"> · the only one with a dataset</span>
+      </span>
+    )
+  }
+
+  return (
+    <Select
+      label="Season"
+      value={tier}
+      onChange={onTierChange}
+      options={[...seasons].reverse().map((entry) => ({
+        value: entry.id,
+        label: entry.id === tierIndex?.current ? `${entry.label} (current)` : entry.label,
+      }))}
+    />
+  )
+}
+
+/**
+ * A boss's portrait over a lettered tile, exactly as every other icon here works.
+ *
+ * No per-boss colour: nine invented hues would be nine categorical slots this
+ * project does not have and the palette rules forbid, and the boss's name is
+ * written out beside the icon in every place it appears. So the tile is the
+ * de-emphasis grey and the identity is the name.
+ */
+function BossIcon({ encounterId, name, size = 22 }: {
+  encounterId: number
+  name: string
+  size?: number
+}) {
+  return (
+    <EntityIcon
+      url={bossIconUrl(encounterId)}
+      name={name}
+      color="var(--text-muted)"
+      wash="var(--elevated)"
+      size={size}
+      labelled
+    />
   )
 }
 
@@ -123,10 +223,12 @@ function Overview({
   fights,
   selected,
   onSelect,
+  season,
 }: {
   fights: FightsDataset
   selected: FightEncounter | null
   onSelect: (id: number) => void
+  season: ReactNode
 }) {
   const { coverage, measurement } = fights
   const untouched = coverage.encounters - new Set(
@@ -138,17 +240,18 @@ function Overview({
   return (
     <Panel>
       <PanelHeader
-        title="Fight shapes in this tier"
+        title="Fight shapes this season"
         subtitle={
           <>
             {PURPOSE} Nothing here is simulated yet: these shapes are published so they
             can be checked before anyone pays for nine bosses × twenty-six builds.
           </>
         }
+        actions={season}
       />
       <div className="grid gap-3 px-5 pb-5 sm:grid-cols-2 lg:grid-cols-4">
         <StatTile
-          label="Bosses in the tier"
+          label="Bosses this season"
           value={coverage.encounters}
           caption="Every encounter the fight profile file lists, whether or not anything is known about it."
         />
@@ -176,13 +279,14 @@ function Overview({
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[760px] text-[13px]">
+        <table className="w-full min-w-[860px] text-[13px]">
           <thead>
             <tr className="border-b border-hairline text-left text-[11.5px] tracking-wide text-ink-muted uppercase">
               <th className="py-2 pr-4 pl-5 font-medium">Boss</th>
               <th className="py-2 pr-4 text-right font-medium">Targets asserted</th>
               <th className="py-2 pr-4 text-right font-medium">Targets measured</th>
               <th className="py-2 pr-4 text-right font-medium">Fights sampled</th>
+              <th className="py-2 pr-4 text-right font-medium">Fight read</th>
               <th className="py-2 pr-5 font-medium">State</th>
             </tr>
           </thead>
@@ -207,10 +311,11 @@ function Overview({
                       onClick={() => onSelect(entry.encounterId)}
                       aria-current={active ? 'true' : undefined}
                       className={cx(
-                        'text-left',
+                        'inline-flex items-center gap-2 text-left',
                         active ? 'font-semibold text-ink' : 'text-ink hover:underline',
                       )}
                     >
+                      <BossIcon encounterId={entry.encounterId} name={entry.name} size={20} />
                       {entry.name}
                     </button>
                   </td>
@@ -227,6 +332,9 @@ function Overview({
                   <td className="py-2 pr-4 text-right tabular-nums text-ink-secondary">
                     {measured ? sampled : <Muted>—</Muted>}
                   </td>
+                  <td className="py-2 pr-4 text-right tabular-nums text-ink-secondary">
+                    {measured ? <Coverage measured={measured} /> : <Muted>—</Muted>}
+                  </td>
                   <td className="py-2 pr-5 text-ink-muted">{stateOf(entry)}</td>
                 </tr>
               )
@@ -237,9 +345,81 @@ function Overview({
       <Note>
         A boss with nothing in either column has not been measured and nobody has
         written anything down about it. The scenario the site would build for it is
-        one stationary target, which is a fallback, not a reading of the fight.
+        one stationary target, which is a fallback, not a reading of the fight.{' '}
+        <strong className="font-medium text-ink-secondary">Fight read</strong> is how
+        much of each sampled pull the event fetch actually reached: enemy damage-taken
+        is paginated and a twenty-player Mythic pull outruns the budget, so a low
+        figure means the counts beside it describe the opening minutes and not the
+        encounter.
       </Note>
     </Panel>
+  )
+}
+
+/**
+ * How much of each sampled pull the event fetch actually reached.
+ *
+ * Read from `measured.eventCoverage` where the pipeline published it. Where it
+ * did not -- every dataset written before that field existed, including the one
+ * on the site today -- it is derived from the per-pull step functions that *are*
+ * published: the last step is where the events stopped, and over the fight length
+ * that is the coverage. Deriving it here rather than waiting for the next probe
+ * run is deliberate: the counts in the file right now were averaged over whole
+ * fights that were only partly read, and a reader has no other way to know.
+ *
+ * Returns null only when there is nothing at all to compute from.
+ */
+function coverageOf(measured: MeasuredFight): { low: number; high: number; median: number } | null {
+  const published = measured.eventCoverage
+  if (published) return published
+
+  const timeline = measured.timeline
+  if (!timeline) return null
+  const pulls = [
+    { steps: timeline.representative.steps, duration: timeline.representative.durationSeconds },
+    ...timeline.others.map((other) => ({ steps: other.steps, duration: other.durationSeconds })),
+  ]
+  const values = pulls
+    .map(({ steps, duration }) => {
+      const last = steps.length ? steps[steps.length - 1]![0] : 0
+      return duration > 0 ? Math.min(last / duration, 1) : null
+    })
+    .filter((value): value is number => value !== null)
+    .sort((a, b) => a - b)
+  if (!values.length) return null
+  return {
+    low: values[0]!,
+    high: values[values.length - 1]!,
+    median: values[Math.floor(values.length / 2)]!,
+  }
+}
+
+/** Below this a count averaged over a fight is a count averaged over its opening. */
+const COMPLETE_COVERAGE = 0.95
+
+function Coverage({ measured }: { measured: MeasuredFight }) {
+  const coverage = coverageOf(measured)
+  if (!coverage) return <Muted>—</Muted>
+  const partial = coverage.low < COMPLETE_COVERAGE
+  const text =
+    coverage.low === coverage.high
+      ? percent(coverage.median)
+      : `${percent(coverage.low)}–${percent(coverage.high)}`
+  return (
+    <span
+      className={partial ? 'text-ink' : 'text-ink-secondary'}
+      title={
+        partial
+          ? 'The event fetch stopped before the end of these pulls. Counts taken over them describe the part that was read.'
+          : 'The event fetch reached the end of these pulls.'
+      }
+    >
+      {text}
+      {partial ? <span aria-hidden> ⚠</span> : null}
+      <span className="sr-only">
+        {partial ? ' — partly read, counts describe a prefix of the fight' : ''}
+      </span>
+    </span>
   )
 }
 
@@ -271,7 +451,12 @@ function Encounter({
       <>
         <Panel>
           <PanelHeader
-            title={encounter.name}
+            title={
+              <span className="inline-flex items-center gap-2">
+                <BossIcon encounterId={encounter.encounterId} name={encounter.name} />
+                {encounter.name}
+              </span>
+            }
             subtitle="Nothing measured or asserted yet."
           />
           <EmptyState>
@@ -292,8 +477,123 @@ function Encounter({
       <TimelinePanel encounter={encounter} fights={fights} />
       <ComparisonPanel encounter={encounter} />
       {measured && sampled > 0 ? <MeasurementPanel measured={measured} /> : null}
+      {measured && sampled > 0 ? <PromotionPanel encounter={encounter} /> : null}
       <ScenarioPanel encounter={encounter} />
     </>
+  )
+}
+
+// --------------------------------------------------------------------------------
+// What the logs could contribute to the profile, and what stops them
+// --------------------------------------------------------------------------------
+
+/**
+ * The promotion proposals, shown before anything is written anywhere.
+ *
+ * The owner does not want to type nine bosses' target counts in by hand, and the
+ * probe already measures them. What he also does not want -- and what this panel
+ * exists to prevent -- is a pipeline step quietly replacing something he stated
+ * with something the log reader computed. A disagreement between the two is the
+ * most valuable output this whole subsystem has, and an automatic promotion would
+ * consume it silently on the way past.
+ *
+ * So the proposal is published and the writing is a command somebody runs.
+ */
+function PromotionPanel({ encounter }: { encounter: FightEncounter }) {
+  const promotions = encounter.promotions
+  if (!promotions) {
+    return (
+      <Panel>
+        <PanelHeader
+          title="What the logs could fill in"
+          subtitle="This dataset was published before the promotion machinery existed, so there is nothing to show. The next probe run will carry it."
+        />
+      </Panel>
+    )
+  }
+  if (!promotions.length) {
+    return (
+      <Panel>
+        <PanelHeader
+          title="What the logs could fill in"
+          subtitle="Nothing the measurement could contribute to this profile."
+        />
+      </Panel>
+    )
+  }
+
+  const ready = promotions.filter((entry) => entry.eligible)
+  return (
+    <Panel>
+      <PanelHeader
+        title="What the logs could fill in"
+        subtitle={
+          <>
+            Facts the measurement could become, so nobody has to copy a number across
+            by hand. {ready.length} of {promotions.length} are ready to write. Nothing
+            here has been applied: a measurement reaches a profile only through the
+            command below, and it never overwrites a fact a person asserted.
+          </>
+        }
+      />
+      <div className="space-y-3 px-5 pt-4 pb-1">
+        {promotions.map((promotion) => (
+          <PromotionRow key={promotion.key} promotion={promotion} />
+        ))}
+      </div>
+      {encounter.promoteCommand ? (
+        <div className="px-5 pt-3 pb-4">
+          <pre className="overflow-x-auto rounded-lg border border-hairline bg-elevated px-4 py-3 text-[12.5px] leading-relaxed text-ink-secondary">
+            {encounter.promoteCommand}
+          </pre>
+          <p className="mt-2 text-[12.5px] leading-relaxed text-ink-muted">
+            Without <code>--write</code> it prints the same list and changes nothing.
+          </p>
+        </div>
+      ) : null}
+      <Note>
+        A held-back fact is not a failure. &ldquo;A person already said so&rdquo; is the
+        permanent answer and stays that way; &ldquo;the event fetch only read the first
+        minute&rdquo; is a reason to re-probe with a larger page budget. Both are
+        printed rather than resolved, for the same reason the comparison above is.
+      </Note>
+    </Panel>
+  )
+}
+
+function PromotionRow({ promotion }: { promotion: FightPromotion }) {
+  return (
+    <div className="rounded-lg border border-hairline px-4 py-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <span className="text-[13px] font-medium text-ink">
+          {promotion.label}: {promotion.summary}
+        </span>
+        <span
+          className={cx(
+            'rounded-full border px-2 py-px text-[11px] tracking-wide uppercase',
+            promotion.eligible
+              ? 'border-hairline text-ink-secondary'
+              : 'border-hairline text-ink-muted',
+          )}
+        >
+          {promotion.eligible ? 'ready to write' : 'held back'}
+        </span>
+      </div>
+      <p className="mt-1.5 text-[12.5px] leading-relaxed text-ink-secondary">
+        {promotion.reason}
+      </p>
+      <p className="mt-1.5 text-[12.5px] leading-relaxed text-ink-muted">
+        Measured from {promotion.sample} fight(s)
+        {promotion.reports.length ? ` (${promotion.reports.join(', ')})` : ''}:{' '}
+        {promotion.evidence}
+      </p>
+      {promotion.disagrees ? (
+        <p className="mt-1.5 text-[12.5px] leading-relaxed text-ink">
+          The profile currently says <code>{JSON.stringify(promotion.current)}</code>.
+          This project&rsquo;s rule is that the extraction is the likelier culprit.
+        </p>
+      ) : null}
+    </div>
   )
 }
 
@@ -401,6 +701,10 @@ function TimelinePanel({
   }, [encounter, representative, timeline, simIsFallback])
 
   const rows = useMemo(() => buildStepRows(series), [series])
+  const { bands, notDrawn: hiddenBands } = useMemo(
+    () => drawableBands(representative?.auras ?? []),
+    [representative],
+  )
   const peak = rows.reduce((best, row) => {
     for (const [key, value] of Object.entries(row)) {
       if (key !== 'second' && typeof value === 'number') best = Math.max(best, value)
@@ -424,15 +728,28 @@ function TimelinePanel({
           },
         ]
       : []),
-    ...(representative?.auras.length
-      ? [{ id: 'amp', label: 'Aura window measured on an enemy', color: AMPLIFY_COLOR }]
+    ...(bands.length
+      ? [
+          {
+            id: 'amp',
+            label: hiddenBands
+              ? `Aura window measured on an enemy (${hiddenBands} further window(s) not drawn)`
+              : 'Aura window measured on an enemy',
+            color: AMPLIFY_COLOR,
+          },
+        ]
       : []),
   ]
 
   return (
     <Panel>
       <PanelHeader
-        title={`${encounter.name}: how many things are alive, and when`}
+        title={
+          <span className="inline-flex items-center gap-2">
+            <BossIcon encounterId={encounter.encounterId} name={encounter.name} />
+            {`${encounter.name}: how many things are alive, and when`}
+          </span>
+        }
         subtitle={
           representative ? (
             <>
@@ -492,7 +809,7 @@ function TimelinePanel({
 
             {/* Measured aura windows on the drawn pull. What an aura DOES is not in
                 the API, so this is a window and never a magnitude. */}
-            {(representative?.auras ?? []).map((aura, index) => (
+            {bands.map((aura, index) => (
               <ReferenceArea
                 key={`${aura.abilityId}-${index}`}
                 x1={aura.start}
@@ -500,7 +817,10 @@ function TimelinePanel({
                 fill={AMPLIFY_COLOR}
                 fillOpacity={0.14}
                 label={{
-                  value: aura.ability,
+                  // Named with the enemy where the extraction resolved one: an
+                  // ability floating over a three-target chart does not answer the
+                  // question the band exists to raise.
+                  value: aura.actorName ? `${aura.ability} on ${aura.actorName}` : aura.ability,
                   position: 'insideTop',
                   fill: 'var(--text-muted)',
                   fontSize: 11,
@@ -632,6 +952,68 @@ function TimelinePanel({
       </Note>
     </Panel>
   )
+}
+
+/** Bands one ability may contribute before the rest are dropped. */
+const MAX_BANDS_PER_ABILITY = 3
+
+/**
+ * Bands the chart will draw at all, across every ability. Six is about where a
+ * shaded band still reads as an interval rather than as the background.
+ */
+const MAX_BANDS = 6
+
+/**
+ * Aura windows reduced to the bands worth drawing, and a count of what was not.
+ *
+ * A shaded band is a heavy mark and an aura has no natural limit on how often it
+ * lands: the published MID2 run carries roughly two hundred windows on the drawn
+ * pull, across about twenty abilities -- most of them player debuffs, which the
+ * extraction's aura filter now drops and this file predates. Drawn at 14% opacity
+ * each they turn the plot into a solid block with the step lines invisible
+ * underneath. So overlapping windows of one ability are merged (five copies of an
+ * add carrying the same buff is one thing happening, not five bands), each
+ * ability contributes at most a few, and the whole chart at most a handful.
+ *
+ * Everything dropped is counted and named in the legend. A cap that silently
+ * showed the first six would be worse than the wash it replaced.
+ *
+ * The pipeline merges and caps per ability too, from the same reasoning. This is
+ * repeated here because the dataset on the site right now predates that and a
+ * reader cannot wait for the next probe run to see the chart; re-merging
+ * already-merged windows is a no-op.
+ */
+function drawableBands(auras: FightAuraWindow[]): {
+  bands: FightAuraWindow[]
+  notDrawn: number
+} {
+  const byAbility = new Map<number, FightAuraWindow[]>()
+  for (const aura of auras) {
+    const group = byAbility.get(aura.abilityId)
+    if (group) group.push(aura)
+    else byAbility.set(aura.abilityId, [aura])
+  }
+
+  let notDrawn = 0
+  const candidates: FightAuraWindow[] = []
+  for (const group of byAbility.values()) {
+    const merged: FightAuraWindow[] = []
+    for (const aura of [...group].sort((a, b) => a.start - b.start)) {
+      const last = merged[merged.length - 1]
+      if (last && aura.start <= last.start + last.duration) {
+        last.duration =
+          Math.max(last.start + last.duration, aura.start + aura.duration) - last.start
+        continue
+      }
+      merged.push({ ...aura })
+    }
+    notDrawn += Math.max(merged.length - MAX_BANDS_PER_ABILITY, 0)
+    candidates.push(...merged.slice(0, MAX_BANDS_PER_ABILITY))
+  }
+
+  candidates.sort((a, b) => a.start - b.start)
+  notDrawn += Math.max(candidates.length - MAX_BANDS, 0)
+  return { bands: candidates.slice(0, MAX_BANDS), notDrawn }
 }
 
 /** Context pulls underneath, then the simulated line, then the logged pull on top. */
@@ -790,6 +1172,7 @@ function ComparisonPanel({ encounter }: { encounter: FightEncounter }) {
 }
 
 function AmplificationNote({ amplification }: { amplification: FightAmplification }) {
+  const measuredTarget = amplification.targetSource === 'logs'
   return (
     <div className="rounded-lg border border-hairline px-4 py-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -804,13 +1187,45 @@ function AmplificationNote({ amplification }: { amplification: FightAmplificatio
         Stated as ×{amplification.multiplier} for {amplification.duration}s from{' '}
         {amplification.first}s, landing on{' '}
         {amplification.target === 'unknown'
-          ? 'a target that was not specified'
+          ? 'a target nobody has named yet'
           : `the ${amplification.target} target`}
         . No field in the Warcraft Logs API says what an aura does, so the window can be
         measured and the multiplier can only ever be somebody&rsquo;s word.{' '}
         {amplification.representable
           ? 'simc can express this as a vulnerable raid event.'
           : 'simc cannot express this — see the scenario below.'}
+      </p>
+      {/* Which of the targets carries it: a field the person who wrote this fact
+          left blank, and the one part of an amplification the logs *can* answer.
+          Its provenance is per field, beside the magnitude's, because the two
+          halves genuinely come from different places. */}
+      <p className="mt-1.5 text-[12.5px] leading-relaxed text-ink-muted">
+        {measuredTarget ? (
+          <>
+            <strong className="font-medium text-ink-secondary">
+              Which target: measured from the logs.
+            </strong>{' '}
+            {amplification.targetEvidence}
+          </>
+        ) : amplification.target === 'unknown' ? (
+          <>
+            <strong className="font-medium text-ink-secondary">
+              Which target: not yet established.
+            </strong>{' '}
+            Aura windows are keyed on the enemy that carried them, so a probe run can
+            name it — see &ldquo;Carried by&rdquo; above and the promotion below. Until
+            an enemy is named <em>and</em> the fight nominates a priority target, simc
+            has nothing to point a <code>vulnerable</code> raid event at: its generated
+            adds have no name to pass to <code>target=</code>.
+          </>
+        ) : (
+          <>
+            <strong className="font-medium text-ink-secondary">
+              Which target: asserted.
+            </strong>{' '}
+            Nobody has measured it against a log.
+          </>
+        )}
       </p>
     </div>
   )
@@ -822,6 +1237,13 @@ function AmplificationNote({ amplification }: { amplification: FightAmplificatio
 
 function MeasurementPanel({ measured }: { measured: MeasuredFight }) {
   const timeline = measured.timeline
+  const coverage = coverageOf(measured)
+  const partial = !!coverage && coverage.low < COMPLETE_COVERAGE
+  const coverageText = coverage
+    ? coverage.low === coverage.high
+      ? percent(coverage.median)
+      : `${percent(coverage.low)}–${percent(coverage.high)}`
+    : 'an unrecorded amount of'
   return (
     <Panel>
       <PanelHeader
@@ -844,15 +1266,36 @@ function MeasurementPanel({ measured }: { measured: MeasuredFight }) {
         />
         <StatTile
           label="Targets, mean"
-          value={spreadText(measured.meanTargets, 2)}
-          caption="Time-weighted. This is the number one desired_targets would have to stand for."
+          value={partial ? '—' : spreadText(measured.meanTargets, 2)}
+          caption={
+            partial
+              ? `Not reported: the event fetch reached only ${coverageText} of these pulls, so a time-weighted mean over them is a mean over their opening minutes. The peak above is unaffected — a shorter read can only make it too small.`
+              : 'Time-weighted, and it counts an enemy only while it is being damaged: a target the raid switches off drops out of it while still alive.'
+          }
         />
         <StatTile
           label="Raid size"
           value={spreadText(measured.raidSize)}
-          caption={`The log's own group size. ${spreadText(measured.playersListed)} player actors were listed.`}
+          caption={`The log's own group size — fight metadata, so a partial event fetch does not touch it. ${spreadText(measured.playersListed)} player actors were listed.`}
         />
       </div>
+
+      {partial ? (
+        <div className="px-5 pb-4">
+          <p className="rounded-lg border border-hairline bg-elevated px-4 py-3 text-[12.5px] leading-relaxed text-ink-secondary">
+            <strong className="font-medium text-ink">
+              The event fetch reached {coverageText} of these pulls.
+            </strong>{' '}
+            Enemy damage-taken is paginated and bounded, and a twenty-player Mythic
+            pull generates it faster than the probe&rsquo;s page budget allows, so the
+            stream stops part-way and every enemy&rsquo;s last recorded hit is the cut
+            point rather than its death. Counts here are averaged over the part that
+            was read. Kill time and raid size come from the fight&rsquo;s own metadata
+            and are unaffected. Raising <code>--max-pages</code> on the probe is what
+            fixes it, at a cost in points.
+          </p>
+        </div>
+      ) : null}
 
       {measured.adds?.length ? (
         <SubTable
@@ -886,7 +1329,7 @@ function MeasurementPanel({ measured }: { measured: MeasuredFight }) {
       {measured.auras?.length ? (
         <SubTable
           title="Auras on enemies"
-          columns={['Ability', 'Starts', 'Lasts', 'Targets', 'Seen in']}
+          columns={['Ability', 'Starts', 'Lasts', 'Carried by', 'Seen in']}
           rows={measured.auras.map((aura) => [
             `${aura.ability} (${aura.abilityId})`,
             spreadText(aura.start, 1, 's'),
@@ -894,7 +1337,17 @@ function MeasurementPanel({ measured }: { measured: MeasuredFight }) {
               {spreadText(aura.duration, 1, 's')}
               {aura.anyTruncated ? <Muted> · some windows truncated</Muted> : null}
             </>,
-            aura.distinctTargets,
+            // Which enemy, by name. This is the answer to "the amplification sits
+            // on one of the three targets -- which one?", and it is the reason the
+            // column that used to hold a count now holds names.
+            aura.carriedBy?.length ? (
+              <span title={aura.roleEvidence}>
+                {aura.carriedBy.map((carrier) => carrier.name).join(', ')}
+                <Muted> · {aura.role}</Muted>
+              </span>
+            ) : (
+              <Muted>{aura.distinctTargets} target(s), not named</Muted>
+            ),
             `${aura.seenInFights} fight(s)`,
           ])}
         />
@@ -905,7 +1358,10 @@ function MeasurementPanel({ measured }: { measured: MeasuredFight }) {
         start and end, and nothing anywhere says what the aura does. Auras a player
         applied are dropped, because a warrior&rsquo;s debuff and a boss buffing its own
         add arrive in the same event stream — an earlier version of this nominated
-        Avenging Wrath as a boss mechanic.{' '}
+        Avenging Wrath as a boss mechanic. &ldquo;Carried by&rdquo; names the enemy the
+        aura landed on and says whether it is the priority target or an add; where the
+        enemies were hit about equally nothing nominates a boss and it reads{' '}
+        <em>unknown</em>, which is a fact about the encounter rather than a gap.{' '}
         {timeline ? timeline.why : ''}
       </Note>
     </Panel>

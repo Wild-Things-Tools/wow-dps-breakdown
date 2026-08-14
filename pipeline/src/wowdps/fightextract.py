@@ -63,6 +63,12 @@ AURA_END_TYPES = frozenset({"removebuff", "removedebuff"})
 #: are different claims and the second is the one a scenario should be built from.
 DEFAULT_SIGNIFICANT_SHARE = 0.01
 
+#: Below this share of a fight read by the event fetch, no statistic averaged over
+#: the fight can be trusted, because the unread part is silently counted as empty.
+#: 0.95 rather than 1.0: a kill's last enemy dies a fraction of a second before the
+#: log closes, so a complete fetch still lands just short.
+COMPLETE_EVENT_COVERAGE = 0.95
+
 #: A fight counts as a constant-target fight when it spends at least this much of
 #: its length at its peak count. Not 100%: on a kill the targets die one after
 #: another over the last second or two, which would otherwise make every fight in
@@ -158,27 +164,67 @@ class PhaseWindow:
 
 @dataclass(frozen=True)
 class TargetCountTimeline:
-    """How many enemies were alive at once, as a step function.
+    """How many enemies were being fought at once, as a step function.
 
     ``steps`` are ``(start second, count)`` pairs, each running until the next
     one. ``mean`` is time-weighted, which is the number a single ``desired_targets``
     would have to stand for; ``peak_share`` says whether that is even a fair
-    summary, by reporting how much of the fight was spent at the highest count.
+    summary, by reporting how much of the measured window was spent at the highest
+    count.
+
+    Why there are two lengths here, and why it matters
+    -------------------------------------------------
+    ``duration`` is how long the fight ran. ``observed`` is how much of it the
+    event fetch actually reached. They are not the same thing, and treating them
+    as the same produced a genuinely wrong number on the first real nine-boss
+    pass: enemy damage-taken is paginated and bounded, a twenty-player Mythic pull
+    generates events far faster than the budget allows, and the fetch stops
+    part-way through. Every enemy's last hit is then the cut point, the step
+    function falls to zero there, and a mean divided by the *whole* fight length
+    reads as though nothing was alive for the rest of it.
+
+    Measured on the MID2 pass: Midnight Falls was read for 11-22% of its length
+    and reported a mean of 0.34 concurrent targets; Vorasius, a single-target
+    boss, reported 0.59. A mean below one on a boss that is always there is not a
+    property of the encounter, it is a division by the wrong denominator.
+
+    So both statistics are computed over ``observed``, and ``coverage`` publishes
+    the ratio so nothing downstream can mistake a fifth of a fight for all of it.
+    A caller that wants a whole-fight claim has to check ``coverage`` first --
+    ``plan_promotions`` does exactly that and refuses.
     """
 
     steps: tuple[tuple[float, int], ...]
     duration: float
+    #: Seconds of the fight the events actually covered. ``None`` means "assume
+    #: the whole fight", which is right for a timeline built from something other
+    #: than a bounded event fetch.
+    observed: float | None = None
+
+    @property
+    def window(self) -> float:
+        """The length the statistics are averaged over: what was read, not what ran."""
+        if self.observed is None or self.observed <= 0:
+            return self.duration
+        return min(self.observed, self.duration)
+
+    @property
+    def coverage(self) -> float:
+        """Fraction of the fight the events reached. 1.0 when nothing was cut."""
+        if self.duration <= 0:
+            return 0.0
+        return round(min(self.window / self.duration, 1.0), 4)
 
     def _spans(self):
         for index, (start, count) in enumerate(self.steps):
-            end = self.steps[index + 1][0] if index + 1 < len(self.steps) else self.duration
-            yield count, max(0.0, end - start)
+            end = self.steps[index + 1][0] if index + 1 < len(self.steps) else self.window
+            yield count, max(0.0, min(end, self.window) - min(start, self.window))
 
     @property
     def mean(self) -> float:
-        if not self.steps or self.duration <= 0:
+        if not self.steps or self.window <= 0:
             return 0.0
-        return round(sum(count * span for count, span in self._spans()) / self.duration, 3)
+        return round(sum(count * span for count, span in self._spans()) / self.window, 3)
 
     @property
     def peak(self) -> int:
@@ -186,11 +232,11 @@ class TargetCountTimeline:
 
     @property
     def peak_share(self) -> float:
-        """Fraction of the fight spent at the peak count."""
-        if self.duration <= 0:
+        """Fraction of the measured window spent at the peak count."""
+        if self.window <= 0:
             return 0.0
         at_peak = sum(span for count, span in self._spans() if count == self.peak)
-        return round(at_peak / self.duration, 4)
+        return round(at_peak / self.window, 4)
 
     @property
     def constant(self) -> bool:
@@ -203,6 +249,11 @@ class TargetCountTimeline:
             "peak": self.peak,
             "peakShare": self.peak_share,
             "constant": self.constant,
+            # Published beside the numbers it qualifies, never in a footnote: a
+            # mean over 20% of a fight and a mean over all of it are different
+            # claims wearing the same name.
+            "observed": round(self.window, 3),
+            "coverage": self.coverage,
         }
 
 
@@ -326,6 +377,33 @@ class FightObservation:
     actor_names: dict[int, str] = field(default_factory=dict, compare=False, repr=False)
     actor_game_ids: dict[int, int] = field(default_factory=dict, compare=False, repr=False)
 
+    @property
+    def event_coverage(self) -> float:
+        """Fraction of this pull the event fetch reached. See ``TargetCountTimeline``."""
+        return self.timeline.coverage
+
+    def is_encounter_aura(self, aura: AuraWindow) -> bool:
+        """Whether one aura window is something the *encounter* did to an enemy.
+
+        Two independent tests, because the first one on its own has already
+        failed in production twice:
+
+        1. **The aura must not be on a player.** A self-buff and a boss's buff on
+           its own add arrive in the same stream, and a paladin's Avenging Wrath
+           on himself is not an encounter mechanic on anything. This test needs
+           nothing but the target id, so it holds even when the event carried no
+           source at all -- which is exactly the case the source test lets
+           through, and exactly how Avenging Wrath reached the published MID2
+           dataset a second time after being fixed once.
+        2. **The aura must not have been applied by a player.** This is the older
+           test and it is still the one that catches a debuff a player put on an
+           enemy. An aura whose event carried no source is kept: unknown is not
+           the same as "a player did it".
+        """
+        if aura.actor_id in self.player_ids:
+            return False
+        return not (aura.source_id is not None and aura.source_id in self.player_ids)
+
     def enemy_name(self, actor_id: int) -> str:
         """A name for one enemy actor, from the report's master data or its damage."""
         named = self.actor_names.get(actor_id)
@@ -390,6 +468,9 @@ class FightObservation:
             ],
             "activeTimeFraction": self.active_time_fraction,
             "truncated": self.truncated,
+            # The single number that says how far any of the counts above can be
+            # read. A fight fetched to 20% is not a fight with few targets.
+            "eventCoverage": self.event_coverage,
             "warnings": list(self.warnings),
         }
 
@@ -484,10 +565,27 @@ def enemy_lives(
     return lives
 
 
-def target_count_timeline(lives: list[EnemyLife], duration: float) -> TargetCountTimeline:
-    """Concurrently-alive enemy count as a step function over the fight."""
+def observed_window(lives: list[EnemyLife], duration: float) -> float:
+    """How much of the fight the damage events actually reached.
+
+    The last moment any enemy was demonstrably being fought. On a complete fetch
+    that is the kill; on a fetch that hit its page limit it is the cut point, and
+    everything after it is unread rather than empty. See ``TargetCountTimeline``
+    for what goes wrong when the two are conflated.
+    """
     if not lives:
-        return TargetCountTimeline(steps=((0.0, 0),), duration=duration)
+        return 0.0
+    return round(min(max(life.last_seen for life in lives), duration), 3)
+
+
+def target_count_timeline(
+    lives: list[EnemyLife],
+    duration: float,
+    observed: float | None = None,
+) -> TargetCountTimeline:
+    """Concurrent enemy count as a step function over the part of the fight that was read."""
+    if not lives:
+        return TargetCountTimeline(steps=((0.0, 0),), duration=duration, observed=observed)
 
     deltas: dict[float, int] = {}
     for life in lives:
@@ -507,7 +605,7 @@ def target_count_timeline(lives: list[EnemyLife], duration: float) -> TargetCoun
 
     if not steps or steps[0][0] > 0:
         steps.insert(0, (0.0, 0))
-    return TargetCountTimeline(steps=tuple(steps), duration=duration)
+    return TargetCountTimeline(steps=tuple(steps), duration=duration, observed=observed)
 
 
 def add_patterns(lives: list[EnemyLife], total_damage: float) -> list[AddPattern]:
@@ -857,11 +955,31 @@ def observe_fight(
     ]
 
     friendly = fight.get("friendlyPlayers") or []
+    # How far into the fight the events reached. Both timelines are averaged over
+    # this rather than over the fight length, because a bounded event fetch that
+    # stopped at 20% would otherwise report the other 80% as an empty room.
+    window = observed_window(lives, duration)
     warnings: list[str] = []
     if not lives:
         warnings.append("no enemy damage events: target counts could not be measured")
     if not any(life.died for life in lives):
         warnings.append("no enemy deaths seen: every lifespan ends at its last hit, not a death")
+    if aura_events and not player_ids:
+        # Without a player list neither aura test can fire, and every player
+        # cooldown in the stream becomes a candidate for the encounter's own
+        # amplification window. Silent until now; the failure is invisible in the
+        # output because the extra auras look exactly like real ones.
+        warnings.append(
+            "no player actors were listed for this report, so auras players applied "
+            "cannot be told from auras the encounter applied: treat every aura here "
+            "as unfiltered"
+        )
+    if duration > 0 and window / duration < COMPLETE_EVENT_COVERAGE:
+        warnings.append(
+            f"the event fetch reached {window:.0f}s of a {duration:.0f}s fight "
+            f"({window / duration:.0%}): every target count here describes that "
+            f"prefix, not the whole pull"
+        )
 
     return FightObservation(
         report_code=report_code,
@@ -873,8 +991,12 @@ def observe_fight(
         duration=duration,
         raid_size=fight.get("size") if isinstance(fight.get("size"), int) else None,
         players=len(friendly),
-        timeline=target_count_timeline(lives, duration),
-        significant_timeline=target_count_timeline(significant, duration),
+        timeline=target_count_timeline(lives, duration, window),
+        # The significant timeline shares the *fight's* window, not its own: an
+        # add under the floor still proves the fetch was alive at that second, and
+        # recomputing the window from the survivors alone would shorten it for a
+        # reason that has nothing to do with the fetch.
+        significant_timeline=target_count_timeline(significant, duration, window),
         enemies=tuple(lives),
         adds=tuple(add_patterns(significant, total_damage)),
         phases=tuple(phase_windows(fight.get("phaseTransitions") or [], phase_metadata, duration)),
@@ -987,6 +1109,16 @@ class EncounterObservation:
     def uptime(self) -> Spread | None:
         return _spread(self._values(lambda fight: fight.active_time_fraction))
 
+    @property
+    def event_coverage(self) -> Spread | None:
+        """How much of each sampled fight the event fetch reached, pooled.
+
+        The gate on every whole-fight claim. On the first real nine-boss pass this
+        ran from 0.11 to 1.0 depending on the encounter, and nothing downstream had
+        any way to know.
+        """
+        return _spread(self._values(lambda fight: fight.event_coverage))
+
     def pooled_adds(self) -> list[dict]:
         """Per NPC, what the fights agreed on -- keyed by game id where there is one.
 
@@ -1026,21 +1158,17 @@ class EncounterObservation:
         "this encounter does this" from "this pull went badly". Raising the floor
         is the knob; inventing a window from one observation is not.
 
-        ``encounter_only`` drops auras a *player* applied. Both a boss buffing its
-        own add and a warrior landing Colossus Smash put an aura on an enemy and
-        arrive in the same stream, so without this the nearest-window search
-        happily nominates a player cooldown as the encounter's amplification --
-        it nominated Avenging Wrath on the first real run. An aura whose event
-        carried no source is kept: unknown is not the same as "a player did it".
+        ``encounter_only`` drops auras that are not the encounter's own, by both
+        of the tests in ``FightObservation.is_encounter_aura``: not on a player,
+        and not applied by one. The first real probe run nominated Avenging Wrath
+        as an encounter mechanic with only the source test in place, and the first
+        real *nine-boss* run did it again -- self-buffs frequently carry no source
+        id at all, so only the target test catches them.
         """
         buckets: dict[int, list[tuple[str, AuraWindow]]] = {}
         for fight in self.fights:
             for aura in fight.auras:
-                if (
-                    encounter_only
-                    and aura.source_id is not None
-                    and aura.source_id in fight.player_ids
-                ):
+                if encounter_only and not fight.is_encounter_aura(aura):
                     continue
                 buckets.setdefault(aura.ability_id, []).append((fight.report_code, aura))
 
@@ -1089,11 +1217,7 @@ class EncounterObservation:
             for aura in fight.auras:
                 if aura.ability_id != ability_id:
                     continue
-                if (
-                    encounter_only
-                    and aura.source_id is not None
-                    and aura.source_id in fight.player_ids
-                ):
+                if encounter_only and not fight.is_encounter_aura(aura):
                     continue
                 name = fight.enemy_name(aura.actor_id)
                 game_id = fight.actor_game_ids.get(aura.actor_id)
@@ -1166,6 +1290,7 @@ class EncounterObservation:
             "peakTargets": _json(self.peak_targets),
             "peakTargetShare": _json(self.peak_share),
             "activeTimeFraction": _json(self.uptime),
+            "eventCoverage": _json(self.event_coverage),
             "adds": self.pooled_adds(),
             "auras": self.pooled_auras(),
             "phases": self.pooled_phases(),

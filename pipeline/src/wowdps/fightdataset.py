@@ -65,7 +65,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .fightextract import Spread
+from .fightextract import COMPLETE_EVENT_COVERAGE, Spread
 from .fightprofile import (
     SOURCE_DEFAULT,
     SOURCE_HAND,
@@ -159,6 +159,16 @@ class MeasuredEncounter:
     @property
     def peak_share(self) -> Spread | None:
         return _spread(self.payload.get("peakTargetShare"))
+
+    @property
+    def event_coverage(self) -> Spread | None:
+        """``None`` for a payload written before coverage was measured at all.
+
+        That is a meaningful absence rather than a missing field to default: a run
+        that did not record how much of each fight it read cannot support a claim
+        about a whole fight, and ``plan_promotions`` treats it as such.
+        """
+        return _spread(self.payload.get("eventCoverage"))
 
     def pooled_auras(self) -> list[dict]:
         return [aura for aura in self.payload.get("auras") or [] if isinstance(aura, dict)]
@@ -337,33 +347,89 @@ def _representative(payload: dict) -> dict | None:
     return min(fights, key=distance)
 
 
-def _drawable_auras(fight: dict, pooled: list[dict]) -> list[dict]:
-    """The representative fight's aura windows, filtered to the pooled shortlist.
+#: Bands one ability may contribute to the chart before the rest are dropped.
+#: A shaded band is a heavy mark; a dozen of them is a wash, and the published
+#: MID2 run drew roughly two hundred (a Death Knight disease on fifteen enemy
+#: instances) which covered the step lines completely.
+_MAX_BANDS_PER_ABILITY = 3
 
-    A fight's own aura list is unfiltered: it carries every aura on every enemy,
-    including debuffs players applied, because the per-fight payload does not
-    record who applied what. ``pooled_auras`` already dropped player-sourced auras
-    and one-off appearances, so its ability ids are the shortlist of things that
-    might be an encounter mechanic. Drawing anything else would repeat the mistake
-    that once nominated Avenging Wrath as a boss's amplification.
+
+def _merge_windows(windows: list[dict]) -> list[dict]:
+    """Overlapping windows of one ability, merged into the intervals they cover.
+
+    Five copies of an add carrying the same buff at the same time is *one* thing
+    happening to the encounter, and drawing it five times says nothing the first
+    band did not, at five times the ink. Merging is on the interval, so two
+    genuinely separate applications stay two bands.
+    """
+    ordered = sorted(windows, key=lambda window: window["start"])
+    merged: list[dict] = []
+    for window in ordered:
+        end = window["start"] + window["duration"]
+        if merged and window["start"] <= merged[-1]["start"] + merged[-1]["duration"]:
+            last = merged[-1]
+            last["duration"] = round(max(last["start"] + last["duration"], end) - last["start"], 3)
+            last["instances"] += 1
+            if window.get("actorName") and window["actorName"] not in last["actorNames"]:
+                last["actorNames"].append(window["actorName"])
+            last["truncated"] = last["truncated"] or window["truncated"]
+            continue
+        merged.append(
+            {
+                **window,
+                "instances": 1,
+                "actorNames": [window["actorName"]] if window.get("actorName") else [],
+            }
+        )
+    return merged
+
+
+def _drawable_auras(fight: dict, pooled: list[dict]) -> list[dict]:
+    """The representative fight's aura windows, filtered and merged for drawing.
+
+    Three reductions, in order, each of which the published MID2 run needed:
+
+    1. **Filtered to the pooled shortlist.** A fight's own aura list is
+       unfiltered -- every aura on every actor, including ones players applied,
+       because the per-fight payload does not record who applied what.
+       ``pooled_auras`` already dropped those and one-off appearances, so its
+       ability ids are the shortlist of things that might be an encounter
+       mechanic. Drawing anything else repeats the mistake that once nominated
+       Avenging Wrath as a boss's amplification.
+    2. **Merged where they overlap.** One buff on five copies of an add is one
+       thing happening, not five bands.
+    3. **Capped per ability.** A shaded band is a heavy mark and a periodic aura
+       has no natural limit. The count that was dropped travels with the band, so
+       the chart says "and 27 more" rather than quietly showing three.
     """
     keep = {aura.get("abilityId") for aura in pooled}
-    return [
-        {
-            "abilityId": aura.get("abilityId"),
-            "ability": aura.get("ability"),
-            "start": aura.get("start"),
-            "duration": aura.get("duration"),
-            "truncated": bool(aura.get("truncated")),
-            "instance": aura.get("instance"),
-            # Which enemy this window was on, so the band can be labelled with a
-            # name rather than with an ability floating over a three-target chart.
-            "actorName": aura.get("actorName"),
-            "role": aura.get("role"),
-        }
-        for aura in fight.get("auras") or []
-        if isinstance(aura, dict) and aura.get("abilityId") in keep
-    ]
+    by_ability: dict[object, list[dict]] = {}
+    for aura in fight.get("auras") or []:
+        if not isinstance(aura, dict) or aura.get("abilityId") not in keep:
+            continue
+        by_ability.setdefault(aura["abilityId"], []).append(
+            {
+                "abilityId": aura.get("abilityId"),
+                "ability": aura.get("ability"),
+                "start": float(aura.get("start") or 0.0),
+                "duration": float(aura.get("duration") or 0.0),
+                "truncated": bool(aura.get("truncated")),
+                # Which enemy this window was on, so the band can be labelled with
+                # a name rather than an ability floating over a three-target chart.
+                "actorName": aura.get("actorName"),
+                "role": aura.get("role"),
+            }
+        )
+
+    drawn: list[dict] = []
+    for windows in by_ability.values():
+        merged = _merge_windows(windows)
+        shown, hidden = merged[:_MAX_BANDS_PER_ABILITY], len(merged) - _MAX_BANDS_PER_ABILITY
+        for window in shown:
+            window["alsoAtOtherTimes"] = max(hidden, 0)
+            drawn.append(window)
+    drawn.sort(key=lambda window: (window["start"], window["abilityId"]))
+    return drawn
 
 
 def _timeline_block(payload: dict) -> dict | None:
@@ -382,6 +448,7 @@ def _timeline_block(payload: dict) -> dict | None:
             "durationSeconds": fight.get("durationSeconds"),
             "kill": bool(fight.get("kill")),
             "steps": (fight.get("significantTargetCount") or {}).get("steps") or [],
+            "coverage": fight.get("eventCoverage"),
         }
         for fight in payload.get("fights") or []
         if isinstance(fight, dict) and fight is not chosen
@@ -411,6 +478,8 @@ def _timeline_block(payload: dict) -> dict | None:
             "peak": significant.get("peak"),
             "peakShare": significant.get("peakShare"),
             "constant": significant.get("constant"),
+            "observed": significant.get("observed"),
+            "coverage": chosen.get("eventCoverage"),
             # Everything that took a hit, including props and strays under the
             # significance floor. "Three things exist" and "three things matter"
             # are different claims and the view can show both.
@@ -435,7 +504,24 @@ def _caveats(payload: dict, rankings_page: int | None) -> list[str]:
             f"{len(fights)} fight(s) sampled: too few to tell an encounter's shape from "
             f"one guild's pull."
         )
-    if any(fight.get("truncated") for fight in fights):
+    coverages = [
+        float(fight["eventCoverage"])
+        for fight in fights
+        if isinstance(fight.get("eventCoverage"), (int, float))
+    ]
+    if coverages and min(coverages) < COMPLETE_EVENT_COVERAGE:
+        # Quantitative on purpose. "At least one event fetch stopped at its page
+        # limit" is what this used to say, and it was true of a run where one boss
+        # was read for 11% of its length and reported a mean concurrent target
+        # count of 0.34 -- a number nobody could have known to distrust from that
+        # sentence.
+        notes.append(
+            f"The event fetch reached {min(coverages):.0%}-{max(coverages):.0%} of "
+            f"these fights. Counts here are averaged over the part that was read, "
+            f"not the whole pull, and a whole-fight claim cannot be taken from them: "
+            f"raise the probe's --max-pages and re-run."
+        )
+    elif any(fight.get("truncated") for fight in fights):
         notes.append(
             "At least one event fetch stopped at its page limit, so the tail of that "
             "fight is incomplete rather than absent."
@@ -496,6 +582,9 @@ def _encounter_document(
             "peakTargets": payload.get("peakTargets"),
             "peakTargetShare": payload.get("peakTargetShare"),
             "activeTimeFraction": payload.get("activeTimeFraction"),
+            # How much of each sampled fight the events actually covered. Every
+            # count in this block is averaged over that, not over the fight.
+            "eventCoverage": payload.get("eventCoverage"),
             "adds": payload.get("adds") or [],
             "auras": payload.get("auras") or [],
             "phases": payload.get("phases") or [],

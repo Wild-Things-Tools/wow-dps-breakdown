@@ -236,6 +236,15 @@ export default function App() {
     setDetails((current) => current.filter((detail) => available.has(detail.id)))
   }, [manifest])
 
+  // Same for the open boss: seasons have different raids, so an encounter id from
+  // one season means nothing in the next. Dropped explicitly rather than left in
+  // the URL pointing at a boss the view quietly fell back from.
+  useEffect(() => {
+    if (!fights) return
+    const available = new Set(fights.encounters.map((entry) => entry.encounterId))
+    setBoss((current) => (current && !available.has(current) ? null : current))
+  }, [fights])
+
   useEffect(() => {
     writeUrl({ view, tier, scenario: scenario?.id ?? null, focus, boss })
   }, [view, tier, scenario, focus, boss])
@@ -320,7 +329,17 @@ export default function App() {
       {view === 'gear' ? <GearView gear={gear} /> : null}
 
       {view === 'fights' ? (
-        <FightsView fights={fights} encounterId={boss} onEncounterChange={setBoss} />
+        <FightsView
+          fights={fights}
+          encounterId={boss}
+          onEncounterChange={setBoss}
+          // The season control on this view *is* the tier control. One piece of
+          // state, one `tier=` in the URL, one answer everywhere -- see the
+          // reasoning on `Season` in FightsView.
+          tierIndex={tierIndex}
+          tier={tier}
+          onTierChange={setTier}
+        />
       ) : null}
 
       {view === 'timing' && !waitingForDetails ? (

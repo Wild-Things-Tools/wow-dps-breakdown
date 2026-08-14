@@ -794,3 +794,143 @@ def test_aura_carriers_pool_on_game_id_across_reports():
     assert len(carriers) == 1
     assert carriers[0]["gameId"] == 240_002
     assert carriers[0]["seenInFights"] == 2
+
+
+# --------------------------------------------------------------------------------
+# A bounded event fetch, and the statistic it destroys
+# --------------------------------------------------------------------------------
+#
+# The bug these pin, from the first real nine-boss pass: enemy damage-taken is
+# paginated and bounded, a twenty-player Mythic pull outruns the budget, and the
+# fetch stops part-way. Every enemy's last hit is then the cut point. Dividing a
+# time-weighted count by the *fight* length rather than by the part that was read
+# reported four of nine bosses at a mean concurrent target count below 1.0 --
+# including Vorasius, a single-target boss, at 0.59.
+
+
+def truncated_fight(read_to: float, fight_length: float = 300.0):
+    """One enemy, up the whole time, whose events stop being fetched at `read_to`."""
+    return observe_fight(
+        report_code="r1",
+        fight=fight(startTime=FIGHT_START, endTime=int(FIGHT_START + fight_length * 1000)),
+        damage_events=[damage(0.1, 10), damage(read_to, 10)],
+        death_events=[],
+        aura_events=[],
+        phase_metadata=[],
+        actor_names={10: "Boss"},
+        truncated=True,
+    )
+
+
+def test_a_single_target_boss_never_averages_below_one_target():
+    """The impossible number that gave the bug away."""
+    observed = truncated_fight(read_to=96.0, fight_length=163.0)
+
+    assert observed.significant_timeline.mean == pytest.approx(1.0, abs=0.01)
+    assert observed.event_coverage == pytest.approx(96.0 / 163.0, abs=0.001)
+
+
+def test_a_complete_fetch_leaves_the_mean_where_it_was():
+    """The fix must not move a number that was already right."""
+    observed = truncated_fight(read_to=299.9, fight_length=300.0)
+
+    assert observed.significant_timeline.mean == pytest.approx(1.0, abs=0.01)
+    assert observed.event_coverage > 0.99
+
+
+def test_a_partly_read_fight_says_how_far_it_got():
+    observed = truncated_fight(read_to=60.0, fight_length=300.0)
+
+    assert observed.event_coverage == pytest.approx(0.2, abs=0.001)
+    assert any("20%" in warning for warning in observed.warnings), observed.warnings
+
+
+def test_peak_survives_truncation_where_the_mean_does_not():
+    """Why the promotion path uses the peak.
+
+    Two targets for the first thirty seconds of a five-minute fight, read to sixty
+    seconds. The peak is 2 either way; the mean is whatever the denominator says.
+    """
+    observed = observe_fight(
+        report_code="r1",
+        fight=fight(startTime=FIGHT_START, endTime=FIGHT_START + 300_000),
+        damage_events=[damage(0.1, 10), damage(60.0, 10), damage(0.2, 11), damage(30.0, 11)],
+        death_events=[],
+        aura_events=[],
+        phase_metadata=[],
+        actor_names={10: "Boss", 11: "Add"},
+    )
+    assert observed.significant_timeline.peak == 2
+    # Over the sixty seconds that were read, not over three hundred: half of them
+    # had two enemies up.
+    assert observed.significant_timeline.mean == pytest.approx(1.5, abs=0.02)
+
+
+def test_pooled_coverage_is_published_so_a_caller_can_refuse():
+    observation = EncounterObservation(3180, "Midnight Falls", 5)
+    observation.fights = [
+        truncated_fight(read_to=95.0, fight_length=480.0),
+        truncated_fight(read_to=108.0, fight_length=486.0),
+    ]
+    coverage = observation.event_coverage
+    assert coverage is not None
+    assert coverage.high < 0.25
+
+
+def test_a_self_buff_with_no_source_is_not_an_encounter_mechanic():
+    """The regression the first real nine-boss pass shipped.
+
+    Avenging Wrath and Divine Shield reached the published MID2 aura list, on a
+    fight whose amplification is asserted as "about twenty seconds at the pull" --
+    and Avenging Wrath lasts twenty seconds and is cast at the pull. The source
+    test alone did not catch them, because a self-buff often carries no sourceID,
+    and "unknown is not a player" then keeps it. Only the target test does: an
+    aura on a player is not an aura on an enemy, whatever applied it.
+    """
+    from wowdps.fightextract import AuraWindow, FightObservation, TargetCountTimeline
+
+    def pull(code: str) -> FightObservation:
+        return FightObservation(
+            report_code=code,
+            fight_id=1,
+            encounter_id=3180,
+            encounter_name="Lightblinded Vanguard",
+            difficulty=5,
+            kill=True,
+            duration=300.0,
+            raid_size=20,
+            players=20,
+            timeline=TargetCountTimeline(steps=((0.0, 3),), duration=300.0),
+            significant_timeline=TargetCountTimeline(steps=((0.0, 3),), duration=300.0),
+            enemies=(),
+            adds=(),
+            phases=(),
+            auras=(
+                # The encounter's own buff on one of its enemies.
+                AuraWindow(1258659, "Light Infused", 90, 1, 0.0, 285.0, False, source_id=None),
+                # A paladin's twenty-second cooldown on himself, no source id --
+                # the exact shape of the asserted amplification window.
+                AuraWindow(1246385, "Avenging Wrath", 7, 0, 0.5, 20.5, False, source_id=None),
+            ),
+            damage_by_target=(),
+            active_time_fraction=None,
+            player_ids=frozenset({7}),
+        )
+
+    observation = EncounterObservation(3180, "Lightblinded Vanguard", 5, [pull("a"), pull("b")])
+    assert {aura["ability"] for aura in observation.pooled_auras()} == {"Light Infused"}
+
+
+def test_a_report_with_no_player_list_says_the_aura_filter_is_inoperative():
+    """Both aura tests need the player ids. Without them nothing is filtered, and
+    that is invisible in the output unless it is said."""
+    observed = observe_fight(
+        report_code="r1",
+        fight=fight(),
+        damage_events=[damage(1, 10)],
+        death_events=[],
+        aura_events=[aura(1.0, "applybuff", 42, 10), aura(21.0, "removebuff", 42, 10)],
+        phase_metadata=[],
+        player_ids=frozenset(),
+    )
+    assert any("cannot be told from" in warning for warning in observed.warnings)

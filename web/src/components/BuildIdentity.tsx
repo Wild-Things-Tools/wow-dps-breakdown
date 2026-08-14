@@ -74,23 +74,31 @@ export function fullBuildName(build: Pick<BuildLike, 'spec' | 'class' | 'heroTal
 // --------------------------------------------------------------------------------
 
 /**
- * One icon over a class-coloured tile.
+ * One icon over a coloured, lettered tile.
  *
  * The tile is not a placeholder that gets replaced -- it is drawn first and the
  * image sits on top of it, so a failed load degrades to a coloured, lettered
- * mark instead of a broken-image glyph.
+ * mark instead of a broken-image glyph. That is what lets the site stay usable
+ * with the icon CDN blocked, and it is the reason every icon on the site goes
+ * through this one component rather than being an `<img>` where it is needed.
+ *
+ * Exported because not everything with an icon is a build. A boss has a portrait
+ * and no class, so it passes its own colour; everything else passes the class
+ * colour and gets exactly what it got before.
  */
-function GameIcon({
+export function EntityIcon({
   url,
   name,
-  wowClass,
+  color,
+  wash,
   size,
   labelled,
   round,
 }: {
   url: string | null
   name: string
-  wowClass: string
+  color: string
+  wash: string
   size: number
   /** True when the name is written out beside this icon. */
   labelled: boolean
@@ -99,9 +107,9 @@ function GameIcon({
   const style: CSSProperties = {
     width: size,
     height: size,
-    background: classWash(wowClass, 22),
-    borderColor: classColor(wowClass),
-    color: classColor(wowClass),
+    background: wash,
+    borderColor: color,
+    color,
     fontSize: Math.max(7, Math.round(size * 0.42)),
   }
   return (
@@ -140,6 +148,11 @@ function GameIcon({
   )
 }
 
+/** The tile colours for anything that belongs to a class. */
+function classTile(wowClass: string) {
+  return { color: classColor(wowClass), wash: classWash(wowClass, 22) }
+}
+
 export function ClassIcon({
   wowClass,
   size = 16,
@@ -150,10 +163,10 @@ export function ClassIcon({
   labelled?: boolean
 }) {
   return (
-    <GameIcon
+    <EntityIcon
       url={classIconUrl(wowClass)}
       name={wowClass}
-      wowClass={wowClass}
+      {...classTile(wowClass)}
       size={size}
       labelled={labelled}
       round
@@ -171,10 +184,10 @@ export function SpecIcon({
   labelled?: boolean
 }) {
   return (
-    <GameIcon
+    <EntityIcon
       url={specIconUrl(build.specId) ?? classIconUrl(build.class)}
       name={buildName(build)}
-      wowClass={build.class}
+      {...classTile(build.class)}
       size={size}
       labelled={labelled}
     />
@@ -214,10 +227,10 @@ export function HeroTreeBadge({
   const url = heroTreeIconUrl(build.heroTalent)
   return (
     <span className={cx('inline-flex items-center gap-1 text-[11.5px] text-ink-secondary', className)}>
-      <GameIcon
+      <EntityIcon
         url={url}
         name={build.heroTalent}
-        wowClass={build.class}
+        {...classTile(build.class)}
         size={size}
         labelled
         round
