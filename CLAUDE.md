@@ -301,25 +301,156 @@ which is why this has to be handled here.
   child actions into their parent, so summing them double-counts and shares stop adding
   to 1.
 
+## Class identity: colour, icons, and no selection
+
+Three decisions the owner made on 14 August 2026 that override rules this file used
+to state. They are recorded here with what pays for them, because each one has a
+real cost and the cost is easy to forget.
+
+### 1. Nothing is selected before anything is shown
+
+There is no spec picker anywhere. `SpecPicker.tsx` is deleted, `MAX_SERIES` and
+`SeriesPalette` are gone from `palette.ts`, and the `specs=` URL parameter no
+longer exists. Every comparison view loads **every** per-spec file for the tier
+(~780 KB for MID2's 26 builds, cached in `lib/data.ts`) and renders all of them.
+
+That is not a deletion, it is a change of form, because twenty-six lines on one
+plot is a smear:
+
+| View | Form now | Why |
+|---|---|---|
+| Overview | unchanged — ranked bars, all builds | it was always the precedent |
+| Target scaling | **small multiples**, one panel per build, shared y domain, median build faint behind each curve | past ~4 converging lines the dataviz method says facet |
+| Funnel | **diverging bars around 1.0**, one per build, plus small multiples of the sweep | 1.0 is where the reading flips, so it is the baseline the bars grow from, not a line drawn across a zero-anchored chart |
+| Builds | **every** spec with more than one build: a tier-wide lead table, then one panel per spec | the comparison is only ever 2–3 lines wide, so a grid of them needs no picker |
+| Loot | "best drop for each build" (new) + "one item, every build" | the second mode, "picked builds, every item", only made sense behind the picker and is gone |
+| Timing | ranked bars for burst, small multiples for the curves | 26 damage curves overlap almost exactly mid-fight |
+| Spec detail | opens on the scenario's top build; the strip of every build is navigation, not a gate | inherently one build at a time, but never empty |
+
+Interaction may still filter *after* the fact — the target-count and item
+selectors are exactly that. What must not come back is having to choose before
+seeing anything.
+
+### 2. Class colour is a primary encoding, and it fails the palette checks
+
+`palette.ts` used to say class colours were "used only as a secondary identity cue
+-- a small dot beside a name -- and never to encode a series". That is overridden:
+bars, lines and names all wear the class colour now, the way Warcraft Logs does it.
+
+The reason for the old rule has not gone away. Measured, not assumed — the shipped
+thirteen against the dark surface, `--pairs all`:
+
+```
+Lightness band   FAIL  nine of thirteen outside 0.48-0.67
+Chroma floor     FAIL  Priest (0), Warrior (0.08), Evoker (0.094) read grey
+CVD separation   FAIL  worst pair Warlock/Demon Hunter ΔE 3.3 (deutan)
+Normal vision    FAIL  worst pair Warlock/Shaman ΔE 10.4, against a floor of 15
+Contrast         PASS  all thirteen >= 4.5:1
+```
+
+Thirteen fixed hues can never pass and no re-ordering helps. So colour is
+**redundant**, and three other channels carry identity in every place it appears:
+a class icon, a spec icon and a hero-tree icon; the name written out; and the
+table twin under every chart. Do not remove any of them — they are what makes the
+colour legal.
+
+### 3. Dark only
+
+There is no theme toggle, no `data-theme`, no `prefers-color-scheme` branch and no
+stored preference. One surface (`--surface-1: #1a1a19`, page `#0d0d0d`), one set of
+tokens, one set of measurements. Anything that has to work on a light background
+has to be measured first: eight of the thirteen class colours sat below 3:1 there
+and all thirteen below 4.5:1, which is the whole reason light mode was expensive.
+
+Ten of the thirteen class tokens are Blizzard's canonical values untouched. Three
+were below the 4.5:1 text floor on this surface and are lifted along their own
+OKLCH hue, chroma capped at canonical:
+
+```
+Death Knight #c41e3a -> #e84756   2.98 -> 4.53   (also below the 3:1 mark floor)
+Demon Hunter #a330c9 -> #be4fe6   3.17 -> 4.52
+Shaman       #0070dd -> #2081ef   3.62 -> 4.52
+```
+
+Measured with the dataviz validator's own `contrast()` export, not by eye. Re-run
+it before changing any of them.
+
+### Icons: where they come from, and why it is not a dataset field
+
+`lib/gameIcons.ts` is the whole mapping — 13 classes, 39 specs, 39 hero trees —
+keyed on ids the pipeline already emits (`class`, `specId`, `heroTalent`). It is
+**presentation, not data**: simc ships no icon information for anything, and the
+dataset's value is that it is derived from simc and byte-reproducible.
+
+Images come from `wow.zamimg.com`, the CDN Wowhead's tooltip script already pulls
+item icons from on the Loot view, so this adds no new third party. Two shapes,
+both verified by request:
+
+```
+class / spec   https://wow.zamimg.com/images/wow/icons/medium/<slug>.jpg
+hero tree      https://wow.zamimg.com/images/wow/TextureAtlas/live/talents-heroclass-<class>-<tree>.webp
+```
+
+Hero-tree emblems are **UI texture atlas elements, not icons** — the mapping is
+`TraitSubTree.UiTextureAtlasElementID` resolved through `UiTextureAtlasElement`,
+and the names never appear under `icons/`. Guessing `inv_ability_<tree><class>_*`
+hits about half of them and silently misses the rest (Stormbringer's internal name
+is "stormcaller"), so do not derive them by pattern. All 39 return 200 at ~15 KB,
+200x200 with alpha. `ICON_BASE` / `ATLAS_BASE` are the only two lines to change to
+self-host.
+
+Every icon is drawn *over* a class-coloured tile with the entity's initials in it,
+so a blocked CDN costs the picture and nothing else. Every icon carries an
+accessible name: `alt`/`aria-label` when it stands alone, `alt=""` plus `title`
+when its name is written out beside it, so a screen reader hears the name once.
+
+**A hero tree is icon plus written name, everywhere.** Class and spec icons are
+recognisable enough to carry a tight axis label on their own; hero-tree emblems are
+new and are not. `heroTalent === 'Default'` is simc's marker for a spec it ships one
+build for — it is not a hero tree, gets no invented emblem, and renders as a muted
+"Single build" pill.
+
+### The reusable pieces
+
+Anything drawing a build should use these rather than re-deriving them:
+
+| Piece | For |
+|---|---|
+| `components/BuildIdentity.tsx` → `BuildIdentity` | **the** identity component: spec icon + name in class colour + hero-tree badge |
+| `BuildChip` | one-line variant, with an optional line-dash key |
+| `SpecIcon` / `ClassIcon` / `HeroTreeBadge` | the three icon channels on their own |
+| `makeBuildTick(builds, {width})` | Recharts category-axis tick: SVG `<image>` + name + hero tree |
+| `buildName` / `fullBuildName` / `heroLabel` | naming, including the `Default` case |
+| `BuildLike` | the structural type all three dataset shapes satisfy |
+| `components/SmallMultiples.tsx` → `SmallMultiples` | the faceted grid, shared domain and median context curve |
+| `lib/palette.ts` → `classColor` / `classWash` / `buildDash` | colour and the same-spec separator |
+| `lib/gameIcons.ts` → `classIconUrl` / `specIconUrl` / `heroTreeIconUrl` | the URLs |
+
+Two builds of one spec share a class colour *and* a spec icon, because they are the
+same class and the same spec. The hero-tree emblem, its name, and `buildDash` on a
+line chart are what separate them. Never invent a second colour for the second
+build.
+
 ## Charts
 
 Read the `dataviz` skill before touching chart code. The short version of what applies
 here:
 
-- The categorical palette is validated **as an ordered set**. Assign slots in fixed order,
-  never cycle, and keep a spec's slot stable while it stays selected (`SeriesPalette`).
-- Three light-mode slots are below 3:1 on the light surface. That obliges direct labels or
-  a table view on every multi-series chart — both are shipped; do not remove them.
+- Class colour encodes identity; the eight validated **series** slots are still used
+  where a mark is not a build (main target vs everything else, gain vs loss). Those
+  are assigned in fixed order and never cycled.
 - Never a dual y-axis. Absolute DPS and indexed DPS are two modes of one chart, not two
   scales on one chart.
 - Re-run the validator if you change any palette value:
-  `node scripts/validate_palette.js "<hex,…>" --mode light` (and `--mode dark`) from the
-  skill's directory.
-- The Builds view assigns slots by the build's index within its spec (`slotColor`), not
-  through `SeriesPalette` — there are only ever two or three builds and the set changes
-  wholesale when the spec picker changes, so there is nothing to keep stable across a
-  filter.
-- Its "tie" rule is the project's uncertainty convention in code: a lead is only reported
+  `node scripts/validate_palette.js "<hex,…>" --mode dark --surface "#1a1a19"` from the
+  skill's directory. There is no light mode to check any more.
+- Every chart keeps its table twin. That was already the rule; with class colour as a
+  primary encoding it is load-bearing rather than a nicety.
+- `chart.tsx` still carries `makeEndLabel` / `resolveLabelOffsets` / `shortLabel` from
+  the multi-line era. Nothing uses them today — the views are small multiples and
+  per-row axis ticks — but they are the correct treatment if a converging multi-line
+  chart comes back.
+- The "tie" rule is the project's uncertainty convention in code: a lead is only reported
   as a lead when the margin exceeds `hypot(errorA, errorB)`, the two means' errors added
   in quadrature. Do not replace this with a fixed percentage threshold — the whole point
   is that it tracks the precision the run actually achieved.
@@ -334,12 +465,19 @@ time to establish, all read out of the shipped script or measured in a browser o
   `https://wow.zamimg.com/js/power.js` **404s**.
 - It enriches `document.links` and bails on anything whose `nodeName` is not `A` or
   `AREA`. An SVG `<a>` is in neither, so **Recharts axis labels can never carry a
-  tooltip or an icon**. Any chart naming items needs a table beside it that does.
+  Wowhead tooltip**. Any chart naming items needs a table beside it that does.
 - **simc has no icon data.** `dbc_item_data_t` (`engine/dbc/item_data.hpp`) has no
-  icon field, and neither does anything in `generated/`. Icon names exist only in
-  Wowhead's tooltip JSON, so drawing icons inside the SVG would mean importing an
-  external, non-reproducible field into a dataset whose value is that it is derived
-  from simc and byte-reproducible. Hence icons in HTML contexts only.
+  icon field, and neither does anything in `generated/`. For *items* the icon name
+  exists only in Wowhead's tooltip JSON, so putting one in the dataset would import an
+  external, non-reproducible field into something whose value is that it is derived
+  from simc and byte-reproducible. Item icons therefore stay in HTML contexts only,
+  where the script can add them.
+- **Class, spec and hero-tree icons are the opposite case, and they do appear inside
+  the SVG.** That mapping is small, static and ours, so it lives in `lib/gameIcons.ts`
+  as presentation rather than in the dataset — and an SVG `<image>` with a URL we
+  control needs nothing from Wowhead's script. See "Class identity" above. The two
+  facts are not in tension: what cannot go in the chart is a *third-party lookup*, not
+  a picture.
 - `iconizeLinks` costs **one XHR to `nether.wowhead.com` per distinct entity on
   load**, not on hover — the icon has to be there before anyone hovers. Measured on
   the Loot view: 31 third-party requests, 14 of them tooltip JSON and 14 icons.
@@ -364,12 +502,25 @@ cd web && npm run typecheck && npm run build
 ```
 
 To actually look at the result, build a small dataset and screenshot it — the type
-checker will not catch a clipped label or a collided axis:
+checker will not catch a clipped label, a collided axis or an icon that never arrived:
 
 ```bash
-cd web && npx vite preview --port 4173 &
-node shot.mjs   # if present; uses /opt/pw-browsers/chromium, do NOT run `playwright install`
+cd web && npx vite preview --port 4240 --strictPort &
+node shot.mjs   # gitignored helper; uses /opt/pw-browsers/chromium, do NOT run `playwright install`
 ```
+
+The site is dark only, so that is one pass over the views, not two. Two notes on the
+helper, both of which cost time to work out:
+
+- A sandbox that routes egress through a proxy needs `--proxy-server=$HTTPS_PROXY`
+  passed to Chromium, and `waitUntil: 'networkidle'` never settles once third-party
+  requests are in play — use `domcontentloaded` plus a fixed wait.
+- Even with the proxy the icon CDN may be unreachable, in which case every icon
+  renders as its fallback tile and the shots tell you nothing about the icons. Point
+  `SHOT_ICON_CACHE` at a directory of `<slug>.jpg` / `<element>.webp` files fetched
+  with curl and the helper serves them through `page.route`. Running *without* the
+  cache is the other test worth doing: it is exactly what a reader with a blocked CDN
+  sees.
 
 ## Deploy target (`Wild-Things-Tools/wt-gate`)
 
@@ -471,9 +622,11 @@ Two things nearly threw it away, both fixed, both worth not reintroducing:
   an old-tier one. It did (`MID1_Mage_Fire`), and cost a whole run: nine minutes of
   compile, then a hard failure before a single simulation. It now tries the newest tier's
   first five profiles and passes if any one of them runs.
-- Switching tier prunes selections the new tier has no profile for. The count of what was
-  dropped is reported rather than swallowed; a comparison quietly missing a line is the
-  kind of silent wrongness this project treats as a bug.
+- Switching tier changes the spec list, and nothing is selected any more, so there is
+  no longer a selection to prune — the views re-render against whatever the new tier
+  ships. The one thing that still carries across is the open build on Spec detail, and
+  a build the new tier has no profile for is dropped back to the default rather than
+  left pointing at a missing file.
 
 ## Fight patterns per boss — what Warcraft Logs can and cannot tell you
 

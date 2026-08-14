@@ -740,26 +740,38 @@ which is not the shape the median parse the site compares against experienced.
 
 ## Design and accessibility notes
 
-- Series colours come from a palette validated for colour-blind separation and contrast
-  in both light and dark mode. Slots are assigned in fixed order and follow the entity,
-  so filtering a chart never repaints the remaining series.
-- Three light-mode slots sit below 3:1 against the light surface, so every multi-series
-  chart ships direct labels at the line ends *and* a table view — identity never rests on
-  colour alone.
-- WoW class colours are a strong domain convention but are nowhere near colour-blind safe
-  as a set of thirteen, so they appear only as a secondary cue (a dot beside a name),
-  never as the series encoding.
-- Dark mode is a separately chosen set of steps validated against the dark surface, not
-  an automatic inversion.
+- **Nothing is selected before anything is shown.** There is no spec picker: every view
+  renders every build in the tier and lets you filter afterwards. That changed what the
+  charts could be — twenty-six lines on one plot is a smear — so the comparison views are
+  small multiples, ranked bars and tables rather than a multi-line plot behind a chooser.
+- **The site is dark only.** One surface, one set of tokens, one set of measurements.
+- **Class colour is the primary identity encoding**, the way Warcraft Logs does it. As a
+  set of thirteen those colours are not colour-blind safe and never can be — measured
+  against the dataviz validator they fail its lightness, chroma and separation checks
+  outright. So colour is redundant, and identity is carried by a class icon, a spec icon,
+  a hero-talent-tree icon, the name written out beside them, and the table twin under
+  every chart. Ten of the thirteen are Blizzard's canonical values; three (Death Knight,
+  Demon Hunter, Shaman) sat below the 4.5:1 text floor on this surface and are lifted
+  along their own hue until they clear it.
+- Class, spec and hero-tree icons are a presentation mapping in the web code, not a
+  dataset field — simc ships no icon data and the dataset's value is that it is derived
+  from simc and reproducible. The images come from Wowhead's CDN, and every icon is drawn
+  over a class-coloured tile with the entity's initials, so a blocked CDN costs the
+  picture and nothing else. Every icon carries an accessible name, and a hero tree is
+  always icon *plus* written name, because those emblems are new and not yet recognisable.
+- The eight validated series colours are still used where a mark is not a build — main
+  target versus everything else, gain versus loss — assigned in fixed order, never cycled.
 - Wowhead tooltips and icons are an enhancement on top of a page that is complete
   without them: a name is a name, in the cell's own ink, with the icon's space reserved
   so nothing moves when the icon arrives or never does. Quality colouring stays off —
   every trinket in the sweep is an epic, so it would be a constant, and text colour in
   those tables already means something (a muted cell is a tie).
-- Only HTML can carry a tooltip: the script enriches `document.links`, and an SVG
-  anchor is in neither that collection nor its `nodeName` check. So chart axis labels
-  stay plain text and every chart that names items is paired with a table that links
-  them — which the palette's relief rule already required for other reasons.
+- Only HTML can carry a Wowhead tooltip: the script enriches `document.links`, and an
+  SVG anchor is in neither that collection nor its `nodeName` check. So chart axis
+  labels never link an item, and every chart that names items is paired with a table
+  that does. Class and spec icons *are* drawn inside the SVG — an `<image>` with a URL
+  we control needs nothing from Wowhead's script. What cannot go in a chart is a
+  third-party lookup, not a picture.
 
 ---
 

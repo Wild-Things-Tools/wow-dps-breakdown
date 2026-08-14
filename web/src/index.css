@@ -3,77 +3,19 @@
 /* ---------------------------------------------------------------------------
    Design tokens.
 
-   Colours come from the validated data-visualisation palette: the eight
-   categorical slots pass the colour-blindness and contrast gates in both light
-   and dark mode as an ordered set, so slots are assigned in fixed order and
-   never cycled. Three light-mode slots sit below 3:1 against the light surface,
-   which is why every multi-series chart in this app ships direct labels at the
-   series ends plus a table view -- identity never rests on colour alone.
+   **The site is dark only.** There is no theme toggle, no `data-theme`
+   attribute and no `prefers-color-scheme` branch: one surface, one palette, one
+   set of measurements to keep true. Anything that needs to work on a light
+   background has to be re-measured first, not assumed.
 
-   Dark values are declared twice on purpose: the media query follows the OS
-   setting, the [data-theme] scope lets the in-app toggle win in both directions.
+   Series colours come from the validated data-visualisation palette: eight
+   categorical slots that pass the colour-blindness and contrast gates against
+   this surface as an ordered set, so slots are assigned in fixed order and
+   never cycled. They still encode *series*, not identity — identity is the
+   class colour block below.
    --------------------------------------------------------------------------- */
 
 :root {
-  color-scheme: light;
-
-  --surface-1: #fcfcfb;
-  --surface-page: #f9f9f7;
-  --text-primary: #0b0b0b;
-  --text-secondary: #52514e;
-  --text-muted: #898781;
-  --gridline: #e1e0d9;
-  --baseline: #c3c2b7;
-  --hairline: rgb(11 11 11 / 0.1);
-  --elevated: rgb(11 11 11 / 0.04);
-
-  --series-1: #2a78d6;
-  --series-2: #eb6834;
-  --series-3: #1baf7a;
-  --series-4: #eda100;
-  --series-5: #e87ba4;
-  --series-6: #008300;
-  --series-7: #4a3aa7;
-  --series-8: #e34948;
-
-  /* Sequential blue ramp, used for magnitude (ability breakdown, heat cells). */
-  --seq-100: #cde2fb;
-  --seq-250: #86b6ef;
-  --seq-400: #3987e5;
-  --seq-550: #1c5cab;
-  --seq-700: #0d366b;
-
-  --status-good: #0ca30c;
-  --status-warning: #fab219;
-  --status-critical: #d03b3b;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:where(:not([data-theme='light'])) {
-    color-scheme: dark;
-
-    --surface-1: #1a1a19;
-    --surface-page: #0d0d0d;
-    --text-primary: #ffffff;
-    --text-secondary: #c3c2b7;
-    --text-muted: #898781;
-    --gridline: #2c2c2a;
-    --baseline: #383835;
-    --hairline: rgb(255 255 255 / 0.1);
-    --elevated: rgb(255 255 255 / 0.04);
-
-    --series-1: #3987e5;
-    --series-2: #d95926;
-    --series-3: #199e70;
-    --series-4: #c98500;
-    --series-5: #d55181;
-    --series-6: #008300;
-    --series-7: #9085e9;
-    --series-8: #e66767;
-  }
-}
-
-:root[data-theme='dark'] {
   color-scheme: dark;
 
   --surface-1: #1a1a19;
@@ -94,6 +36,65 @@
   --series-6: #008300;
   --series-7: #9085e9;
   --series-8: #e66767;
+
+  /* Sequential blue ramp, used for magnitude (ability breakdown, heat cells). */
+  --seq-100: #cde2fb;
+  --seq-250: #86b6ef;
+  --seq-400: #3987e5;
+  --seq-550: #1c5cab;
+  --seq-700: #0d366b;
+
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-critical: #d03b3b;
+
+  /* ------------------------------------------------------------------------
+     Class identity.
+
+     Blizzard's thirteen class colours are the domain convention — every WoW
+     site uses them and players read them without thinking — and this site now
+     uses them as a primary encoding: bars, lines and names all wear the class
+     colour. As a set of thirteen they are *not* colour-blind safe and never
+     can be, so identity never rests on them; see lib/palette.ts for what
+     carries it instead.
+
+     What is measurable is legibility, and these are drawn for a dark game UI
+     so most of them are already fine here. Measured with the dataviz skill's
+     own validator (`contrast()` in scripts/validate_palette.js) against the
+     panel surface #1a1a19:
+
+       Priest 17.42  Rogue 15.25  Monk 13.07  Hunter 10.18  Mage 8.78
+       Paladin 7.72  Warrior 6.89  Druid 6.75  Warlock 5.63  Evoker 4.66
+
+     Three sat below the 4.5:1 text floor and are lifted along their own OKLCH
+     hue until they clear it, chroma held at the canonical value so nothing
+     gets louder than the colour players know:
+
+       Death Knight #c41e3a -> #e84756 (2.98 -> 4.53, and 2.98 was below the
+                                        3:1 *mark* floor as well)
+       Demon Hunter #a330c9 -> #be4fe6 (3.17 -> 4.52)
+       Shaman       #0070dd -> #2081ef (3.62 -> 4.52)
+
+     The other ten are Blizzard's values untouched. One tier, not two: every
+     token clears the text floor, and a mark drawn at the text threshold is
+     never wrong.
+     ------------------------------------------------------------------------ */
+  --class-death-knight: #e84756;
+  --class-demon-hunter: #be4fe6;
+  --class-druid: #ff7c0a;
+  --class-evoker: #33937f;
+  --class-hunter: #aad372;
+  --class-mage: #3fc7eb;
+  --class-monk: #00ff98;
+  --class-paladin: #f48cba;
+  --class-priest: #ffffff;
+  --class-rogue: #fff468;
+  --class-shaman: #2081ef;
+  --class-warlock: #8788ee;
+  --class-warrior: #c69b6d;
+  /* A build whose class the presentation layer does not know. Deliberately
+     neutral: an unknown class must not borrow a real one's identity. */
+  --class-unknown: #c3c2b7;
 }
 
 @theme inline {
