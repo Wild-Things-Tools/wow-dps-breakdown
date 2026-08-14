@@ -365,3 +365,135 @@ def test_the_comparison_asks_which_enemy_carries_the_amplification():
 
     assert row["profile"] == "unknown"
     assert row["measured"] == "Champion (unknown)"
+
+
+# --------------------------------------------------------------------------------
+# Kill patterns: several shapes, or one
+# --------------------------------------------------------------------------------
+
+
+def waved_fight(code: str, duration: float, wave_at: float | None, length: float = 90.0):
+    """A single-target pull, optionally with two extra enemies for a while.
+
+    The wave is long by default -- a third of a five-minute pull -- because the
+    threshold is a *share of the fight*, and a wave shorter than it is by design not
+    a different pattern.
+    """
+    events = [damage(second, 10) for second in (0.4, duration - 1)]
+    if wave_at is not None:
+        events += [
+            damage(wave_at + step * length / 4, actor) for actor in (11, 12) for step in range(5)
+        ]
+    return observe_fight(
+        report_code=code,
+        fight={
+            "id": 7,
+            "encounterID": 3180,
+            "name": "Lightblinded Vanguard",
+            "difficulty": 5,
+            "kill": True,
+            "size": 20,
+            "startTime": START,
+            "endTime": int(START + duration * 1000),
+            "friendlyPlayers": list(range(20)),
+        },
+        damage_events=events,
+        death_events=[],
+        aura_events=[],
+        phase_metadata=[],
+        actor_names={10: "Zealot", 11: "Champion", 12: "Seer"},
+        friendly_ids=frozenset({1}),
+    )
+
+
+def payload_of(fights) -> dict:
+    observation = EncounterObservation(3180, "Lightblinded Vanguard", 5)
+    observation.fights = list(fights)
+    return vanguard_payload(encounters=[observation.to_json()])
+
+
+def timeline_of(payload) -> dict:
+    document = fightdataset.build_document("MID2", load_profiles("MID2"), payload)
+    return find(document, 3180)["measured"]["timeline"]
+
+
+def test_pulls_that_agree_yield_one_pattern_and_nothing_to_choose_between():
+    timeline = timeline_of(payload_of([waved_fight(f"F{i}", 300.0, 60.0) for i in range(4)]))
+
+    assert len(timeline["patterns"]) == 1
+    assert timeline["patterns"][0]["pulls"] == 4
+    assert timeline["patterns"][0]["share"] == 1.0
+    # The flattened fields still describe the pattern the view opens on.
+    assert timeline["representative"] == timeline["patterns"][0]["representative"]
+
+
+def test_two_shapes_are_two_presets_and_the_popular_one_comes_first():
+    """Three pulls where the wave never arrived and two where it did. That is two
+    patterns, not one pattern and two outliers, and the view must be able to say so."""
+    fights = [waved_fight(f"NONE{i}", 300.0, None) for i in range(3)]
+    fights += [waved_fight(f"WAVE{i}", 300.0, 60.0) for i in range(2)]
+    timeline = timeline_of(payload_of(fights))
+
+    patterns = timeline["patterns"]
+    assert [entry["pulls"] for entry in patterns] == [3, 2]
+    assert patterns[0]["share"] == 0.6
+    assert all(code.startswith("NONE") for code in patterns[0]["reportCodes"])
+    assert all(code.startswith("WAVE") for code in patterns[1]["reportCodes"])
+    # Each preset draws its own pattern's pulls behind it, never the other's.
+    assert [pull["reportCode"] for pull in patterns[1]["alsoInThisPattern"]][0].startswith("WAVE")
+    assert {pull["reportCode"] for pull in patterns[1]["unmatched"]} == {
+        f"NONE{i}" for i in range(3)
+    }
+
+
+def test_the_same_shape_at_two_lengths_is_one_pattern():
+    """Comparison is on normalised fight time: a longer pull of the same shape is a
+    longer pull, and its length is already a published fact of its own."""
+    fights = [
+        waved_fight("SHORT", 200.0, 40.0, length=60.0),
+        waved_fight("LONG", 300.0, 60.0, length=90.0),
+    ]
+    timeline = timeline_of(payload_of(fights))
+
+    assert len(timeline["patterns"]) == 1
+    assert timeline["patterns"][0]["pulls"] == 2
+
+
+def test_a_pull_nobody_else_matched_is_context_and_never_a_preset_of_one():
+    """With a handful of pulls sampled, "one log did this" is not a pattern."""
+    fights = [waved_fight(f"NONE{i}", 300.0, None) for i in range(3)]
+    fights += [waved_fight("ODD", 300.0, 60.0)]
+    timeline = timeline_of(payload_of(fights))
+
+    assert len(timeline["patterns"]) == 1
+    assert timeline["patterns"][0]["pulls"] == 3
+    assert [pull["reportCode"] for pull in timeline["patterns"][0]["unmatched"]] == ["ODD"]
+
+
+def test_when_no_two_pulls_agree_a_chart_still_has_something_to_draw():
+    fights = [
+        waved_fight("A", 300.0, None),
+        waved_fight("B", 300.0, 20.0),
+        waved_fight("C", 300.0, 190.0),
+    ]
+    timeline = timeline_of(payload_of(fights))
+
+    # One entry, holding one pull, with the other two carried as context. A chart
+    # still has something to draw; the caveats are where "no two of these agreed"
+    # belongs, not a preset list of three.
+    assert len(timeline["patterns"]) == 1
+    assert timeline["patterns"][0]["pulls"] == 1
+    assert len(timeline["others"]) == 2
+
+
+def test_patterns_are_stable_across_runs_whatever_order_the_pulls_arrive_in():
+    """Determinism is the whole point of committing this file."""
+    fights = [waved_fight(f"NONE{i}", 300.0, None) for i in range(3)]
+    fights += [waved_fight(f"WAVE{i}", 300.0, 60.0) for i in range(2)]
+    forward = timeline_of(payload_of(fights))
+    backward = timeline_of(payload_of(list(reversed(fights))))
+
+    assert [entry["reportCodes"] for entry in forward["patterns"]] == [
+        entry["reportCodes"] for entry in backward["patterns"]
+    ]
+    assert forward["representative"]["reportCode"] == backward["representative"]["reportCode"]

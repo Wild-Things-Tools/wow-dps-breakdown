@@ -37,10 +37,24 @@ drawn from fewer and fewer samples and stops being comparable.
 
 So the published timeline is **one representative fight, whole**, plus every other
 sampled fight's own steps carried alongside for the view to draw faintly. The
-representative is the sampled fight whose time-weighted mean target count sits
-nearest the pooled median (ties broken on fight length). The *summary* claims --
-mean targets, peak targets, share of the fight at peak -- stay pooled as
-``Spread``s with their min/median/max, which is where an aggregate belongs.
+*summary* claims -- mean targets, peak targets, share of the fight at peak -- stay
+pooled as ``Spread``s with their min/median/max, which is where an aggregate belongs.
+
+Which fight, though, is not always one question. Pulls of the same boss can be
+genuinely different *shapes*: a wave killed before the next one spawns in half the
+logs and overlapping in the other half is two patterns, not one pattern plus noise,
+and picking the pull nearest the median then silently answers a question nobody
+asked. So the sampled pulls are **clustered on their target-count curve** and every
+pattern at least two pulls share is published as its own preset, ordered by how many
+pulls it holds. The first is the one most kills looked like; it is what the view
+opens on. A boss whose pulls all look alike yields exactly one pattern and the view
+shows no chooser at all -- the clustering is what decides that, not a setting.
+
+Comparison is on normalised fight time, because two pulls of the same shape at
+different lengths are the same pattern and their length difference is already
+published separately. A pull that matches nothing stays in ``others`` as context
+rather than becoming a preset of one: with three pulls sampled, "one log did this"
+is not a pattern.
 
 Phase and aura windows come in two forms for the same reason. The representative
 fight's own windows are published with it, because those are the only ones that
@@ -347,6 +361,180 @@ def _representative(payload: dict) -> dict | None:
     return min(fights, key=distance)
 
 
+#: Buckets a pull's target-count curve is resampled into before two are compared.
+#: Sixty over a normalised fight is one bucket per five seconds of a five-minute
+#: pull, which is finer than any add wave worth separating.
+_PATTERN_BUCKETS = 60
+
+#: Share of the fight two pulls may disagree on and still be the same shape.
+#:
+#: Deliberately *not* a mean absolute difference, which was the first attempt and is
+#: wrong in a way the fixtures caught: a real add wave is large but short, so
+#: averaging it over the fight buries it. Imperator Averzian peaks at seven targets
+#: for 4% of its length -- six extra targets contributing 0.25 to a mean, under any
+#: threshold coarse enough to ignore jitter. Counting *how much of the fight* the two
+#: curves are a whole target apart separates "the wave came" from "it did not" while
+#: staying blind to an add dying three seconds earlier.
+#:
+#: The number is calibrated, not derived, and the calibration is worth writing down
+#: because it is the first thing to redo when the sample grows. Every pair of pulls
+#: in the published MID2 probe (three per boss, nine bosses):
+#:
+#:     Lightblinded Vanguard   0.050  0.067  0.117    a constant-three fight
+#:     Vorasius                0.000  0.117  0.117    single target throughout
+#:     Chimaerus               0.033  0.333  0.367    two pulls alike, one not
+#:     Belo'ren                0.150  0.317  0.400    two pulls alike, one not
+#:     Midnight Falls          0.100  0.117  0.217
+#:     Crown of the Cosmos     0.167  0.183  0.283
+#:     Fallen-King Salhadaar   0.217  0.267  0.283    no two alike
+#:     Vaelgor & Ezzorak       0.217  0.233  0.317    no two alike
+#:     Imperator Averzian      0.383  0.433  0.667    no two alike
+#:
+#: Pulls of one shape sit at 0.00-0.15 and pulls of different shapes at 0.28-0.67,
+#: so 0.20 falls in the gap. Two caveats on that: three pulls per boss is far too
+#: few to call it a distribution, and a pull whose event fetch stopped early differs
+#: from a complete one over exactly the part it never read -- raise the probe's
+#: `--reports` before trusting a split, and check `coverage` on both pulls.
+_PATTERN_DIFFERENCE = 0.20
+
+#: Pulls that must share a shape before it is offered as a preset. One log doing
+#: something is not a pattern -- it is one log, and it stays in ``others`` where the
+#: view draws it as context behind the chosen curve.
+_MIN_PATTERN_PULLS = 2
+
+
+def _resample(steps: list, duration: float, buckets: int = _PATTERN_BUCKETS) -> list[float]:
+    """A step function read at even fractions of the fight, so lengths compare.
+
+    ``steps`` is ``[[time, count], ...]`` and holds its value until the next entry.
+    Sampling at bucket midpoints of *normalised* time is what makes a 240s pull and
+    a 300s pull of the same shape come out equal: their length difference is a
+    published fact of its own and does not need to be a second pattern.
+    """
+    ordered = [
+        (float(step[0]), float(step[1]))
+        for step in steps
+        if isinstance(step, (list, tuple)) and len(step) >= 2
+    ]
+    if not ordered or duration <= 0:
+        return [0.0] * buckets
+    ordered.sort(key=lambda entry: entry[0])
+
+    curve: list[float] = []
+    index = 0
+    value = 0.0
+    for bucket in range(buckets):
+        when = duration * (bucket + 0.5) / buckets
+        while index < len(ordered) and ordered[index][0] <= when:
+            value = ordered[index][1]
+            index += 1
+        curve.append(value)
+    return curve
+
+
+def _shape_difference(left: list[float], right: list[float]) -> float:
+    """Share of the fight on which two curves are at least one whole target apart."""
+    if not left or not right:
+        return 1.0
+    apart = sum(1 for a, b in zip(left, right, strict=True) if abs(a - b) >= 1.0)
+    return apart / len(left)
+
+
+def _cluster_fights(fights: list[dict]) -> list[list[dict]]:
+    """Group pulls whose target-count curves are the same shape.
+
+    Single-link agglomerative, done as connected components over "within the
+    threshold of each other": with three to a dozen pulls per encounter anything
+    heavier would be fitting parameters to noise, and single link has the property
+    that matters here -- a slow drift across many pulls stays one pattern rather
+    than being cut at an arbitrary point.
+
+    Order is by size, then by the earliest report code in the group, so the same
+    payload always yields the same patterns in the same order.
+    """
+    curves = [
+        _resample(
+            (fight.get("significantTargetCount") or {}).get("steps") or [],
+            float(fight.get("durationSeconds") or 0.0),
+        )
+        for fight in fights
+    ]
+
+    parent = list(range(len(fights)))
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    for left in range(len(fights)):
+        for right in range(left + 1, len(fights)):
+            if _shape_difference(curves[left], curves[right]) < _PATTERN_DIFFERENCE:
+                parent[find(left)] = find(right)
+
+    groups: dict[int, list[dict]] = {}
+    for index, fight in enumerate(fights):
+        groups.setdefault(find(index), []).append(fight)
+
+    def order(group: list[dict]) -> tuple[int, str]:
+        return (-len(group), min(str(fight.get("reportCode") or "") for fight in group))
+
+    return sorted(groups.values(), key=order)
+
+
+def _widest_difference(group: list[dict]) -> float:
+    """The largest pairwise shape difference inside one pattern."""
+    curves = [
+        _resample(
+            (fight.get("significantTargetCount") or {}).get("steps") or [],
+            float(fight.get("durationSeconds") or 0.0),
+        )
+        for fight in group
+    ]
+    widest = 0.0
+    for left in range(len(curves)):
+        for right in range(left + 1, len(curves)):
+            widest = max(widest, _shape_difference(curves[left], curves[right]))
+    return round(widest, 3)
+
+
+def _nearest_to_centre(group: list[dict], length_median: float = 0.0) -> dict:
+    """The pull in a group that looks most like the group.
+
+    Its own centre, not the pooled one: a pattern's representative has to be a pull
+    that pattern actually contains, or the preset draws a curve from one shape and
+    labels it with another.
+
+    Length is the tiebreak, and it earns its place -- inside a pattern the curves
+    are by construction near-identical, so without it the choice would fall through
+    to the report code and the published pull would be whichever log happens to sort
+    first. Nearest the pooled median length is the same rule the single-representative
+    version used, which is why a boss whose pulls all agree keeps publishing the
+    pull it published before.
+    """
+    curves = {
+        id(fight): _resample(
+            (fight.get("significantTargetCount") or {}).get("steps") or [],
+            float(fight.get("durationSeconds") or 0.0),
+        )
+        for fight in group
+    }
+
+    def spread(fight: dict) -> tuple[float, float, str, int]:
+        own = curves[id(fight)]
+        total = sum(_shape_difference(own, curves[id(other)]) for other in group)
+        length = abs(float(fight.get("durationSeconds") or 0.0) - length_median)
+        return (
+            round(total, 6),
+            length,
+            str(fight.get("reportCode") or ""),
+            int(fight.get("fightId") or 0),
+        )
+
+    return min(group, key=spread)
+
+
 #: Bands one ability may contribute to the chart before the rest are dropped.
 #: A shaded band is a heavy mark; a dozen of them is a wash, and the published
 #: MID2 run drew roughly two hundred (a Death Knight disease on fifteen enemy
@@ -432,27 +620,121 @@ def _drawable_auras(fight: dict, pooled: list[dict]) -> list[dict]:
     return drawn
 
 
+def _context_pull(fight: dict) -> dict:
+    """One pull as the view draws it behind the chosen curve."""
+    return {
+        "reportCode": fight.get("reportCode"),
+        "fightId": fight.get("fightId"),
+        "durationSeconds": fight.get("durationSeconds"),
+        "kill": bool(fight.get("kill")),
+        "steps": (fight.get("significantTargetCount") or {}).get("steps") or [],
+        "coverage": fight.get("eventCoverage"),
+    }
+
+
+def _pull_block(fight: dict, pooled: list[dict]) -> dict:
+    """One pull, whole, as a preset draws it."""
+    significant = fight.get("significantTargetCount") or {}
+    everything = fight.get("targetCount") or {}
+    return {
+        "reportCode": fight.get("reportCode"),
+        "fightId": fight.get("fightId"),
+        "kill": bool(fight.get("kill")),
+        "durationSeconds": fight.get("durationSeconds"),
+        "raidSize": fight.get("raidSize"),
+        "steps": significant.get("steps") or [],
+        "mean": significant.get("mean"),
+        "peak": significant.get("peak"),
+        "peakShare": significant.get("peakShare"),
+        "constant": significant.get("constant"),
+        "observed": significant.get("observed"),
+        "coverage": fight.get("eventCoverage"),
+        # Everything that took a hit, including props and strays under the
+        # significance floor. "Three things exist" and "three things matter"
+        # are different claims and the view can show both.
+        "allEnemySteps": everything.get("steps") or [],
+        "allEnemyPeak": everything.get("peak"),
+        "phases": fight.get("phases") or [],
+        "auras": _drawable_auras(fight, pooled),
+        "truncated": bool(fight.get("truncated")),
+        "warnings": list(fight.get("warnings") or []),
+    }
+
+
+def _pattern_label(pull: dict) -> str:
+    """A factual name for a shape, never an interpretation of it.
+
+    "Three targets throughout" is a reading somebody could disagree with; "peaks at
+    3, 2.9 on average" is what was measured. The view writes the sentence.
+    """
+    peak = pull.get("peak")
+    mean = pull.get("mean")
+    if peak is None or mean is None:
+        return "unmeasured shape"
+    if pull.get("constant"):
+        return f"{int(peak)} target{'' if int(peak) == 1 else 's'} throughout"
+    return f"peaks at {int(peak)}, {float(mean):.1f} on average"
+
+
+def _patterns(payload: dict, pooled: list[dict]) -> list[dict]:
+    """Every shape at least ``_MIN_PATTERN_PULLS`` of the sampled pulls share.
+
+    Ordered by how many pulls they hold, so the first is what most of these kills
+    looked like. A boss whose pulls all agree yields one entry and the view shows no
+    chooser; a boss with none -- every pull its own shape -- also yields one, built
+    from the pull nearest the pooled middle, because a chart still has to draw
+    something and "no two of these agreed" is what the caveats are for.
+    """
+    fights = [fight for fight in payload.get("fights") or [] if isinstance(fight, dict)]
+    if not fights:
+        return []
+
+    groups = [group for group in _cluster_fights(fights) if len(group) >= _MIN_PATTERN_PULLS]
+    if not groups:
+        chosen = _representative(payload)
+        groups = [[chosen]] if chosen is not None else []
+
+    length_median = float(((payload.get("durationSeconds") or {}).get("median")) or 0.0)
+    patterns = []
+    for index, group in enumerate(groups):
+        chosen = _nearest_to_centre(group, length_median)
+        members = {id(fight) for fight in group}
+        pull = _pull_block(chosen, pooled)
+        patterns.append(
+            {
+                "id": f"pattern-{index + 1}",
+                "pulls": len(group),
+                "share": round(len(group) / len(fights), 3),
+                "label": _pattern_label(pull),
+                # The widest disagreement inside this pattern, in share of the
+                # fight. A pattern held together at 0.19 and one held together at
+                # 0.02 are different claims, and the threshold alone hides that.
+                "spread": _widest_difference(group),
+                "representative": pull,
+                # The pattern's own other members, for the view to draw behind the
+                # chosen curve without mixing in pulls of a different shape.
+                "alsoInThisPattern": [
+                    _context_pull(fight) for fight in group if fight is not chosen
+                ],
+                "reportCodes": sorted(str(fight.get("reportCode") or "") for fight in group),
+                "unmatched": [_context_pull(fight) for fight in fights if id(fight) not in members],
+            }
+        )
+    return patterns
+
+
 def _timeline_block(payload: dict) -> dict | None:
-    chosen = _representative(payload)
-    if chosen is None:
+    pooled = [aura for aura in payload.get("auras") or [] if isinstance(aura, dict)]
+    patterns = _patterns(payload, pooled)
+    if not patterns:
         return None
 
-    pooled = [aura for aura in payload.get("auras") or [] if isinstance(aura, dict)]
-    significant = chosen.get("significantTargetCount") or {}
-    everything = chosen.get("targetCount") or {}
-
-    others = [
-        {
-            "reportCode": fight.get("reportCode"),
-            "fightId": fight.get("fightId"),
-            "durationSeconds": fight.get("durationSeconds"),
-            "kill": bool(fight.get("kill")),
-            "steps": (fight.get("significantTargetCount") or {}).get("steps") or [],
-            "coverage": fight.get("eventCoverage"),
-        }
-        for fight in payload.get("fights") or []
-        if isinstance(fight, dict) and fight is not chosen
-    ]
+    # The first pattern is the one most of these kills looked like, and it is what
+    # the view opens on. `representative` and `others` are that pattern flattened,
+    # kept so a file written before patterns existed and one written after are read
+    # by the same code path.
+    chosen_pattern = patterns[0]
+    others = chosen_pattern["alsoInThisPattern"] + chosen_pattern["unmatched"]
 
     return {
         "pooling": "representative",
@@ -464,32 +746,14 @@ def _timeline_block(payload: dict) -> dict | None:
             "pooled claims are the spreads beside the chart, not the curve."
         ),
         "chosenBecause": (
-            "the sampled fight whose time-weighted mean target count sits nearest the "
-            "pooled median, fight length breaking ties"
+            "the pull nearest the centre of the shape most of these kills shared; "
+            "pulls are grouped by their target-count curve over normalised fight "
+            "time, and a shape only becomes a preset when at least two pulls have it"
         ),
-        "representative": {
-            "reportCode": chosen.get("reportCode"),
-            "fightId": chosen.get("fightId"),
-            "kill": bool(chosen.get("kill")),
-            "durationSeconds": chosen.get("durationSeconds"),
-            "raidSize": chosen.get("raidSize"),
-            "steps": significant.get("steps") or [],
-            "mean": significant.get("mean"),
-            "peak": significant.get("peak"),
-            "peakShare": significant.get("peakShare"),
-            "constant": significant.get("constant"),
-            "observed": significant.get("observed"),
-            "coverage": chosen.get("eventCoverage"),
-            # Everything that took a hit, including props and strays under the
-            # significance floor. "Three things exist" and "three things matter"
-            # are different claims and the view can show both.
-            "allEnemySteps": everything.get("steps") or [],
-            "allEnemyPeak": everything.get("peak"),
-            "phases": chosen.get("phases") or [],
-            "auras": _drawable_auras(chosen, pooled),
-            "truncated": bool(chosen.get("truncated")),
-            "warnings": list(chosen.get("warnings") or []),
-        },
+        # Every shape at least two sampled pulls shared, most-shared first. One entry
+        # means the pulls agreed and there is nothing to choose between.
+        "patterns": patterns,
+        "representative": chosen_pattern["representative"],
         "others": others,
     }
 

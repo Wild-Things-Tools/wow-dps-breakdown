@@ -29,7 +29,7 @@
  * both series count the same thing.
  */
 
-import { useMemo, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   CartesianGrid,
   Line,
@@ -50,6 +50,7 @@ import {
   Note,
   Panel,
   PanelHeader,
+  SegmentedControl,
   Select,
   StatTile,
   cx,
@@ -57,9 +58,11 @@ import {
 import { percent } from '../lib/format'
 import { bossIconUrl } from '../lib/gameIcons'
 import type {
+  ContextPull,
   FightAmplification,
   FightAuraWindow,
   FightEncounter,
+  FightPattern,
   FightPromotion,
   FightSpread,
   FightsDataset,
@@ -644,6 +647,69 @@ function buildStepRows(series: StepSeries[]): Array<Record<string, number | null
     })
 }
 
+/**
+ * How many pulls the probe sampled, from the patterns themselves.
+ *
+ * Every pull is in exactly one pattern's `pulls` or in its `unmatched`, so either
+ * side of the first entry adds up to the sample. Taken from the first pattern rather
+ * than summed, because summing `pulls` across patterns silently drops the pulls that
+ * matched nothing.
+ */
+/**
+ * What the clustering found, said in words rather than left to the control.
+ *
+ * Three sentences at most, and none of them a hedge: how many shapes there were, how
+ * tightly this one holds together, and how thin the sample is. The last is the one
+ * that matters most today -- three pulls per boss cannot establish a pattern, and a
+ * chooser with two options on it looks far more confident than the evidence is.
+ */
+function PatternNote({
+  patterns,
+  pattern,
+}: {
+  patterns: FightPattern[]
+  pattern: FightPattern
+}) {
+  const total = sampledPulls(patterns)
+  return (
+    <Note>
+      {patterns.length > 1 ? (
+        <>
+          These {total} pulls came out as <strong>{patterns.length} different shapes</strong>,
+          grouped by their target-count curve over normalised fight time. This one is what{' '}
+          {pattern.pulls} of them looked like; the others are a click away.{' '}
+        </>
+      ) : pattern.pulls > 1 ? (
+        <>
+          All {pattern.pulls} sampled pulls had the same shape, so there is nothing to
+          choose between.{' '}
+        </>
+      ) : (
+        <>
+          No two of the {total} sampled pulls agreed on a shape, so this is one pull
+          rather than a pattern. Treat the curve as an example, not as what the fight
+          looks like.{' '}
+        </>
+      )}
+      {pattern.pulls > 1 ? (
+        <>The pulls in it disagree on at most {percent(pattern.spread, 0)} of the fight. </>
+      ) : null}
+      {total < 5 ? (
+        <>
+          {total} pulls is too few to call any of this a distribution — raise the
+          probe’s <code>--reports</code> before reading a split as a real difference in
+          how the fight goes, and check that both pulls were read to the end.
+        </>
+      ) : null}
+    </Note>
+  )
+}
+
+function sampledPulls(patterns: FightPattern[]): number {
+  const first = patterns[0]
+  return first ? first.pulls + first.unmatched.length : 0
+}
+
 function TimelinePanel({
   encounter,
   fights,
@@ -652,9 +718,28 @@ function TimelinePanel({
   fights: FightsDataset
 }) {
   const timeline = encounter.measured?.timeline ?? null
-  const representative = timeline?.representative ?? null
   const targetsFact = encounter.facts.find((fact) => fact.key === 'targets')
   const simIsFallback = targetsFact?.source === 'default'
+
+  // Pulls of one boss are not all the same fight, so the probe groups them by
+  // shape. Ordered most-shared first, which is what this opens on. A file written
+  // before the clustering has no `patterns` and falls back to its single pull.
+  const patterns = timeline?.patterns ?? null
+  const [patternId, setPatternId] = useState<string | null>(null)
+  useEffect(() => {
+    // A new boss has different patterns, and an id from the last one names nothing.
+    setPatternId(null)
+  }, [encounter.encounterId])
+
+  const pattern: FightPattern | null =
+    patterns?.find((entry) => entry.id === patternId) ?? patterns?.[0] ?? null
+  const representative = pattern?.representative ?? timeline?.representative ?? null
+  // When several shapes exist, the context curves are this pattern's own pulls: a
+  // curve of a different shape drawn faintly under a labelled one is the artefact
+  // the clustering exists to avoid. With one shape there is nothing else to be.
+  const contextPulls: ContextPull[] = pattern
+    ? pattern.alsoInThisPattern
+    : (timeline?.others ?? [])
 
   const series = useMemo<StepSeries[]>(() => {
     const built: StepSeries[] = [
@@ -686,7 +771,7 @@ function TimelinePanel({
         opacity: 1,
       })
     }
-    for (const other of (timeline?.others ?? []).slice(0, MAX_CONTEXT_PULLS)) {
+    for (const other of contextPulls.slice(0, MAX_CONTEXT_PULLS)) {
       built.push({
         id: `other-${other.reportCode}-${other.fightId}`,
         label: `${other.reportCode} fight ${other.fightId}`,
@@ -698,7 +783,7 @@ function TimelinePanel({
       })
     }
     return built
-  }, [encounter, representative, timeline, simIsFallback])
+  }, [encounter, representative, contextPulls, simIsFallback])
 
   const rows = useMemo(() => buildStepRows(series), [series])
   const { bands, notDrawn: hiddenBands } = useMemo(
@@ -713,7 +798,7 @@ function TimelinePanel({
   }, 0)
   const span = Math.max(...series.map((entry) => entry.end), 1)
 
-  const contextCount = timeline?.others.length ?? 0
+  const contextCount = contextPulls.length
   const legend = [
     { id: 'sim', label: series[0]!.label, color: SIM_COLOR },
     ...(representative
@@ -749,6 +834,20 @@ function TimelinePanel({
             <BossIcon encounterId={encounter.encounterId} name={encounter.name} />
             {`${encounter.name}: how many things are alive, and when`}
           </span>
+        }
+        actions={
+          patterns && patterns.length > 1 ? (
+            <SegmentedControl
+              label="Kill pattern"
+              value={pattern?.id ?? patterns[0]!.id}
+              onChange={setPatternId}
+              options={patterns.map((entry) => ({
+                value: entry.id,
+                label: `${entry.pulls} of ${sampledPulls(patterns)} · ${entry.label}`,
+                title: `${entry.reportCodes.join(', ')} — these pulls disagreed on at most ${percent(entry.spread, 0)} of the fight`,
+              }))}
+            />
+          ) : null
         }
         subtitle={
           representative ? (
@@ -914,6 +1013,7 @@ function TimelinePanel({
           value this project treats as not published. */}
       <StepTable rows={rows} series={series} />
 
+      {patterns && pattern ? <PatternNote patterns={patterns} pattern={pattern} /> : null}
 
       {encounter.measured?.caveats.length ? (
         <div className="px-5 pb-4">

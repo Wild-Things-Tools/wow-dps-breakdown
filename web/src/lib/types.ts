@@ -566,20 +566,54 @@ export interface RepresentativeFight {
   warnings: string[]
 }
 
+/** One sampled pull as it is drawn behind the chosen curve. */
+export interface ContextPull {
+  reportCode: string
+  fightId: number
+  durationSeconds: number
+  kill: boolean
+  steps: Array<[number, number]>
+  coverage?: number | null
+}
+
+/**
+ * A shape at least two of the sampled pulls shared.
+ *
+ * Pulls of one boss are not all the same fight: a wave killed before the next one
+ * spawns in half the logs and overlapping in the other half is two patterns, and
+ * showing only the pull nearest the median would answer a question nobody asked.
+ * The list is ordered by how many pulls each shape holds, so the first is what most
+ * of these kills looked like — and a boss whose pulls all agree yields exactly one,
+ * which is how the view knows to show no chooser.
+ */
+export interface FightPattern {
+  id: string
+  /** How many sampled pulls had this shape, and that over all of them. */
+  pulls: number
+  share: number
+  /** Factual, never an interpretation: "3 targets throughout", "peaks at 7". */
+  label: string
+  /**
+   * The widest disagreement inside this pattern, as a share of the fight. A pattern
+   * held together at 0.19 and one held together at 0.02 are different claims.
+   */
+  spread: number
+  representative: RepresentativeFight
+  alsoInThisPattern: ContextPull[]
+  reportCodes: string[]
+  /** Sampled pulls this pattern does not contain. */
+  unmatched: ContextPull[]
+}
+
 export interface FightTimeline {
   /** "representative" — one real pull, never a per-second average. */
   pooling: string
   why: string
   chosenBecause: string
+  /** Absent on files written before pulls were clustered. */
+  patterns?: FightPattern[]
   representative: RepresentativeFight
-  others: Array<{
-    reportCode: string
-    fightId: number
-    durationSeconds: number
-    kill: boolean
-    steps: Array<[number, number]>
-    coverage?: number | null
-  }>
+  others: ContextPull[]
 }
 
 export interface MeasuredFight {
