@@ -13,8 +13,9 @@ name: Simulations
 # the site quietly stale. That failure mode is worse than slightly older data.
 #
 # So: weekly, plus manual runs whenever they are actually warranted (a balance
-# patch, an APL fix). Estimated ~1,100 minutes a month including CI and deploys,
-# which leaves room for the estimate above to be wrong.
+# patch, an APL fix). Estimated ~800 minutes a month including CI and deploys,
+# which leaves room for the estimate above to be wrong by the factor of two it
+# could plausibly be wrong by.
 #
 # If this repository is ever made public, Actions minutes become unlimited and free
 # and this can go back to nightly -- see "What this costs to run" in the README.
@@ -22,12 +23,17 @@ on:
   schedule:
     # Wednesday, early UTC: after the Tuesday US reset and any patch that came with
     # it, before the European raid week gets going.
+    #
+    # The current tier only. A scheduled pass over the *previous* tier was planned
+    # here and then measured: 15 of MID1's 41 damage profiles no longer load,
+    # because their talent hashes reference nodes that current spell data does not
+    # offer the spec ("node N is not available to player's spec"). That silently
+    # removes every Mage, every Hunter, every Warrior and Havoc from the tier. Two
+    # thirds of a dataset for a fifth of the monthly Actions budget is a bad trade,
+    # and the profiles that break are correlated with the changes the comparison is
+    # supposed to show. So the previous tier is run on demand -- `tiers: latest
+    # previous` via workflow_dispatch -- until simc's old-tier profiles load again.
     - cron: '0 4 * * 3'
-    # Monthly: the current tier *and* the one before it. Past profiles do not
-    # change, but the spell data they run against does, which is the whole content
-    # of "how does last season's setup fare under current balance" -- and that only
-    # moves on patch days.
-    - cron: '0 5 1 * *'
   workflow_dispatch:
     inputs:
       target_error:
@@ -58,9 +64,10 @@ env:
   TARGET_ERROR: ${{ inputs.target_error || '0' }}
   ITERATIONS: ${{ inputs.iterations || '3000' }}
   SHARDS: ${{ inputs.shards || '6' }}
-  # 'latest' and 'previous' resolve against the tiers simc ships, so the monthly run
-  # keeps meaning "this season and last" once the next tier lands.
-  TIERS: ${{ inputs.tiers || (github.event.schedule == '0 5 1 * *' && 'latest previous') || 'latest' }}
+  # 'latest' and 'previous' resolve against the tiers simc ships, so a manual
+  # `tiers: latest previous` keeps meaning "this season and last" once the next tier
+  # lands. Scheduled runs do the current tier only -- see the note on the schedule.
+  TIERS: ${{ inputs.tiers || 'latest' }}
 
 jobs:
   build-simc:
@@ -100,8 +107,31 @@ jobs:
           cp simc/build/simc bundle/simc
           strip bundle/simc || true
           cp -r simc/profiles bundle/profiles
-          bundle/simc bundle/profiles/MID1/MID1_Mage_Fire.simc iterations=10 threads=2 html= \
-            || { echo "smoke test failed"; exit 1; }
+
+          # Smoke test: does the binary we just built run at all?
+          #
+          # It must not be pinned to one named profile. Profiles from a past tier can
+          # carry talent hashes that no longer validate against current spell data --
+          # "node N is not available to player's spec" -- and that is a fact about one
+          # profile, not a broken build. Pinning MID1_Mage_Fire here once cost a whole
+          # nightly run: nine minutes of compile, then a hard failure before a single
+          # simulation. So: newest tier, and any one of its first few profiles passing
+          # is proof enough that the binary works.
+          tier=$(ls -d bundle/profiles/*/ | grep -E '/[A-Za-z]+[0-9]+/$' | sort -V | tail -1)
+          echo "smoke testing against $tier"
+          ok=0
+          for profile in $(ls "$tier"*.simc | head -5); do
+            if bundle/simc "$profile" iterations=10 threads=2 html= >/dev/null 2>&1; then
+              echo "smoke test passed: $profile"
+              ok=1
+              break
+            fi
+            echo "::warning::$profile did not run; trying the next one"
+          done
+          if [ "$ok" != 1 ]; then
+            echo "::error::simc ran none of the first five $tier profiles -- the build is broken"
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@v4
         with:

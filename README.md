@@ -156,10 +156,25 @@ A true historical reconstruction — simc checked out at a dated commit, with th
 data and rotations as they were — is a different and much more expensive feature. See
 Planned.
 
-The nightly run simulates the current tier. A weekly run simulates the current tier and
-the one before it, since past profiles do not change but the spell data they run against
-does. Both tiers resolve by position (`latest`, `previous`) rather than by name, so
-nothing needs editing when the next tier ships.
+**Old profiles rot, and the rot is not evenly spread.** Measured against simc 1210-01:
+15 of `MID1`'s 41 damage profiles no longer load at all. Their talent hashes reference
+nodes that current spell data does not offer the spec — simc reports `Selected node
+108655 entry 134185 is not available to player's spec` and refuses the actor. Every Mage
+build, every Hunter build, both Warrior damage builds, Havoc Demon Hunter, both
+Retribution builds and one of the two Elemental builds are affected; `MID2` has no such
+failures.
+
+The pipeline degrades gracefully — a profile that will not load fails its cells, gets
+logged and is skipped — but a season 1 view missing three classes entirely is not a
+comparison anybody should read. Worse, the profiles that break are exactly the ones whose
+talents changed most, so the loss is correlated with what the comparison is meant to
+show. That is why the previous tier is not on a schedule: the machinery is built and
+tested, and it is a one-line manual run (`tiers: latest previous`) whenever simc's
+old-tier profiles are loadable again.
+
+Scheduled runs simulate the current tier. The previous tier runs on demand — see below
+for why. Both resolve by position (`latest`, `previous`) rather than by name, so nothing
+needs editing when the next tier ships.
 
 ### Hero talents come for free
 
@@ -369,9 +384,9 @@ failure than slightly older data, so the schedule is sized to fit:
 | | Cadence | Estimated job-minutes / month |
 |---|---|---|
 | Current tier | Weekly (Wednesday) | ~650 |
-| Current + previous tier | Monthly | ~340 |
+| Previous tier | On demand only — see below | 0 |
 | CI and deploys on pushes | per push | ~150 |
-| | | **~1,140 of 2,000** |
+| | | **~800 of 2,000** |
 
 The remaining margin is deliberate: the estimate assumes a 2-vCPU standard runner, and
 if that assumption is wrong it is wrong by a factor of two.

@@ -266,6 +266,19 @@ repository: 2,000 Actions minutes a month.
   balance. What travels is the within-run ratios: funnel gain, concentration, burst ratio,
   the shape of the scaling curve. Any future side-by-side tier view must be restricted to
   those, or it will present a gear difference as a balance change.
+- **Old-tier profiles rot.** Measured on simc 1210-01: 15 of MID1's 41 damage profiles
+  fail to load, because their talent hashes point at nodes current spell data does not
+  offer the spec (`Selected node N entry M is not available to player's spec`). All Mage,
+  all Hunter, both Warrior damage builds, Havoc, both Retribution builds, one Elemental
+  build. MID2: none. So a scheduled previous-tier run would publish a season 1 view with
+  three classes missing, and the breakage correlates with the talent changes the
+  comparison is supposed to surface. The tier axis stays; the *schedule* for the old tier
+  does not. Re-measure before turning it back on — the script is one loop of
+  `simc <profile> iterations=1`.
+- The nightly smoke test in `sims.yml` must never pin a named profile, and especially not
+  an old-tier one. It did (`MID1_Mage_Fire`), and cost a whole run: nine minutes of
+  compile, then a hard failure before a single simulation. It now tries the newest tier's
+  first five profiles and passes if any one of them runs.
 - Switching tier prunes selections the new tier has no profile for. The count of what was
   dropped is reported rather than swallowed; a comparison quietly missing a line is the
   kind of silent wrongness this project treats as a bug.
