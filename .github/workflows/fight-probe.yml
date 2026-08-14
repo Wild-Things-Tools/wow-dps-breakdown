@@ -1,0 +1,139 @@
+name: Fight probe
+
+# Exploratory, on demand, and it commits nothing.
+#
+# The Warcraft Logs credentials are repository secrets, so this is the only place
+# `wowdps fight-probe` can run at all -- a development checkout cannot reach the API.
+# What comes back is a readable dump of what each boss's fights actually look like
+# (target counts over time, add lifetimes, phase boundaries, auras on enemies, raid
+# size) plus the raw response cache, uploaded as an artifact.
+#
+# Deliberately not a schedule and deliberately not a commit:
+#
+# * The output is evidence for writing `pipeline/src/wowdps/data/fight_profiles.json`
+#   by hand, not a dataset. A fight profile mixes measured facts with facts the
+#   owner states from playing the encounter, and merging those is a judgement, not
+#   a merge.
+# * The API meters by points per hour, not requests, and event queries over a whole
+#   Mythic pull are the expensive end of it. The command measures its own cost and
+#   stops at 80% of the hour's budget; a cron that silently ate the budget every
+#   night would take the weekly rankings check down with it.
+#
+# The response cache in the artifact is worth keeping: download it, point a local
+# run at it with --cache, and the extraction can be iterated on offline for nothing.
+on:
+  workflow_dispatch:
+    inputs:
+      encounters:
+        description: 'Space-separated encounter ids, or empty for every boss in the newest zone'
+        default: ''
+      tier:
+        description: 'Tier whose fight profiles the measurements are compared against'
+        default: 'MID2'
+      difficulty:
+        description: '5 = Mythic, 4 = Heroic'
+        default: '5'
+      reports:
+        description: 'Distinct reports to read per encounter (the main cost dial)'
+        default: '3'
+      page:
+        description: 'Rankings page to sample from; 1 is the world best, which is not a typical pull'
+        default: '1'
+      max_pages:
+        description: 'Event pages per stream per fight'
+        default: '3'
+      point_ceiling:
+        description: 'Abort once this fraction of the hourly point budget is spent'
+        default: '0.8'
+      cheap:
+        description: 'Use enemy casts instead of enemy damage-taken as the presence signal'
+        type: boolean
+        default: false
+
+concurrency:
+  group: fight-probe
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check credentials
+        id: creds
+        env:
+          WCL_CLIENT_ID: ${{ secrets.WCL_CLIENT_ID }}
+        run: |
+          if [ -z "$WCL_CLIENT_ID" ]; then
+            echo "::notice::WCL_CLIENT_ID is not set — skipping. Add WCL_CLIENT_ID and WCL_CLIENT_SECRET as repository secrets to enable this, see https://www.warcraftlogs.com/api/clients/"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.creds.outputs.enabled == 'true'
+        with:
+          python-version: '3.12'
+
+      - name: Install pipeline
+        if: steps.creds.outputs.enabled == 'true'
+        run: pip install -e ./pipeline
+
+      - name: Probe
+        if: steps.creds.outputs.enabled == 'true'
+        env:
+          WCL_CLIENT_ID: ${{ secrets.WCL_CLIENT_ID }}
+          WCL_CLIENT_SECRET: ${{ secrets.WCL_CLIENT_SECRET }}
+          ENCOUNTERS: ${{ inputs.encounters }}
+          TIER: ${{ inputs.tier }}
+          DIFFICULTY: ${{ inputs.difficulty }}
+          REPORTS: ${{ inputs.reports }}
+          PAGE: ${{ inputs.page }}
+          MAX_PAGES: ${{ inputs.max_pages }}
+          POINT_CEILING: ${{ inputs.point_ceiling }}
+          CHEAP: ${{ inputs.cheap }}
+        run: |
+          args=()
+          for id in $ENCOUNTERS; do args+=(--encounter "$id"); done
+          if [ "$CHEAP" = "true" ]; then args+=(--no-damage-events); fi
+          # Exit code 2 means the point ceiling stopped the pass; whatever was
+          # collected is still written, so it is a warning rather than a failure.
+          set +e
+          wowdps -v fight-probe \
+            --tier "$TIER" \
+            --difficulty "$DIFFICULTY" \
+            --reports "$REPORTS" \
+            --page "$PAGE" \
+            --max-pages "$MAX_PAGES" \
+            --point-ceiling "$POINT_CEILING" \
+            --out fight-probe \
+            "${args[@]}"
+          status=$?
+          set -e
+          if [ "$status" = "2" ]; then
+            echo "::warning::the pass stopped early on the point ceiling; partial output uploaded"
+          elif [ "$status" != "0" ]; then
+            exit "$status"
+          fi
+
+      - name: Summary
+        if: steps.creds.outputs.enabled == 'true'
+        run: |
+          {
+            echo '## Fight probe'
+            echo
+            echo '```'
+            cat fight-probe/fight-probe-*.txt || echo 'no output'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.creds.outputs.enabled == 'true'
+        with:
+          name: fight-probe
+          path: fight-probe
+          retention-days: 14

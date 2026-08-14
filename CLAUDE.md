@@ -415,6 +415,122 @@ Two things nearly threw it away, both fixed, both worth not reintroducing:
   dropped is reported rather than swallowed; a comparison quietly missing a line is the
   kind of silent wrongness this project treats as a bug.
 
+## Fight patterns per boss — what Warcraft Logs can and cannot tell you
+
+The logs cross-check compares Patchwerk single target against nine different encounters,
+and the residual is dominated by **which boss**, not which spec. Measured over the 192
+published comparisons: median logs/sim runs 0.57 (Belo'ren) to 0.86 (Lightblinded
+Vanguard), *in the same order for all 26 specs*, and the only six comparisons where the
+logs win are Mages, five of them on Lightblinded Vanguard. That is one fight style being
+compared against nine fight shapes, not 26 mismodelled specs.
+
+`fightextract.py` (pure functions over payloads), `fightprofile.py` (the data model and
+the simc emission), `fightprobe.py` (`wowdps fight-probe`), `data/fight_profiles.json`.
+
+### Field by field, from the v2 schema and the report API
+
+| What | Verdict | Where from |
+|---|---|---|
+| Raid size | **extractable** | `ReportFight.size` and `len(friendlyPlayers)`, cross-checkable |
+| Fight length, kill/wipe | **extractable** | `startTime`/`endTime`/`kill` |
+| Phase boundaries | **extractable** | `fight.phaseTransitions` (ids + times) **plus** `report.phases` (names + `isIntermission`). Neither alone is a phase list |
+| Which targets mattered | **extractable** | `table(dataType: DamageDone, viewBy: Target)` |
+| Enemy deaths | **extractable** | `events(dataType: Deaths, hostilityType: Enemies)` — tiny, cheap |
+| Concurrent target count | **with caveats** | derived from damage-taken per `(targetID, targetInstance)` |
+| Add spawn time | **with caveats** | there is no general spawn event. `first_seen` is *first damaged* |
+| Add despawn | **with caveats** | a despawn leaves no death event, so the end is the last hit |
+| Amplification *windows* | **with caveats** | aura apply/remove on enemies, per instance |
+| Amplification *magnitude* | **not available** | nothing in the API says what an aura does. Ever. Assert it |
+| Downtime | **not available as such** | the closest is `activeTime` from the damage table, which counts a player as active while doing anything |
+
+Traps in that table, each of which would have shipped a wrong answer:
+
+- **An encounter's own damage-taken buff on an add is a `Buffs` event, not `Debuffs`.**
+  Only auras *players* apply are debuffs. Probing only `Debuffs` on enemies misses exactly
+  the case the feature exists for. Fetch both.
+- **Key on `(targetID, targetInstance)`, never `targetID`.** Five copies of one add share
+  one actor id; collapsing them reports a wave of five as one enemy alive for the union of
+  their lifetimes.
+- **Actor ids are report-local.** Pool across reports on `gameID`, from
+  `masterData.actors`.
+- **Every kill ends with the targets dying one after another**, so a naive "is the count
+  constant" test says no fight in the game has a constant shape. `CONSTANT_TARGET_SHARE`
+  (0.95 of the fight at peak count) is the documented threshold that fixes it.
+- An enemy hit exactly once has a zero-width lifespan and cannot raise a target count.
+  Known limit, tested, not a bug worth chasing.
+
+### Rankings are the route to the logs, and they are biased
+
+`characterRankings` entries carry `report.code` and `report.fightID`, so "top parses for
+this boss" is already a list of logs — no report search. But page 1 is the world's best
+pulls: shorter than a typical kill, adds dying faster, phases sometimes skipped. A profile
+built from them is *speed-kill shaped*, which is not what the median parse the site
+compares against experienced. `--page` samples lower; the probe states the bias in its own
+output.
+
+### Cost is metered in points, and the cost function is not published
+
+Warcraft Logs' own advice is to read `rateLimitData` and find out. So `PointLedger` asks
+for `rateLimitData` alongside every query (no extra round trip) and the pass is bracketed
+by two standalone readings — the run total is a measurement. Per-query attribution may lag
+by one response and is labelled as an estimate. `--point-ceiling` (default 0.8) aborts
+before a 429 loses the pass. Every response is cached on disk by (query, variables), so
+re-running the extraction over a warm cache is free — download the CI artifact and iterate
+offline.
+
+Structure per fight is one `FIGHT_STRUCTURE_QUERY` (fights + phases + masterData in one
+document — the schema notes fights and phases do not double-charge), four event queries
+and two table queries. Enemy damage-taken is by far the largest stream; `--no-damage-events`
+swaps it for casts at a fraction of the cost and goes blind to adds nobody logged a cast for.
+
+**The actual measured cost of a pass is still unknown** — see "what is untested" below.
+
+### Turning a profile into a scenario
+
+`FightProfile.to_scenario()` leaves `fight_style` as `None`, for the reason already in this
+file: naming one clears the raid events. Mappings:
+
+- permanent extra targets → `desired_targets=N`
+- add waves → `raid_events+=/adds,count=,first=,duration=,cooldown=`
+- amplification on the priority target → `raid_events+=/vulnerable,first=,duration=,cooldown=,multiplier=`
+  (`vulnerable_event_t` in `engine/sim/raid_event.cpp`; without `target=` it increments
+  `sim->target->debuffs.vulnerable`)
+- there is no "fire once" switch on a raid event, so a one-shot is a cooldown longer than
+  any fight (`_NEVER_AGAIN = 100000`)
+
+An amplification on an *add* has no mapping: simc's generated adds have no name to pass to
+`target=`. `ScenarioPlan.unrepresented` carries it out as text rather than dropping it —
+a scenario that silently models three quarters of a fight is worse than one that says which
+quarter is missing.
+
+### Provenance, and why hand facts are first-class
+
+Each fact in `fight_profiles.json` is `{value, provenance}` with `source` one of `hand`,
+`logs`, `default`. The owner plays these fights and knows things no event stream contains;
+`hand` is not a placeholder for a measurement that has not happened. A disagreement between
+a hand fact and the probe is a **finding** — most likely the extraction is wrong — so
+`compare_to_measurement` prints them side by side and resolves nothing.
+
+The validation case is Lightblinded Vanguard: permanent 3 targets, one of the three taking
+~20% extra damage for ~20 seconds at the pull. It is written into the data file, pinned by
+a test, and reproduced from synthetic events in `test_fightextract.py`. If a probe run
+disagrees, fix the extraction — do not edit the profile.
+
+### What is verified and what is not
+
+Verified: everything offline. The extraction against hand-written fixtures, the profile
+→ simc mapping, the point ledger arithmetic, the whole command end to end with a stubbed
+client (`test_fightprobe.py`).
+
+**Not verified: a single real API call.** Credentials are Actions secrets. The GraphQL
+documents were written against a third-party mirror of the v2 schema
+(`ToppleTheNun/mchammer`, which carries `phases`/`archiveStatus`, so it is recent) because
+`warcraftlogs.com/v2-api-docs` is 403 without a session. Field names, argument names and
+enum values come from that mirror, not from the live server. So the first CI run of
+`fight-probe.yml` is a schema check as much as a measurement — expect to fix a field name,
+and expect the `table` payload shape (`_table_entries` guesses between `entries`/`series`/
+`targets`) to need pinning against a real response.
+
 ## Conventions
 
 - Dataset JSON is committed under `web/public/data/<tier>/`. Raw simc reports are not —

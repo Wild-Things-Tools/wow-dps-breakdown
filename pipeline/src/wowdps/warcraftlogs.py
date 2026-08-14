@@ -12,19 +12,23 @@ https://www.warcraftlogs.com/api/clients/ and export::
     WCL_CLIENT_ID=...
     WCL_CLIENT_SECRET=...
 
-The public client endpoint is rate limited to 3600 points per hour, and a rankings
-query costs well under a point per call, so a nightly verification pass over a raid
-tier is comfortably inside budget.
+The public client endpoint is rate limited by *points* per hour, not requests, and
+the cost of a query is not published as a formula -- Warcraft Logs' own advice is to
+read ``rateLimitData`` and find out. A rankings query costs well under a point, so a
+nightly verification pass over a raid tier is comfortably inside budget; event
+queries over a whole fight are the expensive end, which is why ``fightprobe`` meters
+itself against ``rate_limit()`` and caches every response it gets.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
 import statistics
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -73,6 +77,109 @@ query Zones {
 }
 """
 
+RATE_LIMIT_QUERY = """
+query RateLimit {
+  rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
+}
+"""
+
+# Everything one report can say about the *shape* of its fights, in a single
+# request. Splitting these apart would cost points per round trip for data the
+# server has already loaded: the schema notes that fetching fights and phases
+# together does not double-charge.
+#
+# `masterData.actors(type: "NPC")` is what turns the numeric actor ids in event
+# payloads into names, and `abilities` does the same for aura ids. Both are per
+# report rather than per fight, so one fetch serves every fight in it.
+FIGHT_STRUCTURE_QUERY = """
+query FightStructure($code: String!, $encounterId: Int!, $difficulty: Int!) {
+  reportData {
+    report(code: $code) {
+      code
+      title
+      startTime
+      endTime
+      phases { encounterID separatesWipes phases { id name isIntermission } }
+      masterData(translate: true) {
+        actors(type: "NPC") { id gameID name subType type petOwner }
+        abilities { gameID name type }
+      }
+      fights(encounterID: $encounterId, difficulty: $difficulty, killType: Encounters) {
+        id
+        encounterID
+        name
+        difficulty
+        kill
+        size
+        startTime
+        endTime
+        fightPercentage
+        averageItemLevel
+        friendlyPlayers
+        enemyNPCs { id gameID instanceCount groupCount }
+        phaseTransitions { id startTime }
+        lastPhase
+      }
+    }
+  }
+  rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
+}
+"""
+
+# The expensive one. `limit` is capped at 10000 by the API; a page that comes back
+# with a nextPageTimestamp means the fight has more events than one page holds, and
+# the caller decides whether to pay for the next page or mark the result truncated.
+EVENTS_QUERY = """
+query FightEvents(
+  $code: String!
+  $fightId: Int!
+  $dataType: EventDataType!
+  $hostility: HostilityType!
+  $startTime: Float!
+  $endTime: Float!
+  $limit: Int!
+) {
+  reportData {
+    report(code: $code) {
+      events(
+        fightIDs: [$fightId]
+        dataType: $dataType
+        hostilityType: $hostility
+        startTime: $startTime
+        endTime: $endTime
+        limit: $limit
+      ) {
+        data
+        nextPageTimestamp
+      }
+    }
+  }
+  rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
+}
+"""
+
+TABLE_QUERY = """
+query FightTable(
+  $code: String!
+  $fightId: Int!
+  $dataType: TableDataType!
+  $viewBy: ViewType!
+  $hostility: HostilityType!
+) {
+  reportData {
+    report(code: $code) {
+      table(
+        fightIDs: [$fightId]
+        dataType: $dataType
+        viewBy: $viewBy
+        hostilityType: $hostility
+      )
+    }
+  }
+  rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
+}
+"""
+
 
 class WarcraftLogsError(RuntimeError):
     pass
@@ -95,12 +202,81 @@ class Credentials:
         return cls(client_id=client_id, client_secret=client_secret)
 
 
+@dataclass
+class PointLedger:
+    """What the API actually charged, read back from ``rateLimitData``.
+
+    Warcraft Logs meters by points and does not publish the cost function, so the
+    only honest way to state what a pass costs is to measure it. Every query in
+    this module asks for ``rateLimitData`` alongside its real payload, which costs
+    no extra round trip, and the ledger keeps the running total.
+
+    One caveat that must travel with any per-query number produced from this: the
+    reading arrives *with* the response, and whether the server has already
+    charged for that same response is not documented. So a delta between two
+    consecutive readings is reliable as a total and may be attributed one query
+    late. Totals are what get published; per-query costs are labelled estimates.
+    """
+
+    limit_per_hour: int | None = None
+    first_reading: float | None = None
+    last_reading: float | None = None
+    resets_in: int | None = None
+    entries: list[tuple[str, float, bool]] = field(default_factory=list)
+
+    def record(self, label: str, payload: dict, cached: bool = False) -> None:
+        data = payload.get("rateLimitData") or {}
+        spent = data.get("pointsSpentThisHour")
+        if isinstance(spent, (int, float)):
+            if self.first_reading is None:
+                self.first_reading = float(spent)
+            self.last_reading = float(spent)
+            self.limit_per_hour = data.get("limitPerHour", self.limit_per_hour)
+            self.resets_in = data.get("pointsResetIn", self.resets_in)
+        self.entries.append(
+            (label, float(spent) if isinstance(spent, (int, float)) else -1.0, cached)
+        )
+
+    @property
+    def spent(self) -> float | None:
+        """Points this run cost, or ``None`` when nothing reported a reading."""
+        if self.first_reading is None or self.last_reading is None:
+            return None
+        return round(self.last_reading - self.first_reading, 4)
+
+    def to_json(self) -> dict:
+        return {
+            "limitPerHour": self.limit_per_hour,
+            "pointsSpentThisRun": self.spent,
+            "pointsSpentThisHour": self.last_reading,
+            "pointsResetIn": self.resets_in,
+            "queries": len([entry for entry in self.entries if not entry[2]]),
+            "cacheHits": len([entry for entry in self.entries if entry[2]]),
+            "note": (
+                "Points are read back from rateLimitData rather than predicted: "
+                "Warcraft Logs does not publish a cost formula. The run total is a "
+                "measurement; attributing it to individual queries can lag by one "
+                "response."
+            ),
+        }
+
+
 class WarcraftLogsClient:
-    def __init__(self, credentials: Credentials, timeout: float = 30.0) -> None:
+    def __init__(
+        self,
+        credentials: Credentials,
+        timeout: float = 30.0,
+        cache_dir: Path | None = None,
+    ) -> None:
         self._credentials = credentials
         self._timeout = timeout
         self._token: str | None = None
         self._client = httpx.Client(timeout=timeout)
+        #: Responses are cached on disk by (query, variables). Re-running a probe
+        #: against the same reports then costs nothing, which is what makes it
+        #: safe to iterate on the extraction without burning the hourly budget.
+        self._cache_dir = cache_dir
+        self.ledger = PointLedger()
 
     def __enter__(self) -> WarcraftLogsClient:
         return self
@@ -129,25 +305,163 @@ class WarcraftLogsClient:
         self._token = token
         return token
 
-    def query(self, query: str, variables: dict | None = None) -> dict:
+    def _cache_path(self, query: str, variables: dict) -> Path | None:
+        if not self._cache_dir:
+            return None
+        digest = hashlib.sha256(
+            json.dumps({"q": query, "v": variables}, sort_keys=True).encode("utf-8")
+        ).hexdigest()[:32]
+        return self._cache_dir / f"{digest}.json"
+
+    def query(self, query: str, variables: dict | None = None, label: str = "query") -> dict:
+        variables = variables or {}
+        cached_at = self._cache_path(query, variables)
+        if cached_at and cached_at.is_file():
+            payload = json.loads(cached_at.read_text(encoding="utf-8"))
+            self.ledger.record(label, payload, cached=True)
+            return payload
+
         token = self._authenticate()
         response = self._client.post(
             API_URL,
-            json={"query": query, "variables": variables or {}},
+            json={"query": query, "variables": variables},
             headers={"Authorization": f"Bearer {token}"},
         )
         if response.status_code == 429:
-            raise WarcraftLogsError("rate limited by Warcraft Logs (3600 points/hour)")
+            raise WarcraftLogsError(
+                "rate limited by Warcraft Logs: the hourly point budget is spent. "
+                "Re-run later; cached responses cost nothing."
+            )
         if response.status_code != 200:
             raise WarcraftLogsError(f"query failed ({response.status_code}): {response.text[:300]}")
         payload = response.json()
         if payload.get("errors"):
             raise WarcraftLogsError(f"GraphQL errors: {payload['errors']}")
-        return payload.get("data") or {}
+        data = payload.get("data") or {}
+        self.ledger.record(label, data)
+
+        if cached_at:
+            cached_at.parent.mkdir(parents=True, exist_ok=True)
+            cached_at.write_text(json.dumps(data), encoding="utf-8")
+        return data
+
+    def rate_limit(self) -> dict:
+        """The current point budget, as its own query.
+
+        Taken once before and once after a pass, this brackets the whole run: the
+        difference is exactly what the pass cost, with no attribution guesswork.
+        """
+        return (self.query(RATE_LIMIT_QUERY, label="rateLimit").get("rateLimitData")) or {}
+
+    def fight_structure(self, code: str, encounter_id: int, difficulty: int) -> dict:
+        """Fights, phase metadata and the report's actor/ability names, in one call."""
+        data = self.query(
+            FIGHT_STRUCTURE_QUERY,
+            {"code": code, "encounterId": encounter_id, "difficulty": difficulty},
+            label=f"fights:{code}",
+        )
+        return ((data.get("reportData") or {}).get("report")) or {}
+
+    def fight_events(
+        self,
+        code: str,
+        fight_id: int,
+        data_type: str,
+        hostility: str,
+        start_ms: float,
+        end_ms: float,
+        limit: int = 10000,
+        max_pages: int = 5,
+    ) -> tuple[list[dict], bool]:
+        """Every event of one type for one fight, and whether the fetch was cut short.
+
+        Returns ``(events, truncated)``. Truncation is reported rather than
+        silently accepted: a target-count timeline built from the first page of a
+        long fight would show adds arriving and never leaving.
+        """
+        collected: list[dict] = []
+        cursor = start_ms
+        for page in range(max_pages):
+            data = self.query(
+                EVENTS_QUERY,
+                {
+                    "code": code,
+                    "fightId": fight_id,
+                    "dataType": data_type,
+                    "hostility": hostility,
+                    "startTime": cursor,
+                    "endTime": end_ms,
+                    "limit": limit,
+                },
+                label=f"events:{data_type}:{code}:{fight_id}:p{page}",
+            )
+            events = ((data.get("reportData") or {}).get("report") or {}).get("events") or {}
+            rows = events.get("data")
+            if isinstance(rows, str):
+                rows = json.loads(rows)
+            collected.extend(row for row in (rows or []) if isinstance(row, dict))
+
+            nxt = events.get("nextPageTimestamp")
+            if not isinstance(nxt, (int, float)):
+                return collected, False
+            cursor = float(nxt)
+        return collected, True
+
+    def fight_table(
+        self,
+        code: str,
+        fight_id: int,
+        data_type: str = "DamageDone",
+        view_by: str = "Default",
+        hostility: str = "Friendlies",
+    ) -> dict | None:
+        data = self.query(
+            TABLE_QUERY,
+            {
+                "code": code,
+                "fightId": fight_id,
+                "dataType": data_type,
+                "viewBy": view_by,
+                "hostility": hostility,
+            },
+            label=f"table:{data_type}:{view_by}:{code}:{fight_id}",
+        )
+        table = ((data.get("reportData") or {}).get("report") or {}).get("table")
+        if isinstance(table, str):
+            table = json.loads(table)
+        return table if isinstance(table, dict) else None
 
     def zones(self) -> list[dict]:
-        data = self.query(ZONE_QUERY)
+        data = self.query(ZONE_QUERY, label="zones")
         return (data.get("worldData") or {}).get("zones") or []
+
+    def encounter_rankings(
+        self,
+        encounter_id: int,
+        difficulty: int = 5,
+        metric: str = "dps",
+        page: int = 1,
+    ) -> dict:
+        """Top parses on one encounter, unfiltered by class.
+
+        This is the route from "which boss" to "which logs to read": ranking
+        entries carry the report code and fight id of the parse they came from, so
+        no report search is needed. It also means the fights analysed are top-end
+        pulls, which is a bias worth stating -- see ``fightprobe``.
+        """
+        data = self.query(
+            RANKINGS_QUERY,
+            {
+                "encounterId": encounter_id,
+                "difficulty": difficulty,
+                "metric": metric,
+                "className": None,
+                "specName": None,
+                "page": page,
+            },
+            label=f"rankings:{encounter_id}",
+        )
+        return ((data.get("worldData") or {}).get("encounter")) or {}
 
     def spec_rankings(
         self,
@@ -173,9 +487,40 @@ class WarcraftLogsClient:
                 "specName": spec_name.replace(" ", ""),
                 "page": page,
             },
+            label=f"rankings:{encounter_id}:{class_name}:{spec_name}",
         )
         encounter = ((data.get("worldData") or {}).get("encounter")) or {}
         return encounter
+
+
+def top_report_fights(encounter: dict, limit: int) -> list[tuple[str, int]]:
+    """``(report code, fight id)`` for the highest parses, one fight per report.
+
+    One per report on purpose: two parses from the same pull describe the same
+    fight, so a sample of five entries could easily be a sample of one kill. The
+    order of ``rankings`` is the site's own ranking order, so taking the first
+    distinct reports takes the top guilds' pulls.
+    """
+    rankings = encounter.get("characterRankings")
+    if isinstance(rankings, str):
+        rankings = json.loads(rankings)
+    if not isinstance(rankings, dict):
+        return []
+
+    seen: set[str] = set()
+    found: list[tuple[str, int]] = []
+    for entry in rankings.get("rankings") or []:
+        if not isinstance(entry, dict):
+            continue
+        report = entry.get("report") or {}
+        code, fight_id = report.get("code"), report.get("fightID")
+        if not isinstance(code, str) or not isinstance(fight_id, int) or code in seen:
+            continue
+        seen.add(code)
+        found.append((code, fight_id))
+        if len(found) >= limit:
+            break
+    return found
 
 
 #: Below this many ranked parses a row is not published at all: the median of a
