@@ -564,6 +564,45 @@ The validation case is Lightblinded Vanguard: permanent 3 targets, one of the th
 a test, and reproduced from synthetic events in `test_fightextract.py`. If a probe run
 disagrees, fix the extraction — do not edit the profile.
 
+### Publishing it: `fights.json`, and how the timeline is pooled
+
+`fightdataset.py` turns (profiles, probe payload or None) into
+`web/public/data/<tier>/fights.json`, which `views/FightsView.tsx` draws. Decisions in it
+that are easy to get wrong a second time:
+
+- **The published timeline is one real pull, not an average of pulls.** A per-second
+  median across kills of different lengths yields a shape no pull had — a wave arriving at
+  88s in one log and 96s in another comes out as a two-step ramp — and past the shortest
+  fight it is drawn from fewer and fewer samples, which is the same failure already
+  documented above for `timeline_dmg`. The representative is the sampled fight whose
+  time-weighted mean target count is nearest the pooled median, length breaking ties; the
+  other pulls are carried whole beside it. The *aggregate* claims stay pooled as
+  `Spread`s. Do not "improve" this into a mean curve.
+- **The representative's own phase and aura windows are published with it**, because
+  those are the only ones that line up with the steps being drawn. The pooled ones are
+  spreads in the measured block. Two forms of the same thing, on purpose.
+- **A fight's own aura list has no source field**, so it carries player debuffs too;
+  `_drawable_auras` filters it to the ability ids `pooled_auras` kept. Without that the
+  chart draws Avenging Wrath as a boss mechanic — the same bug as before, one layer up.
+- **A missing fact publishes as `source: "default"` with the reason**, and
+  `profile.constantTargets` is `null` rather than `false` when nothing was asserted. The
+  default `targets` fact carries `constant: true` so a scenario built from it is
+  well-formed; publishing that as a finding would say the boss holds a constant target
+  count, which nobody has checked.
+- **"Probed and read nothing" is not "never probed".** The first publishes a `measured`
+  block with `fightsSampled: 0`, the second publishes `measured: null`, and the view says
+  something different for each.
+- `write_fights` keeps `generatedAt` when the rest of the document is unchanged, for the
+  same reason `_settle_provenance` does in the manifest.
+- **Nothing is wired into `wowdps build`.** The scenario is published, not run. Nine
+  bosses × 26 builds is a cost decision, and the profiles are one boss deep.
+
+The view's one deviation from the chart specs is deliberate and commented: the simulated
+line is 3.5px where lines are 2px everywhere else. Where the simulation and the pull agree
+the two lines land on identical pixels, and a 2px line under a 2px line reads as a series
+that failed to draw. Context pulls are also drawn *first*, so the two identity series sit
+on top of them.
+
 ### What is verified and what is not
 
 Verified: everything offline. The extraction against hand-written fixtures, the profile

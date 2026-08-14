@@ -1,6 +1,6 @@
 name: Fight probe
 
-# Exploratory, on demand, and it commits nothing.
+# Exploratory, on demand, and it commits nothing unless asked to.
 #
 # The Warcraft Logs credentials are repository secrets, so this is the only place
 # `wowdps fight-probe` can run at all -- a development checkout cannot reach the API.
@@ -8,12 +8,18 @@ name: Fight probe
 # (target counts over time, add lifetimes, phase boundaries, auras on enemies, raid
 # size) plus the raw response cache, uploaded as an artifact.
 #
-# Deliberately not a schedule and deliberately not a commit:
+# It can also publish `web/public/data/<tier>/fights.json`, the dataset the site's
+# Fights view draws -- opt in with the `publish` input. That file keeps the two halves
+# apart rather than merging them: what the profile asserts, what the logs measured, and
+# the difference, side by side. `fight_profiles.json` stays hand-edited; nothing here
+# writes to it.
 #
-# * The output is evidence for writing `pipeline/src/wowdps/data/fight_profiles.json`
-#   by hand, not a dataset. A fight profile mixes measured facts with facts the
-#   owner states from playing the encounter, and merging those is a judgement, not
-#   a merge.
+# Deliberately not a schedule:
+#
+# * The dump is evidence for writing `pipeline/src/wowdps/data/fight_profiles.json`
+#   by hand. A fight profile mixes measured facts with facts the owner states from
+#   playing the encounter, and merging those is a judgement, not a merge -- which is
+#   exactly why the published dataset shows both and resolves neither.
 # * The API meters by points per hour, not requests, and event queries over a whole
 #   Mythic pull are the expensive end of it. The command measures its own cost and
 #   stops at 80% of the hour's budget; a cron that silently ate the budget every
@@ -49,12 +55,16 @@ on:
         description: 'Use enemy casts instead of enemy damage-taken as the presence signal'
         type: boolean
         default: false
+      publish:
+        description: 'Also write and commit web/public/data/<tier>/fights.json, so the Fights view shows this run'
+        type: boolean
+        default: false
 
 concurrency:
   group: fight-probe
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   probe:
@@ -96,10 +106,14 @@ jobs:
           MAX_PAGES: ${{ inputs.max_pages }}
           POINT_CEILING: ${{ inputs.point_ceiling }}
           CHEAP: ${{ inputs.cheap }}
+          PUBLISH: ${{ inputs.publish }}
         run: |
           args=()
           for id in $ENCOUNTERS; do args+=(--encounter "$id"); done
           if [ "$CHEAP" = "true" ]; then args+=(--no-damage-events); fi
+          # --publish writes the dataset from the same payload the artifact carries,
+          # so the committed file and the evidence for it come out of one pass.
+          if [ "$PUBLISH" = "true" ]; then args+=(--publish web/public/data); fi
           # Exit code 2 means the point ceiling stopped the pass; whatever was
           # collected is still written, so it is a warning rather than a failure.
           set +e
@@ -130,6 +144,21 @@ jobs:
             cat fight-probe/fight-probe-*.txt || echo 'no output'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit the published dataset
+        if: steps.creds.outputs.enabled == 'true' && inputs.publish
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add web/public/data
+          if git diff --staged --quiet; then
+            echo "fight dataset unchanged"
+            exit 0
+          fi
+          git commit -m "data: refresh fight shapes for ${TIER} $(date -u +%Y-%m-%d)"
+          git push
+        env:
+          TIER: ${{ inputs.tier }}
 
       - uses: actions/upload-artifact@v4
         if: steps.creds.outputs.enabled == 'true'

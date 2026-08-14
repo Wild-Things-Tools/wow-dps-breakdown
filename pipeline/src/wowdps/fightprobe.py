@@ -55,7 +55,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import fightextract, fightprofile
+from . import fightdataset, fightextract, fightprofile
 from .warcraftlogs import (
     Credentials,
     WarcraftLogsClient,
@@ -483,6 +483,21 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
     print(text)
 
     log.info("wrote %s and %s", json_path, text_path)
+
+    if args.publish:
+        # The same builder `wowdps fights` uses, fed the payload that was just
+        # written. Publishing straight from the pass is what a CI run needs; the
+        # offline command exists so the artifact can be re-published, and the
+        # extraction argued with, without paying for the queries twice.
+        document = fightdataset.build_document(args.tier, profiles, payload)
+        published = fightdataset.write_fights(Path(args.publish) / args.tier, document)
+        log.info(
+            "published %s (%d encounters, %d measured)",
+            published,
+            document["coverage"]["encounters"],
+            document["coverage"]["measured"],
+        )
+
     _report_cost(ledger, len(observations))
     return 0 if not aborted else 2
 
@@ -596,4 +611,10 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         help="response cache directory (default <out>/cache); a warm cache costs no points",
     )
     parser.add_argument("--profiles-file", help="alternative fight profile file")
+    parser.add_argument(
+        "--publish",
+        help="also write <DIR>/<tier>/fights.json, the dataset the site's Fights view "
+        "draws; omit to leave the run as an artifact and publish later with "
+        "`wowdps fights --probe`",
+    )
     parser.set_defaults(func=cmd_fight_probe)

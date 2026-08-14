@@ -287,3 +287,251 @@ export interface GearDataset {
   coverage: { specs: number; specsAvailable: number }
   slots: GearSlot[]
 }
+
+// --------------------------------------------------------------------------------
+// Fight shapes per boss (<tier>/fights.json)
+// --------------------------------------------------------------------------------
+
+/** A pooled number with the range it was pooled from. Never a bare median. */
+export interface FightSpread {
+  median: number
+  low: number
+  high: number
+  /** How many fights it was pooled from. */
+  n: number
+}
+
+/**
+ * One fact about an encounter, and where it came from.
+ *
+ * `source` is the whole point: `hand` is a person who plays the fight (first-class
+ * here — the API cannot tell you what an aura does), `logs` is a probe measurement,
+ * and `default` means nothing is known and the value is the project's fallback.
+ * A `default` fact must never be rendered as a finding.
+ */
+export interface FightFact {
+  key: string
+  label: string
+  source: 'hand' | 'logs' | 'default'
+  sourceLabel: string
+  summary: string
+  detail: string
+  statedBy: string | null
+  observedAt: string | null
+  sample: number | null
+  reports: string[]
+  value: unknown
+}
+
+export interface FightAddWave {
+  name: string
+  count: number
+  first: number
+  duration: number
+  /** Seconds between waves; null means it happens once. */
+  cadence: number | null
+}
+
+export interface FightAmplification {
+  ability: string
+  abilityId: number | null
+  multiplier: number
+  first: number
+  duration: number
+  /** "priority" | "add" | "unknown". Only "priority" has a simc equivalent. */
+  target: string
+  magnitudeSource: string
+  /** Always false: no field in the Warcraft Logs API says what an aura does. */
+  magnitudeMeasurable: boolean
+  /** False when simc has nothing to express this with. */
+  representable: boolean
+}
+
+export interface FightProfileBlock {
+  baselineTargets: number
+  /** Null when no target count was asserted — not false. */
+  constantTargets: boolean | null
+  fightLengthSeconds: number | null
+  raidSize: number | null
+  addWaves: FightAddWave[]
+  amplifications: FightAmplification[]
+  phases: Array<Record<string, unknown>>
+}
+
+/** The simc scenario a profile produces, and what did not survive the trip. */
+export interface FightScenario {
+  encounterId: number
+  name: string
+  targets: number
+  maxTime: number
+  options: string[]
+  unrepresented: string[]
+  /** Fact keys whose value is somebody's word rather than a measurement. */
+  asserted: string[]
+  /** Always null: naming a fight style makes simc clear the raid events. */
+  fightStyle: string | null
+  /** Target count over time, as [second, count] pairs. */
+  steps: Array<[number, number]>
+}
+
+export interface MeasuredAdd {
+  key: string | number
+  name: string
+  gameId: number | null
+  seenInFights: number
+  instances: FightSpread | null
+  firstSeen: FightSpread | null
+  lifetime: FightSpread | null
+  cadence: FightSpread | null
+  damageShare: FightSpread | null
+  presentAtPull: boolean
+}
+
+export interface MeasuredAura {
+  abilityId: number
+  ability: string
+  seenInFights: number
+  applications: number
+  start: FightSpread | null
+  duration: FightSpread | null
+  distinctTargets: number
+  anyTruncated: boolean
+}
+
+export interface MeasuredPhase {
+  id: number
+  name: string
+  isIntermission: boolean
+  start: FightSpread | null
+  duration: FightSpread | null
+  seenInFights: number
+}
+
+export interface FightPhaseWindow {
+  id: number
+  name: string
+  isIntermission: boolean
+  start: number
+  duration: number
+}
+
+export interface FightAuraWindow {
+  abilityId: number
+  ability: string
+  start: number
+  duration: number
+  /** No measured end: the window is a floor, not a value. */
+  truncated: boolean
+  instance: number | null
+}
+
+/** One sampled pull, published whole. Never an average of pulls. */
+export interface RepresentativeFight {
+  reportCode: string
+  fightId: number
+  kill: boolean
+  durationSeconds: number
+  raidSize: number | null
+  steps: Array<[number, number]>
+  mean: number
+  peak: number
+  peakShare: number
+  constant: boolean
+  /** Every enemy that took a hit, including ones under the significance floor. */
+  allEnemySteps: Array<[number, number]>
+  allEnemyPeak: number
+  phases: FightPhaseWindow[]
+  auras: FightAuraWindow[]
+  truncated: boolean
+  warnings: string[]
+}
+
+export interface FightTimeline {
+  /** "representative" — one real pull, never a per-second average. */
+  pooling: string
+  why: string
+  chosenBecause: string
+  representative: RepresentativeFight
+  others: Array<{
+    reportCode: string
+    fightId: number
+    durationSeconds: number
+    kill: boolean
+    steps: Array<[number, number]>
+  }>
+}
+
+export interface MeasuredFight {
+  fightsSampled: number
+  reports: string[]
+  durationSeconds?: FightSpread | null
+  raidSize?: FightSpread | null
+  playersListed?: FightSpread | null
+  meanTargets?: FightSpread | null
+  peakTargets?: FightSpread | null
+  peakTargetShare?: FightSpread | null
+  activeTimeFraction?: FightSpread | null
+  adds?: MeasuredAdd[]
+  auras?: MeasuredAura[]
+  phases?: MeasuredPhase[]
+  truncated?: boolean
+  /** Everything limiting how far these numbers can be read. Not a footnote. */
+  caveats: string[]
+  timeline: FightTimeline | null
+}
+
+/**
+ * One row of asserted against measured.
+ *
+ * `delta` is arithmetic, never a verdict — there is deliberately no "agrees" flag.
+ * A profile saying 300s against a measured 288s is not wrong; a boss measured at
+ * two targets where the owner plays three means the extraction is probably broken.
+ * Both need a person.
+ */
+export interface FightComparisonRow {
+  fact: string
+  profile: number | string | null
+  measured: number | string | null
+  provenance: string
+  note: string
+  delta: number | null
+}
+
+export interface FightEncounter {
+  encounterId: number
+  name: string
+  difficulty: number
+  /** True when anything at all has been asserted or measured about this boss. */
+  hasFacts: boolean
+  facts: FightFact[]
+  profile: FightProfileBlock
+  scenario: FightScenario
+  /** Null when no probe has ever looked. Present with 0 fights when one looked and found nothing. */
+  measured: MeasuredFight | null
+  comparison: FightComparisonRow[]
+}
+
+export interface FightMeasurementRun {
+  generatedAt: string | null
+  difficulty: number | null
+  metric: string | null
+  reportsPerEncounter: number | null
+  /** Page 1 is the world's best pulls, which are not shaped like a typical kill. */
+  rankingsPage: number | null
+  eventStreams: string[]
+  significantDamageShare: number | null
+  samplingBias: string | null
+  abortedBecause: string | null
+  cost: Record<string, unknown> | null
+}
+
+export interface FightsDataset {
+  schemaVersion: number
+  generatedAt: string
+  tier: string
+  note: string
+  /** Null when the file was published from the profiles alone, with no probe run. */
+  measurement: FightMeasurementRun | null
+  coverage: { encounters: number; asserted: number; measured: number }
+  encounters: FightEncounter[]
+}

@@ -7,7 +7,16 @@ import logging
 import sys
 from pathlib import Path
 
-from . import dataset, equipment, fightprofile, gearsweep, profiles, scenarios, simc_runner
+from . import (
+    dataset,
+    equipment,
+    fightdataset,
+    fightprofile,
+    gearsweep,
+    profiles,
+    scenarios,
+    simc_runner,
+)
 from .scenarios import SimSettings
 
 DEFAULT_OUT = Path("web/public/data")
@@ -355,6 +364,40 @@ def cmd_fight_profiles(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_fights(args: argparse.Namespace) -> int:
+    """Publish ``<tier>/fights.json``: what each boss is asserted and measured to be.
+
+    Offline, and deliberately usable with no probe run at all. Without ``--probe``
+    the file carries the assertions, the simc scenario each one produces, and a null
+    measurement for every encounter -- which is the true state of a checkout that
+    has never reached Warcraft Logs, and the state that makes the gaps visible on
+    the site. With ``--probe`` pointed at a ``fight-probe-<tier>.json`` downloaded
+    from CI, the same command fills in the measured half without a single request.
+    """
+    tier_profiles = fightprofile.load_profiles(
+        args.tier, Path(args.profiles_file) if args.profiles_file else None
+    )
+    probe = fightdataset.load_probe(Path(args.probe)) if args.probe else None
+    if probe and probe.get("tier") and probe["tier"] != args.tier:
+        logging.warning(
+            "the probe payload is for tier %s, publishing it under %s",
+            probe["tier"],
+            args.tier,
+        )
+
+    document = fightdataset.build_document(args.tier, tier_profiles, probe)
+    path = fightdataset.write_fights(Path(args.out) / args.tier, document)
+    coverage = document["coverage"]
+    logging.info(
+        "wrote %s (%d encounters, %d with asserted facts, %d measured from logs)",
+        path,
+        coverage["encounters"],
+        coverage["asserted"],
+        coverage["measured"],
+    )
+    return 0
+
+
 def cmd_fight_probe(args: argparse.Namespace) -> int:
     from . import fightprobe
 
@@ -502,6 +545,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_fight_profiles.add_argument("--tier", default="MID2")
     p_fight_profiles.add_argument("--profiles-file", help="alternative fight profile file")
     p_fight_profiles.set_defaults(func=cmd_fight_profiles)
+
+    p_fights = sub.add_parser(
+        "fights",
+        help="publish <tier>/fights.json from the fight profiles and an optional probe run",
+    )
+    p_fights.add_argument("--tier", default="MID2")
+    p_fights.add_argument("--out", default=str(DEFAULT_OUT), help="dataset output directory")
+    p_fights.add_argument(
+        "--probe",
+        help="a fight-probe-<tier>.json to fill in the measured half; omit to publish "
+        "the assertions alone",
+    )
+    p_fights.add_argument("--profiles-file", help="alternative fight profile file")
+    p_fights.set_defaults(func=cmd_fights)
 
     p_fight_probe = sub.add_parser(
         "fight-probe",

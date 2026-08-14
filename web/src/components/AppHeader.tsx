@@ -2,7 +2,15 @@ import { formatDate, relativeAge } from '../lib/format'
 import type { Manifest, TierIndex } from '../lib/types'
 import { Button, Select, cx } from './ui'
 
-export type ViewId = 'overview' | 'scaling' | 'funnel' | 'builds' | 'gear' | 'timing' | 'spec'
+export type ViewId =
+  | 'overview'
+  | 'scaling'
+  | 'funnel'
+  | 'builds'
+  | 'gear'
+  | 'fights'
+  | 'timing'
+  | 'spec'
 
 const VIEWS: Array<{ id: ViewId; label: string; blurb: string }> = [
   { id: 'overview', label: 'Overview', blurb: 'Rank every spec at one target count' },
@@ -13,6 +21,11 @@ const VIEWS: Array<{ id: ViewId; label: string; blurb: string }> = [
     id: 'gear',
     label: 'Loot',
     blurb: 'Which raid drops beat the Mythic+ trinkets a build already wears',
+  },
+  {
+    id: 'fights',
+    label: 'Fights',
+    blurb: 'What each boss actually looks like, and what the sim would run for it',
   },
   { id: 'timing', label: 'Timing', blurb: 'When during a fight the damage happens' },
   { id: 'spec', label: 'Spec detail', blurb: 'Ability breakdown for one build' },

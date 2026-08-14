@@ -2,11 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AppHeader, type ViewId } from './components/AppHeader'
 import { SpecPicker } from './components/SpecPicker'
 import { ErrorState, Note, Panel, Spinner } from './components/ui'
-import { loadGear, loadManifest, loadSpecs, loadTierIndex } from './lib/data'
+import { loadFights, loadGear, loadManifest, loadSpecs, loadTierIndex } from './lib/data'
 import { describeConvergence, samplingError } from './lib/format'
 import { MAX_SERIES, SeriesPalette } from './lib/palette'
-import type { GearDataset, Manifest, SpecDetail, TierIndex } from './lib/types'
+import type { FightsDataset, GearDataset, Manifest, SpecDetail, TierIndex } from './lib/types'
 import { BuildsView, groupBySpec } from './views/BuildsView'
+import { FightsView } from './views/FightsView'
 import { FunnelView } from './views/FunnelView'
 import { GearView, gearSpecIds } from './views/GearView'
 import { OverviewView } from './views/OverviewView'
@@ -14,7 +15,16 @@ import { ScalingView } from './views/ScalingView'
 import { SpecDetailView } from './views/SpecDetailView'
 import { TimingView } from './views/TimingView'
 
-const VIEWS: ViewId[] = ['overview', 'scaling', 'funnel', 'builds', 'gear', 'timing', 'spec']
+const VIEWS: ViewId[] = [
+  'overview',
+  'scaling',
+  'funnel',
+  'builds',
+  'gear',
+  'fights',
+  'timing',
+  'spec',
+]
 type Theme = 'light' | 'dark' | 'system'
 
 /** URL state, so a configured comparison is a link somebody can share. */
@@ -27,6 +37,8 @@ interface UrlState {
   focus: string | null
   /** Builds view: which spec's builds are being compared. */
   buildSpec: string | null
+  /** Fights view: which encounter is open. */
+  boss: number | null
 }
 
 function readUrl(): UrlState {
@@ -40,6 +52,9 @@ function readUrl(): UrlState {
     selected: selected ? selected.split(',').filter(Boolean).slice(0, MAX_SERIES) : [],
     focus: params.get('spec'),
     buildSpec: params.get('buildSpec'),
+    boss: Number.isFinite(Number(params.get('boss'))) && params.get('boss')
+      ? Number(params.get('boss'))
+      : null,
   }
 }
 
@@ -51,6 +66,7 @@ function writeUrl(state: UrlState): void {
   if (state.selected.length) params.set('specs', state.selected.join(','))
   if (state.focus) params.set('spec', state.focus)
   if (state.buildSpec) params.set('buildSpec', state.buildSpec)
+  if (state.boss) params.set('boss', String(state.boss))
   const query = params.toString()
   const next = query ? `${window.location.pathname}?${query}` : window.location.pathname
   window.history.replaceState(null, '', next)
@@ -76,8 +92,10 @@ export default function App() {
   const [selected, setSelected] = useState<string[]>(initial.selected)
   const [focus, setFocus] = useState<string | null>(initial.focus)
   const [buildSpec, setBuildSpec] = useState<string | null>(initial.buildSpec)
+  const [boss, setBoss] = useState<number | null>(initial.boss)
 
   const [gear, setGear] = useState<GearDataset | null>(null)
+  const [fights, setFights] = useState<FightsDataset | null>(null)
   const [details, setDetails] = useState<SpecDetail[]>([])
   const [detailsLoading, setDetailsLoading] = useState(false)
   const [theme, setTheme] = useState<Theme>(readTheme)
@@ -130,6 +148,20 @@ export default function App() {
     setGear(null)
     loadGear(tier).then((data) => {
       if (!cancelled) setGear(data)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [tier, reloadToken])
+
+  // Optional per tier in exactly the way the gear sweep is: a tier can have a spec
+  // dataset with no fight shapes published for it, and the view says so.
+  useEffect(() => {
+    if (!tier) return
+    let cancelled = false
+    setFights(null)
+    loadFights(tier).then((data) => {
+      if (!cancelled) setFights(data)
     })
     return () => {
       cancelled = true
@@ -254,8 +286,8 @@ export default function App() {
   }, [manifest])
 
   useEffect(() => {
-    writeUrl({ view, tier, scenario: scenario?.id ?? null, selected, focus, buildSpec })
-  }, [view, tier, scenario, selected, focus, buildSpec])
+    writeUrl({ view, tier, scenario: scenario?.id ?? null, selected, focus, buildSpec, boss })
+  }, [view, tier, scenario, selected, focus, buildSpec, boss])
 
   useEffect(() => {
     if (theme === 'system') delete document.documentElement.dataset.theme
@@ -406,6 +438,10 @@ export default function App() {
 
       {view === 'gear' ? (
         <GearView gear={gear} visible={gearVisible} colorOf={colorOf} />
+      ) : null}
+
+      {view === 'fights' ? (
+        <FightsView fights={fights} encounterId={boss} onEncounterChange={setBoss} />
       ) : null}
 
       {view === 'timing' && !detailsLoading ? (
