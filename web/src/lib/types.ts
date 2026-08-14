@@ -163,10 +163,69 @@ export interface LogsComparison {
   encounterName: string
   sampleSize: number
   median: number
-  p95: number
+  /** Absent below twenty ranked parses: an extrapolation from the single best one. */
+  p95?: number
   max: number
   simDps: number
   logsToSimRatio: number
+}
+
+/**
+ * One boss, over every build that had enough ranked parses on it.
+ *
+ * `rankAgreement` is a rank correlation between the simulated ordering of those
+ * builds and the logged one, so +1 is "the sim names the same winners", 0 is "it
+ * says nothing" and -1 is "it names them backwards". Null below the sample floor.
+ */
+export interface LogsBossReading {
+  encounterId: number
+  encounterName: string
+  builds: number
+  median: number
+  min: number
+  max: number
+  rankAgreement: number | null
+}
+
+/**
+ * One build, across the bosses it was logged on.
+ *
+ * `vsField` is the build's ratio divided by the median ratio of every build on the
+ * same boss, so it says whether real raids cost this build more or less than they
+ * cost its peers on the same fight. That is the part of the disagreement that is
+ * about the build rather than about the encounter.
+ */
+export interface LogsBuildReading {
+  specId: string
+  displayName: string
+  bosses: number
+  median: number
+  vsField: number | null
+  vsFieldMin: number | null
+  vsFieldMax: number | null
+  /** Median change in rank from the simulated ordering to the logged one. */
+  rankMove: number | null
+  sampleSize: number
+}
+
+export interface LogsAnalysis {
+  builds: number
+  bosses: LogsBossReading[]
+  perBuild: LogsBuildReading[]
+  /**
+   * Share of the spread in the ratio that goes away once you know which boss (or
+   * which build) a row came from. Not eta-squared: medians are subtracted, not
+   * means. The point is that the two are computed identically and so comparable.
+   */
+  varianceExplained: { boss: number | null; build: number | null }
+  /** Rank agreement with the bosses pooled — low by construction, published as the
+   * number somebody would reach for first. */
+  pooledRankAgreement: number | null
+  /** Correlation between a row's parse count and its `vsField`. Near zero means the
+   * build ordering is not an artefact of how many people log the build. */
+  sampleSizeBias: number | null
+  minRankSample: number
+  minBossSample: number
 }
 
 export interface LogsVerification {
@@ -175,6 +234,10 @@ export interface LogsVerification {
   difficulty: number
   note: string
   comparisons: LogsComparison[]
+  /** Absent on files written before the readings existed. */
+  analysis?: LogsAnalysis | null
+  minSampleSize?: number
+  withheldForSmallSample?: number
 }
 
 // --------------------------------------------------------------------------------

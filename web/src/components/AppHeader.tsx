@@ -9,6 +9,7 @@ export type ViewId =
   | 'builds'
   | 'gear'
   | 'fights'
+  | 'logs'
   | 'timing'
   | 'spec'
 
@@ -26,6 +27,11 @@ const VIEWS: Array<{ id: ViewId; label: string; blurb: string }> = [
     id: 'fights',
     label: 'Fights',
     blurb: 'What each boss actually looks like, and what the sim would run for it',
+  },
+  {
+    id: 'logs',
+    label: 'Against logs',
+    blurb: 'What the gap to real raids is made of — the boss, or the build',
   },
   { id: 'timing', label: 'Timing', blurb: 'When during a fight the damage happens' },
   { id: 'spec', label: 'Spec detail', blurb: 'Ability breakdown for one build' },

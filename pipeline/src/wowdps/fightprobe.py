@@ -190,9 +190,7 @@ def _probe_fight(
         for a in actors
         if isinstance(a.get("id"), int) and isinstance(a.get("gameID"), int)
     }
-    player_ids = frozenset(
-        a["id"] for a in actors if isinstance(a.get("id"), int) and a.get("type") == "Player"
-    )
+    friendly_ids = fightextract.friendly_source_ids(actors)
     ability_names = {
         a["gameID"]: a.get("name") or str(a["gameID"])
         for a in (master.get("abilities") or [])
@@ -239,7 +237,7 @@ def _probe_fight(
         damage_table=damage_table,
         player_table=player_table,
         truncated=truncated,
-        player_ids=player_ids,
+        friendly_ids=friendly_ids,
         significant_share=settings.significant_share,
     )
 
@@ -339,7 +337,10 @@ def render(observation: fightextract.EncounterObservation, profile) -> list[str]
         add(
             f"  {aura['ability'][:34]:<34} id={aura['abilityId']:<8} "
             f"start {_med(aura['start'])}s  lasts {_med(aura['duration'])}s  "
-            f"targets={aura['distinctTargets']}  fights={aura['seenInFights']}"
+            f"targets={aura['distinctTargets']}  fights={aura['seenInFights']}  "
+            # Only the sourced windows can be tested against the raid's actor ids;
+            # a column of 0/n means this list is filtered on its target test alone.
+            f"sourced={aura.get('sourced', 0)}/{aura['applications']}"
             + ("  [some windows truncated]" if aura["anyTruncated"] else "")
         )
         # The answer to "which of the three does the amplification sit on",

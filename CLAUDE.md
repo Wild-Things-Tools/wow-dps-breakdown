@@ -815,6 +815,51 @@ Two things nearly threw it away, both fixed, both worth not reintroducing:
   hides its switcher when only one tier exists; the Fights view instead states the
   season as a label, because there it is the subject rather than context.
 
+## The logs cross-check: what 192 comparisons are actually for
+
+The user's objection when this data first landed was right: "einfach nur zeigen, dass
+X drüber und Y drunter sind, bringt uns vermutlich nicht viel". Every row of
+`logs-verification.json` is below 1.0 by construction -- a Patchwerk sim is a
+stationary target with no mechanics -- so the *level* is the definition of the two
+things being compared, not a measurement of either.
+
+What varies between rows is the finding, and `logsanalysis.py` derives three of them
+from the rows already in the file. Measured on MID2, 192 comparisons, 26 builds,
+9 bosses:
+
+| Reading | Number | What it says |
+|---|---|---|
+| Boss share of the variance | **50%** | Half the disagreement goes away once you know the encounter |
+| Build share | **34%** | The same arithmetic grouping by build instead |
+| `vsField` span | **0.76-1.25** | After the boss is divided out, Mages keep the most and Frost DK the least |
+| Rank agreement per boss | **+0.49 to -0.56** | Chimaerus the sim gets broadly right, Vaelgor & Ezzorak close to backwards |
+| Pooled rank agreement | **-0.01** | The number somebody computes first, and it hides both of the above |
+
+So the honest headline is: **a single-target ranking predicts almost nothing about who
+tops the meters on a specific boss**, and the biggest single factor in the sim/logs gap
+is which boss, not which spec. That is also the strongest argument the repository has
+for the per-boss scenarios on the Fights view.
+
+Things not to redo:
+
+- **`vsField` is the ratio divided by the median ratio on the same boss**, not a
+  regression residual. Medians are subtracted rather than means throughout, so
+  `varianceExplained` is *not* eta-squared and is not reported as one. What makes the
+  boss and build figures comparable is that they are the same arithmetic.
+- **The obvious artefact was checked and published either way.** Warcraft Logs pages
+  are ranked, so a build few people log is represented only by its very best players.
+  If that drove `vsField`, sample size and `vsField` would move together. Measured:
+  **r = 0.10**, about 1% of the variance. Weak enough that the build ordering is not a
+  popularity ranking -- but the number is published, not asserted.
+- **`wowdps logs-analyse` needs no credentials.** `verify` spends Warcraft Logs points
+  and only runs in CI; the analysis is a pure function over rows already committed, so
+  changing how a reading is derived does not require re-downloading the same rankings.
+  It writes the keys in `cmd_verify`'s order so a later CI run does not reorder the
+  file, and writes nothing at all when the analysis is unchanged.
+- Floors: `MIN_RANK_SAMPLE = 8` builds before a boss gets a correlation,
+  `MIN_BOSS_SAMPLE = 3` bosses before a build gets `vsField` *or* `rankMove`. Both
+  publish `null` rather than a thin number.
+
 ## Fight patterns per boss — what Warcraft Logs can and cannot tell you
 
 The logs cross-check compares Patchwerk single target against nine different encounters,
@@ -870,6 +915,13 @@ output.
 
 ### Two things the first real probe run exposed
 
+- **Friendly means players *and everything they own*.** `masterData.actors` types a
+  hunter's pet, a mage's Mirror Image and a boss's summoned add all as `Pet`, so the
+  type separates nothing -- what separates them is whose `petOwner` they carry.
+  Filtering on `type == "Player"` alone published Mirror Image's Frostbolt, Blood
+  Plague and Mind Sear as things Lightblinded Vanguard does to its own adds.
+  `friendly_source_ids` follows ownership transitively and cycle-safely; do not
+  shorten it back to a type test.
 - **`masterData.actors(type: "NPC")` looks like an obvious saving and is a bug.** The
   events we want are on enemies, so filtering to NPCs reads as free — but then the payload
   carries no player ids, and there is no way left to tell an aura the *encounter* puts on

@@ -71,7 +71,7 @@ def vanguard_fight(code: str, duration: float, amp_end: float):
         phase_metadata=[],
         actor_names={10: "Zealot", 11: "Champion", 12: "Seer"},
         ability_names={555001: "Blinding Fervor", 111111: "Avenging Wrath"},
-        player_ids=frozenset({1}),
+        friendly_ids=frozenset({1}),
     )
 
 
