@@ -124,6 +124,11 @@ source column from any item database that reads `JournalEncounterItem` (Wowhead,
 Raidbots, a local DB2 dump). It slots into the pool file's `source` field with no
 code change. `wowdps gear-candidates` prints every other column already.
 
+**That dependency now exists**, and it is Blizzard's own: `wowdps loot-sources`
+reads the drop source out of the Game Data API. See "Loot sources, derived rather
+than asserted" below. Nothing above changes — simc still ships no source, so do not
+go looking there — but the pool file no longer has to be believed on its own.
+
 ### The item level ladder is measurable, the track names are not
 
 Equipping one trinket under each bonus id of the Midnight upgrade family (item_bonus
@@ -202,6 +207,119 @@ dataset carries its own `coverage` count. A sweep that is interrupted at spec 9 
 leaves a dataset that is smaller *and* honest about being smaller. The view prints
 "covers N of M builds in the tier" from that field -- never from the array length,
 which would be the same number with none of the meaning.
+
+## Loot sources, derived rather than asserted
+
+`blizzard.py` (the client), `lootsources.py` (derivation, merge, `wowdps
+loot-sources`), `.github/workflows/loot-sources.yml`. Credentials are
+`BLIZZARD_CLIENT_ID` / `BLIZZARD_CLIENT_SECRET`, free from develop.battle.net,
+client-credentials OAuth against `https://oauth.battle.net/token`.
+
+### Endpoints and namespaces, and why each one
+
+Host is `https://{region}.api.blizzard.com`. Namespace is **required** and is per
+endpoint family — the wrong one is a 404, which is at least loud.
+
+| What | Endpoint | Namespace |
+|---|---|---|
+| expansions, and the raid/dungeon split | `journal-expansion/index`, `journal-expansion/{id}` | `static-{region}` |
+| the items an encounter drops | `journal-encounter/index`, `journal-encounter/{id}` | `static-{region}` |
+| a scoped instance's encounter list | `journal-instance/{id}` | `static-{region}` |
+| the current season | `mythic-keystone/season/index` → `current_season` | `dynamic-{region}` |
+| this season's dungeons | `connected-realm/{id}/mythic-leaderboard/index` → `current_leaderboards` | `dynamic-{region}` |
+| keystone dungeon → journal instance | `mythic-keystone/dungeon/{id}` → `dungeon.key` | `dynamic-{region}` |
+
+Four things in that table cost time to establish:
+
+- **`journal-expansion/index` returns `tiers`, not `expansions`.** And one
+  expansion payload classifies every instance it owns as a raid or a dungeon, so
+  fifteen requests do what a thousand `journal-instance` fetches would.
+- **`mythic-keystone/season/{id}` does not list dungeons.** It has periods and a
+  usually-null `season_name`, nothing else. The rotation comes from
+  `current_leaderboards`, which is an *interpretation* — a leaderboard exists for
+  exactly the dungeons the season runs — and the output says so. It is per
+  connected realm while the rotation is region-wide, so the lowest realm id is used
+  and the answer is the same for all of them.
+- **Keystone dungeon ids are challenge-mode ids and share nothing with journal
+  instance ids.** `mythic-keystone/dungeon/{id}` carries the join in
+  `dungeon.key.href`, and the href is read rather than the sibling `id` because only
+  the href says which kind of id it is.
+- **`items[].id` is the journal entry, `items[].item.id` is the item.** Reading the
+  outer one builds a table that joins to nothing.
+
+Locale defaults to `en_US` and that is not cosmetic: names are the join key against
+simc's English item table and against a pool file written in English.
+
+### Derivation never overwrites assertion
+
+Same discipline as `fight_profiles.json`. Each item gains a `derived` block beside
+its hand-written `source`; `source` is never touched; a disagreement is printed,
+written into the run report, and left standing. If the API says a trinket the
+structural inference called Mythic+ is a raid drop, that is a finding for a human,
+not a silent reshaping of the pool the whole published comparison rests on. Same for
+the rotation: `dungeonRotationDerived` sits beside `dungeonRotation` and the two are
+diffed, never merged.
+
+`derived.inRotation` is the fact that replaces the hand-typed rotation entirely — it
+is per item, and it is `None` (not `False`) when no rotation could be derived,
+because "unknown" and "no" are different answers.
+
+`lootSources.derivedAt` is settled the same way `generatedAt` is in `dataset.py`: if
+nothing but the timestamp changed, the old timestamp is kept, so a quiet run leaves
+nothing to commit and any diff means the game moved. Do not remove that.
+
+### Cost
+
+Blizzard publishes its limits — **36,000 requests an hour, 100 a second** — so this
+is arithmetic rather than the measurement the Warcraft Logs point budget needs. The
+client paces at 20/s and counts what it actually sent.
+
+- Full walk (the default, and the season-proof one): ~15 expansion requests + one
+  encounter index + one request per encounter in the game, on the order of **1,500
+  requests**, about 4% of the hourly budget and a couple of minutes at 20/s.
+- `--expansion NAME`: that expansion's instances plus this season's rotation
+  instances, on the order of **150 requests**. Cheaper and narrower — an item
+  outside the scope comes back *unresolved*, never misplaced.
+- Every response is cached on disk by (path, params). The workflow uploads the cache;
+  download it and iterate offline for nothing.
+
+### What a new season needs from a human
+
+Ideally nothing. The current season, the rotation, and the raid/dungeon split are all
+resolved at run time, and the default walk covers every encounter in the game, so a
+new raid in a new expansion needs no configuration. What a human still does:
+
+1. **Run the workflow.** It is `workflow_dispatch` only, on purpose: it commits, and
+   a disagreement between the API and the pool file wants somebody reading it.
+2. **Add the new tier's pool entry** (`gear_pools.json` gains a `MID3` block with its
+   item ids and item levels) — `loot-sources` enriches a pool, it does not invent one.
+   `wowdps gear-candidates` still prints the enumeration.
+3. **Resolve any disagreement** the run reports, by editing `source` or leaving it and
+   noting why.
+4. **Read the tier↔season line.** `MID2` means "Midnight Season 2" to this project
+   and nothing to Blizzard, whose season is an integer and usually unnamed. The
+   association is asserted by `--tier` and the report says so rather than pretending
+   otherwise.
+
+Also worth knowing: at a season boundary the leaderboards for the new season do not
+exist until it starts, so a run in the gap reports an empty rotation and says which
+kind of empty it is.
+
+### What is unverified
+
+**Every field name and every response shape, against the live service.** There are no
+credentials in this environment, and `develop.battle.net` is blocked by the egress
+proxy, so the endpoints, namespaces and payload shapes were established from the
+published schema as reflected in third-party clients and typed mirrors — not from a
+real response. The offline tests (`test_blizzard.py`, `test_lootsources.py`) pin the
+extraction and the merge against hand-written payloads. **The first workflow run is a
+schema check as much as a derivation** — the same position `fight-probe.yml` was in,
+and that one needed no field renamed, which is encouraging and not evidence.
+
+The likeliest things to need fixing: the `raids`/`dungeons` key names on
+`journal-expansion`, whether `journal-encounter.category.type` really carries
+`RAID`/`DUNGEON` (it is only the fallback), and whether `current_leaderboards`
+entries carry the keystone dungeon id in `id`.
 
 ## The one thing not to break
 

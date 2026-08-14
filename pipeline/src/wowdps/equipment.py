@@ -165,6 +165,42 @@ class ItemLevel:
 
 
 @dataclass(frozen=True)
+class DerivedSource:
+    """Where one item drops, according to Blizzard's Game Data API.
+
+    Written by ``wowdps loot-sources`` and never by hand. It sits *beside* the
+    asserted ``source`` rather than replacing it, because the two disagreeing is a
+    finding: the structural inference that produced ``source`` is wrong in both
+    directions, and which rows it got wrong is exactly what nobody could check
+    before. ``lootsources.py`` prints the disagreements; a human resolves them.
+    """
+
+    #: "raid" | "mythicplus", from the journal's own raid/dungeon split. ``None``
+    #: when the item drops in both, which is a fact rather than a failure.
+    source: str | None
+    encounter: str
+    encounter_id: int | None
+    instance: str
+    instance_id: int | None
+    expansion: str | None
+    #: Whether the instance is one this Mythic+ season runs. ``None`` means no
+    #: rotation was derived, which is not the same as "no".
+    in_rotation: bool | None
+
+    @classmethod
+    def from_json(cls, raw: dict) -> DerivedSource:
+        return cls(
+            source=raw.get("source"),
+            encounter=raw.get("encounter", ""),
+            encounter_id=raw.get("encounterId"),
+            instance=raw.get("instance", ""),
+            instance_id=raw.get("instanceId"),
+            expansion=raw.get("expansion"),
+            in_rotation=raw.get("inRotation"),
+        )
+
+
+@dataclass(frozen=True)
 class GearItem:
     """One candidate item."""
 
@@ -176,13 +212,26 @@ class GearItem:
     primary_stat: str | None
     #: The secondary the item allocates, if any. Display only.
     secondary_stat: str | None
-    #: "raid" | "mythicplus". Asserted, not derived -- see the module docstring.
+    #: "raid" | "mythicplus". Asserted by hand -- see the module docstring. Compare
+    #: against ``derived`` rather than replacing one with the other.
     source: str
     base_ilevel: int
     base_quality: int
     #: Extra bonus ids to pass alongside ``ilevel``. Empty for trinkets, which need
     #: none; rings and necks will need their socket bonuses here.
     bonus_ids: tuple[int, ...] = ()
+    #: What the Game Data API says, when a ``loot-sources`` pass has run.
+    derived: DerivedSource | None = None
+
+    @property
+    def source_disagrees(self) -> bool:
+        """Does the API contradict the hand-written source?
+
+        Only ever *reported*. The sweep keeps using ``source``, because a pool that
+        silently changed shape between two runs would move every number in the
+        published comparison with no note saying why.
+        """
+        return bool(self.derived and self.derived.source and self.derived.source != self.source)
 
     def usable_by(self, primary: str) -> bool:
         if self.primary_stat is None:
@@ -245,15 +294,37 @@ class GearPools:
 
     tier: str
     slots: dict[str, SlotPool] = field(default_factory=dict)
+    #: The dungeons this Mythic+ season runs, as a human typed them.
+    dungeon_rotation: tuple[str, ...] = ()
+    #: The same list as the Game Data API reports it. Kept apart from the asserted
+    #: one on purpose: the point of deriving it was to be able to check the typing,
+    #: which needs both to survive.
+    derived_rotation: tuple[str, ...] = ()
+
+    def rotation_disagreement(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """``(asserted only, derived only)``, empty when they agree or one is absent."""
+        if not self.dungeon_rotation or not self.derived_rotation:
+            return (), ()
+        return (
+            tuple(n for n in self.dungeon_rotation if n not in self.derived_rotation),
+            tuple(n for n in self.derived_rotation if n not in self.dungeon_rotation),
+        )
+
+    def source_disagreements(self) -> list[GearItem]:
+        """Every item whose asserted pool the API contradicts."""
+        return [
+            item for pool in self.slots.values() for item in pool.items if item.source_disagrees
+        ]
 
 
-def _data_file() -> Path:
+def pools_file() -> Path:
+    """The shipped pool file. ``loot-sources`` writes it; everything else reads it."""
     return Path(str(resources.files("wowdps") / "data" / "gear_pools.json"))
 
 
 def load_pools(tier: str, path: Path | None = None) -> GearPools:
     """Read the curated pool file for one tier."""
-    source = path or _data_file()
+    source = path or pools_file()
     raw = json.loads(source.read_text(encoding="utf-8"))
     tiers = raw.get("tiers") or {}
     if tier not in tiers:
@@ -289,6 +360,7 @@ def load_pools(tier: str, path: Path | None = None) -> GearPools:
                 base_ilevel=int(item.get("baseIlevel", 0)),
                 base_quality=int(item.get("baseQuality", 0)),
                 bonus_ids=tuple(item.get("bonusIds") or ()),
+                derived=(DerivedSource.from_json(item["derived"]) if item.get("derived") else None),
             )
             for item in slot_entry["items"]
         )
@@ -302,7 +374,12 @@ def load_pools(tier: str, path: Path | None = None) -> GearPools:
             note=slot_entry.get("note", ""),
         )
 
-    return GearPools(tier=tier, slots=pools)
+    return GearPools(
+        tier=tier,
+        slots=pools,
+        dungeon_rotation=tuple(entry.get("dungeonRotation") or ()),
+        derived_rotation=tuple(entry.get("dungeonRotationDerived") or ()),
+    )
 
 
 # --------------------------------------------------------------------------------
