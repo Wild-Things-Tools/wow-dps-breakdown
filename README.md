@@ -325,6 +325,12 @@ pipeline/          Python: profile discovery, simc orchestration, metric extract
     gearsweep.py     the baseline-and-candidates profileset sweep
     dataset.py       writing the static JSON the site reads
     warcraftlogs.py  optional cross-check against real raid logs
+    fightextract.py  reading fight structure out of Warcraft Logs event payloads
+    fightprofile.py  per-boss fight shapes, with provenance, and the simc options they make
+    fightprobe.py    `wowdps fight-probe`: measuring a boss's shape from real logs
+    data/
+      gear_pools.json      curated item pools per tier
+      fight_profiles.json  per-boss fight shapes: measured and asserted facts, marked
 web/               React SPA (Vite, TypeScript, Tailwind v4, Recharts)
   public/data/       the generated dataset, committed
     tiers.json         which tiers exist, and which one is current
@@ -335,6 +341,7 @@ web/               React SPA (Vite, TypeScript, Tailwind v4, Recharts)
   gear.yml           on-demand gear comparison sweep → commits gear.json
   deploy.yml         builds and pushes the site into the gated hub repository
   logs-verification.yml   optional weekly Warcraft Logs comparison
+  fight-probe.yml         on-demand: what a boss's fights actually look like
 scripts/build-simc.sh     local SimulationCraft build
 ```
 
@@ -485,6 +492,12 @@ parallel shards.
 - **Weekly, optional** (`logs-verification.yml`): pulls ranking medians from Warcraft
   Logs for a reality check. Skips itself cleanly if credentials are not configured.
 
+- **On demand** (`fight-probe.yml`): reads a handful of real logs per boss and reports what
+  its fights actually look like — target counts over time, add lifetimes, phase
+  boundaries, auras on enemies, raid size. Commits nothing; it uploads evidence. Not on a
+  schedule because the Warcraft Logs point budget is shared with the weekly check above,
+  and because turning the output into a fight profile is a judgement rather than a merge.
+
 The nightly job publishes whatever finished. One spec that fails to converge costs that
 spec's cell, not the whole day's data, and the failure is recorded in the spec's own file
 so the site can show it.
@@ -553,6 +566,83 @@ correction factor, and the site presents both rather than reconciling them.
 
 ---
 
+## The logs comparison is a per-boss problem (in progress)
+
+The cross-check above compares one **Patchwerk single-target** simulation against nine
+different encounters, and the result says more about the boss than about the spec.
+Across the 192 published comparisons with at least five parses:
+
+| Boss | Median logs ÷ sim |
+|---|---:|
+| Belo'ren, Child of Al'ar | 0.57 |
+| Crown of the Cosmos | 0.60 |
+| Vorasius | 0.64 |
+| Fallen-King Salhadaar | 0.66 |
+| Imperator Averzian | 0.68 |
+| Chimaerus, the Undreamt God | 0.74 |
+| Midnight Falls | 0.79 |
+| Vaelgor & Ezzorak | 0.81 |
+| Lightblinded Vanguard | 0.86 |
+
+That ordering is **the same for all 26 specs**, and the only six comparisons where the
+logs beat the sim are Mages, five of them on Lightblinded Vanguard — which is a permanent
+three-target fight. Adds, phases, downtime and damage-amplification windows are doing the
+work, not modelling error. Comparing against a boss's *actual shape* is the fix.
+
+### A fight profile is data, and it says where each fact came from
+
+`pipeline/src/wowdps/data/fight_profiles.json` holds one entry per boss. Every fact
+carries a provenance:
+
+| Provenance | Meaning |
+|---|---|
+| `hand` | A person asserted it. The owner plays these fights, and there are things about them no event stream contains. |
+| `logs` | `wowdps fight-probe` measured it, from named reports, with the spread it was pooled from. |
+| `default` | Nothing is known and the value is the project fallback — kept explicit so it cannot pass for a measurement. |
+
+Hand facts are **first-class**, not placeholders. And where a hand fact and a measurement
+disagree, the probe prints both and resolves neither: the interesting possibility is that
+the extraction is wrong, and that is invisible if one silently overwrites the other.
+
+`wowdps fight-profiles` prints each boss's profile and the SimulationCraft options it
+produces — permanent targets become `desired_targets`, add waves become an `adds` raid
+event, an amplification on the priority target becomes a `vulnerable` raid event. Anything
+the profile carries that simc cannot express is listed as *not modelled* rather than
+dropped.
+
+### What Warcraft Logs can and cannot supply
+
+| | |
+|---|---|
+| Raid size, fight length, kill or wipe | **extractable** |
+| Phase boundaries and names | **extractable** — but the times and the names come from two different fields |
+| Which targets actually took damage, and how much | **extractable** |
+| Enemy deaths | **extractable** |
+| Concurrent target count over the fight | **extractable with caveats** — derived from damage per enemy instance |
+| Add spawn and despawn times | **extractable with caveats** — there is no spawn event, so "first seen" is "first damaged", and a despawn leaves no death |
+| Damage-amplification *windows* | **extractable with caveats** — an aura id, a target, a start and a duration |
+| Damage-amplification *magnitude* | **not available.** Nothing in the API says what an aura does. That 20% is somebody's word, and is marked as such |
+| Downtime | **not available as such.** The nearest is Warcraft Logs' own `activeTime`, which counts a player as active while doing anything at all |
+
+### Running the probe
+
+`wowdps fight-probe` needs the same credentials as the cross-check, so it runs in CI:
+the **Fight probe** workflow, on demand, uploading a readable dump and the raw response
+cache as an artifact. It commits nothing — the output is evidence for writing a profile by
+hand, not a dataset.
+
+The API meters by *points* per hour rather than requests, and does not publish a cost
+function, so the probe measures its own cost from `rateLimitData` and stops at 80% of the
+hour's budget rather than discovering the limit as an error. Every response is cached by
+query, so re-running the extraction over a downloaded cache is free.
+
+One bias the output states about itself: the fights it reads come from the top of the
+encounter's rankings, because that is where a ranking entry hands you a report code for
+nothing. Those are speed kills — shorter than a typical pull, with adds dying faster —
+which is not the shape the median parse the site compares against experienced.
+
+---
+
 ## Design and accessibility notes
 
 - Series colours come from a palette validated for colour-blind separation and contrast
@@ -572,6 +662,12 @@ correction factor, and the site presents both rather than reconciling them.
 ## Limitations worth stating plainly
 
 - **Sims are not logs.** Perfect play, a stationary target, no mechanics, no deaths.
+- **The logs comparison currently compares the wrong things**, and knowingly. One
+  Patchwerk single-target run is held up against nine encounters with adds, phases and
+  downtime, so the boss explains more of the gap than the spec does. Per-boss fight
+  profiles are the fix and are in progress — see above. Until they land, read a
+  logs/sim ratio as "this spec on this boss against a laboratory measurement", and
+  compare specs *within* a boss rather than a spec's ratio against 1.0.
 - **Profiles are simc's, not yours.** Gear, talents and consumables are the tier defaults.
   Two builds being close here says little about your character specifically.
 - **The talent loadout is fixed across the target sweep.** SimulationCraft ships one

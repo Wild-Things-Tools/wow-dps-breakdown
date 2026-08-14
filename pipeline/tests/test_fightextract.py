@@ -1,0 +1,552 @@
+"""Reading fight structure out of event payloads, against hand-written fixtures.
+
+The API credentials live in CI, so nothing here can call Warcraft Logs. What can be
+tested offline is the whole of the interesting part: every assumption the extraction
+makes about what an event stream means is a pure function over a payload, and each
+one is pinned here against events shaped the way the API returns them.
+
+Two fixtures carry most of the weight. ``lightblinded_vanguard_events`` is the
+owner's stated ground truth written out as events -- three targets up for the whole
+pull, one of them carrying a buff for the first twenty seconds -- so a change that
+breaks the extraction fails here rather than in CI a day later. ``add_wave_events``
+is the other shape: a boss plus waves that arrive, live and leave.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from wowdps import fightextract
+from wowdps.fightextract import (
+    EncounterObservation,
+    active_time_fraction,
+    add_patterns,
+    aura_windows,
+    damage_by_target,
+    enemy_lives,
+    observe_fight,
+    phase_windows,
+    target_count_timeline,
+)
+
+# Report-relative milliseconds: fights do not start at zero in a real report, and a
+# bug that assumed they did would be invisible against a zero-based fixture.
+FIGHT_START = 1_000_000
+FIGHT_END = FIGHT_START + 300_000
+
+
+def at(second: float) -> int:
+    return int(FIGHT_START + second * 1000)
+
+
+def damage(second: float, actor: int, instance: int = 0, amount: float = 1000.0) -> dict:
+    return {
+        "timestamp": at(second),
+        "type": "damage",
+        "targetID": actor,
+        "targetInstance": instance,
+        "amount": amount,
+    }
+
+
+def death(second: float, actor: int, instance: int = 0) -> dict:
+    return {"timestamp": at(second), "type": "death", "targetID": actor, "targetInstance": instance}
+
+
+def aura(second: float, kind: str, ability: int, actor: int, instance: int = 0) -> dict:
+    return {
+        "timestamp": at(second),
+        "type": kind,
+        "abilityGameID": ability,
+        "targetID": actor,
+        "targetInstance": instance,
+    }
+
+
+def fight(**overrides) -> dict:
+    base = {
+        "id": 7,
+        "encounterID": 3180,
+        "name": "Lightblinded Vanguard",
+        "difficulty": 5,
+        "kill": True,
+        "size": 20,
+        "startTime": FIGHT_START,
+        "endTime": FIGHT_END,
+        "friendlyPlayers": list(range(1, 21)),
+        "enemyNPCs": [],
+        "phaseTransitions": [],
+    }
+    base.update(overrides)
+    return base
+
+
+# --------------------------------------------------------------------------------
+# Lifespans
+# --------------------------------------------------------------------------------
+
+
+def test_instances_of_one_npc_are_separate_enemies():
+    """Five copies of an add share one actor id and differ only by instance.
+
+    Keying on the actor alone would report a wave of five as a single enemy alive
+    for the union of their lifetimes -- one add, five times too long.
+    """
+    events = [damage(10, 50, instance=i) for i in range(1, 6)]
+    events += [damage(25, 50, instance=i) for i in range(1, 6)]
+    lives = enemy_lives(events, [], FIGHT_START, FIGHT_END)
+    assert len(lives) == 5
+    assert {life.instance for life in lives} == {1, 2, 3, 4, 5}
+
+
+def test_an_enemy_that_dies_ends_at_its_death():
+    lives = enemy_lives([damage(5, 50), damage(40, 50)], [death(42, 50)], FIGHT_START, FIGHT_END)
+    assert lives[0].died is True
+    assert lives[0].last_seen == 42.0
+    assert lives[0].lifetime == 37.0
+
+
+def test_an_enemy_with_no_death_ends_at_its_last_hit():
+    """Despawns leave no death event, so the honest end is the last observed hit."""
+    lives = enemy_lives([damage(5, 50), damage(40, 50)], [], FIGHT_START, FIGHT_END)
+    assert lives[0].died is False
+    assert lives[0].last_seen == 40.0
+
+
+def test_death_events_that_name_the_dying_unit_as_source_are_still_read():
+    """Log versions differ on whether a death's subject is target or source."""
+    events = [{"timestamp": at(30), "type": "death", "sourceID": 50, "sourceInstance": 0}]
+    lives = enemy_lives([damage(5, 50)], events, FIGHT_START, FIGHT_END)
+    assert lives[0].died is True and lives[0].last_seen == 30.0
+
+
+def test_first_seen_is_first_damage_not_spawn():
+    """Named for what it is. The API has no general spawn event, and pretending
+    otherwise would report every add as spawning when the raid got round to it."""
+    lives = enemy_lives([damage(37, 50)], [], FIGHT_START, FIGHT_END)
+    assert lives[0].first_seen == 37.0
+
+
+# --------------------------------------------------------------------------------
+# Timelines
+# --------------------------------------------------------------------------------
+
+
+def test_three_permanent_targets_read_as_three_constant_targets():
+    lives = enemy_lives(
+        [damage(0.5, actor) for actor in (10, 11, 12)]
+        + [damage(299, actor) for actor in (10, 11, 12)],
+        [death(299.5, actor) for actor in (10, 11, 12)],
+        FIGHT_START,
+        FIGHT_END,
+    )
+    timeline = target_count_timeline(lives, 300.0)
+    assert timeline.peak == 3
+    assert timeline.constant is True
+    assert timeline.mean == pytest.approx(3.0, abs=0.02)
+
+
+def test_a_wave_that_comes_and_goes_is_not_constant():
+    lives = enemy_lives(
+        [damage(0.5, 10), damage(299, 10)] + [damage(60, 50, i) for i in range(5)],
+        [death(80, 50, i) for i in range(5)],
+        FIGHT_START,
+        FIGHT_END,
+    )
+    timeline = target_count_timeline(lives, 300.0)
+    assert timeline.peak == 6
+    assert timeline.constant is False
+    # 20 of 300 seconds at six targets, the rest at one.
+    assert timeline.mean == pytest.approx(1 + 5 * 20 / 300, abs=0.02)
+
+
+def test_targets_dying_in_the_last_second_do_not_make_a_fight_variable():
+    """Every kill ends with the targets dying one after another. A `constant` flag
+    that reacted to that would say no fight in the game has a constant shape."""
+    lives = enemy_lives(
+        [damage(0.5, actor) for actor in (10, 11, 12)],
+        [death(298.5, 10), death(299.2, 11), death(300.0, 12)],
+        FIGHT_START,
+        FIGHT_END,
+    )
+    timeline = target_count_timeline(lives, 300.0)
+    assert timeline.constant is True
+    assert timeline.peak_share > 0.99
+
+
+def test_an_empty_fight_yields_a_zero_timeline_rather_than_an_error():
+    timeline = target_count_timeline([], 300.0)
+    assert timeline.steps == ((0.0, 0),)
+    assert timeline.mean == 0.0 and timeline.peak == 0
+
+
+# --------------------------------------------------------------------------------
+# Add patterns
+# --------------------------------------------------------------------------------
+
+
+def test_wave_cadence_and_lifetime_come_out_in_raid_event_shape():
+    events = []
+    deaths = []
+    for wave, start in enumerate((20, 80, 140)):
+        for instance in range(5):
+            events.append(damage(start, 50, instance=wave * 5 + instance))
+            deaths.append(death(start + 20, 50, instance=wave * 5 + instance))
+    lives = enemy_lives(events, deaths, FIGHT_START, FIGHT_END)
+    pattern = add_patterns(lives, total_damage=sum(life.damage for life in lives))[0]
+
+    assert pattern.instances == 15
+    assert pattern.first_seen == 20.0
+    assert pattern.lifetime == 20.0
+    assert pattern.present_at_pull is False
+    # Instances within a wave arrive together, so most gaps are zero; the median
+    # over fifteen instances is the within-wave gap, not the wave cadence. That is
+    # the honest reading of "time between one instance and the next", and the
+    # reason wave detection needs the owner rather than a cleverer median.
+    assert pattern.cadence == 0.0
+
+
+def test_targets_up_at_the_pull_are_marked_as_such():
+    """The distinction that decides the scenario: a target count, or an add wave."""
+    lives = enemy_lives([damage(1.4, 10), damage(45, 50)], [], FIGHT_START, FIGHT_END)
+    patterns = {pattern.name: pattern for pattern in add_patterns(lives, 2000.0)}
+    assert patterns["actor 10"].present_at_pull is True
+    assert patterns["actor 50"].present_at_pull is False
+
+
+def test_a_single_appearance_has_no_cadence():
+    """One appearance is not a rhythm, and a cooldown derived from it is invented."""
+    lives = enemy_lives([damage(20, 50)], [], FIGHT_START, FIGHT_END)
+    assert add_patterns(lives, 1000.0)[0].cadence is None
+
+
+# --------------------------------------------------------------------------------
+# Auras
+# --------------------------------------------------------------------------------
+
+
+def test_an_aura_window_is_its_application_to_its_removal():
+    windows = aura_windows(
+        [aura(0, "applybuff", 1234, 11), aura(20, "removebuff", 1234, 11)],
+        FIGHT_START,
+        FIGHT_END,
+        {1234: "Blinding Light"},
+    )
+    assert len(windows) == 1
+    assert windows[0].ability_name == "Blinding Light"
+    assert (windows[0].start, windows[0].duration) == (0.0, 20.0)
+    assert windows[0].truncated is False
+
+
+def test_a_refresh_does_not_open_a_second_window():
+    """Otherwise one twenty-second aura is reported as four five-second ones."""
+    events = [
+        aura(0, "applybuff", 1234, 11),
+        aura(5, "refreshbuff", 1234, 11),
+        aura(10, "refreshbuff", 1234, 11),
+        aura(20, "removebuff", 1234, 11),
+    ]
+    windows = aura_windows(events, FIGHT_START, FIGHT_END)
+    assert len(windows) == 1 and windows[0].duration == 20.0
+
+
+def test_an_aura_still_up_at_the_end_is_truncated_not_measured():
+    windows = aura_windows([aura(250, "applydebuff", 99, 10)], FIGHT_START, FIGHT_END)
+    assert windows[0].truncated is True and windows[0].duration == 50.0
+
+
+def test_a_removal_with_no_application_is_flagged_rather_than_dropped():
+    """The aura was up before the fight or before the event page. Its start is
+    unknown, which is a different statement from 'it did not happen'."""
+    windows = aura_windows([aura(12, "removebuff", 99, 10)], FIGHT_START, FIGHT_END)
+    assert len(windows) == 1
+    assert windows[0].start == 0.0 and windows[0].truncated is True
+
+
+def test_windows_on_different_instances_do_not_merge():
+    events = [
+        aura(0, "applybuff", 1234, 50, instance=1),
+        aura(0, "applybuff", 1234, 50, instance=2),
+        aura(20, "removebuff", 1234, 50, instance=1),
+        aura(30, "removebuff", 1234, 50, instance=2),
+    ]
+    windows = aura_windows(events, FIGHT_START, FIGHT_END)
+    assert sorted(window.duration for window in windows) == [20.0, 30.0]
+
+
+# --------------------------------------------------------------------------------
+# Phases and tables
+# --------------------------------------------------------------------------------
+
+
+def test_phases_need_both_the_transitions_and_the_metadata():
+    """Transitions carry times without names; report.phases carries names without
+    times. Neither one alone is a phase list."""
+    transitions = [
+        {"id": 1, "startTime": FIGHT_START},
+        {"id": 2, "startTime": FIGHT_START + 90_000},
+        {"id": 1, "startTime": FIGHT_START + 150_000},
+    ]
+    metadata = [
+        {"id": 1, "name": "Vanguard", "isIntermission": False},
+        {"id": 2, "name": "Blinding", "isIntermission": True},
+    ]
+    windows = phase_windows(transitions, metadata, 300.0)
+    assert [w.name for w in windows] == ["Vanguard", "Blinding", "Vanguard"]
+    assert [w.start for w in windows] == [0.0, 90.0, 150.0]
+    assert windows[1].is_intermission is True
+    assert windows[-1].duration == 150.0
+
+
+def test_an_encounter_with_no_transitions_has_no_phases():
+    assert phase_windows([], [{"id": 1, "name": "Only"}], 300.0) == []
+
+
+def test_damage_by_target_shares_sum_to_one():
+    table = {
+        "data": {
+            "entries": [
+                {"name": "Boss", "id": 10, "total": 750},
+                {"name": "Add", "id": 11, "total": 250},
+            ]
+        }
+    }
+    rows = damage_by_target(table)
+    assert [row.name for row in rows] == ["Boss", "Add"]
+    assert sum(row.share for row in rows) == pytest.approx(1.0)
+
+
+def test_an_unrecognised_table_shape_yields_nothing_rather_than_a_wrong_number():
+    assert damage_by_target({"unexpected": True}) == []
+    assert damage_by_target(None) == []
+
+
+def test_active_time_is_a_median_fraction_of_the_fight():
+    table = {
+        "data": {
+            "entries": [{"activeTime": 240_000}, {"activeTime": 270_000}, {"activeTime": 300_000}]
+        }
+    }
+    assert active_time_fraction(table, 300.0) == pytest.approx(0.9)
+
+
+# --------------------------------------------------------------------------------
+# Whole fights: the two shapes that matter
+# --------------------------------------------------------------------------------
+
+
+def lightblinded_vanguard_events():
+    """The owner's ground truth, written out as events.
+
+    Three targets up for the whole pull; one of the three carries a buff for the
+    first twenty seconds. If the extraction stops reproducing this, it is the
+    extraction that is wrong.
+    """
+    damage_events = []
+    for actor in (10, 11, 12):
+        for second in range(0, 300, 10):
+            damage_events.append(damage(second + 0.5, actor, amount=1000))
+    death_events = [death(299.5, actor) for actor in (10, 11, 12)]
+    aura_events = [aura(0.2, "applybuff", 555_001, 11), aura(20.4, "removebuff", 555_001, 11)]
+    return damage_events, death_events, aura_events
+
+
+def test_lightblinded_vanguard_reads_as_three_permanent_targets():
+    damage_events, death_events, aura_events = lightblinded_vanguard_events()
+    observation = observe_fight(
+        report_code="aBcD1234",
+        fight=fight(),
+        damage_events=damage_events,
+        death_events=death_events,
+        aura_events=aura_events,
+        phase_metadata=[],
+        actor_names={
+            10: "Lightblinded Zealot",
+            11: "Lightblinded Champion",
+            12: "Lightblinded Seer",
+        },
+        ability_names={555_001: "Blinding Fervor"},
+        damage_table={
+            "data": {"entries": [{"name": "Lightblinded Zealot", "id": 10, "total": 30000}]}
+        },
+        player_table={"data": {"entries": [{"activeTime": 285_000}]}},
+    )
+
+    assert observation.raid_size == 20
+    assert observation.players == 20
+    assert observation.significant_timeline.peak == 3
+    assert observation.significant_timeline.constant is True
+    assert observation.significant_timeline.mean == pytest.approx(3.0, abs=0.05)
+    assert len(observation.adds) == 3
+    assert all(add.present_at_pull for add in observation.adds)
+
+    assert len(observation.auras) == 1
+    window = observation.auras[0]
+    assert window.ability_name == "Blinding Fervor"
+    assert window.start == pytest.approx(0.2)
+    assert window.duration == pytest.approx(20.2)
+    # One of the three, not all three: the aura is on a single actor.
+    assert window.actor_id == 11
+
+
+def add_wave_fight():
+    damage_events = [damage(second, 10) for second in range(0, 300, 5)]
+    death_events = []
+    for wave, start in enumerate((20, 80, 140, 200, 260)):
+        for instance in range(5):
+            key = wave * 5 + instance
+            damage_events.append(damage(start, 50, instance=key, amount=500))
+            damage_events.append(damage(start + 19, 50, instance=key, amount=500))
+            death_events.append(death(start + 20, 50, instance=key))
+    return damage_events, death_events
+
+
+def test_an_add_wave_fight_reads_as_a_boss_plus_waves():
+    damage_events, death_events = add_wave_fight()
+    observation = observe_fight(
+        report_code="wave0001",
+        fight=fight(name="Some Add Fight"),
+        damage_events=damage_events,
+        death_events=death_events,
+        aura_events=[],
+        phase_metadata=[],
+        actor_names={10: "Boss", 50: "Summoned Zealot"},
+    )
+    assert observation.significant_timeline.peak == 6
+    assert observation.significant_timeline.constant is False
+    by_name = {add.name: add for add in observation.adds}
+    assert by_name["Boss"].present_at_pull is True
+    assert by_name["Summoned Zealot"].instances == 25
+    assert by_name["Summoned Zealot"].lifetime == pytest.approx(20.0)
+
+
+def test_an_enemy_under_the_significance_floor_is_kept_but_not_counted_as_a_target():
+    """'Three things exist' and 'three things matter' are different claims."""
+    damage_events = [damage(second, 10, amount=10_000) for second in range(0, 300, 5)]
+    damage_events += [damage(50, 99, amount=1), damage(60, 99, amount=1)]  # a prop
+    observation = observe_fight(
+        report_code="prop0001",
+        fight=fight(),
+        damage_events=damage_events,
+        death_events=[],
+        aura_events=[],
+        phase_metadata=[],
+    )
+    assert observation.timeline.peak == 2
+    assert observation.significant_timeline.peak == 1
+
+
+def test_an_enemy_hit_exactly_once_has_no_width_and_no_effect_on_the_timeline():
+    """A known limit rather than an accident: with damage as the presence signal,
+    an enemy's window runs from its first hit to its last, so one hit is a point.
+    It is still listed as an enemy; it just cannot raise a target count."""
+    observation = observe_fight(
+        report_code="once0001",
+        fight=fight(),
+        damage_events=[damage(second, 10) for second in range(0, 300, 5)] + [damage(50, 99)],
+        death_events=[],
+        aura_events=[],
+        phase_metadata=[],
+    )
+    assert len(observation.enemies) == 2
+    assert observation.timeline.peak == 1
+
+
+def test_a_fight_with_no_enemy_events_says_so_instead_of_reporting_zero_targets():
+    observation = observe_fight(
+        report_code="empty001",
+        fight=fight(),
+        damage_events=[],
+        death_events=[],
+        aura_events=[],
+        phase_metadata=[],
+    )
+    assert any("target counts could not be measured" in w for w in observation.warnings)
+
+
+# --------------------------------------------------------------------------------
+# Pooling across fights
+# --------------------------------------------------------------------------------
+
+
+def one_fight(code: str, size: int, duration_s: float) -> fightextract.FightObservation:
+    end = FIGHT_START + int(duration_s * 1000)
+    damage_events, death_events, aura_events = lightblinded_vanguard_events()
+    damage_events = [event for event in damage_events if event["timestamp"] <= end]
+    death_events = [event for event in death_events if event["timestamp"] <= end]
+    return observe_fight(
+        report_code=code,
+        fight=fight(size=size, endTime=end, friendlyPlayers=list(range(size))),
+        damage_events=damage_events,
+        death_events=death_events,
+        aura_events=aura_events,
+        phase_metadata=[],
+        actor_names={10: "A", 11: "B", 12: "C"},
+        ability_names={555_001: "Blinding Fervor"},
+    )
+
+
+def test_pooled_facts_carry_the_spread_they_were_pooled_from():
+    """A profile built from five logs is five guilds' pulls. A bare median would
+    read as more precise than the sample it came from."""
+    observation = EncounterObservation(3180, "Lightblinded Vanguard", 5)
+    observation.fights = [
+        one_fight("r1", 20, 240),
+        one_fight("r2", 20, 300),
+        one_fight("r3", 20, 280),
+    ]
+
+    assert observation.raid_size.agrees is True
+    assert observation.raid_size.median == 20
+
+    duration = observation.duration
+    assert duration.median == 280 and (duration.low, duration.high) == (240, 300)
+    assert duration.agrees is False
+    assert duration.n == 3
+
+
+def test_an_aura_seen_in_one_fight_of_three_is_not_a_fight_pattern():
+    """A single observation cannot tell 'this encounter does this' from 'this pull
+    went badly'."""
+    observation = EncounterObservation(3180, "Lightblinded Vanguard", 5)
+    lonely = observe_fight(
+        report_code="r9",
+        fight=fight(),
+        damage_events=[damage(1, 10)],
+        death_events=[],
+        aura_events=[aura(5, "applydebuff", 777, 10), aura(9, "removedebuff", 777, 10)],
+        phase_metadata=[],
+    )
+    observation.fights = [one_fight("r1", 20, 300), one_fight("r2", 20, 300), lonely]
+
+    ids = {entry["abilityId"] for entry in observation.pooled_auras()}
+    assert 555_001 in ids
+    assert 777 not in ids
+
+
+def test_adds_are_pooled_on_game_id_because_actor_ids_are_report_local():
+    observation = EncounterObservation(3180, "Lightblinded Vanguard", 5)
+    first = observe_fight(
+        report_code="r1",
+        fight=fight(),
+        damage_events=[damage(1, 10)],
+        death_events=[],
+        aura_events=[],
+        phase_metadata=[],
+        actor_names={10: "Zealot"},
+        actor_game_ids={10: 240001},
+    )
+    # Same NPC, different report, different report-local actor id.
+    second = observe_fight(
+        report_code="r2",
+        fight=fight(),
+        damage_events=[damage(1, 77)],
+        death_events=[],
+        aura_events=[],
+        phase_metadata=[],
+        actor_names={77: "Zealot"},
+        actor_game_ids={77: 240001},
+    )
+    observation.fights = [first, second]
+    pooled = observation.pooled_adds()
+    assert len(pooled) == 1 and pooled[0]["seenInFights"] == 2
