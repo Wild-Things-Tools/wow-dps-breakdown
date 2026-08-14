@@ -404,6 +404,12 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
     return fightprobe.cmd_fight_probe(args)
 
 
+def cmd_fight_promote(args: argparse.Namespace) -> int:
+    from . import fightpromote
+
+    return fightpromote.cmd_fight_promote(args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="wowdps", description=__doc__)
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -568,6 +574,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     fightprobe.add_arguments(p_fight_probe)
     p_fight_probe.set_defaults(func=cmd_fight_probe)
+
+    p_fight_promote = sub.add_parser(
+        "fight-promote",
+        help="offer a probe run's measurements as fight profile facts; prints the "
+        "plan unless --write is given, and never overwrites a hand-asserted fact",
+    )
+    from . import fightpromote
+
+    fightpromote.add_arguments(p_fight_promote)
+    p_fight_promote.set_defaults(func=cmd_fight_promote)
 
     return parser
 

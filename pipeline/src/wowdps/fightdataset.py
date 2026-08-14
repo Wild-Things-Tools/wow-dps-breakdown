@@ -47,6 +47,16 @@ fight's own windows are published with it, because those are the only ones that
 line up with the steps being drawn; the pooled ones are published in the measured
 block as spreads, because that is the claim about the encounter rather than about
 one pull.
+
+Promotions: a measured fact, offered rather than applied
+--------------------------------------------------------
+Each encounter also carries ``promotions`` -- the facts the measurement could
+contribute to the profile, each with the value, the evidence, whether it is
+eligible, and what blocks it. They are *published, never applied*: writing one
+into ``fight_profiles.json`` takes ``wowdps fight-promote --write``, and no
+promotion ever overwrites a fact a person stated. See ``fightprofile`` for the
+rules and ``fightpromote`` for the command. Publishing the proposal is what makes
+the decision inspectable rather than something that happened in CI overnight.
 """
 
 from __future__ import annotations
@@ -62,6 +72,7 @@ from .fightprofile import (
     SOURCE_LOGS,
     FightProfile,
     TierProfiles,
+    plan_promotions,
 )
 
 #: Written to ``<tier>/fights.json``. Bumped independently of the spec dataset's
@@ -126,6 +137,14 @@ class MeasuredEncounter:
         return [fight for fight in self.payload.get("fights") or [] if isinstance(fight, dict)]
 
     @property
+    def fights_sampled(self) -> int:
+        return len(self.fights)
+
+    @property
+    def reports(self) -> list[str]:
+        return [str(code) for code in self.payload.get("reports") or []]
+
+    @property
     def duration(self) -> Spread | None:
         return _spread(self.payload.get("durationSeconds"))
 
@@ -136,6 +155,10 @@ class MeasuredEncounter:
     @property
     def peak_targets(self) -> Spread | None:
         return _spread(self.payload.get("peakTargets"))
+
+    @property
+    def peak_share(self) -> Spread | None:
+        return _spread(self.payload.get("peakTargetShare"))
 
     def pooled_auras(self) -> list[dict]:
         return [aura for aura in self.payload.get("auras") or [] if isinstance(aura, dict)]
@@ -259,13 +282,12 @@ def _profile_block(profile: FightProfile) -> dict:
         ],
         "amplifications": [
             {
-                "ability": amp.ability,
-                "abilityId": amp.ability_id,
-                "multiplier": amp.multiplier,
-                "first": amp.first,
-                "duration": amp.duration,
-                "target": amp.target,
-                "magnitudeSource": amp.magnitude_source,
+                **amp.to_json(),
+                # Field-level provenance, published even when unset, so the view
+                # never has to guess whether "unknown" means nobody looked or
+                # nobody could tell.
+                "targetSource": amp.target_source,
+                "targetEvidence": amp.target_evidence,
                 # The one number Warcraft Logs cannot supply at all, flagged where
                 # a reader will see it rather than in a footnote.
                 "magnitudeMeasurable": False,
@@ -334,6 +356,10 @@ def _drawable_auras(fight: dict, pooled: list[dict]) -> list[dict]:
             "duration": aura.get("duration"),
             "truncated": bool(aura.get("truncated")),
             "instance": aura.get("instance"),
+            # Which enemy this window was on, so the band can be labelled with a
+            # name rather than with an ability floating over a three-target chart.
+            "actorName": aura.get("actorName"),
+            "role": aura.get("role"),
         }
         for aura in fight.get("auras") or []
         if isinstance(aura, dict) and aura.get("abilityId") in keep
@@ -487,6 +513,7 @@ def _encounter_document(
             "timeline": None,
         }
 
+    promotions = plan_promotions(profile, measured) if measured is not None else []
     return {
         "encounterId": profile.encounter_id,
         "name": profile.name,
@@ -497,6 +524,14 @@ def _encounter_document(
         "scenario": _scenario_block(profile),
         "measured": measured_block,
         "comparison": _comparison(profile, measured),
+        # What the measurement could contribute to the profile, and what stops it.
+        # Published rather than applied: the site is where somebody looks at a
+        # proposal before running the command that writes it.
+        "promotions": [promotion.to_json() for promotion in promotions],
+        "promoteCommand": (
+            f"wowdps fight-promote --tier {profile.tier} "
+            f"--encounter {profile.encounter_id} --probe fight-probe-{profile.tier}.json --write"
+        ),
     }
 
 

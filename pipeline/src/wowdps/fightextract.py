@@ -69,6 +69,23 @@ DEFAULT_SIGNIFICANT_SHARE = 0.01
 #: the game "variable" for a reason that has nothing to do with its shape.
 CONSTANT_TARGET_SHARE = 0.95
 
+#: How much more damage the leading enemy must take than the next one before the
+#: damage stream is allowed to nominate it as the priority target. Below this the
+#: fight is "several things being hit about equally" -- which is a real encounter
+#: shape, not a measurement failure -- and the honest answer is that nothing in
+#: the events nominates a boss. Deliberately not a tie-break: picking the larger
+#: of two near-equal numbers would turn noise into an assertion about the fight.
+PRIORITY_DAMAGE_MARGIN = 1.25
+
+#: Roles an enemy can play relative to the simulation. Only ``priority`` has a
+#: simc equivalent for an amplification window (``vulnerable`` without ``target=``
+#: lands on ``sim->target``); ``add`` is carried so the gap is nameable.
+ROLE_PRIORITY = "priority"
+ROLE_ADD = "add"
+ROLE_UNKNOWN = "unknown"
+#: One aura that landed on a priority target in one pull and an add in another.
+ROLE_MIXED = "mixed"
+
 
 def _seconds(timestamp_ms: float, fight_start_ms: float) -> float:
     """Report-relative milliseconds to fight-relative seconds, rounded to 1ms."""
@@ -230,6 +247,45 @@ class TargetDamage:
 
 
 @dataclass(frozen=True)
+class PriorityNomination:
+    """Which enemy a simulation's priority target would stand for, and on what grounds.
+
+    There is no "is the boss" field anywhere in the API. What there is: the
+    encounter's name, and how much damage each enemy took. So this nominates, it
+    does not decide, and it carries the sentence a person would need in order to
+    disagree with it.
+
+    ``actor_id`` is ``None`` when nothing nominates one, which is the correct
+    answer for a fight where three things are hit about equally. An encounter that
+    genuinely has no single priority target is a fact about the encounter; guessing
+    one there would invent the very thing this exists to establish.
+    """
+
+    actor_id: int | None
+    name: str | None
+    game_id: int | None
+    evidence: str
+
+    @property
+    def known(self) -> bool:
+        return self.actor_id is not None
+
+    def role_of(self, actor_id: int) -> str:
+        """``priority``/``add`` for an enemy, or ``unknown`` when nothing was nominated."""
+        if not self.known:
+            return ROLE_UNKNOWN
+        return ROLE_PRIORITY if actor_id == self.actor_id else ROLE_ADD
+
+    def to_json(self) -> dict:
+        return {
+            "actorId": self.actor_id,
+            "name": self.name,
+            "gameId": self.game_id,
+            "evidence": self.evidence,
+        }
+
+
+@dataclass(frozen=True)
 class FightObservation:
     """Everything one fight in one report says about its own shape."""
 
@@ -261,6 +317,24 @@ class FightObservation:
     #: player debuffs on an enemy, not something the encounter does, and they must
     #: not be offered as candidates for an encounter's own amplification window.
     player_ids: frozenset[int] = frozenset()
+    #: Which enemy this pull nominates as the priority target, and why. Never a
+    #: guess: an encounter where nothing stands out reports nothing.
+    priority: PriorityNomination = PriorityNomination(None, None, None, "not computed")
+    #: Report-local actor id to name, so an aura on an enemy that never took a hit
+    #: still has something to be called. Out of equality and hashing: it is a
+    #: lookup table, not part of what the fight *is*.
+    actor_names: dict[int, str] = field(default_factory=dict, compare=False, repr=False)
+    actor_game_ids: dict[int, int] = field(default_factory=dict, compare=False, repr=False)
+
+    def enemy_name(self, actor_id: int) -> str:
+        """A name for one enemy actor, from the report's master data or its damage."""
+        named = self.actor_names.get(actor_id)
+        if named:
+            return named
+        return next(
+            (enemy.name for enemy in self.enemies if enemy.actor_id == actor_id),
+            f"actor {actor_id}",
+        )
 
     def to_json(self) -> dict:
         return {
@@ -286,12 +360,19 @@ class FightObservation:
                 }
                 for phase in self.phases
             ],
+            "priorityEnemy": self.priority.to_json(),
             "auras": [
                 {
                     "abilityId": aura.ability_id,
                     "ability": aura.ability_name,
                     "actorId": aura.actor_id,
                     "instance": aura.instance,
+                    # Which enemy carried it, by name and by role. The owner was
+                    # being asked to say which of three targets an amplification
+                    # sits on; this is where the answer comes from instead.
+                    "actorName": self.enemy_name(aura.actor_id),
+                    "actorGameId": self.actor_game_ids.get(aura.actor_id),
+                    "role": self.priority.role_of(aura.actor_id),
                     "start": aura.start,
                     "duration": aura.duration,
                     "truncated": aura.truncated,
@@ -464,6 +545,84 @@ def add_patterns(lives: list[EnemyLife], total_damage: float) -> list[AddPattern
         _ = actor_id
     patterns.sort(key=lambda pattern: (-pattern.damage_share, pattern.first_seen))
     return patterns
+
+
+def nominate_priority_enemy(
+    lives: list[EnemyLife],
+    encounter_name: str = "",
+) -> PriorityNomination:
+    """Which of the enemies present is the one a sim's priority target stands for.
+
+    Two signals, in order, and a refusal:
+
+    1. **An enemy named for the encounter.** Warcraft Logs names the fight after
+       its boss, and the boss NPC almost always carries that name, so an exact or
+       containing match is the strongest thing available. It is also the only
+       signal that survives a fight where the adds out-damage the boss.
+    2. **The enemy that took clearly the most damage**, by a stated margin. A boss
+       with a five-minute health bar is not usually within 25% of an add.
+    3. Otherwise **nothing is nominated**. Three enemies hit about equally is the
+       shape of a permanent multi-target fight, and answering "the first one" there
+       would manufacture the fact this function exists to establish.
+
+    Nothing here decides what an aura *does* -- that is never in the API. It
+    decides which enemy an aura landed on can be *called*, which is what turns
+    "an amplification on one of the three" into something simc can or cannot be
+    given a ``target=`` for.
+    """
+    if not lives:
+        return PriorityNomination(None, None, None, "no enemy took damage: nothing to nominate")
+
+    by_actor: dict[int, list[EnemyLife]] = {}
+    for life in lives:
+        by_actor.setdefault(life.actor_id, []).append(life)
+
+    wanted = (encounter_name or "").strip().casefold()
+    if wanted:
+        for actor_id, group in sorted(by_actor.items()):
+            name = (group[0].name or "").strip().casefold()
+            if name and (name == wanted or name in wanted or wanted in name):
+                return PriorityNomination(
+                    actor_id,
+                    group[0].name,
+                    group[0].game_id,
+                    f"named for the encounter: {group[0].name!r} in {encounter_name!r}",
+                )
+
+    ranked = sorted(
+        (
+            (sum(life.damage for life in group), actor_id, group)
+            for actor_id, group in by_actor.items()
+        ),
+        key=lambda row: (-row[0], row[1]),
+    )
+    total = sum(damage for damage, _, _ in ranked)
+    top_damage, top_actor, top_group = ranked[0]
+    if len(ranked) == 1:
+        return PriorityNomination(
+            top_actor, top_group[0].name, top_group[0].game_id, "the only enemy that took damage"
+        )
+
+    runner_up = ranked[1][0]
+    ratio = (top_damage / runner_up) if runner_up > 0 else float("inf")
+    if top_damage > 0 and ratio >= PRIORITY_DAMAGE_MARGIN:
+        share = (top_damage / total) if total else 0.0
+        margin = "no other enemy was hit" if runner_up <= 0 else f"{ratio:.2g}x the next enemy"
+        return PriorityNomination(
+            top_actor,
+            top_group[0].name,
+            top_group[0].game_id,
+            f"took {share:.0%} of the damage dealt to enemies, {margin}",
+        )
+
+    return PriorityNomination(
+        None,
+        None,
+        None,
+        f"{len(ranked)} enemies took comparable damage (the top two within "
+        f"{ratio:.2g}x of each other): nothing in the events nominates one as the "
+        f"priority target",
+    )
 
 
 def aura_windows(
@@ -725,6 +884,12 @@ def observe_fight(
         truncated=truncated,
         warnings=tuple(warnings),
         player_ids=player_ids,
+        # Nominated from the enemies that mattered rather than from everything
+        # that took a hit: a totem under the significance floor cannot be the
+        # boss, and letting it into the ranking only adds noise to the margin.
+        priority=nominate_priority_enemy(significant or lives, str(fight.get("name") or "")),
+        actor_names=dict(actor_names or {}),
+        actor_game_ids=dict(actor_game_ids or {}),
     )
 
 
@@ -780,6 +945,18 @@ class EncounterObservation:
 
     def _values(self, pick) -> list[float]:
         return [value for value in (pick(fight) for fight in self.fights) if value is not None]
+
+    # `fights_sampled` and `reports` are the two things a promotion decision needs
+    # that are not a Spread. They are named to match the published document's keys
+    # so one planner reads a live observation and a downloaded artifact alike.
+
+    @property
+    def fights_sampled(self) -> int:
+        return len(self.fights)
+
+    @property
+    def reports(self) -> list[str]:
+        return sorted({fight.report_code for fight in self.fights})
 
     @property
     def duration(self) -> Spread | None:
@@ -873,6 +1050,7 @@ class EncounterObservation:
             if len(reports) < min_fights:
                 continue
             windows = [aura for _, aura in group]
+            carriers = self._aura_carriers(ability_id, encounter_only=encounter_only)
             pooled.append(
                 {
                     "abilityId": ability_id,
@@ -882,6 +1060,13 @@ class EncounterObservation:
                     "start": _pooled(windows, lambda aura: aura.start),
                     "duration": _pooled(windows, lambda aura: aura.duration),
                     "distinctTargets": len({(a.actor_id, a.instance) for a in windows}),
+                    # *Which* enemy carried it, pooled by game id because actor ids
+                    # are report-local. This is the answer to "which of the three
+                    # targets does the amplification sit on", read out of the data
+                    # instead of asked of a person.
+                    "carriedBy": carriers,
+                    "role": _combined_role(carriers),
+                    "roleEvidence": self._role_evidence(carriers),
                     # A truncated window has no measured end, so its duration is a
                     # floor rather than a value.
                     "anyTruncated": any(aura.truncated for aura in windows),
@@ -889,6 +1074,66 @@ class EncounterObservation:
             )
         pooled.sort(key=lambda entry: (entry["start"] or {}).get("median", 0.0))
         return pooled
+
+    def _aura_carriers(self, ability_id: int, *, encounter_only: bool = True) -> list[dict]:
+        """The enemies one aura landed on, pooled across reports.
+
+        Keyed on the NPC's game id where there is one and on its name otherwise,
+        for the reason already established for adds: a report-local actor id means
+        nothing in the next report, so pooling on it reports the same NPC three
+        times. ``role`` is per fight, because which enemy a pull nominated as its
+        priority target is a property of that pull's own damage.
+        """
+        carriers: dict[object, dict] = {}
+        for fight in self.fights:
+            for aura in fight.auras:
+                if aura.ability_id != ability_id:
+                    continue
+                if (
+                    encounter_only
+                    and aura.source_id is not None
+                    and aura.source_id in fight.player_ids
+                ):
+                    continue
+                name = fight.enemy_name(aura.actor_id)
+                game_id = fight.actor_game_ids.get(aura.actor_id)
+                entry = carriers.setdefault(
+                    game_id if game_id is not None else name,
+                    {
+                        "name": name,
+                        "gameId": game_id,
+                        "applications": 0,
+                        "instances": set(),
+                        "reports": set(),
+                        "roles": set(),
+                    },
+                )
+                entry["applications"] += 1
+                entry["instances"].add(aura.instance)
+                entry["reports"].add(fight.report_code)
+                entry["roles"].add(fight.priority.role_of(aura.actor_id))
+
+        resolved = [
+            {
+                "name": entry["name"],
+                "gameId": entry["gameId"],
+                "applications": entry["applications"],
+                "instances": len(entry["instances"]),
+                "seenInFights": len(entry["reports"]),
+                "role": _one_role(entry["roles"]),
+            }
+            for entry in carriers.values()
+        ]
+        resolved.sort(key=lambda entry: (-entry["applications"], entry["name"]))
+        return resolved
+
+    def _role_evidence(self, carriers: list[dict]) -> str:
+        """Why the carriers were called what they were called, in one sentence."""
+        if not carriers:
+            return "no enemy carried this aura in the sampled fights"
+        nominations = sorted({fight.priority.evidence for fight in self.fights})
+        named = ", ".join(f"{entry['name']} ({entry['role']})" for entry in carriers[:4])
+        return f"carried by {named}. Priority target nominated because: " + "; ".join(nominations)
 
     def pooled_phases(self) -> list[dict]:
         buckets: dict[int, list[PhaseWindow]] = {}
@@ -926,6 +1171,37 @@ class EncounterObservation:
             "phases": self.pooled_phases(),
             "fights": [fight.to_json() for fight in self.fights],
         }
+
+
+def _one_role(roles: set[str]) -> str:
+    """One enemy's role across the pulls it was seen in.
+
+    An enemy that was the priority target in one pull and an add in another is
+    ``mixed``, which is a finding about the extraction rather than about the
+    encounter -- the same NPC cannot be both. ``unknown`` anywhere wins over a
+    resolved role, because a pull that nominated nothing is not evidence that the
+    other pulls were right.
+    """
+    known = {role for role in roles if role != ROLE_UNKNOWN}
+    if not known:
+        return ROLE_UNKNOWN
+    if ROLE_UNKNOWN in roles or len(known) > 1:
+        return ROLE_MIXED if len(known) > 1 else ROLE_UNKNOWN
+    return next(iter(known))
+
+
+def _combined_role(carriers: list[dict]) -> str:
+    """One role for a whole aura, across every enemy that carried it."""
+    roles = {entry["role"] for entry in carriers}
+    if not roles:
+        return ROLE_UNKNOWN
+    if roles == {ROLE_PRIORITY}:
+        return ROLE_PRIORITY
+    if roles == {ROLE_ADD}:
+        return ROLE_ADD
+    if roles == {ROLE_UNKNOWN}:
+        return ROLE_UNKNOWN
+    return ROLE_MIXED
 
 
 def _pooled(group: list, pick) -> dict | None:

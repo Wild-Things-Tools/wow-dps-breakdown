@@ -651,3 +651,146 @@ def test_the_applying_source_wins_over_the_removing_one():
         fight_end_ms=300000,
     )
     assert windows[0].source_id == 11
+
+
+# --------------------------------------------------------------------------------
+# Which enemy carries an aura, and which one the priority target stands for
+# --------------------------------------------------------------------------------
+#
+# The question these answer: "the amplification sits on one of the three targets --
+# which one?" It was asked of a person twice and never answered. It is in the event
+# stream, keyed on (actor_id, instance), with the names in the report's master data.
+
+
+def test_an_enemy_named_for_the_encounter_is_the_priority_target():
+    lives = enemy_lives(
+        [damage(1, 10, amount=100), damage(1, 11, amount=9000)],
+        [],
+        FIGHT_START,
+        FIGHT_END,
+        actor_names={10: "Lightblinded Vanguard", 11: "Zealot"},
+    )
+    nomination = fightextract.nominate_priority_enemy(lives, "Lightblinded Vanguard")
+
+    # The name wins even though the add took ninety times the damage: an encounter
+    # where the adds out-damage the boss is ordinary and is not a naming problem.
+    assert nomination.name == "Lightblinded Vanguard"
+    assert "named for the encounter" in nomination.evidence
+
+
+def test_the_enemy_that_took_clearly_the_most_damage_is_nominated():
+    lives = enemy_lives(
+        [damage(1, 10, amount=8000), damage(1, 11, amount=1000)],
+        [],
+        FIGHT_START,
+        FIGHT_END,
+        actor_names={10: "Warlord", 11: "Zealot"},
+    )
+    nomination = fightextract.nominate_priority_enemy(lives, "Some Other Name")
+
+    assert nomination.name == "Warlord"
+    assert nomination.role_of(10) == fightextract.ROLE_PRIORITY
+    assert nomination.role_of(11) == fightextract.ROLE_ADD
+    assert "of the damage" in nomination.evidence
+
+
+def test_three_enemies_hit_about_equally_nominate_nothing():
+    """A permanent three-target fight is a shape, not a measurement failure.
+
+    Picking the largest of three near-equal numbers would manufacture exactly the
+    fact this is supposed to establish, so it refuses and says why.
+    """
+    lives = enemy_lives(
+        [damage(1, actor, amount=1000) for actor in (10, 11, 12)],
+        [],
+        FIGHT_START,
+        FIGHT_END,
+        actor_names={10: "Zealot", 11: "Champion", 12: "Seer"},
+    )
+    nomination = fightextract.nominate_priority_enemy(lives, "Lightblinded Vanguard")
+
+    assert nomination.known is False
+    assert nomination.role_of(11) == fightextract.ROLE_UNKNOWN
+    assert "nothing in the events nominates one" in nomination.evidence
+
+
+def test_an_aura_names_the_enemy_that_carried_it():
+    """The answer to "which of the three", in the published payload."""
+    observation = EncounterObservation(3180, "Lightblinded Vanguard", 5)
+    observation.fights = [
+        observe_fight(
+            report_code=code,
+            fight=fight(),
+            damage_events=[damage(1, actor) for actor in (10, 11, 12)],
+            death_events=[],
+            aura_events=[
+                aura(1.0, "applybuff", 555_001, 11),
+                aura(21.0, "removebuff", 555_001, 11),
+            ],
+            phase_metadata=[],
+            actor_names={10: "Zealot", 11: "Champion", 12: "Seer"},
+            actor_game_ids={10: 1, 11: 2, 12: 3},
+            ability_names={555_001: "Blinding Fervor"},
+        )
+        for code in ("r1", "r2")
+    ]
+
+    pooled = observation.pooled_auras()[0]
+    assert [entry["name"] for entry in pooled["carriedBy"]] == ["Champion"]
+    assert pooled["carriedBy"][0]["seenInFights"] == 2
+    # Named, but not classified: nothing in this fight nominates a boss, and the
+    # aura's role must not be invented out of the enemy merely having a name.
+    assert pooled["role"] == fightextract.ROLE_UNKNOWN
+    assert "Champion" in pooled["roleEvidence"]
+
+
+def test_an_aura_on_the_boss_is_reported_as_being_on_the_priority_target():
+    """The case that makes an amplification expressible in simc at all."""
+    observation = EncounterObservation(3180, "Warlord", 5)
+    observation.fights = [
+        observe_fight(
+            report_code=code,
+            fight=fight(name="Warlord"),
+            damage_events=[damage(1, 10, amount=9000), damage(1, 11, amount=1000)],
+            death_events=[],
+            aura_events=[
+                aura(1.0, "applybuff", 555_001, 10),
+                aura(21.0, "removebuff", 555_001, 10),
+            ],
+            phase_metadata=[],
+            actor_names={10: "Warlord", 11: "Zealot"},
+            ability_names={555_001: "Blinding Fervor"},
+        )
+        for code in ("r1", "r2")
+    ]
+
+    pooled = observation.pooled_auras()[0]
+    assert pooled["role"] == fightextract.ROLE_PRIORITY
+    assert pooled["carriedBy"][0]["name"] == "Warlord"
+
+
+def test_aura_carriers_pool_on_game_id_across_reports():
+    """Actor ids are report-local; the same NPC must not be reported twice."""
+    observation = EncounterObservation(3180, "Lightblinded Vanguard", 5)
+
+    def pull(code: str, actor: int):
+        return observe_fight(
+            report_code=code,
+            fight=fight(),
+            damage_events=[damage(1, actor)],
+            death_events=[],
+            aura_events=[
+                aura(1.0, "applybuff", 555_001, actor),
+                aura(21.0, "removebuff", 555_001, actor),
+            ],
+            phase_metadata=[],
+            actor_names={actor: "Champion"},
+            actor_game_ids={actor: 240_002},
+            ability_names={555_001: "Blinding Fervor"},
+        )
+
+    observation.fights = [pull("r1", 11), pull("r2", 88)]
+    carriers = observation.pooled_auras()[0]["carriedBy"]
+    assert len(carriers) == 1
+    assert carriers[0]["gameId"] == 240_002
+    assert carriers[0]["seenInFights"] == 2

@@ -215,6 +215,14 @@ class Amplification:
     target: str = TARGET_UNKNOWN
     ability_id: int | None = None
     magnitude_source: str = SOURCE_HAND
+    #: Where ``target`` came from, separately from the fact's own provenance. An
+    #: amplification whose magnitude a person stated and whose *carrier* the logs
+    #: measured is the normal end state, and "hand" over the whole thing would
+    #: misdescribe both halves.
+    target_source: str | None = None
+    #: The sentence behind ``target_source``: which enemy, in how many pulls, and
+    #: on what grounds it was called the priority target or an add.
+    target_evidence: str | None = None
 
     def simc_option(self) -> str | None:
         """``None`` when simc has nothing to express this with."""
@@ -235,7 +243,25 @@ class Amplification:
             target=raw.get("target", TARGET_UNKNOWN),
             ability_id=raw.get("abilityId"),
             magnitude_source=raw.get("magnitudeSource", SOURCE_HAND),
+            target_source=raw.get("targetSource"),
+            target_evidence=raw.get("targetEvidence"),
         )
+
+    def to_json(self) -> dict:
+        payload: dict = {
+            "ability": self.ability,
+            "abilityId": self.ability_id,
+            "multiplier": self.multiplier,
+            "first": self.first,
+            "duration": self.duration,
+            "target": self.target,
+            "magnitudeSource": self.magnitude_source,
+        }
+        if self.target_source:
+            payload["targetSource"] = self.target_source
+        if self.target_evidence:
+            payload["targetEvidence"] = self.target_evidence
+        return payload
 
 
 @dataclass(frozen=True)
@@ -474,6 +500,22 @@ class FightProfile:
                     extra=note,
                 )
             )
+            # Which of the targets carries it. Asked of a person twice and not
+            # answered; it is in the event stream, so this is where it comes from.
+            rows.append(
+                _row(
+                    f"amplification {amplification.ability!r} carried by",
+                    amplification.target,
+                    carrier_text(match),
+                    Provenance(
+                        source=amplification.target_source or SOURCE_HAND,
+                        detail=amplification.target_evidence
+                        or "which target carries it, as recorded in the profile",
+                    ),
+                    extra=(match or {}).get("roleEvidence")
+                    or "no matched aura, so no enemy to name",
+                )
+            )
 
         return rows
 
@@ -536,6 +578,397 @@ def _window_text(match: dict | None) -> str | None:
     if start is None or duration is None:
         return None
     return f"{start:g}-{start + duration:g}"
+
+
+def carrier_text(match: dict | None) -> str | None:
+    """Which enemy carried a measured aura, named, with its role in brackets.
+
+    The name is the answer to "which of the three"; the role is what decides
+    whether simc can be given a ``target=`` for it. They are printed together
+    because naming an enemy the simulation cannot address is only half an answer.
+    """
+    if not match:
+        return None
+    carriers = match.get("carriedBy") or []
+    if not carriers:
+        return None
+    named = ", ".join(f"{entry['name']} ({entry['role']})" for entry in carriers[:3])
+    if len(carriers) > 3:
+        named += f", +{len(carriers) - 3} more"
+    return named
+
+
+def measured_target(match: dict | None) -> str | None:
+    """A measured aura's role as a value a profile's ``target`` field could take.
+
+    ``mixed`` and ``unknown`` deliberately return ``None``: an aura seen on the
+    boss in one pull and an add in another, or on a fight where nothing nominates
+    a boss at all, is not a value to write down. It is a reason to look again.
+    """
+    role = (match or {}).get("role")
+    if role == TARGET_PRIORITY:
+        return TARGET_PRIORITY
+    if role == TARGET_ADD:
+        return TARGET_ADD
+    return None
+
+
+# --------------------------------------------------------------------------------
+# Turning a measurement into a profile fact
+# --------------------------------------------------------------------------------
+#
+# The point of this section, and the rule it must not break
+# ---------------------------------------------------------
+# Typing a target count in by hand for nine bosses is exactly the work the probe
+# already does, so a measured fact should be able to *become* the profile's value
+# with ``source: "logs"`` and the reports it came from. What it must never do is
+# overwrite something a person stated. CLAUDE.md's rule stands and is the reason
+# this file exists at all: when an assertion and a measurement disagree, the
+# likelier culprit is the extraction, and a promotion that quietly resolved that
+# would destroy the only signal there is.
+#
+# So promotion is *proposed* here and *applied* by an explicit command
+# (``wowdps fight-promote --write``), and a proposal is a full object -- the value,
+# the evidence, whether it is eligible, and what blocks it -- so the decision can be
+# read on the site and in a terminal before anything is written.
+#
+# Three states, three behaviours:
+#
+# ``default``  nothing recorded. The measurement fills the gap. Eligible.
+# ``logs``     an older measurement. A newer one supersedes it. Eligible.
+# ``hand``     a person said so. **Never** overwritten, even when the numbers
+#              agree; the promotion is reported as blocked, with the difference.
+#
+# The one exception is not an exception to that rule: an amplification's *carrier*
+# and *ability id* are fields a hand fact left blank (``"target": "unknown"``,
+# ``"abilityId": null``). Filling a blank is not overwriting a statement, and the
+# multiplier -- the one number no log can ever supply -- is never touched.
+
+#: How many sampled fights a measurement needs before it is offered as a fact. A
+#: single pull cannot separate "this encounter does this" from "this pull went
+#: like that", which is the same floor ``pooled_auras`` applies to auras.
+DEFAULT_MIN_FIGHTS = 3
+
+#: Fraction of a fight at its peak target count above which a measured target
+#: count is offered as *constant*. Mirrors ``fightextract.CONSTANT_TARGET_SHARE``;
+#: duplicated as a number rather than imported to keep this module free of a
+#: dependency on the extraction.
+_CONSTANT_SHARE = 0.95
+
+
+@dataclass(frozen=True)
+class Promotion:
+    """One measured fact, offered as a profile fact, with the case for and against.
+
+    Nothing here writes anything. A ``Promotion`` is a proposal that can be
+    printed, published to the site, and applied only by a command a person ran.
+    """
+
+    key: str
+    label: str
+    #: What would be written into ``fight_profiles.json`` under ``facts[key]``.
+    value: object
+    #: The value in words, for a terminal and for the page.
+    summary: str
+    #: Why the measurement supports it -- always including the spread, never a
+    #: bare median.
+    evidence: str
+    sample: int
+    reports: tuple[str, ...]
+    #: True when this may be written. False is not a failure: "a person already
+    #: said so" and "two fights is not enough" are both ordinary answers.
+    eligible: bool
+    reason: str
+    #: ``hand`` when a person's statement is what stops it. Never overwritten.
+    blocked_by: str | None = None
+    #: What the profile says now, when there is something to disagree with.
+    current: object = None
+    #: True when the measurement and the current value are not the same. On a
+    #: hand fact this is the finding CLAUDE.md is about, not a merge conflict.
+    disagrees: bool = False
+
+    def to_json(self) -> dict:
+        return {
+            "key": self.key,
+            "label": self.label,
+            "value": self.value,
+            "summary": self.summary,
+            "evidence": self.evidence,
+            "sample": self.sample,
+            "reports": list(self.reports),
+            "eligible": self.eligible,
+            "reason": self.reason,
+            "blockedBy": self.blocked_by,
+            "current": self.current,
+            "disagrees": self.disagrees,
+        }
+
+
+def _spread_text(spread, digits: int = 0, unit: str = "") -> str:
+    """A pooled number with the range it came from. Never a bare median."""
+    if spread is None:
+        return "not measured"
+    fmt = f"{{:.{digits}f}}{unit}"
+    if spread.low == spread.high:
+        return f"{fmt.format(spread.median)} in every one of the {spread.n} sampled fights"
+    return (
+        f"{fmt.format(spread.median)} "
+        f"(range {fmt.format(spread.low)}-{fmt.format(spread.high)}, n={spread.n})"
+    )
+
+
+def _share_text(spread) -> str:
+    """The same, for a fraction that reads as a percentage."""
+    if spread is None:
+        return "not measured"
+    if spread.low == spread.high:
+        return f"{spread.median:.0%} in every one of the {spread.n} sampled fights"
+    return f"{spread.median:.0%} (range {spread.low:.0%}-{spread.high:.0%}, n={spread.n})"
+
+
+def plan_promotions(
+    profile: FightProfile,
+    observation,
+    *,
+    min_fights: int = DEFAULT_MIN_FIGHTS,
+) -> list[Promotion]:
+    """Every measured fact this encounter could contribute, eligible or not.
+
+    ``observation`` is anything carrying the pooled readings -- a live
+    ``EncounterObservation`` or the ``MeasuredEncounter`` view over a downloaded
+    probe artifact. Both are read the same way on purpose: a promotion decided in
+    CI and a promotion decided offline from the artifact must come out identical.
+
+    Ineligible proposals are returned rather than filtered, because "the logs say
+    three targets and a person said two" is the single most valuable thing this
+    machinery can produce, and dropping it would leave a page that only ever
+    agreed with itself.
+    """
+    sample = int(getattr(observation, "fights_sampled", 0) or 0)
+    reports = tuple(getattr(observation, "reports", ()) or ())
+    proposals = [
+        _targets_promotion(observation),
+        _fight_length_promotion(observation),
+        _raid_size_promotion(observation),
+    ]
+    amplifications = _amplification_promotion(profile, observation)
+    if amplifications is not None:
+        proposals.append(amplifications)
+
+    return [
+        _decide(profile, proposal, sample=sample, reports=reports, min_fights=min_fights)
+        for proposal in proposals
+        if proposal is not None
+    ]
+
+
+@dataclass(frozen=True)
+class _Proposal:
+    """A measurement's own case, before the profile has been consulted."""
+
+    key: str
+    label: str
+    value: object
+    summary: str
+    evidence: str
+    #: Set when the measurement is not solid enough to offer regardless of what
+    #: the profile says -- the fights disagreed with each other, for instance.
+    withheld: str | None = None
+    #: True for a field-level fill of blanks a hand fact left, which a hand fact
+    #: does not block. See the section header.
+    fills_blanks: bool = False
+
+
+def _targets_promotion(observation) -> _Proposal | None:
+    peak = getattr(observation, "peak_targets", None)
+    if peak is None:
+        return None
+    share = getattr(observation, "peak_share", None)
+    constant = bool(share and share.median >= _CONSTANT_SHARE)
+    baseline = int(round(peak.median))
+    withheld = None
+    if peak.low != peak.high:
+        withheld = (
+            f"the sampled fights did not agree on the peak target count "
+            f"({peak.low:g}-{peak.high:g}); a single number for the profile would "
+            f"be a choice, not a measurement"
+        )
+    return _Proposal(
+        key="targets",
+        label="Targets at the pull",
+        value={"baseline": baseline, "constant": constant},
+        summary=f"{baseline} target(s), {'constant' if constant else 'varying'}",
+        evidence=(
+            f"peak concurrent enemies above the significance floor: "
+            f"{_spread_text(peak)}; time at that peak {_share_text(share)}"
+        ),
+        withheld=withheld,
+    )
+
+
+def _fight_length_promotion(observation) -> _Proposal | None:
+    duration = getattr(observation, "duration", None)
+    if duration is None:
+        return None
+    # No agreement gate here, unlike the target count: kills legitimately differ in
+    # length, so a spread is the expected result rather than a warning sign. The
+    # spread travels in the evidence so the median never reads as exact.
+    return _Proposal(
+        key="fightLengthSeconds",
+        label="Fight length",
+        value=int(round(duration.median)),
+        summary=f"{duration.median:.0f}s",
+        evidence=f"kill time {_spread_text(duration, 0, 's')}",
+    )
+
+
+def _raid_size_promotion(observation) -> _Proposal | None:
+    size = getattr(observation, "raid_size", None)
+    if size is None:
+        return None
+    withheld = (
+        None
+        if size.low == size.high
+        else f"the sampled fights logged different group sizes ({size.low:g}-{size.high:g})"
+    )
+    return _Proposal(
+        key="raidSize",
+        label="Raid size",
+        value=int(round(size.median)),
+        summary=f"{size.median:.0f} players",
+        evidence=f"the log's own group size: {_spread_text(size)}",
+        withheld=withheld,
+    )
+
+
+def _amplification_promotion(profile: FightProfile, observation) -> _Proposal | None:
+    """Fill in an amplification's ability id and carrier, and nothing else.
+
+    This is the answer to "which of the three targets does it sit on", written
+    into the profile instead of asked of a person again. What it deliberately does
+    not touch: ``multiplier`` (no log can ever supply it), ``first`` and
+    ``duration`` (a person stated those; the measured window is printed beside
+    them for comparison and that is where it stops).
+    """
+    amplifications = profile.amplifications
+    if not amplifications:
+        return None
+    candidates = observation.pooled_auras()
+    if not candidates:
+        return None
+
+    filled: list[dict] = []
+    changes: list[str] = []
+    evidence: list[str] = []
+    for amplification in amplifications:
+        match, _ = _match_amplification(amplification, candidates)
+        payload = amplification.to_json()
+        if match is None:
+            filled.append(payload)
+            continue
+
+        if amplification.ability_id is None and isinstance(match.get("abilityId"), int):
+            payload["abilityId"] = match["abilityId"]
+            changes.append(
+                f"{amplification.ability!r}: ability id {match['abilityId']} "
+                f"({match.get('ability')})"
+            )
+
+        role = measured_target(match)
+        if amplification.target == TARGET_UNKNOWN and role is not None:
+            payload["target"] = role
+            payload["targetSource"] = SOURCE_LOGS
+            payload["targetEvidence"] = match.get("roleEvidence") or ""
+            changes.append(f"{amplification.ability!r}: carried by the {role} target")
+
+        named = carrier_text(match)
+        if named:
+            evidence.append(
+                f"{amplification.ability!r} matched {match.get('ability')!r} "
+                f"(id {match.get('abilityId')}), carried by {named}, "
+                f"seen in {match.get('seenInFights')} fight(s)"
+            )
+        filled.append(payload)
+
+    if not changes:
+        return None
+
+    return _Proposal(
+        key="amplifications",
+        label="Damage amplification",
+        value=filled,
+        summary="; ".join(changes),
+        evidence=(
+            "; ".join(evidence)
+            + ". The multiplier, the start and the duration are left exactly as "
+            "asserted: no field in the Warcraft Logs API says what an aura does."
+        ),
+        fills_blanks=True,
+    )
+
+
+def _decide(
+    profile: FightProfile,
+    proposal: _Proposal,
+    *,
+    sample: int,
+    reports: tuple[str, ...],
+    min_fights: int,
+) -> Promotion:
+    stored = profile.facts.get(proposal.key)
+    current = stored.value if stored is not None else None
+    source = stored.provenance.source if stored is not None else SOURCE_DEFAULT
+    # A blanks-fill changes the stored value and contradicts nothing in it, so it
+    # is not a disagreement. Reporting it as one would put the loudest word on the
+    # page next to the one case where profile and logs are in complete accord.
+    disagrees = stored is not None and not proposal.fills_blanks and current != proposal.value
+
+    def promotion(eligible: bool, reason: str, blocked_by: str | None = None) -> Promotion:
+        return Promotion(
+            key=proposal.key,
+            label=proposal.label,
+            value=proposal.value,
+            summary=proposal.summary,
+            evidence=proposal.evidence,
+            sample=sample,
+            reports=reports,
+            eligible=eligible,
+            reason=reason,
+            blocked_by=blocked_by,
+            current=current,
+            disagrees=disagrees,
+        )
+
+    if sample < min_fights:
+        return promotion(
+            False,
+            f"{sample} sampled fight(s), below the floor of {min_fights}: not enough to "
+            f"tell an encounter's shape from one guild's pull",
+        )
+    if proposal.withheld:
+        return promotion(False, proposal.withheld)
+    if source == SOURCE_HAND and not proposal.fills_blanks:
+        return promotion(
+            False,
+            "a person stated this, and a measurement never overwrites a person. "
+            + (
+                "The two disagree, which under this project's rule means the "
+                "extraction is the likelier culprit -- fix that before editing the "
+                "profile."
+                if disagrees
+                else "The two agree, so there is nothing to gain by rewriting it."
+            ),
+            blocked_by=SOURCE_HAND,
+        )
+    if proposal.fills_blanks:
+        return promotion(
+            True,
+            "fills in fields the profile left blank; every value a person stated, "
+            "including the multiplier, is left untouched",
+        )
+    if source == SOURCE_LOGS:
+        return promotion(True, "supersedes an earlier measurement of the same fact")
+    return promotion(True, "nothing is recorded for this fact, and the logs measured it")
 
 
 # --------------------------------------------------------------------------------

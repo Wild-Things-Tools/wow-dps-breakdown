@@ -341,3 +341,229 @@ def test_the_probe_confirming_the_owner_leaves_both_numbers_standing():
     assert rows["baseline targets"]["profile"] == rows["baseline targets"]["measured"] == 3
     assert rows["raid size"]["profile"] is None  # never asserted; the probe answers it
     assert rows["raid size"]["measured"] == 20
+
+
+# --------------------------------------------------------------------------------
+# Promoting a measurement to a profile fact
+# --------------------------------------------------------------------------------
+#
+# The rule these pin: a measurement fills a gap and never overwrites a person. The
+# owner does not want to type in nine bosses' target counts; he also does not want
+# the log reader silently agreeing with itself, which is what an automatic promotion
+# would produce the first time the extraction was wrong.
+
+
+def pooled_observation(
+    peak: int,
+    size: int,
+    durations: tuple[float, ...] = (280.0, 290.0, 300.0),
+    *,
+    amp_on: int | None = None,
+    boss_share: float = 1.0,
+) -> fightextract.EncounterObservation:
+    """Several pulls of one encounter, so a promotion has a sample to stand on."""
+    observation = fightextract.EncounterObservation(3180, "Lightblinded Vanguard", 5)
+    observation.fights = []
+    for index, duration in enumerate(durations):
+        start, end = 1_000_000, 1_000_000 + int(duration * 1000)
+        actors = list(range(10, 10 + peak))
+        events = [
+            {
+                "timestamp": when,
+                "type": "damage",
+                "targetID": actor,
+                "amount": 1000 * (boss_share if actor == actors[0] else 1.0),
+            }
+            for actor in actors
+            for when in (start + 500, end - 500)
+        ]
+        auras: list[dict] = []
+        if amp_on is not None:
+            auras = [
+                {
+                    "timestamp": start + 900,
+                    "type": "applybuff",
+                    "abilityGameID": 555_001,
+                    "targetID": amp_on,
+                },
+                {
+                    "timestamp": start + 20_900,
+                    "type": "removebuff",
+                    "abilityGameID": 555_001,
+                    "targetID": amp_on,
+                },
+            ]
+        observation.fights.append(
+            fightextract.observe_fight(
+                report_code=f"r{index}",
+                fight={
+                    "id": 1,
+                    "encounterID": 3180,
+                    "name": "Lightblinded Vanguard",
+                    "size": size,
+                    "startTime": start,
+                    "endTime": end,
+                    "friendlyPlayers": list(range(size)),
+                    "kill": True,
+                },
+                damage_events=events,
+                death_events=[],
+                aura_events=auras,
+                phase_metadata=[],
+                actor_names={10: "Vanguard Champion", 11: "Zealot", 12: "Seer"},
+                ability_names={555_001: "Blinding Fervor"},
+            )
+        )
+    return observation
+
+
+def by_key(promotions) -> dict:
+    return {promotion.key: promotion for promotion in promotions}
+
+
+def test_a_gap_in_the_profile_is_filled_from_the_logs():
+    plan = by_key(fightprofile.plan_promotions(profile(), pooled_observation(3, 20)))
+
+    assert plan["targets"].eligible is True
+    assert plan["targets"].value == {"baseline": 3, "constant": True}
+    assert plan["raidSize"].value == 20
+    # The evidence always carries the spread. A promoted median that reads as
+    # exact is the same bug as a bare DPS number with no error beside it.
+    assert "n=3" in plan["fightLengthSeconds"].evidence or "every one of" in (
+        plan["fightLengthSeconds"].evidence
+    )
+
+
+def test_a_hand_asserted_fact_is_never_overwritten_even_when_the_logs_agree():
+    stated = profile(targets=hand({"baseline": 3, "constant": True}))
+    plan = by_key(fightprofile.plan_promotions(stated, pooled_observation(3, 20)))
+
+    assert plan["targets"].eligible is False
+    assert plan["targets"].blocked_by == SOURCE_HAND
+    assert plan["targets"].disagrees is False
+
+
+def test_a_disagreement_with_a_hand_fact_is_reported_rather_than_resolved():
+    """The finding this whole subsystem exists to preserve."""
+    stated = profile(targets=hand({"baseline": 3, "constant": True}))
+    plan = by_key(fightprofile.plan_promotions(stated, pooled_observation(2, 20)))
+
+    assert plan["targets"].eligible is False
+    assert plan["targets"].disagrees is True
+    assert plan["targets"].value == {"baseline": 2, "constant": True}
+    assert "extraction is the likelier culprit" in plan["targets"].reason
+
+
+def test_an_earlier_measurement_is_superseded_by_a_later_one():
+    stale = profile(raidSize=measured(30))
+    plan = by_key(fightprofile.plan_promotions(stale, pooled_observation(3, 20)))
+
+    assert plan["raidSize"].eligible is True
+    assert "supersedes an earlier measurement" in plan["raidSize"].reason
+
+
+def test_too_few_sampled_fights_holds_everything_back():
+    plan = by_key(
+        fightprofile.plan_promotions(profile(), pooled_observation(3, 20, durations=(300.0,)))
+    )
+    assert all(promotion.eligible is False for promotion in plan.values())
+    assert "below the floor" in plan["targets"].reason
+
+
+def test_fights_that_disagree_with_each_other_do_not_yield_a_target_count():
+    """Three pulls that saw 2, 3 and 3 targets have not measured a target count.
+
+    Taking the median there would publish a choice as a measurement.
+    """
+    observation = pooled_observation(3, 20)
+    observation.fights[0] = pooled_observation(2, 20, durations=(280.0,)).fights[0]
+    plan = by_key(fightprofile.plan_promotions(profile(), observation))
+
+    assert plan["targets"].eligible is False
+    assert "did not agree on the peak target count" in plan["targets"].reason
+
+
+def test_an_amplification_gets_its_ability_id_and_carrier_without_touching_the_multiplier():
+    """The Lightblinded Vanguard question, answered from the events.
+
+    The profile states a magnitude and leaves ``target`` unknown and ``abilityId``
+    null. Those two blanks are what a measurement may fill; the 20% is not, because
+    no field in the API says what an aura does.
+    """
+    stated = profile(
+        amplifications=hand(
+            [
+                {
+                    "ability": "opening damage-taken buff",
+                    "multiplier": 1.2,
+                    "first": 0,
+                    "duration": 20,
+                    "target": "unknown",
+                    "abilityId": None,
+                }
+            ]
+        )
+    )
+    # Actor 10 takes eight times the damage of the other two, so it is nominated as
+    # the priority target, and the aura sits on it.
+    observation = pooled_observation(3, 20, amp_on=10, boss_share=8.0)
+    plan = by_key(fightprofile.plan_promotions(stated, observation))
+
+    promotion = plan["amplifications"]
+    assert promotion.eligible is True, promotion.reason
+    assert promotion.blocked_by is None
+    filled = promotion.value[0]
+    assert filled["abilityId"] == 555_001
+    assert filled["target"] == fightprofile.TARGET_PRIORITY
+    assert filled["targetSource"] == SOURCE_LOGS
+    assert "Vanguard Champion" in filled["targetEvidence"]
+    # Untouched, all three of them.
+    assert filled["multiplier"] == 1.2
+    assert filled["first"] == 0 and filled["duration"] == 20
+    assert filled["magnitudeSource"] == SOURCE_HAND
+
+
+def test_an_amplification_on_a_fight_that_nominates_no_boss_stays_unknown():
+    """Naming the enemy is not the same as knowing what simc should be told."""
+    stated = profile(
+        amplifications=hand(
+            [
+                {
+                    "ability": "opening damage-taken buff",
+                    "multiplier": 1.2,
+                    "first": 0,
+                    "duration": 20,
+                    "target": "unknown",
+                    "abilityId": None,
+                }
+            ]
+        )
+    )
+    # Three enemies hit equally: the aura is named onto "Zealot" and nothing else.
+    plan = by_key(fightprofile.plan_promotions(stated, pooled_observation(3, 20, amp_on=11)))
+    filled = plan["amplifications"].value[0]
+    assert filled["abilityId"] == 555_001
+    assert filled["target"] == fightprofile.TARGET_UNKNOWN
+    assert "targetSource" not in filled
+
+
+def test_a_filled_in_amplification_stops_being_offered():
+    """Idempotent: nothing left to fill means nothing left to propose."""
+    stated = profile(
+        amplifications=hand(
+            [
+                {
+                    "ability": "opening damage-taken buff",
+                    "multiplier": 1.2,
+                    "first": 0,
+                    "duration": 20,
+                    "target": "priority",
+                    "abilityId": 555_001,
+                }
+            ]
+        )
+    )
+    plan = by_key(
+        fightprofile.plan_promotions(stated, pooled_observation(3, 20, amp_on=10, boss_share=8.0))
+    )
+    assert "amplifications" not in plan
