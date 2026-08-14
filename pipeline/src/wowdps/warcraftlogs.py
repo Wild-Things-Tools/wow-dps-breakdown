@@ -34,6 +34,8 @@ from pathlib import Path
 
 import httpx
 
+from . import logsanalysis
+
 log = logging.getLogger(__name__)
 
 TOKEN_URL = "https://www.warcraftlogs.com/oauth/token"
@@ -688,6 +690,10 @@ def cmd_verify(args: argparse.Namespace) -> int:
             "expected and informative, not an error in either source."
         ),
         "comparisons": comparisons,
+        # The readings that make the comparisons worth publishing. Derived from the
+        # rows above and nothing else, so `wowdps logs-analyse` can recompute them
+        # from a committed file without credentials or a second API pass.
+        "analysis": logsanalysis.analyse(comparisons),
         "minSampleSize": MIN_SAMPLE,
         "withheldForSmallSample": thin,
     }

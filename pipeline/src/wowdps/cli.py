@@ -416,6 +416,12 @@ def cmd_fight_promote(args: argparse.Namespace) -> int:
     return fightpromote.cmd_fight_promote(args)
 
 
+def cmd_logs_analyse(args: argparse.Namespace) -> int:
+    from . import logsanalysis
+
+    return logsanalysis.cmd_logs_analyse(args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="wowdps", description=__doc__)
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -600,6 +606,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     fightpromote.add_arguments(p_fight_promote)
     p_fight_promote.set_defaults(func=cmd_fight_promote)
+
+    p_logs_analyse = sub.add_parser(
+        "logs-analyse",
+        help="recompute the readings in a published logs-verification.json; needs no "
+        "credentials and spends no Warcraft Logs points",
+    )
+    from . import logsanalysis
+
+    logsanalysis.add_arguments(p_logs_analyse)
+    p_logs_analyse.set_defaults(func=cmd_logs_analyse)
 
     return parser
 

@@ -364,10 +364,11 @@ class FightObservation:
     #: from the tail of the fight is incomplete rather than absent.
     truncated: bool = False
     warnings: tuple[str, ...] = ()
-    #: Actor ids the report lists as players. Auras applied by one of these are
-    #: player debuffs on an enemy, not something the encounter does, and they must
-    #: not be offered as candidates for an encounter's own amplification window.
-    player_ids: frozenset[int] = frozenset()
+    #: Actor ids on the raid's side: the players and everything they own. Auras
+    #: applied by one of these are player effects on an enemy, not something the
+    #: encounter does, and they must not be offered as candidates for an
+    #: encounter's own amplification window. See ``friendly_source_ids``.
+    friendly_ids: frozenset[int] = frozenset()
     #: Which enemy this pull nominates as the priority target, and why. Never a
     #: guess: an encounter where nothing stands out reports nothing.
     priority: PriorityNomination = PriorityNomination(None, None, None, "not computed")
@@ -395,14 +396,17 @@ class FightObservation:
            source at all -- which is exactly the case the source test lets
            through, and exactly how Avenging Wrath reached the published MID2
            dataset a second time after being fixed once.
-        2. **The aura must not have been applied by a player.** This is the older
+        2. **The aura must not have been applied by the raid.** This is the older
            test and it is still the one that catches a debuff a player put on an
-           enemy. An aura whose event carried no source is kept: unknown is not
-           the same as "a player did it".
+           enemy. "The raid" rather than "a player" on purpose: a pet's debuff is
+           its owner's, and reading only ``type: "Player"`` out of the master data
+           let Mirror Image's Frostbolt through onto the published MID2 aura list.
+           An aura whose event carried no source at all is kept: unknown is not
+           the same as "the raid did it".
         """
-        if aura.actor_id in self.player_ids:
+        if aura.actor_id in self.friendly_ids:
             return False
-        return not (aura.source_id is not None and aura.source_id in self.player_ids)
+        return not (aura.source_id is not None and aura.source_id in self.friendly_ids)
 
     def enemy_name(self, actor_id: int) -> str:
         """A name for one enemy actor, from the report's master data or its damage."""
@@ -924,6 +928,44 @@ def _table_entries(table: dict | None) -> list[dict]:
 # --------------------------------------------------------------------------------
 
 
+def friendly_source_ids(actors: list[dict]) -> frozenset[int]:
+    """Report-local actor ids on the raid's side: players and everything they own.
+
+    ``masterData.actors`` types a hunter's pet, a mage's Mirror Image and a boss's
+    summoned add all as ``Pet``, so the type alone separates nothing -- what
+    separates them is whose ``petOwner`` they carry. Ownership is followed
+    transitively (a pet of a pet is still the raid's) and is cycle-safe, because a
+    malformed report must not hang the probe.
+
+    Reading only ``type == "Player"``, which is what this replaced, let every
+    pet-sourced aura through the encounter-aura filter. Mirror Image's Frostbolt
+    reached the published MID2 aura list that way, listed as something Lightblinded
+    Vanguard does to its own adds.
+    """
+    players = {
+        actor["id"]
+        for actor in actors
+        if isinstance(actor.get("id"), int) and actor.get("type") == "Player"
+    }
+    owners = {
+        actor["id"]: actor["petOwner"]
+        for actor in actors
+        if isinstance(actor.get("id"), int) and isinstance(actor.get("petOwner"), int)
+    }
+
+    friendly = set(players)
+    for actor_id in owners:
+        seen: set[int] = set()
+        current: int | None = actor_id
+        while current is not None and current not in seen:
+            seen.add(current)
+            if current in players:
+                friendly |= seen
+                break
+            current = owners.get(current)
+    return frozenset(friendly)
+
+
 def observe_fight(
     *,
     report_code: str,
@@ -938,7 +980,7 @@ def observe_fight(
     damage_table: dict | None = None,
     player_table: dict | None = None,
     truncated: bool = False,
-    player_ids: frozenset[int] = frozenset(),
+    friendly_ids: frozenset[int] = frozenset(),
     significant_share: float = DEFAULT_SIGNIFICANT_SHARE,
 ) -> FightObservation:
     """Assemble one fight's observations from the payloads that describe it."""
@@ -964,7 +1006,7 @@ def observe_fight(
         warnings.append("no enemy damage events: target counts could not be measured")
     if not any(life.died for life in lives):
         warnings.append("no enemy deaths seen: every lifespan ends at its last hit, not a death")
-    if aura_events and not player_ids:
+    if aura_events and not friendly_ids:
         # Without a player list neither aura test can fire, and every player
         # cooldown in the stream becomes a candidate for the encounter's own
         # amplification window. Silent until now; the failure is invisible in the
@@ -1005,7 +1047,7 @@ def observe_fight(
         active_time_fraction=active_time_fraction(player_table, duration),
         truncated=truncated,
         warnings=tuple(warnings),
-        player_ids=player_ids,
+        friendly_ids=friendly_ids,
         # Nominated from the enemies that mattered rather than from everything
         # that took a hit: a totem under the significance floor cannot be the
         # boss, and letting it into the ranking only adds noise to the margin.
@@ -1198,6 +1240,13 @@ class EncounterObservation:
                     # A truncated window has no measured end, so its duration is a
                     # floor rather than a value.
                     "anyTruncated": any(aura.truncated for aura in windows),
+                    # How many of these windows named who applied them. The source
+                    # test can only fire on those; the rest are kept because unknown
+                    # is not "the raid did it", and a list full of them means this
+                    # encounter's aura filter is running on the target test alone.
+                    # Published so the next run measures that instead of it being
+                    # inferred from which ability names look out of place.
+                    "sourced": sum(1 for aura in windows if aura.source_id is not None),
                 }
             )
         pooled.sort(key=lambda entry: (entry["start"] or {}).get("median", 0.0))

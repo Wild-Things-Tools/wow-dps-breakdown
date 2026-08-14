@@ -1,13 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AppHeader, type ViewId } from './components/AppHeader'
 import { ErrorState, Panel, Spinner } from './components/ui'
-import { loadFights, loadGear, loadManifest, loadSpecs, loadTierIndex } from './lib/data'
+import {
+  loadFights,
+  loadGear,
+  loadLogsVerification,
+  loadManifest,
+  loadSpecs,
+  loadTierIndex,
+} from './lib/data'
 import { describeConvergence, samplingError } from './lib/format'
-import type { FightsDataset, GearDataset, Manifest, SpecDetail, TierIndex } from './lib/types'
+import type {
+  FightsDataset,
+  GearDataset,
+  LogsVerification,
+  Manifest,
+  SpecDetail,
+  TierIndex,
+} from './lib/types'
 import { BuildsView } from './views/BuildsView'
 import { FightsView } from './views/FightsView'
 import { FunnelView } from './views/FunnelView'
 import { GearView } from './views/GearView'
+import { LogsView } from './views/LogsView'
 import { OverviewView } from './views/OverviewView'
 import { ScalingView } from './views/ScalingView'
 import { SpecDetailView } from './views/SpecDetailView'
@@ -20,6 +35,7 @@ const VIEWS: ViewId[] = [
   'builds',
   'gear',
   'fights',
+  'logs',
   'timing',
   'spec',
 ]
@@ -89,6 +105,7 @@ export default function App() {
   const [boss, setBoss] = useState<number | null>(initial.boss)
 
   const [gear, setGear] = useState<GearDataset | null>(null)
+  const [logs, setLogs] = useState<LogsVerification | null>(null)
   const [details, setDetails] = useState<SpecDetail[]>([])
   const [detailsLoading, setDetailsLoading] = useState(false)
 
@@ -155,6 +172,20 @@ export default function App() {
     setFights(null)
     loadFights(tier).then((data) => {
       if (!cancelled) setFights(data)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [tier, reloadToken])
+
+  // And again for the logs cross-check, which needs Warcraft Logs credentials and
+  // so only exists for a tier somebody has run `wowdps verify` against.
+  useEffect(() => {
+    if (!tier) return
+    let cancelled = false
+    setLogs(null)
+    loadLogsVerification(tier).then((data) => {
+      if (!cancelled) setLogs(data)
     })
     return () => {
       cancelled = true
@@ -341,6 +372,8 @@ export default function App() {
           onTierChange={setTier}
         />
       ) : null}
+
+      {view === 'logs' ? <LogsView logs={logs} specs={manifest.specs} /> : null}
 
       {view === 'timing' && !waitingForDetails ? (
         <TimingView details={details} scenario={scenario} />

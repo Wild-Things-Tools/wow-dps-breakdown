@@ -590,7 +590,7 @@ def test_player_debuffs_are_not_offered_as_encounter_mechanics():
             ),
             damage_by_target=(),
             active_time_fraction=None,
-            player_ids=frozenset({7}),
+            friendly_ids=frozenset({7}),
         )
 
     observation = EncounterObservation(
@@ -914,7 +914,7 @@ def test_a_self_buff_with_no_source_is_not_an_encounter_mechanic():
             ),
             damage_by_target=(),
             active_time_fraction=None,
-            player_ids=frozenset({7}),
+            friendly_ids=frozenset({7}),
         )
 
     observation = EncounterObservation(3180, "Lightblinded Vanguard", 5, [pull("a"), pull("b")])
@@ -931,6 +931,42 @@ def test_a_report_with_no_player_list_says_the_aura_filter_is_inoperative():
         death_events=[],
         aura_events=[aura(1.0, "applybuff", 42, 10), aura(21.0, "removebuff", 42, 10)],
         phase_metadata=[],
-        player_ids=frozenset(),
+        friendly_ids=frozenset(),
     )
     assert any("cannot be told from" in warning for warning in observed.warnings)
+
+
+def test_a_pets_debuff_on_an_enemy_is_its_owners_and_not_an_encounter_mechanic():
+    """The second half of the same regression, found in the published MID2 data.
+
+    `masterData.actors` types a hunter's pet, a mage's Mirror Image and a boss's
+    summoned add all as `Pet`. Reading only `type == "Player"` therefore filtered
+    none of them, and Mirror Image's Frostbolt was published as something
+    Lightblinded Vanguard does to its own adds. Ownership is what separates them.
+    """
+    from wowdps.fightextract import friendly_source_ids
+
+    actors = [
+        {"id": 7, "type": "Player", "name": "A mage"},
+        {"id": 8, "type": "Pet", "name": "Mirror Image", "petOwner": 7},
+        # A pet of a pet is still the raid's.
+        {"id": 9, "type": "Pet", "name": "A pet's pet", "petOwner": 8},
+        # The boss's own summon carries the same type and must not be swept up.
+        {"id": 90, "type": "NPC", "name": "General Amias Bellamy"},
+        {"id": 91, "type": "Pet", "name": "Spirit of the Defender", "petOwner": 90},
+        # An ownerless NPC, and a malformed self-owning one that must not hang.
+        {"id": 92, "type": "NPC", "name": "War Chaplain Senn"},
+        {"id": 93, "type": "Pet", "name": "Broken", "petOwner": 93},
+    ]
+    assert friendly_source_ids(actors) == frozenset({7, 8, 9})
+
+
+def test_an_ownership_cycle_that_never_reaches_a_player_is_not_friendly():
+    from wowdps.fightextract import friendly_source_ids
+
+    actors = [
+        {"id": 1, "type": "Player"},
+        {"id": 50, "type": "Pet", "petOwner": 51},
+        {"id": 51, "type": "Pet", "petOwner": 50},
+    ]
+    assert friendly_source_ids(actors) == frozenset({1})
