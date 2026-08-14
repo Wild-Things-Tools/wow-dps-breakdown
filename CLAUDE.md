@@ -337,28 +337,50 @@ this repository:
 - Verified working end to end: deploy run #8 pushed `5a805c0 wow-dps: publish from 919b8ac`
   into `wt-gate` with all 31 files.
 
-## The Actions budget paces the schedule
+## Actions minutes: free now, and why the arithmetic is kept anyway
 
-Not effort, not correctness — the schedule is set by what GitHub Free gives a **private**
-repository: 2,000 Actions minutes a month.
+The repository is **public** as of 14 August 2026, so GitHub-hosted standard runners are
+free with no minute limit. The schedule is paced by how often the answer changes, not by a
+budget. Nightly for the current tier, on demand for the loot sweep.
 
-- **Matrix jobs bill as the sum of their job-minutes.** Six shards for twenty minutes is
-  120 billed minutes, not twenty. Adding shards buys wall-clock time and costs nothing
-  extra in budget; raising the *cadence* is what costs.
-- A full pass over the current tier is roughly 150 job-minutes (26 profiles x 13 cells,
-  estimated on a 2-vCPU runner). Nightly would be ~4,500 a month against 2,000.
-- The failure mode is not a bill. The default spending limit is zero, so exhausting the
-  allowance **stops the runs** and the site goes quietly stale mid-month — which is
-  exactly the kind of silent wrongness this project treats as a bug. Hence weekly for the
-  current tier, monthly for the two-tier pass, and `workflow_dispatch` for patch days.
-- Before raising any cadence, do the arithmetic again. The README's "What this costs to
-  run" carries the current table.
-- **If the repository is ever made public this constraint disappears entirely** —
-  unlimited free minutes, twenty concurrent jobs. Note that repository visibility and site
-  visibility are independent here: the Discord gate lives in `wt-gate`'s Cloudflare
-  middleware, so a public repository would not make the published site public.
+Keep the old arithmetic in mind before making it private again, because it comes straight
+back: GitHub Free for organisations gives a **private** repository 2,000 minutes a month,
+and **matrix jobs bill as the sum of their job-minutes** — twelve shards for twenty
+minutes is 240 billed minutes, not twenty. Nightly would exhaust that by mid-month, and
+since the default spending limit is zero the runs would *stop* rather than bill, leaving
+the site quietly stale. Adding shards is free in either world; raising the cadence is what
+costs.
 
-## The tier axis
+Measured on the first real CI run, replacing the estimates that were here before:
+
+- One full pass over the current tier: **83 job-minutes** over 6 shards, ~6 of them the
+  cached simc build. The runner is **4 vCPU** — an earlier note assumed 2 and was 1.8x too
+  pessimistic.
+- Shards are badly unbalanced: 7 minutes against 19 on the same run. Round-robin balances
+  the *number* of profiles, but a pet spec costs ~2.5x a caster. Hence twelve shards.
+
+## Determinism is verified end to end, and the manifest must not undo it
+
+The first CI run reproduced a local run **byte for byte**: all 26 spec files identical,
+182 of 182 summary cells identical, across two different machines and two different simc
+git revisions (`8590ddb` local, `f50a212` in CI). That is now a measurement, not a claim.
+
+Two things nearly threw it away, both fixed, both worth not reintroducing:
+
+- **`generatedAt` is a wall-clock timestamp in the manifest.** Left alone it rewrites
+  itself every run, so every run commits, and the whole point of deterministic sims —
+  a quiet night leaves nothing to commit, so any diff means something moved — is worth
+  nothing. `_settle_provenance` therefore keeps the published `generatedAt` and `simc`
+  block when everything else in the manifest is unchanged. `generatedAt` reads as *when
+  the data last changed*, which is also the more honest thing to print beside figures that
+  have not moved. Note that `simc.gitRevision` alone would otherwise churn nightly.
+- **`merge_shards` used to take the newest shard's manifest wholesale.** That published
+  one shard's `medianDpsError` as the precision of the whole run — 0.0681 where the true
+  figure over all 338 cells was 0.0597. It is recomputed from the merged spec files now.
+  This is the same bug as the `targetError` one below, in a different disguise: a number
+  describing a fraction of the run, presented as describing all of it.
+
+## The tier axis## The tier axis
 
 - Datasets are namespaced: `web/public/data/<tier>/index.json` and `<tier>/specs/*.json`,
   with `tiers.json` at the root naming which tiers exist and which is current. There is no

@@ -144,3 +144,83 @@ def test_previous_needs_two_tiers(tmp_path):
     make_tier_dir(tmp_path, "MID2")
     with pytest.raises(FileNotFoundError):
         previous_tier(tmp_path)
+
+
+def test_merge_recomputes_the_error_over_the_whole_run(tmp_path):
+    """A shard's manifest only ever saw its own slice; the merged one must not."""
+    shard_a, shard_b = tmp_path / "shard-0", tmp_path / "shard-1"
+    for shard, spec_id, errors, when in (
+        (shard_a, "mage_fire_sunfury", [0.02, 0.04], "2026-08-14T01:00:00+00:00"),
+        (shard_b, "rogue_subtlety_default", [0.30, 0.40], "2026-08-14T02:00:00+00:00"),
+    ):
+        (shard / "MID2" / "specs").mkdir(parents=True)
+        (shard / "MID2" / "index.json").write_text(
+            json.dumps(
+                {
+                    "generatedAt": when,
+                    # Each shard reports the median of what it alone measured.
+                    "settings": {"medianDpsError": sum(errors) / 2},
+                    "specs": [{"id": spec_id}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (shard / "MID2" / "specs" / f"{spec_id}.json").write_text(
+            json.dumps(
+                {
+                    "id": spec_id,
+                    "scenarios": {
+                        "patchwerk": {
+                            "targets": [
+                                {"targets": i + 1, "dpsError": e} for i, e in enumerate(errors)
+                            ]
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    out = tmp_path / "data" / "MID2"
+    merge_shards([shard_a / "MID2", shard_b / "MID2"], out)
+    merged = json.loads((out / "index.json").read_text())
+
+    # Median of 0.02, 0.04, 0.30, 0.40 -- not 0.35, which is what the last shard
+    # to finish measured and would previously have been published as the whole run's.
+    assert merged["settings"]["medianDpsError"] == 0.17
+
+
+def test_manifest_keeps_its_timestamp_when_nothing_changed(tmp_path):
+    """Determinism is worth nothing if the manifest rewrites itself every run."""
+    from wowdps.dataset import _settle_provenance
+
+    path = tmp_path / "index.json"
+    published = {
+        "generatedAt": "2026-08-13T19:22:08+00:00",
+        "simc": {"gitRevision": "8590ddb"},
+        "specs": [{"id": "mage_fire_sunfury", "dps": 100.0}],
+    }
+    path.write_text(json.dumps(published), encoding="utf-8")
+
+    # Same data, later run, newer simc build: nothing about the dataset moved.
+    rerun = {
+        "generatedAt": "2026-08-14T08:05:14+00:00",
+        "simc": {"gitRevision": "f50a212"},
+        "specs": [{"id": "mage_fire_sunfury", "dps": 100.0}],
+    }
+    assert _settle_provenance(rerun, path) == published
+
+    # A real change carries the fresh provenance with it.
+    changed = dict(rerun, specs=[{"id": "mage_fire_sunfury", "dps": 101.0}])
+    assert _settle_provenance(changed, path) == changed
+
+
+def test_settle_provenance_survives_a_missing_or_broken_manifest(tmp_path):
+    from wowdps.dataset import _settle_provenance
+
+    fresh = {"generatedAt": "2026-08-14T08:05:14+00:00", "specs": []}
+    assert _settle_provenance(fresh, tmp_path / "absent.json") == fresh
+
+    broken = tmp_path / "broken.json"
+    broken.write_text("{not json", encoding="utf-8")
+    assert _settle_provenance(fresh, broken) == fresh

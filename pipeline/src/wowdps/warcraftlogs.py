@@ -178,6 +178,28 @@ class WarcraftLogsClient:
         return encounter
 
 
+#: Below this many ranked parses a row is not published at all: the median of a
+#: handful of logs says nothing about how the spec performs, and putting it next to
+#: a simulated number invites a comparison the sample cannot carry.
+MIN_SAMPLE = 5
+
+#: Below this many, the 95th percentile is an extrapolation from the single best
+#: parse rather than an estimate, so it is omitted rather than guessed. The previous
+#: index arithmetic returned the *minimum* at n=2 -- a "95th percentile" below the
+#: median, which shipped.
+MIN_P95 = 20
+
+
+def _percentile(sorted_values: list[float], fraction: float) -> float:
+    """Linear-interpolated percentile of an already sorted list."""
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    position = fraction * (len(sorted_values) - 1)
+    low = int(position)
+    high = min(low + 1, len(sorted_values) - 1)
+    return sorted_values[low] + (sorted_values[high] - sorted_values[low]) * (position - low)
+
+
 def summarise_rankings(encounter: dict) -> dict | None:
     """Reduce a rankings payload to the few numbers we actually compare against."""
     rankings = encounter.get("characterRankings")
@@ -196,12 +218,17 @@ def summarise_rankings(encounter: dict) -> dict | None:
         return None
 
     amounts.sort()
+    if len(amounts) < MIN_SAMPLE:
+        # A median of two parses is not a distribution, and publishing it beside a
+        # simulated figure invites a comparison the data cannot support.
+        return None
+
     return {
         "encounterId": encounter.get("id"),
         "encounterName": encounter.get("name"),
         "sampleSize": len(amounts),
         "median": round(statistics.median(amounts), 1),
-        "p95": round(amounts[int(len(amounts) * 0.95) - 1], 1),
+        **({"p95": round(_percentile(amounts, 0.95), 1)} if len(amounts) >= MIN_P95 else {}),
         "max": round(amounts[-1], 1),
     }
 
@@ -236,6 +263,10 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
     encounter_ids: list[int] = args.encounter or []
     comparisons: list[dict] = []
+    # Rankings that exist but are too thin to publish. Counted rather than dropped
+    # in silence: "this spec has no comparison" and "this spec has too few logs to
+    # compare" are different statements, and the second is the useful one.
+    thin = 0
 
     with WarcraftLogsClient(credentials) as client:
         if not encounter_ids:
@@ -272,6 +303,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
                 summary = cache[key]
                 if not summary:
+                    thin += 1
                     continue
 
                 sim_dps = spec.get("scenarios", {}).get("patchwerk", {}).get("dps", {}).get("1")
@@ -300,8 +332,16 @@ def cmd_verify(args: argparse.Namespace) -> int:
             "expected and informative, not an error in either source."
         ),
         "comparisons": comparisons,
+        "minSampleSize": MIN_SAMPLE,
+        "withheldForSmallSample": thin,
     }
     out_path = data_dir / "logs-verification.json"
     out_path.write_text(json.dumps(output, separators=(",", ":")) + "\n", encoding="utf-8")
-    log.info("wrote %s (%d comparisons)", out_path, len(comparisons))
+    log.info(
+        "wrote %s (%d comparisons, %d withheld for fewer than %d parses)",
+        out_path,
+        len(comparisons),
+        thin,
+        MIN_SAMPLE,
+    )
     return 0

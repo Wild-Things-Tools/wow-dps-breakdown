@@ -267,9 +267,10 @@ show. That is why the previous tier is not on a schedule: the machinery is built
 tested, and it is a one-line manual run (`tiers: latest previous`) whenever simc's
 old-tier profiles are loadable again.
 
-Scheduled runs simulate the current tier. The previous tier runs on demand — see below
-for why. Both resolve by position (`latest`, `previous`) rather than by name, so nothing
-needs editing when the next tier ships.
+The nightly run simulates the current tier. The previous tier runs on demand — see below
+for why, and the reason is data quality rather than cost. Both resolve by position
+(`latest`, `previous`) rather than by name, so nothing needs editing when the next tier
+ships.
 
 ### Hero talents come for free
 
@@ -429,10 +430,9 @@ parallel shards.
 - **Nightly** (`sims.yml`): clones the latest SimulationCraft, builds it with a cached
   build tree, splits the profile matrix across parallel jobs, merges the results and
   commits the dataset. A balance patch or an APL fix is on the site the next morning.
-- **Weekly** (`sims.yml`, Sunday): the same, for the current tier *and* the one before
-  it. Past profiles do not change, but the spell data they run against does — which is
-  the whole content of "how does last season's setup fare under current balance". Nightly
-  for both would double the cost for a number that only moves on patch days.
+- **On demand** (`gear.yml`): the loot sweep, which ranks trinkets against what a
+  character already wears. Not on a schedule — it earns its keep when a raid tier or a
+  tuning pass changes the answer.
 - **On every push to `main`** (`deploy.yml`): rebuilds the site and pushes it into the
   `wt-gate` repository under `public/wow-dps/`. `wt-gate` is a Cloudflare Pages project
   behind a Discord login, so Cloudflare rebuilds it on that push and the site appears at
@@ -491,73 +491,35 @@ so the site can show it.
 
 ### What this costs to run
 
-Nothing, and it is deliberately arranged to stay that way — but the binding constraint
-is not the one you would expect.
+Nothing, and the reason changed on 14 August 2026: **this repository is public**, and
+GitHub-hosted standard runners are free with no minute limit for public repositories. The
+cadence is now set by how often the answer changes, not by a budget.
 
-**GitHub Actions minutes are the budget.** This repository is private, and GitHub Free
-for organisations includes 2,000 Actions minutes a month for private repositories.
-(Public repositories get unlimited free minutes; that difference matters below.) Two
-things make simulations expensive against that allowance:
+It was briefly the other way round, and the arithmetic is worth keeping because it comes
+back the moment this repository is made private again. GitHub Free for organisations
+includes 2,000 Actions minutes a month for **private** repositories, and matrix jobs bill
+as the **sum** of their job-minutes — six shards running twenty minutes cost 120 minutes,
+not twenty. A nightly pass would have exhausted the allowance by mid-month; since the
+default spending limit is zero, the runs would not have produced a bill but would simply
+have **stopped**, leaving the site quietly stale. That failure is worse than older data.
 
-- Matrix jobs bill as the **sum** of their job-minutes. Six shards running for twenty
-  minutes cost 120 minutes, not twenty. Parallelism buys wall-clock time, not budget.
-- The work is genuinely CPU-bound. One cell is 3,000 iterations of a 300-second fight —
-  250 simulated hours of combat — and there are 13 cells per profile. That is the price
-  of the 0.06% standard error, and it is not overhead that can be tuned away.
+Measured on a real run rather than estimated:
 
-One full pass over the current tier costs roughly 150 job-minutes. A nightly schedule
-would therefore want ~4,500 minutes a month against an allowance of 2,000. Since the
-default spending limit is zero, the runs would not produce a bill — they would simply
-**stop partway through the month**, leaving the site quietly stale. That is a worse
-failure than slightly older data, so the schedule is sized to fit:
-
-| | Cadence | Estimated job-minutes / month |
-|---|---|---|
-| Current tier | Weekly (Wednesday) | ~650 |
-| Previous tier | On demand only — see below | 0 |
-| Trinket comparison | On demand only — see below | 0 |
-| CI and deploys on pushes | per push | ~150 |
-| | | **~800 of 2,000** |
-
-The trinket sweep is on demand for the same reason and with its own arithmetic,
-measured rather than assumed. One variant costs about **11 CPU-seconds** at 3,000
-deterministic iterations of a 300-second single-target fight — roughly 2.5× that for
-a pet spec, and roughly 3× again at five targets. One spec is about 36 variants
-across two simc invocations. So:
-
-| Pass | Billed minutes on a 2-vCPU runner |
+| | |
 |---|---|
-| Six builds, one target | ~35 |
-| Six builds, one and five targets | ~140 |
-| **All 26 builds, one target** | **~155** |
-| All 26 builds, one and five targets | ~600 |
+| One full pass over the current tier | **83 job-minutes** across 6 shards |
+| of which the simc build | ~6 minutes, with a warm cache |
+| Runner size | 4 vCPU (the earlier estimate assumed 2, and was 1.8x too pessimistic) |
+| Wall clock | ~25 minutes; the slowest shard ran 19 minutes against the fastest at 7 |
 
-A full single-target pass therefore fits inside the remaining ~1,200 minutes as an
-occasional run, and a 1-and-5-target pass fits about twice. Neither fits a schedule,
-and neither needs one: a raid's trinket table changes when the raid changes, not
-weekly. `gear.yml` is `workflow_dispatch` only, sharded so that no single job runs
-past the six-hour limit — sharding buys wall-clock time, not budget.
+That last figure is why the shard default is now twelve rather than six. Shards cost
+nothing extra — the billed total is the same work either way — and the matrix is badly
+unbalanced, because round-robin balances the *number* of profiles while a pet spec costs
+about 2.5x a caster.
 
-The remaining margin is deliberate: the estimate assumes a 2-vCPU standard runner, and
-if that assumption is wrong it is wrong by a factor of two.
-
-Freshness does not actually depend on the schedule. Balance patches land on known days,
-and `workflow_dispatch` runs the whole matrix on demand — so the answer to "a patch just
-dropped" is to trigger a run, not to poll nightly for a change that happens monthly.
-
-**To lift the ceiling entirely, make the repository public.** Actions minutes are then
-unlimited and free, up to twenty concurrent jobs, and the schedule can go back to nightly
-or finer. Worth being precise about what that does and does not expose: the published
-site is gated by Cloudflare middleware in `wt-gate`, not by this repository's visibility,
-so a public repository does **not** make the site public. What becomes readable is the
-pipeline source, the workflows, and the committed dataset — none of which holds a secret
-(the deploy token is a repository secret, not a file) and all of which is derived from
-SimulationCraft, which is itself open source. It is a real decision, but it is not the
-decision it looks like.
-
-The other zero-cost route is a **self-hosted runner**: minutes on your own hardware are
-never billed, private repository or not. That trades the bill for a machine that has to
-be awake when the schedule fires.
+Two limits still apply to public repositories, and neither binds here: 20 concurrent jobs,
+and scheduled workflows are disabled automatically after 60 days with no repository
+activity. The nightly data commits keep the second one from ever triggering.
 
 ### What hosting costs
 
