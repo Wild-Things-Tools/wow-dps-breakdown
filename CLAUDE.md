@@ -1063,6 +1063,11 @@ that are easy to get wrong a second time:
   asserted boss is exactly that case today -- Lightblinded Vanguard is three permanent
   targets and an amplification whose target simc cannot name -- so the feature is
   wiring waiting on profiles, and it says so when you run it.
+- **That equivalence is measured, not argued.** Frost Death Knight, MID2, 300
+  deterministic iterations: `boss_3180` returned **486,157** DPS and `patchwerk` at
+  three targets returned **486,157** -- the same number to the unit, because they are
+  the same simc invocation with different labels on it. Re-check this the first time
+  a boss profile grows an add wave; the numbers should then diverge.
 
 The view's one deviation from the chart specs is deliberate and commented: the simulated
 line is 3.5px where lines are 2px everywhere else. Where the simulation and the pull agree
