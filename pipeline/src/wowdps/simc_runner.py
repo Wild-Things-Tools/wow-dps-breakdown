@@ -145,3 +145,111 @@ def modelling_caveats(report: dict) -> list[str]:
         if message:
             caveats.append(message.strip())
     return caveats
+
+
+# --------------------------------------------------------------------------------
+# Profilesets: many variants of one actor in a single simc run
+# --------------------------------------------------------------------------------
+#
+# Everything this project compares *within* one profile goes through here, because
+# the alternative -- one simc invocation per variant -- is both slower and less
+# exact. Measured on MID2 Arcane Mage at 3000 deterministic iterations:
+#
+# * Two profilesets with identical options return **bit-identical** DPS, and a
+#   profileset returns the same number regardless of which others share its run. So
+#   a difference between two variants is an exact difference rather than a
+#   difference plus Monte Carlo noise, and results from two separate invocations are
+#   comparable.
+# * The **base actor is not one of them**. It ran 2996 iterations where the
+#   profilesets ran 3000 and landed 0.09% away from an identical profileset, outside
+#   its own 0.088% error. Whatever a caller wants to compare against must itself be
+#   a profileset. This is the single easiest way to get a wrong-by-0.1% answer here.
+# * ``profileset_work_threads=1`` is mandatory. Without it each variant silently
+#   runs at ``iterations / threads`` -- half the precision, no warning.
+
+
+@dataclass(frozen=True)
+class Profileset:
+    """One named variant: a key and the simc options that make it different."""
+
+    key: str
+    options: tuple[str, ...]
+
+
+@dataclass
+class ProfilesetResult:
+    key: str
+    dps: float
+    #: Standard error of the mean, in percent.
+    dps_error: float
+    iterations: int
+    #: Damage per second to the priority target, when the run asked for it.
+    priority_dps: float | None = None
+
+
+def profileset_options(sets: list[Profileset]) -> list[str]:
+    """``profileset.<key>=<option>`` lines, ``+=`` for the second option onward."""
+    options: list[str] = []
+    for entry in sets:
+        for index, option in enumerate(entry.options):
+            options.append(f"profileset.{entry.key}{'=' if index == 0 else '+='}{option}")
+    return options
+
+
+def run_profilesets(
+    simc: Path,
+    request: SimRequest,
+    settings: SimSettings,
+    sets: list[Profileset],
+    timeout: int = 1800,
+    metrics: str = "dps,prioritydps",
+) -> dict[str, ProfilesetResult]:
+    """One simc invocation covering every variant, keyed by profileset name.
+
+    ``metrics`` is a list because ``profileset_metric`` takes one: the second and
+    later entries come back per result under ``additional_metrics``, so a single
+    sweep yields the best variant by damage *and* the best by priority damage
+    without running anything twice. Note that this only selects what is *reported*
+    -- simc never optimises, it runs a fixed action list and tells you the result.
+    """
+    extra = [
+        "profileset_work_threads=1",
+        f"profileset_metric={metrics}",
+        *profileset_options(sets),
+    ]
+    report = run(
+        simc,
+        request,
+        SimSettings(
+            target_error=settings.target_error,
+            max_iterations=settings.max_iterations,
+            threads=settings.threads,
+            extra_options=(*settings.extra_options, *extra),
+        ),
+        timeout=timeout,
+    )
+    return parse_profilesets(report)
+
+
+def parse_profilesets(report: dict) -> dict[str, ProfilesetResult]:
+    """Pull the profileset table out of a json2 report. Pure, so it is testable."""
+    results: dict[str, ProfilesetResult] = {}
+    for entry in ((report.get("sim") or {}).get("profilesets") or {}).get("results") or []:
+        mean = float(entry.get("mean") or 0.0)
+        if mean <= 0:
+            continue
+        # simc keys the extra metric by its *display* name ("Damage per Second to
+        # Priority Target/Boss"), so match on what the name is about rather than on
+        # an exact string that could be reworded upstream.
+        priority = None
+        for metric in entry.get("additional_metrics") or []:
+            if "priority" in str(metric.get("metric", "")).lower():
+                priority = float(metric.get("mean") or 0.0) or None
+        results[entry["name"]] = ProfilesetResult(
+            key=entry["name"],
+            dps=mean,
+            dps_error=float(entry.get("mean_stddev") or 0.0) / mean * 100,
+            iterations=int(entry.get("iterations") or 0),
+            priority_dps=priority,
+        )
+    return results

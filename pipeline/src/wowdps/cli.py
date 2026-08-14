@@ -486,6 +486,79 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
     return fightprobe.cmd_fight_probe(args)
 
 
+def cmd_talents(args: argparse.Namespace) -> int:
+    """Compare a spec's hero builds with the gear held still, ranked two ways."""
+    import json
+
+    from . import talentsweep
+
+    profiles_dir = Path(args.profiles)
+    tier = _resolve_tier(profiles_dir, args.tier)
+    simc = simc_runner.find_simc(args.simc)
+
+    found = profiles.discover(profiles_dir, tier, dps_only=not args.include_tanks)
+    # Filtered by *spec name* rather than by build id: this command compares the
+    # builds of a spec, so naming one build would leave it nothing to compare
+    # against. `--spec Arcane`, not `--spec mage_arcane_sunfury`.
+    if args.wow_class:
+        wanted = {c.lower().replace("_", " ").replace("-", " ") for c in args.wow_class}
+        found = [p for p in found if p.wow_class.lower() in wanted]
+    if args.spec:
+        wanted_specs = {name.lower() for name in args.spec}
+        found = [p for p in found if p.spec.lower() in wanted_specs]
+    if not found:
+        logging.error("no profiles matched the selection")
+        return 1
+
+    by_spec: dict[str, list] = {}
+    for profile in found:
+        by_spec.setdefault(profile.spec_id, []).append(profile)
+
+    settings = SimSettings(
+        target_error=args.target_error,
+        max_iterations=args.max_iterations,
+        threads=args.threads,
+    )
+
+    results = []
+    for _spec_id, group in sorted(by_spec.items()):
+        for targets in args.targets:
+            result = talentsweep.sweep_spec(
+                simc, group, settings, targets=targets, timeout=args.timeout
+            )
+            if result is None:
+                continue
+            results.append(result)
+            by_dps = result.ranked_by("dps")
+            by_priority = result.ranked_by("prioritydps")
+            print(f"\n{result.spec_label} at {targets} target(s), on {result.base_profile_id}")
+            for build in by_dps:
+                priority = (
+                    f"  priority {build.priority_dps:>10,.0f}"
+                    if build.priority_dps is not None
+                    else ""
+                )
+                print(
+                    f"  {build.hero_talent:<28} {build.dps:>11,.0f}"
+                    f"  +/-{build.dps_error:.2f}%{priority}"
+                )
+            if by_priority and by_dps and by_priority[0].key != by_dps[0].key:
+                print(
+                    f"  -> {by_dps[0].hero_talent} does the most damage, but "
+                    f"{by_priority[0].hero_talent} puts the most on the priority target"
+                )
+
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(
+            json.dumps({"tier": tier, "specs": [r.to_json() for r in results]}, indent=1) + "\n",
+            encoding="utf-8",
+        )
+        logging.info("wrote %s (%d spec/target combinations)", out, len(results))
+    return 0 if results else 1
+
+
 def cmd_check_profiles(args: argparse.Namespace) -> int:
     """Which of a tier's profiles still build an actor against current spell data.
 
@@ -721,6 +794,36 @@ def build_parser() -> argparse.ArgumentParser:
 
     fightprobe.add_arguments(p_fight_probe)
     p_fight_probe.set_defaults(func=cmd_fight_probe)
+
+    p_talents = sub.add_parser(
+        "talents",
+        help="compare a spec's hero builds with the gear held still, ranked by "
+        "damage and by damage to the priority target",
+    )
+    add_common(p_talents)
+    p_talents.add_argument("--simc", help="path to the simc binary (default: $PATH)")
+    p_talents.add_argument(
+        "--wow-class", action="append", help="limit to one class, e.g. 'Mage' (repeatable)"
+    )
+    p_talents.add_argument(
+        "--spec",
+        action="append",
+        help="limit to one specialisation by name, e.g. 'Arcane' (repeatable). Not a "
+        "build id: this command compares the builds of a spec against each other",
+    )
+    p_talents.add_argument(
+        "--targets",
+        type=int,
+        nargs="+",
+        default=[1],
+        help="target counts to compare the builds at (default: 1)",
+    )
+    p_talents.add_argument("--target-error", type=float, default=0.0)
+    p_talents.add_argument("--max-iterations", type=int, default=3000)
+    p_talents.add_argument("--threads", type=int, default=0)
+    p_talents.add_argument("--timeout", type=int, default=1800)
+    p_talents.add_argument("--out", help="also write the results as JSON")
+    p_talents.set_defaults(func=cmd_talents)
 
     p_check = sub.add_parser(
         "check-profiles",

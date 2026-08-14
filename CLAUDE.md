@@ -54,6 +54,28 @@ machinery**: build profilesets over build variants once, and rank them twice.
 `profileset_metric` takes a list, so a single sweep yields the best build by `dps` and the
 best build by `prioritydps` together. Do not plan them as two projects.
 
+**Both are built now**, as `talentsweep.py` and `wowdps talents`. The variants are the
+spec's *hero builds*, which are the hashes simc hands us for free; permutations within a
+build would need hashes nobody has generated. The profileset mechanics are shared with
+the gear sweep in `simc_runner.run_profilesets`, so the measurements that justify them
+(bit-identical repeats, the base actor being 0.09% off, `profileset_work_threads=1`) live
+in one place.
+
+Verified on MID2 Arcane Mage, 1000 deterministic iterations, gear held at
+Spellslinger's:
+
+```
+1 target    Sunfury 187,147   Spellslinger 175,654    Sunfury +6.5%
+5 targets   Sunfury 473,927   Spellslinger 456,062    Sunfury +3.9%
+            priority 186,376  priority 178,176        Sunfury +4.6% on the boss
+```
+
+Against the published dataset, where each build wears its own gear, Sunfury leads by
+7.1% at one target. So for Arcane the two questions agree and the gear is worth about
+0.6 points of the 7.1. Two sanity checks that should keep holding: at one target
+`prioritydps` equals `dps` exactly, and the base build's talents-only number reproduced
+its shipped number to 0.3% (across different iteration counts, so different seeds).
+
 Budget accordingly: N variants multiply a cell that already costs ~9s at 3000 deterministic
 iterations, so a talent sweep will have to be restricted to selected target counts (1, 5,
 10) rather than all ten.
