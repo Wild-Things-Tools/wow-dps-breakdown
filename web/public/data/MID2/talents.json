@@ -1,6 +1,6 @@
 {
  "schemaVersion": 1,
- "generatedAt": "2026-08-14T19:50:17+00:00",
+ "generatedAt": "2026-08-14T20:00:25+00:00",
  "tier": "MID2",
  "settings": {
   "iterations": 1000,
@@ -9,8 +9,567 @@
  "note": "Every build of a spec on one character's gear and action list, so the difference is the talents. Ranked twice out of one run: by total damage and by damage to the priority target. simc does not optimise -- it runs a fixed action list, so this is what the shipped builds do rather than what they could do if played to funnel.",
  "specs": [
   {
+   "specId": "death_knight_frost",
+   "label": "Frost Death Knight",
+   "class": "Death Knight",
+   "baseProfile": "death_knight_frost_default",
+   "targets": 1,
+   "builds": [
+    {
+     "id": "death_knight_frost_default",
+     "label": "Frost Death Knight (Default)",
+     "heroTalent": "Default",
+     "dps": 230743.5,
+     "dpsError": 0.1022,
+     "priorityDps": 230743.5,
+     "iterations": 1000
+    },
+    {
+     "id": "death_knight_frost_rider_of_the_apocalypse",
+     "label": "Frost Death Knight (Rider of the Apocalypse)",
+     "heroTalent": "Rider of the Apocalypse",
+     "dps": 239192.6,
+     "dpsError": 0.1188,
+     "priorityDps": 239192.6,
+     "iterations": 1000
+    }
+   ],
+   "bestByDps": "death_knight_frost_rider_of_the_apocalypse",
+   "bestByPriorityDps": "death_knight_frost_rider_of_the_apocalypse",
+   "rankingsDisagree": false,
+   "note": "One character's gear and action list, wearing each build's talents in turn. This is what the talents do, not which shipped profile is strongest -- simc's builds differ in gear too."
+  },
+  {
+   "specId": "death_knight_frost",
+   "label": "Frost Death Knight",
+   "class": "Death Knight",
+   "baseProfile": "death_knight_frost_default",
+   "targets": 5,
+   "builds": [
+    {
+     "id": "death_knight_frost_default",
+     "label": "Frost Death Knight (Default)",
+     "heroTalent": "Default",
+     "dps": 742561.2,
+     "dpsError": 0.108,
+     "priorityDps": 212839.1,
+     "iterations": 1000
+    },
+    {
+     "id": "death_knight_frost_rider_of_the_apocalypse",
+     "label": "Frost Death Knight (Rider of the Apocalypse)",
+     "heroTalent": "Rider of the Apocalypse",
+     "dps": 743972.2,
+     "dpsError": 0.1275,
+     "priorityDps": 217866.1,
+     "iterations": 1000
+    }
+   ],
+   "bestByDps": "death_knight_frost_rider_of_the_apocalypse",
+   "bestByPriorityDps": "death_knight_frost_rider_of_the_apocalypse",
+   "rankingsDisagree": false,
+   "note": "One character's gear and action list, wearing each build's talents in turn. This is what the talents do, not which shipped profile is strongest -- simc's builds differ in gear too."
+  },
+  {
+   "specId": "death_knight_unholy",
+   "label": "Unholy Death Knight",
+   "class": "Death Knight",
+   "baseProfile": "death_knight_unholy_rider_of_the_apocalypse",
+   "targets": 1,
+   "builds": [
+    {
+     "id": "death_knight_unholy_rider_of_the_apocalypse",
+     "label": "Unholy Death Knight (Rider of the Apocalypse)",
+     "heroTalent": "Rider of the Apocalypse",
+     "dps": 233401.7,
+     "dpsError": 0.102,
+     "priorityDps": 233401.7,
+     "iterations": 1000
+    },
+    {
+     "id": "death_knight_unholy_san_layn",
+     "label": "Unholy Death Knight (San'layn)",
+     "heroTalent": "San'layn",
+     "dps": 223642.2,
+     "dpsError": 0.0971,
+     "priorityDps": 223642.2,
+     "iterations": 1000
+    }
+   ],
+   "bestByDps": "death_knight_unholy_rider_of_the_apocalypse",
+   "bestByPriorityDps": "death_knight_unholy_rider_of_the_apocalypse",
+   "rankingsDisagree": false,
+   "note": "One character's gear and action list, wearing each build's talents in turn. This is what the talents do, not which shipped profile is strongest -- simc's builds differ in gear too."
+  },
+  {
+   "specId": "death_knight_unholy",
+   "label": "Unholy Death Knight",
+   "class": "Death Knight",
+   "baseProfile": "death_knight_unholy_rider_of_the_apocalypse",
+   "targets": 5,
+   "builds": [
+    {
+     "id": "death_knight_unholy_rider_of_the_apocalypse",
+     "label": "Unholy Death Knight (Rider of the Apocalypse)",
+     "heroTalent": "Rider of the Apocalypse",
+     "dps": 625206.7,
+     "dpsError": 0.0975,
+     "priorityDps": 244999.7,
+     "iterations": 1000
+    },
+    {
+     "id": "death_knight_unholy_san_layn",
+     "label": "Unholy Death Knight (San'layn)",
+     "heroTalent": "San'layn",
+     "dps": 650888.7,
+     "dpsError": 0.0944,
+     "priorityDps": 236743.5,
+     "iterations": 1000
+    }
+   ],
+   "bestByDps": "death_knight_unholy_san_layn",
+   "bestByPriorityDps": "death_knight_unholy_rider_of_the_apocalypse",
+   "rankingsDisagree": true,
+   "note": "One character's gear and action list, wearing each build's talents in turn. This is what the talents do, not which shipped profile is strongest -- simc's builds differ in gear too."
+  },
+  {
+   "specId": "mage_arcane",
+   "label": "Arcane Mage",
+   "class": "Mage",
+   "baseProfile": "mage_arcane_spellslinger",
+   "targets": 1,
+   "builds": [
+    {
+     "id": "mage_arcane_spellslinger",
+     "label": "Arcane Mage (Spellslinger)",
+     "heroTalent": "Spellslinger",
+     "dps": 175654.4,
+     "dpsError": 0.1414,
+     "priorityDps": 175654.4,
+     "iterations": 1000
+    },
+    {
+     "id": "mage_arcane_sunfury",
+     "label": "Arcane Mage (Sunfury)",
+     "heroTalent": "Sunfury",
+     "dps": 187146.6,
+     "dpsError": 0.1481,
+     "priorityDps": 187146.6,
+     "iterations": 1000
+    }
+   ],
+   "bestByDps": "mage_arcane_sunfury",
+   "bestByPriorityDps": "mage_arcane_sunfury",
+   "rankingsDisagree": false,
+   "note": "One character's gear and action list, wearing each build's talents in turn. This is what the talents do, not which shipped profile is strongest -- simc's builds differ in gear too."
+  },
+  {
+   "specId": "mage_arcane",
+   "label": "Arcane Mage",
+   "class": "Mage",
+   "baseProfile": "mage_arcane_spellslinger",
+   "targets": 5,
+   "builds": [
+    {
+     "id": "mage_arcane_spellslinger",
+     "label": "Arcane Mage (Spellslinger)",
+     "heroTalent": "Spellslinger",
+     "dps": 456061.8,
+     "dpsError": 0.1675,
+     "priorityDps": 178175.9,
+     "iterations": 1000
+    },
+    {
+     "id": "mage_arcane_sunfury",
+     "label": "Arcane Mage (Sunfury)",
+     "heroTalent": "Sunfury",
+     "dps": 473927.5,
+     "dpsError": 0.2274,
+     "priorityDps": 186375.6,
+     "iterations": 1000
+    }
+   ],
+   "bestByDps": "mage_arcane_sunfury",
+   "bestByPriorityDps": "mage_arcane_sunfury",
+   "rankingsDisagree": false,
+   "note": "One character's gear and action list, wearing each build's talents in turn. This is what the talents do, not which shipped profile is strongest -- simc's builds differ in gear too."
+  },
+  {
+   "specId": "mage_fire",
+   "label": "Fire Mage",
+   "class": "Mage",
+   "baseProfile": "mage_fire_frostfire",
+   "targets": 1,
+   "builds": [
+    {
+     "id": "mage_fire_frostfire",
+     "label": "Fire Mage (Frostfire)",
+     "heroTalent": "Frostfire",
+     "dps": 211293.1,
+     "dpsError": 0.0974,
+     "priorityDps": 211293.1,
+     "iterations": 1000
+    },
+    {
+     "id": "mage_fire_sunfury",
+     "label": "Fire Mage (Sunfury)",
+     "heroTalent": "Sunfury",
+     "dps": 216885.6,
+     "dpsError": 0.1067,
+     "priorityDps": 216885.6,
+     "iterations": 1000
+    }
+   ],
+   "bestByDps": "mage_fire_sunfury",
+   "bestByPriorityDps": "mage_fire_sunfury",
+   "rankingsDisagree": false,
+   "note": "One character's gear and action list, wearing each build's talents in turn. This is what the talents do, not which shipped profile is strongest -- simc's builds differ in gear too."
+  },
+  {
+   "specId": "mage_fire",
+   "label": "Fire Mage",
+   "class": "Mage",
+   "baseProfile": "mage_fire_frostfire",
+   "targets": 5,
+   "builds": [
+    {
+     "id": "mage_fire_frostfire",
+     "label": "Fire Mage (Frostfire)",
+     "heroTalent": "Frostfire",
+     "dps": 588520.3,
+     "dpsError": 0.1285,
+     "priorityDps": 166321.4,
+     "iterations": 1000
+    },
+    {
+     "id": "mage_fire_sunfury",
+     "label": "Fire Mage (Sunfury)",
+     "heroTalent": "Sunfury",
+     "dps": 596570.6,
+     "dpsError": 0.1329,
+     "priorityDps": 157176.0,
+     "iterations": 1000
+    }
+   ],
+   "bestByDps": "mage_fire_sunfury",
+   "bestByPriorityDps": "mage_fire_frostfire",
+   "rankingsDisagree": true,
+   "note": "One character's gear and action list, wearing each build's talents in turn. This is what the talents do, not which shipped profile is strongest -- simc's builds differ in gear too."
+  },
+  {
+   "specId": "mage_frost",
+   "label": "Frost Mage",
+   "class": "Mage",
+   "baseProfile": "mage_frost_frostfire",
+   "targets": 1,
+   "builds": [
+    {
+     "id": "mage_frost_frostfire",
+     "label": "Frost Mage (Frostfire)",
+     "heroTalent": "Frostfire",
+     "dps": 180507.9,
+     "dpsError": 0.0988,
+     "priorityDps": 180507.9,
+     "iterations": 1000
+    },
+    {
+     "id": "mage_frost_spellslinger",
+     "label": "Frost Mage (Spellslinger)",
+     "heroTalent": "Spellslinger",
+     "dps": 191511.9,
+     "dpsError": 0.0897,
+     "priorityDps": 191511.9,
+     "iterations": 1000
+    }
+   ],
+   "bestByDps": "mage_frost_spellslinger",
+   "bestByPriorityDps": "mage_frost_spellslinger",
+   "rankingsDisagree": false,
+   "note": "One character's gear and action list, wearing each build's talents in turn. This is what the talents do, not which shipped profile is strongest -- simc's builds differ in gear too."
+  },
+  {
+   "specId": "mage_frost",
+   "label": "Frost Mage",
+   "class": "Mage",
+   "baseProfile": "mage_frost_frostfire",
+   "targets": 5,
+   "builds": [
+    {
+     "id": "mage_frost_frostfire",
+     "label": "Frost Mage (Frostfire)",
+     "heroTalent": "Frostfire",
+     "dps": 318017.4,
+     "dpsError": 0.1045,
+     "priorityDps": 180938.2,
+     "iterations": 1000
+    },
+    {
+     "id": "mage_frost_spellslinger",
+     "label": "Frost Mage (Spellslinger)",
+     "heroTalent": "Spellslinger",
+     "dps": 376751.8,
+     "dpsError": 0.0835,
+     "priorityDps": 190851.4,
+     "iterations": 1000
+    }
+   ],
+   "bestByDps": "mage_frost_spellslinger",
+   "bestByPriorityDps": "mage_frost_spellslinger",
+   "rankingsDisagree": false,
+   "note": "One character's gear and action list, wearing each build's talents in turn. This is what the talents do, not which shipped profile is strongest -- simc's builds differ in gear too."
+  },
+  {
+   "specId": "priest_shadow",
+   "label": "Shadow Priest",
+   "class": "Priest",
+   "baseProfile": "priest_shadow_archon",
+   "targets": 1,
+   "builds": [
+    {
+     "id": "priest_shadow_archon",
+     "label": "Shadow Priest (Archon)",
+     "heroTalent": "Archon",
+     "dps": 224231.0,
+     "dpsError": 0.068,
+     "priorityDps": 224231.0,
+     "iterations": 1000
+    },
+    {
+     "id": "priest_shadow_voidweaver",
+     "label": "Shadow Priest (Voidweaver)",
+     "heroTalent": "Voidweaver",
+     "dps": 218184.7,
+     "dpsError": 0.063,
+     "priorityDps": 218184.7,
+     "iterations": 1000
+    }
+   ],
+   "bestByDps": "priest_shadow_archon",
+   "bestByPriorityDps": "priest_shadow_archon",
+   "rankingsDisagree": false,
+   "note": "One character's gear and action list, wearing each build's talents in turn. This is what the talents do, not which shipped profile is strongest -- simc's builds differ in gear too."
+  },
+  {
+   "specId": "priest_shadow",
+   "label": "Shadow Priest",
+   "class": "Priest",
+   "baseProfile": "priest_shadow_archon",
+   "targets": 5,
+   "builds": [
+    {
+     "id": "priest_shadow_archon",
+     "label": "Shadow Priest (Archon)",
+     "heroTalent": "Archon",
+     "dps": 622899.4,
+     "dpsError": 0.0677,
+     "priorityDps": 200652.5,
+     "iterations": 1000
+    },
+    {
+     "id": "priest_shadow_voidweaver",
+     "label": "Shadow Priest (Voidweaver)",
+     "heroTalent": "Voidweaver",
+     "dps": 639057.4,
+     "dpsError": 0.0624,
+     "priorityDps": 202591.6,
+     "iterations": 1000
+    }
+   ],
+   "bestByDps": "priest_shadow_voidweaver",
+   "bestByPriorityDps": "priest_shadow_voidweaver",
+   "rankingsDisagree": false,
+   "note": "One character's gear and action list, wearing each build's talents in turn. This is what the talents do, not which shipped profile is strongest -- simc's builds differ in gear too."
+  },
+  {
+   "specId": "rogue_assassination",
+   "label": "Assassination Rogue",
+   "class": "Rogue",
+   "baseProfile": "rogue_assassination_deathstalker",
+   "targets": 1,
+   "builds": [
+    {
+     "id": "rogue_assassination_deathstalker",
+     "label": "Assassination Rogue (Deathstalker)",
+     "heroTalent": "Deathstalker",
+     "dps": 230928.1,
+     "dpsError": 0.0895,
+     "priorityDps": 230928.1,
+     "iterations": 1000
+    },
+    {
+     "id": "rogue_assassination_fatebound",
+     "label": "Assassination Rogue (Fatebound)",
+     "heroTalent": "Fatebound",
+     "dps": 226119.0,
+     "dpsError": 0.1015,
+     "priorityDps": 226119.0,
+     "iterations": 1000
+    }
+   ],
+   "bestByDps": "rogue_assassination_deathstalker",
+   "bestByPriorityDps": "rogue_assassination_deathstalker",
+   "rankingsDisagree": false,
+   "note": "One character's gear and action list, wearing each build's talents in turn. This is what the talents do, not which shipped profile is strongest -- simc's builds differ in gear too."
+  },
+  {
+   "specId": "rogue_assassination",
+   "label": "Assassination Rogue",
+   "class": "Rogue",
+   "baseProfile": "rogue_assassination_deathstalker",
+   "targets": 5,
+   "builds": [
+    {
+     "id": "rogue_assassination_deathstalker",
+     "label": "Assassination Rogue (Deathstalker)",
+     "heroTalent": "Deathstalker",
+     "dps": 395071.2,
+     "dpsError": 0.0768,
+     "priorityDps": 175826.8,
+     "iterations": 1000
+    },
+    {
+     "id": "rogue_assassination_fatebound",
+     "label": "Assassination Rogue (Fatebound)",
+     "heroTalent": "Fatebound",
+     "dps": 378759.1,
+     "dpsError": 0.0686,
+     "priorityDps": 193250.9,
+     "iterations": 1000
+    }
+   ],
+   "bestByDps": "rogue_assassination_deathstalker",
+   "bestByPriorityDps": "rogue_assassination_fatebound",
+   "rankingsDisagree": true,
+   "note": "One character's gear and action list, wearing each build's talents in turn. This is what the talents do, not which shipped profile is strongest -- simc's builds differ in gear too."
+  },
+  {
+   "specId": "shaman_elemental",
+   "label": "Elemental Shaman",
+   "class": "Shaman",
+   "baseProfile": "shaman_elemental_farseer",
+   "targets": 1,
+   "builds": [
+    {
+     "id": "shaman_elemental_farseer",
+     "label": "Elemental Shaman (Farseer)",
+     "heroTalent": "Farseer",
+     "dps": 241810.9,
+     "dpsError": 0.1065,
+     "priorityDps": 241810.9,
+     "iterations": 1000
+    },
+    {
+     "id": "shaman_elemental_stormbringer",
+     "label": "Elemental Shaman (Stormbringer)",
+     "heroTalent": "Stormbringer",
+     "dps": 226586.0,
+     "dpsError": 0.1107,
+     "priorityDps": 226586.0,
+     "iterations": 1000
+    }
+   ],
+   "bestByDps": "shaman_elemental_farseer",
+   "bestByPriorityDps": "shaman_elemental_farseer",
+   "rankingsDisagree": false,
+   "note": "One character's gear and action list, wearing each build's talents in turn. This is what the talents do, not which shipped profile is strongest -- simc's builds differ in gear too."
+  },
+  {
+   "specId": "shaman_elemental",
+   "label": "Elemental Shaman",
+   "class": "Shaman",
+   "baseProfile": "shaman_elemental_farseer",
+   "targets": 5,
+   "builds": [
+    {
+     "id": "shaman_elemental_farseer",
+     "label": "Elemental Shaman (Farseer)",
+     "heroTalent": "Farseer",
+     "dps": 550126.9,
+     "dpsError": 0.0922,
+     "priorityDps": 131512.5,
+     "iterations": 1000
+    },
+    {
+     "id": "shaman_elemental_stormbringer",
+     "label": "Elemental Shaman (Stormbringer)",
+     "heroTalent": "Stormbringer",
+     "dps": 676193.1,
+     "dpsError": 0.1028,
+     "priorityDps": 170768.6,
+     "iterations": 1000
+    }
+   ],
+   "bestByDps": "shaman_elemental_stormbringer",
+   "bestByPriorityDps": "shaman_elemental_stormbringer",
+   "rankingsDisagree": false,
+   "note": "One character's gear and action list, wearing each build's talents in turn. This is what the talents do, not which shipped profile is strongest -- simc's builds differ in gear too."
+  },
+  {
+   "specId": "shaman_enhancement",
+   "label": "Enhancement Shaman",
+   "class": "Shaman",
+   "baseProfile": "shaman_enhancement_stormbringer",
+   "targets": 1,
+   "builds": [
+    {
+     "id": "shaman_enhancement_stormbringer",
+     "label": "Enhancement Shaman (Stormbringer)",
+     "heroTalent": "Stormbringer",
+     "dps": 221525.2,
+     "dpsError": 0.1142,
+     "priorityDps": 221525.2,
+     "iterations": 1000
+    },
+    {
+     "id": "shaman_enhancement_totemic",
+     "label": "Enhancement Shaman (Totemic)",
+     "heroTalent": "Totemic",
+     "dps": 214869.6,
+     "dpsError": 0.0824,
+     "priorityDps": 214869.6,
+     "iterations": 1000
+    }
+   ],
+   "bestByDps": "shaman_enhancement_stormbringer",
+   "bestByPriorityDps": "shaman_enhancement_stormbringer",
+   "rankingsDisagree": false,
+   "note": "One character's gear and action list, wearing each build's talents in turn. This is what the talents do, not which shipped profile is strongest -- simc's builds differ in gear too."
+  },
+  {
+   "specId": "shaman_enhancement",
+   "label": "Enhancement Shaman",
+   "class": "Shaman",
+   "baseProfile": "shaman_enhancement_stormbringer",
+   "targets": 5,
+   "builds": [
+    {
+     "id": "shaman_enhancement_stormbringer",
+     "label": "Enhancement Shaman (Stormbringer)",
+     "heroTalent": "Stormbringer",
+     "dps": 681235.0,
+     "dpsError": 0.1185,
+     "priorityDps": 220150.4,
+     "iterations": 1000
+    },
+    {
+     "id": "shaman_enhancement_totemic",
+     "label": "Enhancement Shaman (Totemic)",
+     "heroTalent": "Totemic",
+     "dps": 537376.4,
+     "dpsError": 0.0789,
+     "priorityDps": 176203.3,
+     "iterations": 1000
+    }
+   ],
+   "bestByDps": "shaman_enhancement_stormbringer",
+   "bestByPriorityDps": "shaman_enhancement_stormbringer",
+   "rankingsDisagree": false,
+   "note": "One character's gear and action list, wearing each build's talents in turn. This is what the talents do, not which shipped profile is strongest -- simc's builds differ in gear too."
+  },
+  {
    "specId": "warlock_affliction",
    "label": "Affliction Warlock",
+   "class": "Warlock",
    "baseProfile": "warlock_affliction_hellcaller",
    "targets": 1,
    "builds": [
@@ -41,6 +600,7 @@
   {
    "specId": "warlock_affliction",
    "label": "Affliction Warlock",
+   "class": "Warlock",
    "baseProfile": "warlock_affliction_hellcaller",
    "targets": 5,
    "builds": [
@@ -66,6 +626,68 @@
    "bestByDps": "warlock_affliction_soul_harvester",
    "bestByPriorityDps": "warlock_affliction_hellcaller",
    "rankingsDisagree": true,
+   "note": "One character's gear and action list, wearing each build's talents in turn. This is what the talents do, not which shipped profile is strongest -- simc's builds differ in gear too."
+  },
+  {
+   "specId": "warlock_destruction",
+   "label": "Destruction Warlock",
+   "class": "Warlock",
+   "baseProfile": "warlock_destruction_diabolist",
+   "targets": 1,
+   "builds": [
+    {
+     "id": "warlock_destruction_diabolist",
+     "label": "Destruction Warlock (Diabolist)",
+     "heroTalent": "Diabolist",
+     "dps": 220123.2,
+     "dpsError": 0.0774,
+     "priorityDps": 220123.2,
+     "iterations": 1000
+    },
+    {
+     "id": "warlock_destruction_hellcaller",
+     "label": "Destruction Warlock (Hellcaller)",
+     "heroTalent": "Hellcaller",
+     "dps": 228662.7,
+     "dpsError": 0.0796,
+     "priorityDps": 228662.7,
+     "iterations": 1000
+    }
+   ],
+   "bestByDps": "warlock_destruction_hellcaller",
+   "bestByPriorityDps": "warlock_destruction_hellcaller",
+   "rankingsDisagree": false,
+   "note": "One character's gear and action list, wearing each build's talents in turn. This is what the talents do, not which shipped profile is strongest -- simc's builds differ in gear too."
+  },
+  {
+   "specId": "warlock_destruction",
+   "label": "Destruction Warlock",
+   "class": "Warlock",
+   "baseProfile": "warlock_destruction_diabolist",
+   "targets": 5,
+   "builds": [
+    {
+     "id": "warlock_destruction_diabolist",
+     "label": "Destruction Warlock (Diabolist)",
+     "heroTalent": "Diabolist",
+     "dps": 478392.6,
+     "dpsError": 0.0683,
+     "priorityDps": 201566.6,
+     "iterations": 1000
+    },
+    {
+     "id": "warlock_destruction_hellcaller",
+     "label": "Destruction Warlock (Hellcaller)",
+     "heroTalent": "Hellcaller",
+     "dps": 409888.7,
+     "dpsError": 0.0648,
+     "priorityDps": 156431.0,
+     "iterations": 1000
+    }
+   ],
+   "bestByDps": "warlock_destruction_diabolist",
+   "bestByPriorityDps": "warlock_destruction_diabolist",
+   "rankingsDisagree": false,
    "note": "One character's gear and action list, wearing each build's talents in turn. This is what the talents do, not which shipped profile is strongest -- simc's builds differ in gear too."
   }
  ]
