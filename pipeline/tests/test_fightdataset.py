@@ -536,3 +536,27 @@ def test_a_pattern_label_says_how_often_the_peak_is_reached():
 
 def test_a_shape_with_no_measured_peak_is_not_given_a_label_that_sounds_measured():
     assert fightdataset._pattern_label({"mean": 2.0, "steps": []}) == "unmeasured shape"
+
+
+def test_an_aura_up_for_the_whole_pull_is_reported_rather_than_shaded():
+    """A band marks a stretch that differs from the rest of the fight.
+
+    Lightblinded Vanguard's Light Infused runs the whole pull, so shading it shades
+    the plot. Six of those turned the chart into a solid block the moment the probe
+    sampled six pulls and more of the encounter's own long buffs survived the aura
+    filter -- the same wash the per-ability cap exists to prevent, by another route.
+    """
+    fight = {
+        "durationSeconds": 300.0,
+        "auras": [
+            {"abilityId": 1, "ability": "Light Infused", "start": 0.0, "duration": 299.0},
+            {"abilityId": 2, "ability": "Zealous Spirit", "start": 84.0, "duration": 20.0},
+        ],
+    }
+    pooled = [{"abilityId": 1}, {"abilityId": 2}]
+    drawn = {aura["ability"]: aura for aura in fightdataset._drawable_auras(fight, pooled)}
+
+    assert drawn["Light Infused"]["permanent"] is True
+    assert drawn["Zealous Spirit"]["permanent"] is False
+    # Still published: the view names it under the chart rather than dropping it.
+    assert len(drawn) == 2

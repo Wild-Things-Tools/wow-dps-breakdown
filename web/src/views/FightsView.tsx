@@ -786,8 +786,8 @@ function TimelinePanel({
   }, [encounter, representative, contextPulls, simIsFallback])
 
   const rows = useMemo(() => buildStepRows(series), [series])
-  const { bands, notDrawn: hiddenBands } = useMemo(
-    () => drawableBands(representative?.auras ?? []),
+  const { bands, notDrawn: hiddenBands, permanent: permanentAuras } = useMemo(
+    () => drawableBands(representative?.auras ?? [], representative?.durationSeconds ?? 0),
     [representative],
   )
   const peak = rows.reduce((best, row) => {
@@ -824,6 +824,17 @@ function TimelinePanel({
           },
         ]
       : []),
+  ]
+
+  // Named rather than shaded: see PERMANENT_AURA_SHARE. Pooled by ability so one
+  // buff on three enemies is one line, and the enemy is what the reader wants.
+  const permanentNames = [
+    ...new Map(
+      permanentAuras.map((aura) => [
+        aura.abilityId,
+        aura.actorName ? `${aura.ability} on ${aura.actorName}` : aura.ability,
+      ]),
+    ).values(),
   ]
 
   return (
@@ -920,7 +931,16 @@ function TimelinePanel({
                   // ability floating over a three-target chart does not answer the
                   // question the band exists to raise.
                   value: aura.actorName ? `${aura.ability} on ${aura.actorName}` : aura.ability,
-                  position: 'insideTop',
+                  // Anchored to the side of the band that faces into the plot. A
+                  // centred label on a narrow band at t=0 runs off the left edge --
+                  // "Divine Shield on General Amias Bellamy" rendered as "hield on
+                  // General Amias Bellamy" until this was per-band.
+                  position: aura.start < span / 2 ? 'insideTopLeft' : 'insideTopRight',
+                  // One row per band. Real windows are narrow and cluster, so three
+                  // labels on one line overlap into an unreadable smear -- measured
+                  // on Lightblinded Vanguard, where all three land inside the first
+                  // fifty seconds. A row each is the whole fix.
+                  dy: index * 13,
                   fill: 'var(--text-muted)',
                   fontSize: 11,
                 }}
@@ -1013,6 +1033,14 @@ function TimelinePanel({
           value this project treats as not published. */}
       <StepTable rows={rows} series={series} />
 
+      {permanentNames.length ? (
+        <Note>
+          Up for essentially the whole pull, so listed rather than shaded — a band marks
+          a stretch that differs from the rest of the fight, and these have none:{' '}
+          {permanentNames.join(', ')}.
+        </Note>
+      ) : null}
+
       {patterns && pattern ? <PatternNote patterns={patterns} pattern={pattern} /> : null}
 
       {encounter.measured?.caveats.length ? (
@@ -1058,10 +1086,27 @@ function TimelinePanel({
 const MAX_BANDS_PER_ABILITY = 3
 
 /**
- * Bands the chart will draw at all, across every ability. Six is about where a
- * shaded band still reads as an interval rather than as the background.
+ * Bands the chart will draw at all, across every ability.
+ *
+ * Three, not six, and the reason is that translucent bands *stack*: six at 14%
+ * opacity that happen to overlap read as one 60% block, and the per-ability merge
+ * cannot help because they belong to different abilities. Six was fine on the
+ * three-pull dataset and turned Vaelgor & Ezzorak into a solid wash on the six-pull
+ * one, which is the second time this chart has had to be defended from its own aura
+ * data. The ones kept are the *shortest* windows, because a short window is the one
+ * that marks something and a long one is on its way to being permanent.
  */
-const MAX_BANDS = 6
+const MAX_BANDS = 3
+
+/**
+ * Share of the fight above which an aura is reported rather than drawn.
+ *
+ * Two thirds, and the choice is about what a band *means*: it marks a stretch that
+ * differs from the rest of the fight, so an aura covering most of the fight has no
+ * such stretch to mark. Lightblinded Vanguard's `Light Infused` runs 285s of a 285s
+ * pull; shading it is shading the plot.
+ */
+const PERMANENT_AURA_SHARE = 0.66
 
 /**
  * Aura windows reduced to the bands worth drawing, and a count of what was not.
@@ -1083,10 +1128,28 @@ const MAX_BANDS = 6
  * reader cannot wait for the next probe run to see the chart; re-merging
  * already-merged windows is a no-op.
  */
-function drawableBands(auras: FightAuraWindow[]): {
+function drawableBands(
+  auras: FightAuraWindow[],
+  fightLength: number,
+): {
   bands: FightAuraWindow[]
   notDrawn: number
+  permanent: FightAuraWindow[]
 } {
+  // An aura that is up for nearly the whole fight is not a window, and shading it
+  // says nothing except that the fight happened. Six of those at 14% opacity is the
+  // same solid block the per-ability cap was added to prevent, arriving by a
+  // different route -- visible the moment the probe sampled six pulls instead of
+  // three and more of the encounter's own long buffs survived the aura filter.
+  // They are named under the chart instead, where a permanent aura belongs.
+  const permanent: FightAuraWindow[] = []
+  const windows: FightAuraWindow[] = []
+  for (const aura of auras) {
+    if (fightLength > 0 && aura.duration / fightLength >= PERMANENT_AURA_SHARE) permanent.push(aura)
+    else windows.push(aura)
+  }
+  auras = windows
+
   const byAbility = new Map<number, FightAuraWindow[]>()
   for (const aura of auras) {
     const group = byAbility.get(aura.abilityId)
@@ -1111,9 +1174,11 @@ function drawableBands(auras: FightAuraWindow[]): {
     candidates.push(...merged.slice(0, MAX_BANDS_PER_ABILITY))
   }
 
-  candidates.sort((a, b) => a.start - b.start)
+  // Shortest first to choose, then back into time order to draw.
+  candidates.sort((a, b) => a.duration - b.duration || a.start - b.start)
   notDrawn += Math.max(candidates.length - MAX_BANDS, 0)
-  return { bands: candidates.slice(0, MAX_BANDS), notDrawn }
+  const bands = candidates.slice(0, MAX_BANDS).sort((a, b) => a.start - b.start)
+  return { bands, notDrawn, permanent }
 }
 
 /** Context pulls underneath, then the simulated line, then the logged pull on top. */

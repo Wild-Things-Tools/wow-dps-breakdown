@@ -541,6 +541,13 @@ def _nearest_to_centre(group: list[dict], length_median: float = 0.0) -> dict:
 #: instances) which covered the step lines completely.
 _MAX_BANDS_PER_ABILITY = 3
 
+#: Share of the pull above which an aura is reported rather than drawn as a band.
+#: Two thirds, and the choice is about what a band *means*: it marks a stretch that
+#: differs from the rest of the fight, so an aura covering most of the fight has no
+#: such stretch to mark. Lightblinded Vanguard's `Light Infused` runs 285s of a 285s
+#: pull; shading it is shading the plot.
+_PERMANENT_AURA_SHARE = 0.66
+
 
 def _merge_windows(windows: list[dict]) -> list[dict]:
     """Overlapping windows of one ability, merged into the intervals they cover.
@@ -589,8 +596,17 @@ def _drawable_auras(fight: dict, pooled: list[dict]) -> list[dict]:
     3. **Capped per ability.** A shaded band is a heavy mark and a periodic aura
        has no natural limit. The count that was dropped travels with the band, so
        the chart says "and 27 more" rather than quietly showing three.
+
+    Each window also carries ``permanent``: an aura up for essentially the whole
+    pull is not a *window*, because a band marks a stretch that differs from the
+    rest of the fight and this one has none. The view names those under the chart
+    instead of shading them. This is the same wash the per-ability cap exists to
+    prevent, arriving by a different route, and it appeared the moment the probe
+    sampled six pulls rather than three and more of the encounter's own long buffs
+    survived the aura filter.
     """
     keep = {aura.get("abilityId") for aura in pooled}
+    length = float(fight.get("durationSeconds") or 0.0)
     by_ability: dict[object, list[dict]] = {}
     for aura in fight.get("auras") or []:
         if not isinstance(aura, dict) or aura.get("abilityId") not in keep:
@@ -606,6 +622,10 @@ def _drawable_auras(fight: dict, pooled: list[dict]) -> list[dict]:
                 # a name rather than an ability floating over a three-target chart.
                 "actorName": aura.get("actorName"),
                 "role": aura.get("role"),
+                "permanent": (
+                    length > 0
+                    and float(aura.get("duration") or 0.0) / length >= _PERMANENT_AURA_SHARE
+                ),
             }
         )
 
