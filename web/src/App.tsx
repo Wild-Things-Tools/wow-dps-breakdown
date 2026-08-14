@@ -2,18 +2,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AppHeader, type ViewId } from './components/AppHeader'
 import { SpecPicker } from './components/SpecPicker'
 import { ErrorState, Note, Panel, Spinner } from './components/ui'
-import { loadManifest, loadSpecs, loadTierIndex } from './lib/data'
+import { loadGear, loadManifest, loadSpecs, loadTierIndex } from './lib/data'
 import { describeConvergence, samplingError } from './lib/format'
 import { MAX_SERIES, SeriesPalette } from './lib/palette'
-import type { Manifest, SpecDetail, TierIndex } from './lib/types'
+import type { GearDataset, Manifest, SpecDetail, TierIndex } from './lib/types'
 import { BuildsView, groupBySpec } from './views/BuildsView'
 import { FunnelView } from './views/FunnelView'
+import { GearView, gearSpecIds } from './views/GearView'
 import { OverviewView } from './views/OverviewView'
 import { ScalingView } from './views/ScalingView'
 import { SpecDetailView } from './views/SpecDetailView'
 import { TimingView } from './views/TimingView'
 
-const VIEWS: ViewId[] = ['overview', 'scaling', 'funnel', 'builds', 'timing', 'spec']
+const VIEWS: ViewId[] = ['overview', 'scaling', 'funnel', 'builds', 'gear', 'timing', 'spec']
 type Theme = 'light' | 'dark' | 'system'
 
 /** URL state, so a configured comparison is a link somebody can share. */
@@ -76,6 +77,7 @@ export default function App() {
   const [focus, setFocus] = useState<string | null>(initial.focus)
   const [buildSpec, setBuildSpec] = useState<string | null>(initial.buildSpec)
 
+  const [gear, setGear] = useState<GearDataset | null>(null)
   const [details, setDetails] = useState<SpecDetail[]>([])
   const [detailsLoading, setDetailsLoading] = useState(false)
   const [theme, setTheme] = useState<Theme>(readTheme)
@@ -120,6 +122,20 @@ export default function App() {
     }
   }, [tier, reloadToken])
 
+  // Optional per tier: a tier can have a spec dataset without a gear sweep, and
+  // the view says so rather than the app failing to load.
+  useEffect(() => {
+    if (!tier) return
+    let cancelled = false
+    setGear(null)
+    loadGear(tier).then((data) => {
+      if (!cancelled) setGear(data)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [tier, reloadToken])
+
   const scenarios = manifest?.scenarios ?? []
   const scenario = useMemo(
     () => scenarios.find((entry) => entry.id === scenarioId) ?? scenarios[0] ?? null,
@@ -128,8 +144,19 @@ export default function App() {
 
   // The palette hands out colour slots per spec id and keeps them until the spec
   // is deselected, so filtering never repaints the remaining series.
+  // The gear sweep covers part of the tier, so its picker is narrowed to what was
+  // swept and opens on everything it has -- the chart's whole point is the
+  // cross-spec comparison, and an empty default would hide it behind six clicks.
+  const gearIds = useMemo(() => gearSpecIds(gear), [gear])
+  const gearVisible = useMemo(() => {
+    const covered = selected.filter((id) => gearIds.includes(id))
+    return covered.length ? covered : gearIds.slice(0, MAX_SERIES)
+  }, [selected, gearIds])
+
   const palette = useRef(new SeriesPalette()).current
-  palette.sync(selected)
+  // Colour follows the entity, so the ids handed to the palette are the ones
+  // actually being drawn -- otherwise the gear view's default set has no slots.
+  palette.sync(view === 'gear' ? gearVisible : selected)
   const colorOf = useCallback((id: string) => palette.colorOf(id), [palette])
 
   // Views other than the overview need the full per-spec files.
@@ -295,7 +322,7 @@ export default function App() {
     )
   }
 
-  const comparisonView = needsDetails
+  const comparisonView = needsDetails || view === 'gear'
   const tierLabel =
     tierIndex?.tiers.find((entry) => entry.id === tier)?.label ?? `tier ${manifest.tier}`
 
@@ -312,7 +339,11 @@ export default function App() {
     >
       {comparisonView ? (
         <SpecPicker
-          specs={manifest.specs}
+          specs={
+            view === 'gear'
+              ? manifest.specs.filter((spec) => gearIds.includes(spec.id))
+              : manifest.specs
+          }
           selected={selected}
           onToggle={toggleSpec}
           onClear={() => {
@@ -371,6 +402,10 @@ export default function App() {
             scenario={scenario}
           />
         )
+      ) : null}
+
+      {view === 'gear' ? (
+        <GearView gear={gear} visible={gearVisible} colorOf={colorOf} />
       ) : null}
 
       {view === 'timing' && !detailsLoading ? (

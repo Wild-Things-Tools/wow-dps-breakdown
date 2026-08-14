@@ -93,6 +93,116 @@ different rings and noticeably different secondary stats. So the talents-only pr
 The APLs are identical across a spec's hero builds -- they branch on `talent.` internally --
 so swapping the hash under one APL is legitimate. Confirmed by diffing the two Arcane profiles.
 
+## Gear comparison: what simc's data does and does not carry
+
+The trinket sweep (`wowdps gear`, `equipment.py`, `gearsweep.py`) rests on four
+findings. Two are measured, one is inference, one is a flat absence.
+
+### Item source is NOT in simc's shipped data. Do not go looking again.
+
+There is no journal, no instance, no encounter, no drop source in
+`engine/dbc/generated/`. What exists:
+
+- `dbc_extract3` (the *extraction* toolchain) reads `JournalEncounterItem`, but it
+  needs the game client's DB2 files, which are not in the repository.
+- The only thing that survives into `item_data.inc` is a three-bit `type_flags` for
+  Raid Finder / Heroic, set in `generator.py` from `JournalEncounterItem.flags_1`.
+  **It is 0x00 for every Midnight trinket**, so it separates nothing.
+- `content_tuning.inc` has no difficulty labels; `expected_stat.inc`'s `difficulty`
+  column is about *enemy* scaling, not items.
+
+So "this drops in the raid" is asserted in `pipeline/src/wowdps/data/gear_pools.json`,
+not derived. The assertion used for MID2, with its evidence:
+
+| Pool | Rule | Why it is believable |
+|---|---|---|
+| Raid | trinkets at base ilevel **219**, base quality **4**, ids **270160-270175** | one contiguous block of fifteen epics covering every primary/secondary archetype once or twice -- the shape of a raid loot table |
+| Mythic+ | trinkets at base ilevel **108**, base quality **3** | twenty-five items; rare base quality upgraded to epic by bonus id is the dungeon pattern, and 25 is about three per dungeon |
+
+The smallest external dependency that would replace the inference is a per-item
+source column from any item database that reads `JournalEncounterItem` (Wowhead,
+Raidbots, a local DB2 dump). It slots into the pool file's `source` field with no
+code change. `wowdps gear-candidates` prints every other column already.
+
+### The item level ladder is measurable, the track names are not
+
+Equipping one trinket under each bonus id of the Midnight upgrade family (item_bonus
+type 34, values 618/978) and reading `gear.trinket1.ilevel` back out of simc's own
+json2 gives the whole ladder:
+
+```
+12849 12850 12851 12852 12853 12854 12855 12856 13848
+  318   321   324   328   331   334   337   340   344
+```
+
+The MID2 profiles equip exactly **334** and **344** for epics (331 for crafted).
+344 is the top of the ladder. simc's data does not contain the words "Hero" or
+"Myth" anywhere, so the dataset carries both numbers with an `evidence` string and
+the UI shows it. Do not silently rename them to track names.
+
+Two neighbouring families (`609`/`972`, `610`/`973`) have the same nine-rank shape
+and overlap by five ranks, which is what upgrade tracks look like. The ninth entry
+of every family has a `13xxx` bonus id where the first eight are contiguous `12xxx`
+-- an eight-rank track that Blizzard later extended by one.
+
+### `ilevel=` alone is enough for trinkets, and will not be for rings
+
+Verified on Arcane Mage at 3000 deterministic iterations: a profileset using
+`trinket1=,id=250215,ilevel=334` returned **187,829.9** DPS and one that also passed
+the profile's `bonus_id=12854/13440` returned **187,829.9** -- identical to the last
+digit. Trinket bonus ids only add quality, sockets (trinkets have none) and flavour
+text, and an explicit `ilevel` overrides the scaling config they would otherwise set.
+
+**Rings and necks are different**: their bonus ids add gem sockets, and a socket is
+real stats. `GearItem.bonusIds` exists for that day; it is empty for every trinket.
+
+### Compare profilesets to profilesets, never to the base actor
+
+Also measured, same run:
+
+- Two profilesets with identical gear return **bit-identical** DPS, and a profileset
+  returns the same number regardless of which other profilesets share its run. So a
+  gain is an exact difference, and results from two separate invocations are
+  comparable -- which is what lets the sweep pick the baseline in one run and judge
+  candidates in the next.
+- The **base actor** ran 2996 iterations where the profilesets ran 3000 and landed
+  0.0875% away from an identical profileset -- outside its own 0.088% error. That is
+  why the "Standard" baseline is itself a profileset. This is the single easiest way
+  to get a wrong-by-0.1% answer here.
+
+### Standalone trinket value is additive to about 3%
+
+Arcane Mage, one target, both sockets empty = 159,026 DPS. Freightrunner's Flask
+alone adds 13,342; Gebbo's Bottomless Bag alone adds 14,646; the two together add
+28,804 where the sum of the singles is 27,988 -- the pair is worth **2.9% more** than
+its parts. So ranking by standalone value picks the right pair unless two candidates
+sit within a few percent of each other at the cut, which is why the runners-up are
+published rather than dropped. Pairwise would be N(N-1)/2 -- about 120 variants per
+spec instead of 16 -- for a correction of that size.
+
+### Cost, measured
+
+At 3000 deterministic iterations, one target, 300s fight: **~11 CPU-seconds per
+profileset variant** for a caster, plus ~22 for the base actor each invocation runs
+anyway. Pet specs (Unholy Death Knight, Beast Mastery) are roughly 2.5x that, and
+five targets roughly 3x one target. One spec's trinket sweep is ~36 variants across
+two invocations.
+
+Which puts a full 26-spec single-target pass at roughly **155 billed minutes** on a
+2-vCPU runner, and 1+5 targets at roughly 600. Against 2000 minutes a month with
+~800 already committed, single target fits as an occasional run and nothing fits a
+schedule -- which is fine, because trinkets change when a raid tier changes.
+`gear.yml` is therefore `workflow_dispatch` only. Do not put it on a cron without
+redoing this arithmetic.
+
+### The gear sweep writes after every spec
+
+`cmd_gear` rewrites `gear.json` once per spec rather than once at the end, and the
+dataset carries its own `coverage` count. A sweep that is interrupted at spec 9 of 26
+leaves a dataset that is smaller *and* honest about being smaller. The view prints
+"covers N of M builds in the tier" from that field -- never from the array length,
+which would be the same number with none of the meaning.
+
 ## The one thing not to break
 
 Both measurements rest on SimulationCraft's `prioritydps` field. Facts about it:

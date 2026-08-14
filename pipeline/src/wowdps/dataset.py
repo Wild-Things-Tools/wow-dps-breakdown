@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import simc_runner
+from . import equipment, gearsweep, simc_runner
 from .parse import Cell, parse_cell
 from .profiles import SpecProfile, tier_label
 from .scenarios import Scenario, SimSettings
@@ -306,21 +306,31 @@ def merge_shards(shard_dirs: list[Path], out_dir: Path) -> None:
     CI splits the matrix across parallel jobs (one per class); each writes its own
     ``specs/`` plus a partial manifest. Merging keeps the newest metadata and the
     union of the spec rows.
-    """
-    out_specs = out_dir / "specs"
-    out_specs.mkdir(parents=True, exist_ok=True)
 
+    A shard from the gear workflow carries only ``gear.json`` and no manifest at all,
+    so the gear merge runs first and a run that produced *only* gear data is a
+    success rather than a missing-manifest failure.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    merged_gear = merge_gear_shards(shard_dirs, out_dir)
+
+    out_specs = out_dir / "specs"
     manifests: list[dict] = []
     for shard in shard_dirs:
         manifest_path = shard / "index.json"
         if manifest_path.is_file():
             manifests.append(json.loads(manifest_path.read_text(encoding="utf-8")))
-        for spec_file in sorted((shard / "specs").glob("*.json")):
+        spec_files = sorted((shard / "specs").glob("*.json"))
+        if spec_files:
+            out_specs.mkdir(parents=True, exist_ok=True)
+        for spec_file in spec_files:
             (out_specs / spec_file.name).write_text(
                 spec_file.read_text(encoding="utf-8"), encoding="utf-8"
             )
 
     if not manifests:
+        if merged_gear:
+            return
         raise FileNotFoundError(f"no shard manifests found in {shard_dirs}")
 
     manifests.sort(key=lambda m: m.get("generatedAt", ""))
@@ -336,3 +346,156 @@ def merge_shards(shard_dirs: list[Path], out_dir: Path) -> None:
         json.dumps(merged, separators=(",", ":")) + "\n", encoding="utf-8"
     )
     log.info("merged %d shards -> %d specs", len(manifests), len(merged["specs"]))
+
+
+def merge_gear_shards(shard_dirs: list[Path], out_dir: Path) -> Path | None:
+    """Combine per-shard ``gear.json`` files, if the run produced any.
+
+    A gear sweep shards by spec, so every shard writes the same slot definitions and
+    a slice of the ``specs`` array; merging is the union of those slices. ``coverage``
+    is recounted from what actually arrived rather than carried over from a shard,
+    because a shard that failed has to shrink the published coverage rather than be
+    papered over.
+    """
+    documents = []
+    for shard in shard_dirs:
+        path = shard / "gear.json"
+        if path.is_file():
+            documents.append(json.loads(path.read_text(encoding="utf-8")))
+    if not documents:
+        return None
+
+    documents.sort(key=lambda doc: doc.get("generatedAt", ""))
+    merged = dict(documents[-1])
+
+    slots: dict[str, dict] = {}
+    for document in documents:
+        for slot in document.get("slots", []):
+            existing = slots.setdefault(slot["id"], {**slot, "specs": []})
+            by_id = {spec["id"]: spec for spec in existing["specs"]}
+            for spec in slot.get("specs", []):
+                by_id[spec["id"]] = spec
+            existing["specs"] = [by_id[key] for key in sorted(by_id)]
+
+    merged["slots"] = [slots[key] for key in sorted(slots)]
+    covered = {spec["id"] for slot in merged["slots"] for spec in slot["specs"]}
+    merged["coverage"] = {
+        "specs": len(covered),
+        "specsAvailable": (merged.get("coverage") or {}).get("specsAvailable", len(covered)),
+    }
+
+    path = out_dir / "gear.json"
+    path.write_text(json.dumps(merged, separators=(",", ":")) + "\n", encoding="utf-8")
+    log.info("merged %d gear shards -> %d specs", len(documents), len(covered))
+    return path
+
+
+# --------------------------------------------------------------------------------
+# Gear comparison dataset
+# --------------------------------------------------------------------------------
+
+#: Written to ``<tier>/gear.json``. Bumped independently of SCHEMA_VERSION because
+#: the two files are loaded independently -- an older site build reading a newer
+#: spec dataset should not be told the gear file changed shape.
+GEAR_SCHEMA_VERSION = 1
+
+#: Display names for the pool sources. Kept beside the writer rather than in the
+#: pool data so a correction to one item's source needs no new label.
+SOURCE_LABELS: dict[str, str] = {
+    "raid": "Current raid",
+    "mythicplus": "Mythic+ dungeons",
+}
+
+
+def write_gear(
+    out_dir: Path,
+    results: list[gearsweep.SpecSlotResult],
+    pools: dict[str, equipment.SlotPool],
+    tier: str,
+    simc_meta: dict,
+    settings: SimSettings,
+    specs_available: int,
+) -> Path:
+    """Write the gear-comparison dataset for one tier.
+
+    One file per tier rather than one per slot: the whole payload is a few hundred
+    kilobytes even at full coverage, and the view compares slots side by side. The
+    shape is keyed by *slot* throughout -- nothing in it says "trinket" except the
+    data -- so necks and rings arrive as extra entries in ``slots``.
+
+    ``coverage`` is written whether or not the run was complete. A gear dataset
+    covering six specs of twenty-six is a useful thing to publish and a misleading
+    thing to publish silently.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    by_slot: dict[str, list[gearsweep.SpecSlotResult]] = {}
+    for result in results:
+        by_slot.setdefault(result.slot.id, []).append(result)
+
+    slots = []
+    for slot_id, pool in pools.items():
+        slots.append(
+            {
+                "id": slot_id,
+                "label": pool.slot.label,
+                "sockets": list(pool.slot.sockets),
+                "baselineSource": pool.baseline_source,
+                "baselineSourceLabel": SOURCE_LABELS.get(
+                    pool.baseline_source, pool.baseline_source
+                ),
+                "candidateSource": pool.candidate_source,
+                "candidateSourceLabel": SOURCE_LABELS.get(
+                    pool.candidate_source, pool.candidate_source
+                ),
+                "note": pool.note,
+                "itemLevels": [level.to_json() for level in pool.item_levels],
+                "items": [item.to_json() for item in pool.items],
+                "specs": [result.to_json() for result in by_slot.get(slot_id, [])],
+            }
+        )
+
+    covered = sorted({result.profile.id for result in results})
+    document = {
+        "schemaVersion": GEAR_SCHEMA_VERSION,
+        "generatedAt": datetime.now(UTC).isoformat(timespec="seconds"),
+        "tier": tier,
+        "simc": simc_meta,
+        "settings": {
+            "targetError": settings.target_error,
+            "maxIterations": settings.max_iterations,
+            "deterministic": settings.target_error == 0,
+            "medianDpsError": _median_gear_error(results),
+        },
+        "coverage": {"specs": len(covered), "specsAvailable": specs_available},
+        "slots": slots,
+    }
+
+    path = out_dir / "gear.json"
+    path.write_text(json.dumps(document, separators=(",", ":")) + "\n", encoding="utf-8")
+    return path
+
+
+def _median_gear_error(results: list[gearsweep.SpecSlotResult]) -> float | None:
+    """Median standard error actually measured across every gear variant, in percent.
+
+    Same reasoning as ``_median_dps_error``: in deterministic mode nothing is
+    requested, so the requested figure is 0 and quoting it would claim a precision
+    the run does not have.
+    """
+    errors = sorted(
+        error
+        for result in results
+        for target in result.targets
+        for error in (
+            target.baseline_dps_error,
+            *(entry.dps_error for entry in target.pool),
+            *(entry.dps_error for entry in target.candidates),
+        )
+        if error > 0
+    )
+    if not errors:
+        return None
+    middle = len(errors) // 2
+    median = errors[middle] if len(errors) % 2 else (errors[middle - 1] + errors[middle]) / 2
+    return round(median, 4)

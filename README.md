@@ -8,6 +8,10 @@ simulation rather than opinion:
    targets are there, or does area damage cost it?
 3. **When** does it happen — one big cooldown window, or a flat line?
 
+4. **Which raid drop should this spec get?** For a subset of builds: every raid
+   trinket, at two item levels, measured against the two Mythic+ trinkets the build
+   already wears.
+
 Plus, for every spec with more than one hero-talent build: **which build**, ranked both by
 total damage and by damage on the main target — two questions that turn out to have
 different answers.
@@ -110,6 +114,97 @@ open-source tooling found, which parts of it were actually verified, and which p
 out to be wrong on a second look.
 
 ---
+
+## Which drops are an upgrade
+
+The **Loot** view answers a loot-council question rather than a theorycrafting one:
+*given the Mythic+ trinkets this character already has, is that raid drop worth
+handing over, and by how much?*
+
+Three steps, and each one is a choice that decides what the number means:
+
+1. **Find the baseline.** Every Mythic+ trinket eligible for the spec is run alone —
+   in one socket, with the other socket *empty* — against a run with both sockets
+   empty. The difference is that trinket's standalone value. An empty partner is the
+   neutral partner: it cannot share a cooldown window with the trinket being measured
+   and cannot feed it a stat buff, so the value belongs to the trinket rather than to
+   the pairing it happened to be tested in. The two highest become **Standard**.
+2. **Price it honestly.** Both baseline trinkets are worn at the *lower* of the two
+   item levels. Mythic+ gear tops out below Mythic raid gear, and pricing the thing
+   being compared against at the raid's top level would flatter every raid drop.
+3. **Judge each raid drop.** Each candidate goes into the socket holding the
+   **weaker** of the two baseline trinkets, at each item level. Replacing the weaker
+   one is the real decision — nobody asks whether a drop beats their best trinket
+   while keeping their worst.
+
+Everything is a SimulationCraft profileset, which matters more than it sounds:
+
+- Two profilesets with identical gear return **bit-identical** DPS, and a profileset
+  returns the same number regardless of which other profilesets share its run. So a
+  gain is an exact difference rather than a difference plus fresh Monte Carlo noise.
+- The **base actor** is not that. It runs a slightly different iteration count and
+  lands about 0.09% away from an identical profileset — outside its own error. So
+  Standard is itself a profileset, and nothing is ever compared against the base
+  actor.
+
+### What is measured, and what is asserted
+
+Three of the four inputs come out of SimulationCraft's own data. One does not, and
+the difference is worth stating plainly.
+
+| Input | Where it comes from |
+|---|---|
+| The item catalogue — id, name, base item level, stats, whether it has an effect at all | **Measured.** simc's generated item tables (`item_data.inc`, `item_effect.inc`). |
+| Which trinkets a spec can use | **Measured.** The item's primary stat against the profile's own `# gear_intellect=` / `agility` / `strength` summary. A Strength trinket on a Mage sims fine and means nothing. |
+| The two item levels | **Measured.** Equipping one trinket under each bonus id of the Midnight upgrade family and reading the item level back out of simc gives the whole ladder: 318, 321, 324, 328, 331, 334, 337, 340, 344. simc's MID2 profiles equip 334 and 344 for epics; 344 is the top. |
+| **Which instance an item drops from** | **Asserted.** Not in simc's shipped data at all. |
+
+That last row is the honest gap. SimulationCraft's extraction toolchain reads
+Blizzard's `JournalEncounterItem` table, but the only thing that survives into the
+files this repository has is a Raid Finder / Heroic flag which is zero for every
+Midnight trinket. There is no instance, no encounter and no drop source anywhere in
+`engine/dbc/generated/`.
+
+So the split is written down as data, in `pipeline/src/wowdps/data/gear_pools.json`,
+from a structural reading of the item table: the fifteen epics in one contiguous id
+block at base item level 219 are treated as the raid table, and the twenty-five
+rare-base trinkets at base item level 108 as the dungeon pool. Both readings are
+reproducible — `wowdps gear-candidates` prints the enumeration they come from — and
+both are inference. Correcting one is editing one row of a JSON file, and the
+smallest thing that would remove the guesswork entirely is a source column imported
+from any item database that does read the journal.
+
+Two item levels are labelled "Heroic track" and "Mythic track" in the UI because
+that is what they are for, but simc's files contain neither word; the numbers carry
+their evidence with them and the view shows it.
+
+### Honesty constraints this view enforces
+
+- **A margin inside the two runs’ combined standard error is a tie**, not a lead —
+  `hypot(errA, errB)`, the same rule the Builds view uses. The chart draws that band
+  across zero so a bar that has not cleared it is visible as such, and the table says
+  "tie" in words.
+- **Coverage is stated, not implied.** The dataset carries how many builds were swept
+  out of how many the tier has, and the panel header prints it. "The best trinket"
+  over six builds and over twenty-six are different claims.
+- **Standalone value is not perfectly additive.** Measured on Arcane Mage, a pair is
+  worth about 3% more than the sum of its two parts, so the runners-up at the
+  baseline cut are published rather than dropped.
+- The comparison is **simc’s profile plus a trinket swap**, so it inherits every
+  caveat the rest of the site has: simc’s gear, simc’s talents, simc’s rotation, a
+  stationary target.
+
+### What it currently covers
+
+Six builds of the twenty-six in Midnight season 2, chosen to span the primary stats
+and armour types: Arcane Mage and Affliction Warlock (Intellect, cloth), Enhancement
+Shaman and Beast Mastery Hunter (Agility, mail), Assassination Rogue (Agility,
+leather) and Unholy Death Knight (Strength, plate). Fifteen raid trinkets at two item
+levels each, at one and five targets.
+
+It is a subset because it is expensive, not because the rest is uninteresting — see
+"What this costs to run". The slot axis is already general: necks, rings and weapons
+are new pool entries and a new sweep, not a new format.
 
 ## What gets simulated
 
@@ -225,15 +320,18 @@ pipeline/          Python: profile discovery, simc orchestration, metric extract
     profiles.py      finding and identifying simc tier profiles
     simc_runner.py   invoking simc, collecting json2
     parse.py         concentration, ability shares, timelines, burst ratio
+    equipment.py     equipment slots, item pools, item levels, eligibility
+    gearsweep.py     the baseline-and-candidates profileset sweep
     dataset.py       writing the static JSON the site reads
     warcraftlogs.py  optional cross-check against real raid logs
 web/               React SPA (Vite, TypeScript, Tailwind v4, Recharts)
   public/data/       the generated dataset, committed
     tiers.json         which tiers exist, and which one is current
-    <tier>/            one dataset per tier: manifest plus per-spec detail files
+    <tier>/            one dataset per tier: manifest, per-spec detail files, gear.json
 .github/workflows/
   ci.yml             lint, typecheck, test on every push
-  sims.yml           nightly simulation matrix → commits fresh data
+  sims.yml           weekly simulation matrix → commits fresh data
+  gear.yml           on-demand gear comparison sweep → commits gear.json
   deploy.yml         builds and pushes the site into the gated hub repository
   logs-verification.yml   optional weekly Warcraft Logs comparison
 scripts/build-simc.sh     local SimulationCraft build
@@ -268,6 +366,30 @@ wowdps build \
   --out web/public/data
 ```
 
+Compare trinkets for a couple of specs (a separate command — it is its own pass over
+the profiles, not part of `build`):
+
+```bash
+wowdps gear \
+  --simc .work/simc/build/simc \
+  --profiles .work/simc/profiles \
+  --spec mage_arcane_sunfury \
+  --spec death_knight_unholy_san_layn \
+  --targets 1 \
+  --out web/public/data
+```
+
+`gear.json` is rewritten after every spec, so a sweep that is stopped part-way leaves
+a smaller dataset rather than none — and the dataset says how much of the tier it
+covers, so the site does not present six builds as if they were the field.
+
+To see what SimulationCraft actually knows about a slot — the raw material a pool
+file is curated from:
+
+```bash
+wowdps gear-candidates --slot trinket --min-ilevel 219 --effects-only
+```
+
 Then run the site:
 
 ```bash
@@ -291,6 +413,14 @@ parallel shards.
 | `--wow-class Mage` | Limit to one class (repeatable). |
 | `--tier MID2` | Which tier to simulate. Also takes `latest` (default) and `previous`, which resolve against what simc ships so a scheduled run keeps meaning what it said. |
 | `--include-tanks` | Also simulate tank specs, which are excluded by default. |
+
+`wowdps gear` takes the same selection flags plus:
+
+| Flag | What it does |
+|---|---|
+| `--slot trinket` | Which equipment slot to sweep (repeatable). Trinkets are the only pool that ships; necks and rings are pool entries away. |
+| `--targets 1 --targets 5` | Target counts to sweep at. Each one costs a full pass. |
+| `--pools path.json` | Use a different item pool file, e.g. one with corrected item sources. |
 
 ---
 
@@ -385,8 +515,28 @@ failure than slightly older data, so the schedule is sized to fit:
 |---|---|---|
 | Current tier | Weekly (Wednesday) | ~650 |
 | Previous tier | On demand only — see below | 0 |
+| Trinket comparison | On demand only — see below | 0 |
 | CI and deploys on pushes | per push | ~150 |
 | | | **~800 of 2,000** |
+
+The trinket sweep is on demand for the same reason and with its own arithmetic,
+measured rather than assumed. One variant costs about **11 CPU-seconds** at 3,000
+deterministic iterations of a 300-second single-target fight — roughly 2.5× that for
+a pet spec, and roughly 3× again at five targets. One spec is about 36 variants
+across two simc invocations. So:
+
+| Pass | Billed minutes on a 2-vCPU runner |
+|---|---|
+| Six builds, one target | ~35 |
+| Six builds, one and five targets | ~140 |
+| **All 26 builds, one target** | **~155** |
+| All 26 builds, one and five targets | ~600 |
+
+A full single-target pass therefore fits inside the remaining ~1,200 minutes as an
+occasional run, and a 1-and-5-target pass fits about twice. Neither fits a schedule,
+and neither needs one: a raid's trinket table changes when the raid changes, not
+weekly. `gear.yml` is `workflow_dispatch` only, sharded so that no single job runs
+past the six-hour limit — sharding buys wall-clock time, not budget.
 
 The remaining margin is deliberate: the estimate assumes a 2-vCPU standard runner, and
 if that assumption is wrong it is wrong by a factor of two.

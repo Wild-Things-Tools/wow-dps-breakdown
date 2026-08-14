@@ -1,0 +1,398 @@
+{
+ "note": "Curated. See pipeline/src/wowdps/equipment.py for what is derived and what is asserted.",
+ "tiers": {
+  "MID2": {
+   "itemLevels": [
+    {
+     "id": "heroic",
+     "label": "Heroic track, fully upgraded",
+     "ilevel": 334,
+     "evidence": "bonus_id 12854, rank 6 of the Midnight upgrade ladder (318/321/324/328/331/334/337/340/344), and the item level simc's own MID2 profiles equip for most epics."
+    },
+    {
+     "id": "mythic",
+     "label": "Mythic track, fully upgraded",
+     "ilevel": 344,
+     "evidence": "bonus_id 13848, the top of the Midnight upgrade ladder and the highest item level any MID2 profile equips."
+    }
+   ],
+   "slots": {
+    "trinket": {
+     "baselineSource": "mythicplus",
+     "candidateSource": "raid",
+     "note": "Raid pool: the contiguous block of epic trinkets at base item level 219 (ids 270160-270175). Mythic+ pool: the rare-base trinkets at base item level 108. Both readings are structural inference from simc's item table, which carries no drop source; correct a row here rather than in code.",
+     "items": [
+      {
+       "id": 270160,
+       "name": "First Mate's Shellward",
+       "slug": "first_mate_s_shellward",
+       "source": "raid",
+       "primaryStat": "str_agi",
+       "baseIlevel": 219,
+       "baseQuality": 4
+      },
+      {
+       "id": 270161,
+       "name": "Fang of Umbral Malignance",
+       "slug": "fang_of_umbral_malignance",
+       "source": "raid",
+       "primaryStat": "intellect",
+       "baseIlevel": 219,
+       "baseQuality": 4
+      },
+      {
+       "id": 270162,
+       "name": "Soulcoiler Ritual Vessel",
+       "slug": "soulcoiler_ritual_vessel",
+       "source": "raid",
+       "primaryStat": "intellect",
+       "baseIlevel": 219,
+       "baseQuality": 4
+      },
+      {
+       "id": 270163,
+       "name": "Sszorak's Ferocity",
+       "slug": "sszorak_s_ferocity",
+       "source": "raid",
+       "primaryStat": "strength",
+       "baseIlevel": 219,
+       "baseQuality": 4
+      },
+      {
+       "id": 270164,
+       "name": "Gebbo's Bottomless Bag",
+       "slug": "gebbo_s_bottomless_bag",
+       "source": "raid",
+       "primaryStat": "str_agi_int",
+       "baseIlevel": 219,
+       "baseQuality": 4
+      },
+      {
+       "id": 270165,
+       "name": "Keeper's Seething Core",
+       "slug": "keeper_s_seething_core",
+       "source": "raid",
+       "primaryStat": "str_agi",
+       "baseIlevel": 219,
+       "baseQuality": 4
+      },
+      {
+       "id": 270166,
+       "name": "Vashnik's Sanguine Rancor",
+       "slug": "vashnik_s_sanguine_rancor",
+       "source": "raid",
+       "primaryStat": "agility",
+       "baseIlevel": 219,
+       "baseQuality": 4
+      },
+      {
+       "id": 270167,
+       "name": "Wavecaller's Seastone",
+       "slug": "wavecaller_s_seastone",
+       "source": "raid",
+       "primaryStat": null,
+       "baseIlevel": 219,
+       "baseQuality": 4,
+       "secondaryStat": "haste"
+      },
+      {
+       "id": 270168,
+       "name": "Font of Venomous Rage",
+       "slug": "font_of_venomous_rage",
+       "source": "raid",
+       "primaryStat": null,
+       "baseIlevel": 219,
+       "baseQuality": 4,
+       "secondaryStat": "mastery"
+      },
+      {
+       "id": 270169,
+       "name": "Hex Lord's Dooming Idol",
+       "slug": "hex_lord_s_dooming_idol",
+       "source": "raid",
+       "primaryStat": null,
+       "baseIlevel": 219,
+       "baseQuality": 4,
+       "secondaryStat": "haste"
+      },
+      {
+       "id": 270170,
+       "name": "Vexhul's Everflowing Gland",
+       "slug": "vexhul_s_everflowing_gland",
+       "source": "raid",
+       "primaryStat": "intellect",
+       "baseIlevel": 219,
+       "baseQuality": 4
+      },
+      {
+       "id": 270171,
+       "name": "Preternatural Antivenom",
+       "slug": "preternatural_antivenom",
+       "source": "raid",
+       "primaryStat": null,
+       "baseIlevel": 219,
+       "baseQuality": 4,
+       "secondaryStat": "crit"
+      },
+      {
+       "id": 270173,
+       "name": "Zul'jin's Guillotine Technique",
+       "slug": "zul_jin_s_guillotine_technique",
+       "source": "raid",
+       "primaryStat": "str_agi",
+       "baseIlevel": 219,
+       "baseQuality": 4
+      },
+      {
+       "id": 270174,
+       "name": "Idol of the Howling Nexus",
+       "slug": "idol_of_the_howling_nexus",
+       "source": "raid",
+       "primaryStat": null,
+       "baseIlevel": 219,
+       "baseQuality": 4,
+       "secondaryStat": "mastery"
+      },
+      {
+       "id": 270175,
+       "name": "Voracious Heart of Ula'tek",
+       "slug": "voracious_heart_of_ula_tek",
+       "source": "raid",
+       "primaryStat": null,
+       "baseIlevel": 219,
+       "baseQuality": 4,
+       "secondaryStat": "crit"
+      },
+      {
+       "id": 250144,
+       "name": "Emberwing Feather",
+       "slug": "emberwing_feather",
+       "source": "mythicplus",
+       "primaryStat": "agi_int",
+       "baseIlevel": 108,
+       "baseQuality": 3
+      },
+      {
+       "id": 250214,
+       "name": "Lightspire Core",
+       "slug": "lightspire_core",
+       "source": "mythicplus",
+       "primaryStat": "agi_int",
+       "baseIlevel": 108,
+       "baseQuality": 3
+      },
+      {
+       "id": 250215,
+       "name": "Freightrunner's Flask",
+       "slug": "freightrunner_s_flask",
+       "source": "mythicplus",
+       "primaryStat": "agi_int",
+       "baseIlevel": 108,
+       "baseQuality": 3
+      },
+      {
+       "id": 250223,
+       "name": "Soulcatcher's Charm",
+       "slug": "soulcatcher_s_charm",
+       "source": "mythicplus",
+       "primaryStat": "intellect",
+       "baseIlevel": 108,
+       "baseQuality": 3
+      },
+      {
+       "id": 250224,
+       "name": "Mindpiercer's Sigil",
+       "slug": "mindpiercer_s_sigil",
+       "source": "mythicplus",
+       "primaryStat": null,
+       "baseIlevel": 108,
+       "baseQuality": 3
+      },
+      {
+       "id": 250225,
+       "name": "Void Execution Mandate",
+       "slug": "void_execution_mandate",
+       "source": "mythicplus",
+       "primaryStat": "agility",
+       "baseIlevel": 108,
+       "baseQuality": 3
+      },
+      {
+       "id": 250226,
+       "name": "Latch's Crooked Hook",
+       "slug": "latch_s_crooked_hook",
+       "source": "mythicplus",
+       "primaryStat": "str_agi",
+       "baseIlevel": 108,
+       "baseQuality": 3
+      },
+      {
+       "id": 250227,
+       "name": "Kroluk's Warbanner",
+       "slug": "kroluk_s_warbanner",
+       "source": "mythicplus",
+       "primaryStat": "str_agi",
+       "baseIlevel": 108,
+       "baseQuality": 3
+      },
+      {
+       "id": 250228,
+       "name": "Resonant Bellowstone",
+       "slug": "resonant_bellowstone",
+       "source": "mythicplus",
+       "primaryStat": "str_agi",
+       "baseIlevel": 108,
+       "baseQuality": 3
+      },
+      {
+       "id": 250229,
+       "name": "Idol of the War Loa",
+       "slug": "idol_of_the_war_loa",
+       "source": "mythicplus",
+       "primaryStat": null,
+       "baseIlevel": 108,
+       "baseQuality": 3,
+       "secondaryStat": "crit"
+      },
+      {
+       "id": 250238,
+       "name": "Seed of the Devouring Wild",
+       "slug": "seed_of_the_devouring_wild",
+       "source": "mythicplus",
+       "primaryStat": "strength",
+       "baseIlevel": 108,
+       "baseQuality": 3
+      },
+      {
+       "id": 250241,
+       "name": "Mark of Light",
+       "slug": "mark_of_light",
+       "source": "mythicplus",
+       "primaryStat": "strength",
+       "baseIlevel": 108,
+       "baseQuality": 3
+      },
+      {
+       "id": 250242,
+       "name": "Jelly Replicator",
+       "slug": "jelly_replicator",
+       "source": "mythicplus",
+       "primaryStat": "str_agi",
+       "baseIlevel": 108,
+       "baseQuality": 3
+      },
+      {
+       "id": 250243,
+       "name": "Manaheart's Binding Flame",
+       "slug": "manaheart_s_binding_flame",
+       "source": "mythicplus",
+       "primaryStat": "str_agi",
+       "baseIlevel": 108,
+       "baseQuality": 3
+      },
+      {
+       "id": 250244,
+       "name": "Permafrost Essence",
+       "slug": "permafrost_essence",
+       "source": "mythicplus",
+       "primaryStat": null,
+       "baseIlevel": 108,
+       "baseQuality": 3
+      },
+      {
+       "id": 250245,
+       "name": "Tumor of the Swarm",
+       "slug": "tumor_of_the_swarm",
+       "source": "mythicplus",
+       "primaryStat": "str_agi",
+       "baseIlevel": 108,
+       "baseQuality": 3
+      },
+      {
+       "id": 250246,
+       "name": "Refueling Orb",
+       "slug": "refueling_orb",
+       "source": "mythicplus",
+       "primaryStat": "intellect",
+       "baseIlevel": 108,
+       "baseQuality": 3
+      },
+      {
+       "id": 250248,
+       "name": "Mycolic Medicine",
+       "slug": "mycolic_medicine",
+       "source": "mythicplus",
+       "primaryStat": "intellect",
+       "baseIlevel": 108,
+       "baseQuality": 3
+      },
+      {
+       "id": 250253,
+       "name": "Whisper of the Duskwraith",
+       "slug": "whisper_of_the_duskwraith",
+       "source": "mythicplus",
+       "primaryStat": "intellect",
+       "baseIlevel": 108,
+       "baseQuality": 3
+      },
+      {
+       "id": 250254,
+       "name": "Seed of Radiant Hope",
+       "slug": "seed_of_radiant_hope",
+       "source": "mythicplus",
+       "primaryStat": "intellect",
+       "baseIlevel": 108,
+       "baseQuality": 3
+      },
+      {
+       "id": 250255,
+       "name": "Unstable Felheart Crystal",
+       "slug": "unstable_felheart_crystal",
+       "source": "mythicplus",
+       "primaryStat": "intellect",
+       "baseIlevel": 108,
+       "baseQuality": 3
+      },
+      {
+       "id": 250256,
+       "name": "Heart of Wind",
+       "slug": "heart_of_wind",
+       "source": "mythicplus",
+       "primaryStat": "str_agi_int",
+       "baseIlevel": 108,
+       "baseQuality": 3
+      },
+      {
+       "id": 250257,
+       "name": "Eye of the Drowning Void",
+       "slug": "eye_of_the_drowning_void",
+       "source": "mythicplus",
+       "primaryStat": "agi_int",
+       "baseIlevel": 108,
+       "baseQuality": 3
+      },
+      {
+       "id": 250258,
+       "name": "Vessel of Tortured Souls",
+       "slug": "vessel_of_tortured_souls",
+       "source": "mythicplus",
+       "primaryStat": null,
+       "baseIlevel": 108,
+       "baseQuality": 3,
+       "secondaryStat": "mastery"
+      },
+      {
+       "id": 250259,
+       "name": "Sapling of the Dawnroot",
+       "slug": "sapling_of_the_dawnroot",
+       "source": "mythicplus",
+       "primaryStat": "str_agi_int",
+       "baseIlevel": 108,
+       "baseQuality": 3
+      }
+     ]
+    }
+   }
+  }
+ }
+}
