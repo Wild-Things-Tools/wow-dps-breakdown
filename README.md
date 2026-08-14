@@ -332,6 +332,7 @@ pipeline/          Python: profile discovery, simc orchestration, metric extract
     parse.py         concentration, ability shares, timelines, burst ratio
     equipment.py     equipment slots, item pools, item levels, eligibility
     gearsweep.py     the baseline-and-candidates profileset sweep
+    talentsweep.py   `wowdps talents`: a spec's builds with the gear held still
     dataset.py       writing the static JSON the site reads
     warcraftlogs.py  optional cross-check against real raid logs
     logsanalysis.py  `wowdps logs-analyse`: what that cross-check can actually say
@@ -354,6 +355,7 @@ web/               React SPA (Vite, TypeScript, Tailwind v4, Recharts)
   ci.yml             lint, typecheck, test on every push
   sims.yml           weekly simulation matrix → commits fresh data
   gear.yml           on-demand gear comparison sweep → commits gear.json
+  talents.yml        on-demand build comparison → commits talents.json
   deploy.yml         builds and pushes the site into the gated hub repository
   logs-verification.yml   optional weekly Warcraft Logs comparison
   fight-probe.yml         on-demand: what a boss's fights actually look like
@@ -508,6 +510,12 @@ parallel shards.
 - **Weekly, optional** (`logs-verification.yml`): pulls ranking medians from Warcraft
   Logs for a reality check. Skips itself cleanly if credentials are not configured.
 
+- **On demand** (`talents.yml`): puts every hero build of a spec on one character's gear
+  and ranks the result by total damage *and* by damage to the priority target, out of a
+  single run. A build choice changes when talents change, not nightly — and because the
+  sims are deterministic a nightly run would commit nothing and spend the minutes anyway.
+  Measured on MID2 at five targets: four specs of eleven put a different build top on
+  damage than on damage-to-the-boss.
 - **On demand** (`fight-probe.yml`): reads a handful of real logs per boss and reports what
   its fights actually look like — target counts over time, add lifetimes, phase
   boundaries, auras on enemies, raid size. It uploads evidence, and with its `publish`
@@ -816,6 +824,12 @@ which is not the shape the median parse the site compares against experienced.
   same measurement moves from boss to boss and from build to build.
 - **Profiles are simc's, not yours.** Gear, talents and consumables are the tier defaults.
   Two builds being close here says little about your character specifically.
+- **Two build comparisons exist and they answer different questions.** The Builds view's
+  main table ranks SimulationCraft's *shipped* profiles, which differ in gear as well as
+  talents, so a gap there means "this build the way simc plays it". The panel below it
+  holds gear still and varies only the talent hash. On MID2 Arcane the two agree — Sunfury
+  leads by 7.1% shipped and 6.5% on equal gear — but they need not, and neither is the
+  "real" answer on its own.
 - **The talent loadout is fixed across the target sweep.** SimulationCraft ships one
   talent loadout per hero build, tuned for raid single target, and its rotations adapt to
   the target count while the talents do not. A spec whose real area-damage loadout

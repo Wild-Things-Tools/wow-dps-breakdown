@@ -847,9 +847,15 @@ def _targets_promotion(observation) -> _Proposal | None:
             "minute of them; re-probe before promoting a target count"
         )
     elif coverage.low < MIN_EVENT_COVERAGE:
+        # The decision is made on the *worst* fight, so that is the figure the
+        # sentence has to lead with. Printing the median after the word "only"
+        # produced "the event fetch reached only 100% (range 93%-100%)", which
+        # reads as nonsense and makes a correct refusal look like a bug -- seen on
+        # Lightblinded Vanguard the first time this panel met real data.
         withheld = (
-            f"the event fetch reached only {_share_text(coverage)} of the sampled "
-            f"fights, so every count taken over them is a reading of a prefix. "
+            f"one of the sampled fights was only read to {coverage.low:.0%} "
+            f"(the set ran {coverage.low:.0%}-{coverage.high:.0%}, n={coverage.n}), "
+            f"and a count taken over a partly-read fight is a reading of a prefix. "
             f"Raise --max-pages on the probe and re-run before promoting this"
         )
     elif peak.low != peak.high:
