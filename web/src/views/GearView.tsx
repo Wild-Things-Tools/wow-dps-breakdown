@@ -26,7 +26,7 @@
  * bars per group would put twelve marks in a row nobody can read.
  */
 
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import {
   Bar,
   BarChart,
@@ -46,6 +46,7 @@ import {
   GRID,
   TooltipCard,
 } from '../components/chart'
+import { GameLink } from '../components/GameLink'
 import {
   Dot,
   EmptyState,
@@ -148,8 +149,14 @@ export function GearView({
       : colorOf
   const tileRows = mode === 'byItem' ? allRows : rows
   const tiles = useMemo(
-    () => headline(tileRows, tileScope, mode === 'byItem' ? itemNoise : noise),
-    [tileRows, tileScope, mode, itemNoise, noise],
+    () =>
+      headline(
+        tileRows,
+        tileScope,
+        mode === 'byItem' ? itemNoise : noise,
+        level?.ilevel ?? 0,
+      ),
+    [tileRows, tileScope, mode, itemNoise, noise, level],
   )
 
   if (!gear || !slot || !level) {
@@ -248,9 +255,19 @@ export function GearView({
         <Panel>
           <PanelHeader
             title={
-              activeItem
-                ? `${activeItem.label} at ${level.ilevel}`
-                : "No item selected"
+              activeItem ? (
+                <>
+                  <GameLink
+                    kind="item"
+                    id={activeItem.itemId}
+                    name={activeItem.label}
+                    ilevel={level.ilevel}
+                  />{" "}
+                  at {level.ilevel}
+                </>
+              ) : (
+                "No item selected"
+              )
             }
             subtitle={
               <>
@@ -311,7 +328,9 @@ export function GearView({
                   runs’ standard errors added in quadrature. A bar inside it is
                   a tie, not a lead. Item levels come from the upgrade ladder
                   measured in simc’s own data, not from a track name — simc’s
-                  files do not carry Blizzard’s track labels.
+                  files do not carry Blizzard’s track labels. Item names in the
+                  table below link to Wowhead; the axis labels here are drawn
+                  inside the chart, where the tooltip cannot follow.
                 </Note>
               </>
             )}
@@ -323,7 +342,12 @@ export function GearView({
                 title="Every comparison, in numbers"
                 subtitle="The table view, so nothing here depends on telling two colours apart. A margin inside the two runs’ combined sampling error is reported as a tie."
               />
-              <GainTable rows={rows} specs={specs} colorOf={colorOf} />
+              <GainTable
+                rows={rows}
+                specs={specs}
+                colorOf={colorOf}
+                ilevel={level.ilevel}
+              />
             </Panel>
           ) : null}
         </>
@@ -344,7 +368,9 @@ export function GearView({
           Standalone value is not perfectly additive — measured on Arcane Mage,
           a pair is worth about 3% more than the sum of its two parts — so two
           items within a few percent of each other at the cut could swap once
-          paired.
+          paired. Hovering an item name asks Wowhead for its card at the item
+          level in play; any difficulty name printed in that card is Wowhead’s
+          reading of the item level, not something simc’s files say.
         </Note>
       </Panel>
     </div>
@@ -455,12 +481,17 @@ function medianNoise(rows: Row[]): number {
 
 interface Tile {
   label: string
-  value: string
-  caption: string
+  value: ReactNode
+  caption: ReactNode
   specId?: string
 }
 
-function headline(rows: Row[], specs: GearSpecResult[], noise: number): Tile[] {
+function headline(
+  rows: Row[],
+  specs: GearSpecResult[],
+  noise: number,
+  ilevel: number,
+): Tile[] {
   if (rows.length === 0 || specs.length === 0) return []
   const tiles: Tile[] = []
 
@@ -478,10 +509,21 @@ function headline(rows: Row[], specs: GearSpecResult[], noise: number): Tile[] {
     }
   }
   if (bestRow && bestSpec) {
+    const row = bestRow
     tiles.push({
       label: "Biggest single upgrade",
       value: `${percent(bestGain)}`,
-      caption: `${bestRow.label} for ${bestSpec.displayName}.`,
+      caption: (
+        <>
+          <GameLink
+            kind="item"
+            id={row.itemId}
+            name={row.label}
+            ilevel={ilevel}
+          />{" "}
+          for {bestSpec.displayName}.
+        </>
+      ),
       specId: bestSpec.id,
     })
   }
@@ -503,7 +545,16 @@ function headline(rows: Row[], specs: GearSpecResult[], noise: number): Tile[] {
     const row = rows.find((entry) => entry.itemId === contested[0])
     tiles.push({
       label: "Most contested",
-      value: row?.label ?? "—",
+      value: row ? (
+        <GameLink
+          kind="item"
+          id={row.itemId}
+          name={row.label}
+          ilevel={ilevel}
+        />
+      ) : (
+        "—"
+      ),
       caption: `Top pick for ${contested[1]} of ${specs.length} builds shown.`,
     })
   }
@@ -773,10 +824,13 @@ function GainTable({
   rows,
   specs,
   colorOf,
+  ilevel,
 }: {
   rows: Row[]
   specs: GearSpecResult[]
   colorOf: (id: string) => string
+  /** Item level these candidates were run at, so the hover card matches the row. */
+  ilevel: number
 }) {
   return (
     <div className="overflow-x-auto">
@@ -800,7 +854,14 @@ function GainTable({
               key={row.itemId}
               className="border-b border-hairline/60 last:border-0"
             >
-              <td className="py-2 pr-4 pl-5 text-ink">{row.label}</td>
+              <td className="py-2 pr-4 pl-5 text-ink">
+                <GameLink
+                  kind="item"
+                  id={row.itemId}
+                  name={row.label}
+                  ilevel={ilevel}
+                />
+              </td>
               {specs.map((spec) => {
                 const gain = row.gains[spec.id]
                 const error = row.errors[spec.id] ?? 0
@@ -846,7 +907,17 @@ function BaselineTable({
   items: Map<number, GearItemMeta>
   colorOf: (id: string) => string
 }) {
-  const name = (id: number) => items.get(id)?.name ?? `Item ${id}`
+  // The baseline is worn at the lower of the two item levels, and every pool
+  // entry carries the level it was measured at, so each link asks Wowhead about
+  // the item at the level this row's numbers came from.
+  const link = (id: number, ilevel: number) => (
+    <GameLink
+      kind="item"
+      id={id}
+      name={items.get(id)?.name ?? `Item ${id}`}
+      ilevel={ilevel}
+    />
+  )
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[640px] text-[13px]">
@@ -881,22 +952,23 @@ function BaselineTable({
                   </span>
                 </td>
                 <td className="py-2 pr-4 text-ink-secondary">
-                  {kept ? name(kept) : "—"}
+                  {kept ? link(kept, target.baseline.ilevel) : "—"}
                 </td>
                 <td className="py-2 pr-4 text-ink-secondary">
-                  {replaced ? name(replaced) : "—"}
+                  {replaced ? link(replaced, target.baseline.ilevel) : "—"}
                 </td>
                 <td className="py-2 pr-4 text-right tabular-nums text-ink">
                   {fullNumber(target.baseline.dps)}
                 </td>
                 <td className="py-2 pr-5 text-ink-muted">
                   {runnersUp.length
-                    ? runnersUp
-                        .map(
-                          (entry) =>
-                            `${name(entry.id)} (${fullNumber(entry.standaloneGain)} alone)`,
-                        )
-                        .join(", ")
+                    ? runnersUp.map((entry, index) => (
+                        <span key={entry.id}>
+                          {index ? ", " : null}
+                          {link(entry.id, entry.ilevel)} (
+                          {fullNumber(entry.standaloneGain)} alone)
+                        </span>
+                      ))
                     : "—"}
                 </td>
               </tr>

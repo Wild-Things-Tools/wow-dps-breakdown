@@ -132,6 +132,63 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---------------------------------------------------------------------------
+   Wowhead links (components/GameLink.tsx).
+
+   The name has to read correctly with no script at all -- the tooltip script is
+   third party, so it is blocked, slow or offline for some readers every day.
+   Hence: colour inherited from the cell, so a tie stays muted and a lead stays
+   inked; a dotted underline as the only affordance; and the icon slot drawn
+   here rather than waited for.
+
+   The slot is 1.3em wide because that is exactly the left padding Wowhead's own
+   stylesheet puts on a link it has iconised. Read out of universal.css
+   (2026-08-14) and then measured in the browser, because the file says it twice
+   and the two disagree: an early `.icontinyl { padding-left: 18px !important }`
+   is overridden by a later `.icontinyl { padding-left: 1.3em !important }`. The
+   em is what the cascade actually applies, and a fixed 18px slot mismatched it
+   by 1.7px on 12.5px text.
+
+   So the placeholder collapses at the moment the padding appears, and the text
+   does not move -- in either direction, at any font size, including the case
+   where the icon never arrives because the item did not resolve.
+   --------------------------------------------------------------------------- */
+.gamelink {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--baseline);
+  text-underline-offset: 3px;
+}
+
+.gamelink:hover {
+  text-decoration-color: var(--text-secondary);
+}
+
+.gamelink-icon {
+  display: inline-block;
+  width: 1.3em;
+  height: 1em;
+  vertical-align: -0.15em;
+}
+
+/* The slot scales with the text; the mark inside it does not grow past the 13px
+   the real icon is drawn at, so a heading does not get a large empty square. */
+.gamelink-icon::before {
+  content: '';
+  display: block;
+  width: min(1em, 13px);
+  height: min(1em, 13px);
+  margin-top: calc((1em - min(1em, 13px)) / 2);
+  border: 1px solid var(--hairline);
+  border-radius: 3px;
+  background: var(--elevated);
+}
+
+.gamelink.icontinyl > .gamelink-icon {
+  display: none;
+}
+
 /* Recharts draws its own focus outlines on every surface; keep keyboard focus
    visible but scoped to real controls. */
 :focus-visible {
