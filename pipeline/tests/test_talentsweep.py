@@ -113,6 +113,7 @@ def test_both_rankings_come_out_of_one_run():
     result = SweepResult(
         spec_id="mage_arcane",
         spec_label="Arcane Mage",
+        wow_class="Mage",
         base_profile_id="mage_arcane_spellslinger",
         targets=5,
         builds=[
@@ -133,6 +134,7 @@ def test_a_run_with_no_priority_metric_still_ranks_by_damage():
     result = SweepResult(
         spec_id="mage_arcane",
         spec_label="Arcane Mage",
+        wow_class="Mage",
         base_profile_id="base",
         targets=1,
         builds=[
@@ -157,5 +159,7 @@ def test_a_profileset_that_returned_nothing_is_skipped_rather_than_zeroed():
 def test_ranking_never_invents_an_entry(metric):
     from wowdps.talentsweep import BuildMeasurement
 
-    result = SweepResult("s", "S", "b", 1, [BuildMeasurement("a", "A", "A", 1.0, 0.1, None, 1)])
+    result = SweepResult(
+        "s", "S", "Mage", "b", 1, [BuildMeasurement("a", "A", "A", 1.0, 0.1, None, 1)]
+    )
     assert len(result.ranked_by(metric)) == (1 if metric == "dps" else 0)

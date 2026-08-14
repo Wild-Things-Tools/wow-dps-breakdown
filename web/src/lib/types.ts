@@ -240,6 +240,53 @@ export interface LogsVerification {
   withheldForSmallSample?: number
 }
 
+/**
+ * One build measured with the gear held still (<tier>/talents.json).
+ *
+ * Deliberately *not* the same comparison as the spec rows in the manifest. Those put
+ * each build on the gear SimulationCraft's authors picked for it, which answers
+ * "which build should I play". This holds one character's gear and action list and
+ * swaps only the talent hash, which answers "what do these talents do". Both are
+ * right; on MID2 Arcane they differ by about 0.6 points out of 7.
+ */
+export interface TalentBuild {
+  id: string
+  label: string
+  heroTalent: string
+  dps: number
+  dpsError: number
+  /** Damage per second to the priority target. Equals `dps` at one target. */
+  priorityDps: number | null
+  iterations: number
+}
+
+export interface TalentSpec {
+  specId: string
+  label: string
+  /** The class, for colour and icons. Published rather than derived from `specId`,
+   * which would need string surgery that breaks on two-word class names. */
+  class: string
+  /** Whose gear and action list every build wore. Moves the absolute numbers, not
+   * the comparison, so it is published rather than hidden. */
+  baseProfile: string
+  targets: number
+  builds: TalentBuild[]
+  bestByDps: string | null
+  bestByPriorityDps: string | null
+  /** The case worth naming: most damage overall is not most damage on the boss. */
+  rankingsDisagree: boolean
+  note: string
+}
+
+export interface TalentDataset {
+  schemaVersion: number
+  generatedAt: string
+  tier: string
+  settings: { iterations: number; deterministic: boolean }
+  note: string
+  specs: TalentSpec[]
+}
+
 // --------------------------------------------------------------------------------
 // Gear comparison (<tier>/gear.json)
 // --------------------------------------------------------------------------------

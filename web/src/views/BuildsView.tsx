@@ -42,19 +42,29 @@ import {
 } from 'recharts'
 import { AXIS_LINE, AXIS_TICK, CURSOR_LINE, GRID, TooltipCard } from '../components/chart'
 import { HeroTreeBadge, SpecIcon, buildName, heroLabel } from '../components/BuildIdentity'
-import { EmptyState, Note, Panel, PanelHeader, SegmentedControl } from '../components/ui'
+import { EmptyState, Note, Panel, PanelHeader, SegmentedControl, StatTile, cx } from '../components/ui'
 import { compactNumber, fullNumber, percent } from '../lib/format'
 import { buildDash, classColor } from '../lib/palette'
-import type { Cell, ScenarioMeta, SpecDetail, SpecSummary } from '../lib/types'
+import type {
+  Cell,
+  ScenarioMeta,
+  SpecDetail,
+  SpecSummary,
+  TalentDataset,
+  TalentSpec,
+} from '../lib/types'
 
 type Metric = 'dps' | 'priority'
 
 export function BuildsView({
   details,
   scenario,
+  talents,
 }: {
   details: SpecDetail[]
   scenario: ScenarioMeta
+  /** Optional: exists once `wowdps talents` has been run for the tier. */
+  talents?: TalentDataset | null
 }) {
   const [metric, setMetric] = useState<Metric>('dps')
   const sweeps = scenario.sweepsTargets ?? false
@@ -132,6 +142,8 @@ export function BuildsView({
         </Note>
       </Panel>
 
+      <GearHeldStill talents={talents} />
+
       {sweeps ? (
         <Panel>
           <PanelHeader
@@ -145,6 +157,142 @@ export function BuildsView({
           </div>
         </Panel>
       ) : null}
+    </div>
+  )
+}
+
+// --------------------------------------------------------------------------------
+// The same builds, gear held still
+// --------------------------------------------------------------------------------
+
+/**
+ * The answer to the caveat under the table above.
+ *
+ * Everything on this view so far compares SimulationCraft's *shipped* builds, which
+ * differ in gear as well as talents — so a gap there is "this build the way simc
+ * plays it". This panel puts every build of a spec on one character's gear and
+ * action list, so the only difference left is the talent hash.
+ *
+ * Both rankings come out of one run, and the pair is the point: a build can do the
+ * most damage while a different one puts the most on the boss. Presented as a table
+ * rather than a chart because the reading is categorical — which build wins — and a
+ * bar pair per spec would be a chart of two numbers per row saying what the row says.
+ */
+function GearHeldStill({ talents }: { talents?: TalentDataset | null }) {
+  const counts = useMemo(
+    () => [...new Set((talents?.specs ?? []).map((entry) => entry.targets))].sort((a, b) => a - b),
+    [talents],
+  )
+  const [targets, setTargets] = useState<number | null>(null)
+  const active = targets !== null && counts.includes(targets) ? targets : (counts[0] ?? null)
+
+  if (!talents || counts.length === 0 || active === null) return null
+
+  const rows = talents.specs
+    .filter((entry) => entry.targets === active)
+    .slice()
+    .sort((a, b) => Number(b.rankingsDisagree) - Number(a.rankingsDisagree) || a.label.localeCompare(b.label))
+  const disagreeing = rows.filter((entry) => entry.rankingsDisagree)
+
+  return (
+    <Panel>
+      <PanelHeader
+        title="The same builds, with the gear held still"
+        subtitle="One character’s gear and action list, wearing each build’s talents in turn — so the only difference left is the talents. Ranked by total damage and by damage on the boss, out of one run."
+        actions={
+          counts.length > 1 ? (
+            <SegmentedControl
+              label="Targets"
+              value={String(active)}
+              onChange={(value) => setTargets(Number(value))}
+              options={counts.map((count) => ({ value: String(count), label: `${count}T` }))}
+            />
+          ) : null
+        }
+      />
+      <div className="grid gap-3 px-5 pb-4 sm:grid-cols-2">
+        <StatTile
+          label="Specs with more than one build"
+          value={String(rows.length)}
+          caption={`Measured at ${active} target${active === 1 ? '' : 's'}, ${talents.settings.iterations} deterministic iterations each.`}
+        />
+        <StatTile
+          label="Where the two rankings disagree"
+          value={String(disagreeing.length)}
+          caption={
+            disagreeing.length
+              ? 'The build that does the most damage is not the build that puts the most on the boss. Picking off a damage meter is the wrong call on these.'
+              : 'Every spec puts the same build top on both metrics at this target count.'
+          }
+        />
+      </div>
+      <TalentTable rows={rows} />
+      <Note>
+        {talents.note} Gear is held at whichever build sorts first, named in the table:
+        that moves the absolute numbers and not the comparison. At one target the two
+        columns are identical by construction — everything lands on the only enemy there
+        is.
+      </Note>
+    </Panel>
+  )
+}
+
+function TalentTable({ rows }: { rows: TalentSpec[] }) {
+  return (
+    <div className="overflow-x-auto pb-2">
+      <table className="w-full min-w-[720px] border-collapse text-[13px]">
+        <thead>
+          <tr className="border-b border-hairline text-left text-[11.5px] tracking-wide text-ink-muted uppercase">
+            <th scope="col" className="py-2.5 pr-4 pl-5 font-medium">Spec</th>
+            <th scope="col" className="py-2.5 pr-4 font-medium">Build</th>
+            <th scope="col" className="py-2.5 pr-4 text-right font-medium">Total DPS</th>
+            <th scope="col" className="py-2.5 pr-4 text-right font-medium">On the boss</th>
+            <th scope="col" className="py-2.5 pr-5 font-medium">Leads</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((spec) =>
+            spec.builds
+              .slice()
+              .sort((a, b) => b.dps - a.dps)
+              .map((build, index) => (
+                <tr
+                  key={`${spec.specId}-${build.id}`}
+                  className={cx(
+                    'border-b border-hairline/60 last:border-0',
+                    spec.rankingsDisagree && 'bg-elevated/40',
+                  )}
+                >
+                  <td className="py-2 pr-4 pl-5">
+                    {index === 0 ? (
+                      <span style={{ color: classColor(spec.class) }}>{spec.label}</span>
+                    ) : null}
+                  </td>
+                  <td className="py-2 pr-4">
+                    <HeroTreeBadge
+                      build={{ class: spec.class, heroTalent: build.heroTalent }}
+                    />
+                  </td>
+                  <td className="tnum py-2 pr-4 text-right text-ink">
+                    {fullNumber(build.dps)}
+                    <span className="ml-1 text-ink-muted">±{build.dpsError.toFixed(2)}%</span>
+                  </td>
+                  <td className="tnum py-2 pr-4 text-right text-ink">
+                    {build.priorityDps === null ? '—' : fullNumber(build.priorityDps)}
+                  </td>
+                  <td className="py-2 pr-5 text-[12.5px] text-ink-secondary">
+                    {[
+                      spec.bestByDps === build.id ? 'total damage' : null,
+                      spec.bestByPriorityDps === build.id ? 'on the boss' : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </td>
+                </tr>
+              )),
+          )}
+        </tbody>
+      </table>
     </div>
   )
 }

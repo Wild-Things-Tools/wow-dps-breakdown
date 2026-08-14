@@ -89,6 +89,10 @@ class SweepResult:
 
     spec_id: str
     spec_label: str
+    #: The class, because everything that draws a build needs it for the colour and
+    #: the icons, and deriving it from a spec id like `death_knight_frost` is the
+    #: kind of string surgery that breaks on the one class with two words in it.
+    wow_class: str
     #: The profile whose gear and action list every variant wore.
     base_profile_id: str
     targets: int
@@ -106,6 +110,7 @@ class SweepResult:
         return {
             "specId": self.spec_id,
             "label": self.spec_label,
+            "class": self.wow_class,
             "baseProfile": self.base_profile_id,
             "targets": self.targets,
             "builds": [build.to_json() for build in self.builds],
@@ -210,7 +215,54 @@ def sweep_spec(
     return SweepResult(
         spec_id=base.spec_id,
         spec_label=f"{base.spec} {base.wow_class}",
+        wow_class=base.wow_class,
         base_profile_id=base.id,
         targets=targets,
         builds=builds,
     )
+
+
+def write_talents(
+    out_dir: Path, tier: str, results: list[SweepResult], settings: SimSettings
+) -> Path:
+    """Publish a sweep beside the tier's other optional datasets.
+
+    ``generatedAt`` is settled the way the manifest's is: if nothing but the
+    timestamp changed, the published one is kept, so a re-run that found the same
+    answer leaves nothing to commit. The sims are deterministic, so that is the
+    normal outcome and a diff means something moved.
+    """
+    import json
+    from datetime import UTC, datetime
+
+    path = out_dir / "talents.json"
+    document = {
+        "schemaVersion": 1,
+        "generatedAt": datetime.now(UTC).isoformat(timespec="seconds"),
+        "tier": tier,
+        "settings": {
+            "iterations": settings.max_iterations,
+            "deterministic": settings.target_error <= 0,
+        },
+        "note": (
+            "Every build of a spec on one character's gear and action list, so the "
+            "difference is the talents. Ranked twice out of one run: by total damage "
+            "and by damage to the priority target. simc does not optimise -- it runs "
+            "a fixed action list, so this is what the shipped builds do rather than "
+            "what they could do if played to funnel."
+        ),
+        "specs": [result.to_json() for result in results],
+    }
+
+    if path.is_file():
+        try:
+            published = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            published = None
+        if published is not None:
+            settled = dict(document, generatedAt=published.get("generatedAt"))
+            if settled == published:
+                document = published
+
+    path.write_text(json.dumps(document, indent=1) + "\n", encoding="utf-8")
+    return path

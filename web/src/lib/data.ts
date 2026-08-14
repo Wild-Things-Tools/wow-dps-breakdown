@@ -6,6 +6,7 @@ import type {
   LogsVerification,
   Manifest,
   SpecDetail,
+  TalentDataset,
   TierIndex,
 } from './types'
 
@@ -81,6 +82,19 @@ export async function loadGear(tier: string): Promise<GearDataset | null> {
 export async function loadFights(tier: string): Promise<FightsDataset | null> {
   try {
     return await fetchJson<FightsDataset>(`${tier}/fights.json`)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Build comparison with the gear held still, for one tier. Optional like the gear
+ * sweep and the fight shapes: the file exists once `wowdps talents` has been run,
+ * and the view explains its own absence rather than the app failing to load.
+ */
+export async function loadTalents(tier: string): Promise<TalentDataset | null> {
+  try {
+    return await fetchJson<TalentDataset>(`${tier}/talents.json`)
   } catch {
     return null
   }

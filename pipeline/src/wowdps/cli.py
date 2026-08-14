@@ -488,8 +488,6 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
 
 def cmd_talents(args: argparse.Namespace) -> int:
     """Compare a spec's hero builds with the gear held still, ranked two ways."""
-    import json
-
     from . import talentsweep
 
     profiles_dir = Path(args.profiles)
@@ -548,14 +546,16 @@ def cmd_talents(args: argparse.Namespace) -> int:
                     f"{by_priority[0].hero_talent} puts the most on the priority target"
                 )
 
-    if args.out:
-        out = Path(args.out)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(
-            json.dumps({"tier": tier, "specs": [r.to_json() for r in results]}, indent=1) + "\n",
-            encoding="utf-8",
+    if args.out and results:
+        # Written into the tier layout the site already reads, beside gear.json and
+        # fights.json. Optional in exactly the same way: a tier without one is a
+        # tier nobody has run this for, and the view says so.
+        out_dir = Path(args.out) / tier
+        out_dir.mkdir(parents=True, exist_ok=True)
+        talentsweep.write_talents(out_dir, tier, results, settings)
+        logging.info(
+            "wrote %s (%d spec/target combination(s))", out_dir / "talents.json", len(results)
         )
-        logging.info("wrote %s (%d spec/target combinations)", out, len(results))
     return 0 if results else 1
 
 
@@ -822,7 +822,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_talents.add_argument("--max-iterations", type=int, default=3000)
     p_talents.add_argument("--threads", type=int, default=0)
     p_talents.add_argument("--timeout", type=int, default=1800)
-    p_talents.add_argument("--out", help="also write the results as JSON")
+    p_talents.add_argument(
+        "--out",
+        nargs="?",
+        const=str(DEFAULT_OUT),
+        help="also publish the results to <out>/<tier>/talents.json "
+        f"(default when given with no value: {DEFAULT_OUT})",
+    )
     p_talents.set_defaults(func=cmd_talents)
 
     p_check = sub.add_parser(

@@ -1,0 +1,106 @@
+name: Talent comparison
+
+# Every hero build of a spec on ONE character's gear and action list, ranked twice
+# out of a single run: by total damage, and by damage to the priority target.
+#
+# This is a different question from the one the nightly dataset answers. The spec
+# rows there put each build on the gear SimulationCraft's authors picked for it,
+# which is the right comparison for "which build should I play". Holding gear still
+# is the right comparison for "what do these talents do", and the two can disagree:
+# measured on MID2 at five targets, four specs of eleven put a different build top
+# on damage than on damage-to-the-boss.
+#
+# `workflow_dispatch` only, deliberately:
+#
+# * It is a build-choice question, and build choices change when talents change --
+#   after a tuning pass, not every night.
+# * The answer is stable between tuning passes precisely because the sims are
+#   deterministic, so a nightly run would commit nothing and cost minutes anyway.
+#
+# Whether it belongs on a schedule is a decision about cadence, not a technical
+# limit. If it goes on one, note that the cost is one simc invocation per spec per
+# target count -- roughly a tenth of a full dataset build.
+on:
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: 'Tier to compare, or "latest"'
+        default: 'latest'
+      targets:
+        description: 'Space-separated target counts'
+        default: '1 5 10'
+      iterations:
+        description: 'Iterations per variant (deterministic)'
+        default: '1000'
+      commit:
+        description: 'Commit the published talents.json'
+        type: boolean
+        default: true
+
+concurrency:
+  group: talents
+
+permissions:
+  contents: write
+
+jobs:
+  talents:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pipeline
+        run: pip install -e ./pipeline
+
+      - name: Cache SimulationCraft
+        id: simc-cache
+        uses: actions/cache@v4
+        with:
+          path: .work/simc
+          key: simc-${{ runner.os }}-${{ hashFiles('scripts/build-simc.sh') }}-v1
+
+      - name: Build SimulationCraft
+        if: steps.simc-cache.outputs.cache-hit != 'true'
+        run: ./scripts/build-simc.sh
+
+      - name: Compare builds
+        env:
+          TIER: ${{ inputs.tier }}
+          TARGETS: ${{ inputs.targets }}
+          ITERATIONS: ${{ inputs.iterations }}
+        run: |
+          wowdps -v talents \
+            --profiles .work/simc/profiles \
+            --simc .work/simc/build/simc \
+            --tier "$TIER" \
+            --targets $TARGETS \
+            --max-iterations "$ITERATIONS" \
+            --out web/public/data \
+            | tee talents.txt
+
+      - name: Summary
+        run: |
+          {
+            echo '## Talent comparison'
+            echo
+            echo '```'
+            cat talents.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit
+        if: inputs.commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add 'web/public/data/*/talents.json'
+          if git diff --staged --quiet; then
+            echo "unchanged -- deterministic sims, so this is the expected quiet result"
+            exit 0
+          fi
+          git commit -m "data: refresh talent comparison $(date -u +%Y-%m-%d)"
+          git push
