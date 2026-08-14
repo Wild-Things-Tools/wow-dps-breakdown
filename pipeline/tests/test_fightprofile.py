@@ -590,7 +590,10 @@ def test_a_target_count_from_a_partly_fetched_fight_is_refused():
     )
 
     assert plan["targets"].eligible is False
-    assert "event fetch reached only" in plan["targets"].reason
+    # The refusal is decided on the *worst* fight, so that is the figure it must
+    # quote. Quoting the median produced "reached only 100% (range 93%-100%)" on
+    # Lightblinded Vanguard -- a correct refusal that read as a bug.
+    assert "only read to 20%" in plan["targets"].reason
     assert "--max-pages" in plan["targets"].reason
 
 
