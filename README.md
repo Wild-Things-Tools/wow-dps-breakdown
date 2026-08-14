@@ -156,10 +156,25 @@ A true historical reconstruction — simc checked out at a dated commit, with th
 data and rotations as they were — is a different and much more expensive feature. See
 Planned.
 
-The nightly run simulates the current tier. A weekly run simulates the current tier and
-the one before it, since past profiles do not change but the spell data they run against
-does. Both tiers resolve by position (`latest`, `previous`) rather than by name, so
-nothing needs editing when the next tier ships.
+**Old profiles rot, and the rot is not evenly spread.** Measured against simc 1210-01:
+15 of `MID1`'s 41 damage profiles no longer load at all. Their talent hashes reference
+nodes that current spell data does not offer the spec — simc reports `Selected node
+108655 entry 134185 is not available to player's spec` and refuses the actor. Every Mage
+build, every Hunter build, both Warrior damage builds, Havoc Demon Hunter, both
+Retribution builds and one of the two Elemental builds are affected; `MID2` has no such
+failures.
+
+The pipeline degrades gracefully — a profile that will not load fails its cells, gets
+logged and is skipped — but a season 1 view missing three classes entirely is not a
+comparison anybody should read. Worse, the profiles that break are exactly the ones whose
+talents changed most, so the loss is correlated with what the comparison is meant to
+show. That is why the previous tier is not on a schedule: the machinery is built and
+tested, and it is a one-line manual run (`tiers: latest previous`) whenever simc's
+old-tier profiles are loadable again.
+
+Scheduled runs simulate the current tier. The previous tier runs on demand — see below
+for why. Both resolve by position (`latest`, `previous`) rather than by name, so nothing
+needs editing when the next tier ships.
 
 ### Hero talents come for free
 
@@ -344,7 +359,57 @@ The nightly job publishes whatever finished. One spec that fails to converge cos
 spec's cell, not the whole day's data, and the failure is recorded in the spec's own file
 so the site can show it.
 
-### What this costs to host
+### What this costs to run
+
+Nothing, and it is deliberately arranged to stay that way — but the binding constraint
+is not the one you would expect.
+
+**GitHub Actions minutes are the budget.** This repository is private, and GitHub Free
+for organisations includes 2,000 Actions minutes a month for private repositories.
+(Public repositories get unlimited free minutes; that difference matters below.) Two
+things make simulations expensive against that allowance:
+
+- Matrix jobs bill as the **sum** of their job-minutes. Six shards running for twenty
+  minutes cost 120 minutes, not twenty. Parallelism buys wall-clock time, not budget.
+- The work is genuinely CPU-bound. One cell is 3,000 iterations of a 300-second fight —
+  250 simulated hours of combat — and there are 13 cells per profile. That is the price
+  of the 0.06% standard error, and it is not overhead that can be tuned away.
+
+One full pass over the current tier costs roughly 150 job-minutes. A nightly schedule
+would therefore want ~4,500 minutes a month against an allowance of 2,000. Since the
+default spending limit is zero, the runs would not produce a bill — they would simply
+**stop partway through the month**, leaving the site quietly stale. That is a worse
+failure than slightly older data, so the schedule is sized to fit:
+
+| | Cadence | Estimated job-minutes / month |
+|---|---|---|
+| Current tier | Weekly (Wednesday) | ~650 |
+| Previous tier | On demand only — see below | 0 |
+| CI and deploys on pushes | per push | ~150 |
+| | | **~800 of 2,000** |
+
+The remaining margin is deliberate: the estimate assumes a 2-vCPU standard runner, and
+if that assumption is wrong it is wrong by a factor of two.
+
+Freshness does not actually depend on the schedule. Balance patches land on known days,
+and `workflow_dispatch` runs the whole matrix on demand — so the answer to "a patch just
+dropped" is to trigger a run, not to poll nightly for a change that happens monthly.
+
+**To lift the ceiling entirely, make the repository public.** Actions minutes are then
+unlimited and free, up to twenty concurrent jobs, and the schedule can go back to nightly
+or finer. Worth being precise about what that does and does not expose: the published
+site is gated by Cloudflare middleware in `wt-gate`, not by this repository's visibility,
+so a public repository does **not** make the site public. What becomes readable is the
+pipeline source, the workflows, and the committed dataset — none of which holds a secret
+(the deploy token is a repository secret, not a file) and all of which is derived from
+SimulationCraft, which is itself open source. It is a real decision, but it is not the
+decision it looks like.
+
+The other zero-cost route is a **self-hosted runner**: minutes on your own hardware are
+never billed, private repository or not. That trades the bill for a machine that has to
+be awake when the schedule fires.
+
+### What hosting costs
 
 Nothing, with a lot of headroom, and it is worth knowing where the real limit sits.
 

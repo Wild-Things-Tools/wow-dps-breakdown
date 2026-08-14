@@ -227,6 +227,27 @@ this repository:
 - Verified working end to end: deploy run #8 pushed `5a805c0 wow-dps: publish from 919b8ac`
   into `wt-gate` with all 31 files.
 
+## The Actions budget paces the schedule
+
+Not effort, not correctness — the schedule is set by what GitHub Free gives a **private**
+repository: 2,000 Actions minutes a month.
+
+- **Matrix jobs bill as the sum of their job-minutes.** Six shards for twenty minutes is
+  120 billed minutes, not twenty. Adding shards buys wall-clock time and costs nothing
+  extra in budget; raising the *cadence* is what costs.
+- A full pass over the current tier is roughly 150 job-minutes (26 profiles x 13 cells,
+  estimated on a 2-vCPU runner). Nightly would be ~4,500 a month against 2,000.
+- The failure mode is not a bill. The default spending limit is zero, so exhausting the
+  allowance **stops the runs** and the site goes quietly stale mid-month — which is
+  exactly the kind of silent wrongness this project treats as a bug. Hence weekly for the
+  current tier, monthly for the two-tier pass, and `workflow_dispatch` for patch days.
+- Before raising any cadence, do the arithmetic again. The README's "What this costs to
+  run" carries the current table.
+- **If the repository is ever made public this constraint disappears entirely** —
+  unlimited free minutes, twenty concurrent jobs. Note that repository visibility and site
+  visibility are independent here: the Discord gate lives in `wt-gate`'s Cloudflare
+  middleware, so a public repository would not make the published site public.
+
 ## The tier axis
 
 - Datasets are namespaced: `web/public/data/<tier>/index.json` and `<tier>/specs/*.json`,
@@ -245,6 +266,19 @@ this repository:
   balance. What travels is the within-run ratios: funnel gain, concentration, burst ratio,
   the shape of the scaling curve. Any future side-by-side tier view must be restricted to
   those, or it will present a gear difference as a balance change.
+- **Old-tier profiles rot.** Measured on simc 1210-01: 15 of MID1's 41 damage profiles
+  fail to load, because their talent hashes point at nodes current spell data does not
+  offer the spec (`Selected node N entry M is not available to player's spec`). All Mage,
+  all Hunter, both Warrior damage builds, Havoc, both Retribution builds, one Elemental
+  build. MID2: none. So a scheduled previous-tier run would publish a season 1 view with
+  three classes missing, and the breakage correlates with the talent changes the
+  comparison is supposed to surface. The tier axis stays; the *schedule* for the old tier
+  does not. Re-measure before turning it back on — the script is one loop of
+  `simc <profile> iterations=1`.
+- The nightly smoke test in `sims.yml` must never pin a named profile, and especially not
+  an old-tier one. It did (`MID1_Mage_Fire`), and cost a whole run: nine minutes of
+  compile, then a hard failure before a single simulation. It now tries the newest tier's
+  first five profiles and passes if any one of them runs.
 - Switching tier prunes selections the new tier has no profile for. The count of what was
   dropped is reported rather than swallowed; a comparison quietly missing a line is the
   kind of silent wrongness this project treats as a bug.
