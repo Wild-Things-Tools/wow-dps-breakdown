@@ -541,6 +541,13 @@ def _nearest_to_centre(group: list[dict], length_median: float = 0.0) -> dict:
 #: instances) which covered the step lines completely.
 _MAX_BANDS_PER_ABILITY = 3
 
+#: Share of the pull above which an aura is reported rather than drawn as a band.
+#: Two thirds, and the choice is about what a band *means*: it marks a stretch that
+#: differs from the rest of the fight, so an aura covering most of the fight has no
+#: such stretch to mark. Lightblinded Vanguard's `Light Infused` runs 285s of a 285s
+#: pull; shading it is shading the plot.
+_PERMANENT_AURA_SHARE = 0.66
+
 
 def _merge_windows(windows: list[dict]) -> list[dict]:
     """Overlapping windows of one ability, merged into the intervals they cover.
@@ -589,8 +596,17 @@ def _drawable_auras(fight: dict, pooled: list[dict]) -> list[dict]:
     3. **Capped per ability.** A shaded band is a heavy mark and a periodic aura
        has no natural limit. The count that was dropped travels with the band, so
        the chart says "and 27 more" rather than quietly showing three.
+
+    Each window also carries ``permanent``: an aura up for essentially the whole
+    pull is not a *window*, because a band marks a stretch that differs from the
+    rest of the fight and this one has none. The view names those under the chart
+    instead of shading them. This is the same wash the per-ability cap exists to
+    prevent, arriving by a different route, and it appeared the moment the probe
+    sampled six pulls rather than three and more of the encounter's own long buffs
+    survived the aura filter.
     """
     keep = {aura.get("abilityId") for aura in pooled}
+    length = float(fight.get("durationSeconds") or 0.0)
     by_ability: dict[object, list[dict]] = {}
     for aura in fight.get("auras") or []:
         if not isinstance(aura, dict) or aura.get("abilityId") not in keep:
@@ -606,6 +622,10 @@ def _drawable_auras(fight: dict, pooled: list[dict]) -> list[dict]:
                 # a name rather than an ability floating over a three-target chart.
                 "actorName": aura.get("actorName"),
                 "role": aura.get("role"),
+                "permanent": (
+                    length > 0
+                    and float(aura.get("duration") or 0.0) / length >= _PERMANENT_AURA_SHARE
+                ),
             }
         )
 
@@ -661,11 +681,38 @@ def _pull_block(fight: dict, pooled: list[dict]) -> dict:
     }
 
 
+#: Words for how many times a shape reaches its own peak. Past this many the count
+#: is written as a number, because "peaks at 3 seven times" reads as a measurement
+#: and "peaks at 3 many times" reads as a shrug.
+_TIMES = {1: "once", 2: "twice", 3: "three times", 4: "four times"}
+
+
+def _peak_visits(steps: list, peak: float) -> int:
+    """How many separate times the target count rises to the shape's own peak.
+
+    This is what tells two patterns apart when their peak and mean do not. Vaelgor
+    & Ezzorak's six sampled pulls split into a 237s kill that reaches three targets
+    once and a 337s kill that reaches three twice; both label as "peaks at 3, 2.1 on
+    average" without it, and a chooser offering two identical-looking options is
+    worse than no chooser.
+    """
+    visits = 0
+    above = False
+    for step in steps:
+        if not isinstance(step, (list, tuple)) or len(step) < 2:
+            continue
+        at_peak = float(step[1]) >= peak
+        if at_peak and not above:
+            visits += 1
+        above = at_peak
+    return visits
+
+
 def _pattern_label(pull: dict) -> str:
     """A factual name for a shape, never an interpretation of it.
 
     "Three targets throughout" is a reading somebody could disagree with; "peaks at
-    3, 2.9 on average" is what was measured. The view writes the sentence.
+    3 twice, 2.2 on average" is what was measured. The view writes the sentence.
     """
     peak = pull.get("peak")
     mean = pull.get("mean")
@@ -673,7 +720,11 @@ def _pattern_label(pull: dict) -> str:
         return "unmeasured shape"
     if pull.get("constant"):
         return f"{int(peak)} target{'' if int(peak) == 1 else 's'} throughout"
-    return f"peaks at {int(peak)}, {float(mean):.1f} on average"
+    visits = _peak_visits(pull.get("steps") or [], float(peak))
+    how_often = _TIMES.get(visits, f"{visits} times") if visits else ""
+    return (
+        f"peaks at {int(peak)}{f' {how_often}' if how_often else ''}, {float(mean):.1f} on average"
+    )
 
 
 def _patterns(payload: dict, pooled: list[dict]) -> list[dict]:

@@ -497,3 +497,66 @@ def test_patterns_are_stable_across_runs_whatever_order_the_pulls_arrive_in():
         entry["reportCodes"] for entry in backward["patterns"]
     ]
     assert forward["representative"]["reportCode"] == backward["representative"]["reportCode"]
+
+
+def test_a_pattern_label_says_how_often_the_peak_is_reached():
+    """Peak and mean alone can label two different shapes identically.
+
+    Measured on the real MID2 probe: Vaelgor & Ezzorak's six pulls split into a
+    237s kill that reaches three targets once and a 337s kill that reaches three
+    twice. Both come out as "peaks at 3, 2.1 on average" without the visit count,
+    and a chooser offering two identical-looking options is worse than none.
+    """
+    once = {
+        "peak": 3,
+        "mean": 2.096,
+        "constant": False,
+        "steps": [[0.0, 1], [129.6, 3], [155.4, 2], [237.5, 0]],
+    }
+    twice = {
+        "peak": 3,
+        "mean": 2.18,
+        "constant": False,
+        "steps": [[0.0, 1], [129.2, 3], [159.1, 2], [299.4, 3], [336.8, 0]],
+    }
+    assert fightdataset._pattern_label(once) == "peaks at 3 once, 2.1 on average"
+    assert fightdataset._pattern_label(twice) == "peaks at 3 twice, 2.2 on average"
+
+    # A fight that never leaves its target count says so instead, and in the
+    # singular where that is what one target is.
+    assert (
+        fightdataset._pattern_label({"peak": 1, "mean": 1.0, "constant": True, "steps": []})
+        == "1 target throughout"
+    )
+    assert (
+        fightdataset._pattern_label({"peak": 3, "mean": 3.0, "constant": True, "steps": []})
+        == "3 targets throughout"
+    )
+
+
+def test_a_shape_with_no_measured_peak_is_not_given_a_label_that_sounds_measured():
+    assert fightdataset._pattern_label({"mean": 2.0, "steps": []}) == "unmeasured shape"
+
+
+def test_an_aura_up_for_the_whole_pull_is_reported_rather_than_shaded():
+    """A band marks a stretch that differs from the rest of the fight.
+
+    Lightblinded Vanguard's Light Infused runs the whole pull, so shading it shades
+    the plot. Six of those turned the chart into a solid block the moment the probe
+    sampled six pulls and more of the encounter's own long buffs survived the aura
+    filter -- the same wash the per-ability cap exists to prevent, by another route.
+    """
+    fight = {
+        "durationSeconds": 300.0,
+        "auras": [
+            {"abilityId": 1, "ability": "Light Infused", "start": 0.0, "duration": 299.0},
+            {"abilityId": 2, "ability": "Zealous Spirit", "start": 84.0, "duration": 20.0},
+        ],
+    }
+    pooled = [{"abilityId": 1}, {"abilityId": 2}]
+    drawn = {aura["ability"]: aura for aura in fightdataset._drawable_auras(fight, pooled)}
+
+    assert drawn["Light Infused"]["permanent"] is True
+    assert drawn["Zealous Spirit"]["permanent"] is False
+    # Still published: the view names it under the chart rather than dropping it.
+    assert len(drawn) == 2

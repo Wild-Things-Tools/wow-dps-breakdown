@@ -334,10 +334,14 @@ pipeline/          Python: profile discovery, simc orchestration, metric extract
     gearsweep.py     the baseline-and-candidates profileset sweep
     dataset.py       writing the static JSON the site reads
     warcraftlogs.py  optional cross-check against real raid logs
+    logsanalysis.py  `wowdps logs-analyse`: what that cross-check can actually say
+    blizzard.py      Blizzard Game Data API client (OAuth, namespaces, disk cache)
+    lootsources.py   `wowdps loot-sources`: drop sources and the season's dungeons
     fightextract.py  reading fight structure out of Warcraft Logs event payloads
     fightprofile.py  per-boss fight shapes, with provenance, and the simc options they make
     fightprobe.py    `wowdps fight-probe`: measuring a boss's shape from real logs
     fightdataset.py  `wowdps fights`: publishing the asserted and measured halves together
+    fightpromote.py  `wowdps fight-promote`: offering a measurement as a profile fact
     data/
       gear_pools.json      curated item pools per tier
       fight_profiles.json  per-boss fight shapes: measured and asserted facts, marked
@@ -353,6 +357,7 @@ web/               React SPA (Vite, TypeScript, Tailwind v4, Recharts)
   deploy.yml         builds and pushes the site into the gated hub repository
   logs-verification.yml   optional weekly Warcraft Logs comparison
   fight-probe.yml         on-demand: what a boss's fights actually look like
+  loot-sources.yml        on-demand: drop sources from Blizzard's Game Data API
 scripts/build-simc.sh     local SimulationCraft build
 ```
 
@@ -625,10 +630,32 @@ correction factor, and the site presents both rather than reconciling them.
 
 ---
 
-## The logs comparison is a per-boss problem (in progress)
+## The logs comparison is a per-boss problem, and now it is measured
 
 The cross-check above compares one **Patchwerk single-target** simulation against nine
-different encounters, and the result says more about the boss than about the spec.
+different encounters, and the result says more about the boss than about the spec. That
+used to be an impression; `wowdps logs-analyse` makes it a number, and the **Against
+logs** view draws it.
+
+| Reading | MID2 | What it says |
+|---|---:|---|
+| Share of the spread explained by the boss | **50%** | Half the disagreement goes away once you know the encounter |
+| Share explained by the build | **34%** | The same arithmetic, grouping by build instead |
+| Build span against the field | **0.76x – 1.25x** | With the boss divided out, Mages keep the most of their sim, Frost Death Knight the least |
+| Rank agreement, per boss | **+0.49 → −0.56** | Chimaerus the sim broadly gets right; Vaelgor & Ezzorak is closer to backwards |
+| Rank agreement, pooled | **−0.01** | The number to compute first, and the one that hides both of the above |
+
+So the headline is that **a single-target ranking predicts almost nothing about who tops
+the meters on a specific boss**, and the largest single factor in the gap is which boss.
+The obvious way the build ordering could be an artefact — Warcraft Logs pages are ranked,
+so a build few people log is represented only by its best players — was checked rather
+than argued about: the correlation between parse count and the build reading is **0.10**,
+about 1% of the variance, and it is published either way.
+
+`wowdps logs-analyse` derives all of it from the comparison rows already committed, so it
+needs no Warcraft Logs credentials and spends no API points; `wowdps verify` writes the
+same block when it runs in CI.
+
 Across the 192 published comparisons with at least five parses:
 
 | Boss | Median logs ÷ sim |
@@ -778,12 +805,15 @@ which is not the shape the median parse the site compares against experienced.
 ## Limitations worth stating plainly
 
 - **Sims are not logs.** Perfect play, a stationary target, no mechanics, no deaths.
-- **The logs comparison currently compares the wrong things**, and knowingly. One
-  Patchwerk single-target run is held up against nine encounters with adds, phases and
-  downtime, so the boss explains more of the gap than the spec does. Per-boss fight
-  profiles are the fix and are in progress — see above. Until they land, read a
-  logs/sim ratio as "this spec on this boss against a laboratory measurement", and
-  compare specs *within* a boss rather than a spec's ratio against 1.0.
+- **The logs comparison compares one fight style against nine fight shapes**, knowingly,
+  and now with the size of the effect measured: the boss accounts for 50% of the spread
+  in logs ÷ sim and the build for 34%. So a single ratio against 1.0 is not a reading —
+  compare specs *within* a boss, or use the boss-adjusted figure the Against logs view
+  publishes. Per-boss fight profiles are the fix and are in progress.
+- **Warcraft Logs medians are top-parse medians.** They describe the people who log this
+  game well, not a typical raid night, so the *level* of any ratio is not comparable to
+  your own. None of the published readings rests on the level; all of them are how the
+  same measurement moves from boss to boss and from build to build.
 - **Profiles are simc's, not yours.** Gear, talents and consumables are the tier defaults.
   Two builds being close here says little about your character specifically.
 - **The talent loadout is fixed across the target sweep.** SimulationCraft ships one
