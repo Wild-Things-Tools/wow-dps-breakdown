@@ -279,6 +279,20 @@ class ScenarioPlan:
     #: resulting numbers knows which part of the encounter is somebody's word.
     asserted: tuple[str, ...]
 
+    def restates_a_static_sweep(self, sweep_max_time: int = 300) -> bool:
+        """Whether running this would reproduce a cell the target sweep already has.
+
+        A profile with no add waves, no representable amplification and the default
+        fight length turns into N static targets for 300 seconds -- which is exactly
+        Patchwerk at N targets, under a boss's name. The number would be correct and
+        the label would be a claim the simulation did not earn, so the caller is told
+        rather than left to spend the CPU and find out.
+
+        Lightblinded Vanguard is that case today: three permanent targets and an
+        amplification whose target simc cannot name.
+        """
+        return not self.options and self.max_time == sweep_max_time
+
     def to_json(self) -> dict:
         return {
             "encounterId": self.encounter_id,
@@ -288,6 +302,7 @@ class ScenarioPlan:
             "options": list(self.options),
             "unrepresented": list(self.unrepresented),
             "asserted": list(self.asserted),
+            "restatesStaticSweep": self.restates_a_static_sweep(),
         }
 
 
@@ -362,6 +377,17 @@ class FightProfile:
         return list(value.value)
 
     # -- turning a profile into a simulation ---------------------------------------
+
+    @property
+    def has_facts(self) -> bool:
+        """Whether anything about this boss is known rather than assumed.
+
+        A profile made entirely of project fallbacks produces a scenario that is
+        one target for 300 seconds with no raid events -- Patchwerk at one target
+        wearing a boss's name. Running it would publish the boss's name over a
+        number that has nothing to do with the boss.
+        """
+        return any(fact.provenance.source != SOURCE_DEFAULT for fact in self.facts.values())
 
     def to_plan(self) -> ScenarioPlan:
         options: list[str] = []
@@ -1089,6 +1115,24 @@ def load_profiles(tier: str, path: Path | None = None) -> TierProfiles:
         )
 
     return TierProfiles(tier=tier, note=raw.get("note", ""), profiles=profiles)
+
+
+def boss_scenarios(profiles: TierProfiles) -> dict[str, Scenario]:
+    """Runnable scenarios for the tier's bosses, keyed by scenario id.
+
+    Only bosses something is actually known about: a profile of pure fallbacks
+    would sim as Patchwerk at one target under a boss's name, which is worse than
+    publishing nothing for that boss. ``FightProfile.has_facts`` is the test, and
+    it is the same one the Fights view uses to decide whether a boss reads as
+    asserted or as unknown.
+
+    Ordered by encounter id so a run over "every boss" is reproducible.
+    """
+    return {
+        profile.to_scenario().id: profile.to_scenario()
+        for _, profile in sorted(profiles.profiles.items())
+        if profile.has_facts
+    }
 
 
 def target_counts_for(profiles: TierProfiles) -> tuple[int, ...]:

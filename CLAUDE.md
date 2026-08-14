@@ -1041,8 +1041,18 @@ that are easy to get wrong a second time:
   something different for each.
 - `write_fights` keeps `generatedAt` when the rest of the document is unchanged, for the
   same reason `_settle_provenance` does in the manifest.
-- **Nothing is wired into `wowdps build`.** The scenario is published, not run. Nine
-  bosses × 26 builds is a cost decision, and the profiles are one boss deep.
+- **The scenario can be run now, and is not run by default.** `wowdps build
+  --scenario bosses` expands to every boss whose profile has a `hand` or `logs` fact;
+  `--scenario boss_<encounterId>` picks one. The default scenario set is untouched, so
+  the nightly run's cost and content do not move until somebody decides they should.
+- **A profile of pure fallbacks gets no scenario at all**, and one that carries facts
+  but no *representable* ones is warned about rather than run silently.
+  `ScenarioPlan.restates_a_static_sweep()` is the test: no add waves, no expressible
+  amplification and the default fight length means N static targets for 300s, which is
+  Patchwerk at N with a boss's name on it. Correct number, unearned label. MID2's only
+  asserted boss is exactly that case today -- Lightblinded Vanguard is three permanent
+  targets and an amplification whose target simc cannot name -- so the feature is
+  wiring waiting on profiles, and it says so when you run it.
 
 The view's one deviation from the chart specs is deliberate and commented: the simulated
 line is 3.5px where lines are 2px everywhere else. Where the simulation and the pull agree

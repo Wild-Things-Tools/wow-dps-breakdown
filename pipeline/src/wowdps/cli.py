@@ -108,6 +108,57 @@ def cmd_list(args: argparse.Namespace) -> int:
     return 0
 
 
+#: Scenario name that expands to every boss the tier's profiles know something
+#: about. Spelled as a word rather than a flag so `--scenario` stays the one place
+#: a run's scenario set is decided.
+BOSS_SCENARIO_TOKEN = "bosses"
+
+
+def _resolve_scenarios(
+    names: list[str] | None, tier: str, profiles_file: str | None = None
+) -> list[scenarios.Scenario]:
+    """Scenario objects for the names given, built-in or boss.
+
+    Boss scenarios come from `fight_profiles.json` rather than from the built-in
+    table, because a boss's shape is data that changes with the tier while the four
+    fight styles are code. Loading the profiles is deferred to the point where a
+    boss name is actually asked for, so a plain run never touches the file.
+    """
+    if not names:
+        return list(scenarios.ALL_SCENARIOS)
+
+    wants_boss = any(name == BOSS_SCENARIO_TOKEN or name.startswith("boss_") for name in names)
+    available: dict[str, scenarios.Scenario] = {}
+    if wants_boss:
+        loaded = fightprofile.load_profiles(tier, Path(profiles_file) if profiles_file else None)
+        available = fightprofile.boss_scenarios(loaded)
+        if not available:
+            raise KeyError(
+                f"no boss in {tier} has a fight profile with anything asserted or "
+                f"measured in it, so there is no boss scenario to run. "
+                f"`wowdps fight-probe` measures them; `wowdps fight-promote` writes "
+                f"a measurement into a profile."
+            )
+
+    resolved: list[scenarios.Scenario] = []
+    for name in names:
+        if name == BOSS_SCENARIO_TOKEN:
+            resolved.extend(available.values())
+        elif name in available:
+            resolved.append(available[name])
+        elif name.startswith("boss_"):
+            known = ", ".join(sorted(available)) or "none"
+            raise KeyError(f"unknown boss scenario {name!r}; this tier offers: {known}")
+        else:
+            resolved.append(scenarios.get(name))
+
+    # Repeating a name is a typo, not a request to sim it twice.
+    unique: dict[str, scenarios.Scenario] = {}
+    for scenario in resolved:
+        unique.setdefault(scenario.id, scenario)
+    return list(unique.values())
+
+
 def cmd_build(args: argparse.Namespace) -> int:
     profiles_dir = Path(args.profiles)
     tier = _resolve_tier(profiles_dir, args.tier)
@@ -116,10 +167,18 @@ def cmd_build(args: argparse.Namespace) -> int:
     out_root = Path(args.out)
     out_dir = out_root / tier
 
-    selected_scenarios = (
-        [scenarios.get(s) for s in args.scenario]
-        if args.scenario
-        else list(scenarios.ALL_SCENARIOS)
+    try:
+        selected_scenarios = _resolve_scenarios(args.scenario, tier, args.profiles_file)
+    except KeyError as exc:
+        logging.error("%s", exc.args[0])
+        return 1
+
+    boss_profiles = (
+        fightprofile.load_profiles(
+            tier, Path(args.profiles_file) if args.profiles_file else None
+        ).profiles
+        if any(s.id.startswith("boss_") for s in selected_scenarios)
+        else {}
     )
 
     all_profiles = profiles.discover(profiles_dir, tier, dps_only=not args.include_tanks)
@@ -135,6 +194,29 @@ def cmd_build(args: argparse.Namespace) -> int:
         max_iterations=args.max_iterations,
         threads=args.threads,
     )
+
+    # A boss whose profile carries no add waves, no representable amplification and
+    # the default fight length sims as N static targets for 300s -- which is the
+    # target sweep's own cell with a boss's name on it. Correct number, unearned
+    # label, so it is said out loud rather than discovered in the output.
+    for scenario in selected_scenarios:
+        if not scenario.id.startswith("boss_"):
+            continue
+        profile = boss_profiles.get(int(scenario.id.removeprefix("boss_")))
+        if profile is None:
+            continue
+        plan = profile.to_plan()
+        if plan.restates_a_static_sweep():
+            logging.warning(
+                "%s adds nothing to the target sweep: %d static target(s) for %ds, "
+                "which is Patchwerk at %d. Its profile has no add waves and no "
+                "amplification simc can express%s",
+                scenario.id,
+                plan.targets,
+                plan.max_time,
+                plan.targets,
+                f" ({plan.unrepresented[0]})" if plan.unrepresented else "",
+            )
 
     total_sims = sum(len(s.sims()) for s in selected_scenarios) * len(selected)
     logging.info(
@@ -451,8 +533,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_build.add_argument(
         "--scenario",
         action="append",
-        choices=sorted(scenarios.BY_ID),
-        help="limit to one scenario (repeatable)",
+        metavar="NAME",
+        help=(
+            "limit to one scenario (repeatable). One of "
+            + ", ".join(sorted(scenarios.BY_ID))
+            + "; or 'boss_<encounterId>' to run a boss's own fight profile, or "
+            "'bosses' for every boss the tier's profiles know something about"
+        ),
+    )
+    p_build.add_argument(
+        "--profiles-file",
+        help="alternative fight profile file, for the boss scenarios",
     )
     p_build.add_argument(
         "--wow-class",
