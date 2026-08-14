@@ -7,7 +7,7 @@ import logging
 import sys
 from pathlib import Path
 
-from . import dataset, equipment, gearsweep, profiles, scenarios, simc_runner
+from . import dataset, equipment, fightprofile, gearsweep, profiles, scenarios, simc_runner
 from .scenarios import SimSettings
 
 DEFAULT_OUT = Path("web/public/data")
@@ -323,6 +323,44 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return warcraftlogs.cmd_verify(args)
 
 
+def cmd_fight_profiles(args: argparse.Namespace) -> int:
+    """Print the fight profiles for a tier and the simc scenario each one produces.
+
+    Offline on purpose: this is the half of the fight-profile work that needs no
+    credentials, so the shape of what the probe is aiming at can be inspected and
+    argued with from a development checkout.
+    """
+    tier_profiles = fightprofile.load_profiles(
+        args.tier, Path(args.profiles_file) if args.profiles_file else None
+    )
+    if not tier_profiles.profiles:
+        print(f"no fight profiles defined for tier {args.tier}")
+        return 1
+
+    print(f"tier {args.tier}: {len(tier_profiles.profiles)} encounter(s)")
+    for profile in tier_profiles.profiles.values():
+        plan = profile.to_plan()
+        known = sorted(profile.facts)
+        print(f"\n{profile.name} (encounter {profile.encounter_id})")
+        print(
+            f"  facts: {', '.join(known) if known else 'none -- nothing measured or asserted yet'}"
+        )
+        for key in known:
+            print(f"    {key}: {profile.facts[key].provenance.summary()}")
+        print(f"  simc: desired_targets={plan.targets} max_time={plan.max_time}")
+        for option in plan.options:
+            print(f"        {option}")
+        for missing in plan.unrepresented:
+            print(f"  not modelled: {missing}")
+    return 0
+
+
+def cmd_fight_probe(args: argparse.Namespace) -> int:
+    from . import fightprobe
+
+    return fightprobe.cmd_fight_probe(args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="wowdps", description=__doc__)
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -456,6 +494,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_verify.add_argument("--metric", default="dps", help="Warcraft Logs ranking metric")
     p_verify.add_argument("--difficulty", type=int, default=5, help="5 = Mythic, 4 = Heroic")
     p_verify.set_defaults(func=cmd_verify)
+
+    p_fight_profiles = sub.add_parser(
+        "fight-profiles",
+        help="print each boss's fight profile and the simc scenario it produces",
+    )
+    p_fight_profiles.add_argument("--tier", default="MID2")
+    p_fight_profiles.add_argument("--profiles-file", help="alternative fight profile file")
+    p_fight_profiles.set_defaults(func=cmd_fight_profiles)
+
+    p_fight_probe = sub.add_parser(
+        "fight-probe",
+        help="measure a boss's fight structure from Warcraft Logs (needs credentials)",
+    )
+    from . import fightprobe
+
+    fightprobe.add_arguments(p_fight_probe)
+    p_fight_probe.set_defaults(func=cmd_fight_probe)
 
     return parser
 

@@ -20,6 +20,10 @@ simc-bin/
 *.simc.out
 *.raw.json
 
+# Fight probe output and its response cache. The cache is what makes re-running
+# the extraction free, but it is raw API payloads: large, and not ours to commit.
+fight-probe/
+
 # Editors / OS
 .DS_Store
 .idea/
@@ -27,3 +31,6 @@ simc-bin/
 
 # Local screenshot helper (see CLAUDE.md); not part of the app
 web/shot.mjs
+
+# Git worktrees created for parallel agent runs. Tooling state, not project content.
+.claude/worktrees/

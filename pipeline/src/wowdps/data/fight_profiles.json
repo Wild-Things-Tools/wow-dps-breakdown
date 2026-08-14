@@ -1,0 +1,86 @@
+{
+ "note": "Per-boss fight shapes. Every fact carries a provenance: 'hand' means a person asserted it (first-class -- the owner plays these fights and the API cannot tell you what an aura does), 'logs' means `wowdps fight-probe` measured it from the named reports, 'default' means nothing is known and the value is the project fallback. See pipeline/src/wowdps/fightprofile.py. An encounter listed here with no facts is a known gap, not an empty fight.",
+ "tiers": {
+  "MID2": {
+   "difficulty": 5,
+   "difficultyNote": "5 = Mythic, the difficulty the site's logs comparison uses.",
+   "encounters": [
+    {
+     "encounterId": 3176,
+     "name": "Imperator Averzian",
+     "facts": {}
+    },
+    {
+     "encounterId": 3177,
+     "name": "Vorasius",
+     "facts": {}
+    },
+    {
+     "encounterId": 3178,
+     "name": "Vaelgor & Ezzorak",
+     "facts": {}
+    },
+    {
+     "encounterId": 3179,
+     "name": "Fallen-King Salhadaar",
+     "facts": {}
+    },
+    {
+     "encounterId": 3180,
+     "name": "Lightblinded Vanguard",
+     "facts": {
+      "targets": {
+       "value": {
+        "baseline": 3,
+        "constant": true
+       },
+       "provenance": {
+        "source": "hand",
+        "statedBy": "owner",
+        "detail": "Permanent three-target fight: all three are up for the whole pull, from playing it. This is the validation case for the extraction -- a probe that measures anything other than three constant targets here has a bug, and the difference must not be rationalised away."
+       }
+      },
+      "amplifications": {
+       "value": [
+        {
+         "ability": "opening damage-taken buff",
+         "multiplier": 1.2,
+         "first": 0,
+         "duration": 20,
+         "target": "unknown",
+         "abilityId": null,
+         "magnitudeSource": "hand"
+        }
+       ],
+       "provenance": {
+        "source": "hand",
+        "statedBy": "owner",
+        "detail": "One of the three targets takes roughly 20% extra damage from a buff for roughly the first 20 seconds of the pull. Both numbers are approximate as stated and are written as such. Which of the three carries it was not stated, so `target` is 'unknown' and no simc vulnerable raid event is emitted -- see ScenarioPlan.unrepresented. The probe can measure the window (an aura id, a start and a duration); it can never measure the 20%, because no field in the Warcraft Logs API says what an aura does."
+       }
+      }
+     }
+    },
+    {
+     "encounterId": 3181,
+     "name": "Crown of the Cosmos",
+     "facts": {}
+    },
+    {
+     "encounterId": 3182,
+     "name": "Belo'ren, Child of Al'ar",
+     "facts": {}
+    },
+    {
+     "encounterId": 3183,
+     "name": "Midnight Falls",
+     "facts": {}
+    },
+    {
+     "encounterId": 3306,
+     "name": "Chimaerus, the Undreamt God",
+     "facts": {}
+    }
+   ]
+  }
+ }
+}
