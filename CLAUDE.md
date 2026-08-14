@@ -76,6 +76,30 @@ Against the published dataset, where each build wears its own gear, Sunfury lead
 `prioritydps` equals `dps` exactly, and the base build's talents-only number reproduced
 its shipped number to 0.3% (across different iteration counts, so different seeds).
 
+### The finding: on four specs of eleven, the two rankings disagree
+
+The whole tier at five targets, 1000 deterministic iterations, gear held at each
+spec's base build. **Eleven specs ship more than one build; on four of them the build
+that does the most total damage is not the build that puts the most on the boss.**
+
+| Spec | Most total damage | Most on the boss |
+|---|---|---|
+| Unholy Death Knight | San'layn **+4.1%** | Rider of the Apocalypse **+3.5%** |
+| Fire Mage | Sunfury **+1.4%** | Frostfire **+5.8%** |
+| Assassination Rogue | Deathstalker **+4.3%** | Fatebound **+9.9%** |
+| Affliction Warlock | Soul Harvester **+12.5%** | Hellcaller **+15.3%** |
+
+Every one of those margins is far outside the project's tie band (`hypot` of the two
+errors, 0.10-0.18% here), so none of them is noise. The other seven specs agree with
+themselves: Frost DK, Arcane, Frost Mage, Shadow, both Shamans and Destruction all put
+the same build top on both metrics.
+
+This is the reason the funnel view exists, stated as a build choice: on those four
+specs, picking a build off a damage meter is the wrong call when the boss is what has
+to die. Caveats that travel with it -- one target count, gear held at whichever build
+sorts first (which moves the absolute numbers and not the comparison), and simc's
+shipped action list, which does not itself try to funnel.
+
 Budget accordingly: N variants multiply a cell that already costs ~9s at 3000 deterministic
 iterations, so a talent sweep will have to be restricted to selected target counts (1, 5,
 10) rather than all ten.
