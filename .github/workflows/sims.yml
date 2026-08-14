@@ -1,17 +1,33 @@
 name: Simulations
 
-# The whole point of the project: nobody runs these by hand. Simulations rebuild
-# nightly against the newest SimulationCraft commit, so a balance patch or an APL
-# fix shows up on the site the next morning.
+# Nobody runs these by hand. What paces them is not effort but the Actions budget:
+# this repository is private, and GitHub Free for organisations includes 2,000
+# Actions minutes a month. Matrix jobs bill as the *sum* of their job-minutes, so
+# six shards running twenty minutes cost 120 minutes, not twenty.
+#
+# Rough cost of one full pass over the current tier, assuming a 2-vCPU standard
+# runner: 26 profiles x 13 cells x ~18s = ~20 min per shard, x6 shards, plus the
+# simc build and the merge -- call it 150 job-minutes. A nightly schedule would
+# therefore spend ~4,500 minutes a month against an allowance of 2,000, and on a
+# zero spending limit the runs would simply stop partway through the month, leaving
+# the site quietly stale. That failure mode is worse than slightly older data.
+#
+# So: weekly, plus manual runs whenever they are actually warranted (a balance
+# patch, an APL fix). Estimated ~1,100 minutes a month including CI and deploys,
+# which leaves room for the estimate above to be wrong.
+#
+# If this repository is ever made public, Actions minutes become unlimited and free
+# and this can go back to nightly -- see "What this costs to run" in the README.
 on:
   schedule:
-    # Nightly: the current tier, so a balance patch shows up the next morning.
-    - cron: '0 4 * * *'
-    # Weekly: every tier we publish. Past tiers do not change, but the spell data
-    # they run against does -- which is exactly what "how did last season's setup
-    # fare under current balance" asks. Nightly for both would double the cost for
-    # a number that only moves on patch days.
-    - cron: '0 5 * * 0'
+    # Wednesday, early UTC: after the Tuesday US reset and any patch that came with
+    # it, before the European raid week gets going.
+    - cron: '0 4 * * 3'
+    # Monthly: the current tier *and* the one before it. Past profiles do not
+    # change, but the spell data they run against does, which is the whole content
+    # of "how does last season's setup fare under current balance" -- and that only
+    # moves on patch days.
+    - cron: '0 5 1 * *'
   workflow_dispatch:
     inputs:
       target_error:
@@ -42,9 +58,9 @@ env:
   TARGET_ERROR: ${{ inputs.target_error || '0' }}
   ITERATIONS: ${{ inputs.iterations || '3000' }}
   SHARDS: ${{ inputs.shards || '6' }}
-  # 'latest' and 'previous' resolve against the tiers simc ships, so the weekly run
+  # 'latest' and 'previous' resolve against the tiers simc ships, so the monthly run
   # keeps meaning "this season and last" once the next tier lands.
-  TIERS: ${{ inputs.tiers || (github.event.schedule == '0 5 * * 0' && 'latest previous') || 'latest' }}
+  TIERS: ${{ inputs.tiers || (github.event.schedule == '0 5 1 * *' && 'latest previous') || 'latest' }}
 
 jobs:
   build-simc:
