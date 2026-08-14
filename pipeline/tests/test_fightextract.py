@@ -550,3 +550,104 @@ def test_adds_are_pooled_on_game_id_because_actor_ids_are_report_local():
     observation.fights = [first, second]
     pooled = observation.pooled_adds()
     assert len(pooled) == 1 and pooled[0]["seenInFights"] == 2
+
+
+def test_player_debuffs_are_not_offered_as_encounter_mechanics():
+    """The first real probe run nominated a Paladin cooldown as a boss mechanic.
+
+    A boss buffing its own add and a player landing a debuff on that add both put
+    an aura on an enemy and both arrive in the same event stream. Only the source
+    tells them apart.
+    """
+    from wowdps.fightextract import (
+        AuraWindow,
+        EncounterObservation,
+        FightObservation,
+        TargetCountTimeline,
+    )
+
+    def fight(code: str) -> FightObservation:
+        return FightObservation(
+            report_code=code,
+            fight_id=1,
+            encounter_id=3180,
+            encounter_name="Lightblinded Vanguard",
+            difficulty=5,
+            kill=True,
+            duration=300.0,
+            raid_size=20,
+            players=20,
+            timeline=TargetCountTimeline(steps=((0.0, 3),), duration=300.0),
+            significant_timeline=TargetCountTimeline(steps=((0.0, 3),), duration=300.0),
+            enemies=(),
+            adds=(),
+            phases=(),
+            auras=(
+                # The encounter's own buff on one of its enemies.
+                AuraWindow(555001, "Blinding Fervor", 90, 1, 1.0, 21.0, False, source_id=90),
+                # A player debuff on the same enemy, same rough window.
+                AuraWindow(31884, "Avenging Wrath", 90, 1, 2.0, 22.0, False, source_id=7),
+            ),
+            damage_by_target=(),
+            active_time_fraction=None,
+            player_ids=frozenset({7}),
+        )
+
+    observation = EncounterObservation(
+        encounter_id=3180,
+        encounter_name="Lightblinded Vanguard",
+        difficulty=5,
+        fights=[fight("aaa"), fight("bbb")],
+    )
+
+    names = {aura["ability"] for aura in observation.pooled_auras()}
+    assert names == {"Blinding Fervor"}, "a player-applied aura reached the candidate list"
+
+    # The unfiltered view still sees both, so nothing is lost -- only the default
+    # for "what could the encounter be doing" is narrowed.
+    both = {aura["ability"] for aura in observation.pooled_auras(encounter_only=False)}
+    assert both == {"Blinding Fervor", "Avenging Wrath"}
+
+
+def test_an_aura_with_no_source_is_kept():
+    """Unknown is not the same as 'a player did it'."""
+    from wowdps.fightextract import AuraWindow, aura_windows
+
+    windows = aura_windows(
+        [
+            {"type": "applybuff", "abilityGameID": 42, "targetID": 90, "timestamp": 1000},
+            {"type": "removebuff", "abilityGameID": 42, "targetID": 90, "timestamp": 21000},
+        ],
+        fight_start_ms=1000,
+        fight_end_ms=301000,
+    )
+    assert len(windows) == 1
+    assert isinstance(windows[0], AuraWindow)
+    assert windows[0].source_id is None
+
+
+def test_the_applying_source_wins_over_the_removing_one():
+    """A window belongs to whoever put it there, not whoever happened to strip it."""
+    from wowdps.fightextract import aura_windows
+
+    windows = aura_windows(
+        [
+            {
+                "type": "applydebuff",
+                "abilityGameID": 7,
+                "targetID": 5,
+                "sourceID": 11,
+                "timestamp": 0,
+            },
+            {
+                "type": "removedebuff",
+                "abilityGameID": 7,
+                "targetID": 5,
+                "sourceID": 99,
+                "timestamp": 5000,
+            },
+        ],
+        fight_start_ms=0,
+        fight_end_ms=300000,
+    )
+    assert windows[0].source_id == 11
