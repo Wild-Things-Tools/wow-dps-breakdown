@@ -313,3 +313,17 @@ def test_rotation_never_filters_the_raid_pool():
         base_quality=4,
     )
     assert pool.in_rotation(raid_item) is True
+
+
+def test_a_named_rotation_with_nothing_placed_still_filters_nothing():
+    """Naming the dungeons before tagging the items must not empty the pool."""
+    pool = _pool_with(["Dungeon A", "Dungeon B"], [None, None])
+    assert pool.rotation_is_stated() is True
+    assert len(pool.baseline_candidates("intellect")) == 2
+    assert len(pool.unplaced()) == 2
+
+
+def test_filtering_switches_on_once_something_is_placed():
+    pool = _pool_with(["Dungeon A"], ["Dungeon A", None])
+    kept = pool.baseline_candidates("intellect")
+    assert [item.dungeon for item in kept] == ["Dungeon A"]

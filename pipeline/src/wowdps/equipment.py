@@ -250,7 +250,15 @@ class SlotPool:
         """
         if not self.rotation or item.source != "mythicplus":
             return True
+        if not self._any_placed():
+            # The rotation is named but no item has been assigned a dungeon yet.
+            # Filtering here would exclude every candidate and empty the pool --
+            # a worse failure than the one the rotation exists to fix.
+            return True
         return item.dungeon in self.rotation
+
+    def _any_placed(self) -> bool:
+        return any(i.source == "mythicplus" and i.dungeon is not None for i in self.items)
 
     def rotation_is_stated(self) -> bool:
         return bool(self.rotation)

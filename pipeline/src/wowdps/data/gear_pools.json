@@ -16,8 +16,17 @@
      "evidence": "bonus_id 13848, the top of the Midnight upgrade ladder and the highest item level any MID2 profile equips."
     }
    ],
-   "dungeonRotation": [],
-   "dungeonRotationNote": "The dungeons this Mythic+ season runs, which is the only loot a character can actually farm. EMPTY means nobody has stated it yet, and nothing is filtered. simc ships no item source of any kind, so this cannot be derived -- fill it in here and give each mythicplus item a 'dungeon', and the pool narrows with no code change. Until then the pool is selected structurally (rare-base trinkets at the expansion's dungeon item level), which is a proxy for the wrong thing in both directions: it covers every dungeon of the expansion rather than this season's rotation, and it misses rotation dungeons from older expansions entirely, whose ids and base item levels belong to a different block.",
+   "dungeonRotation": [
+    "Altar of Fangs",
+    "Murder Row",
+    "Den of Nalorakk",
+    "The Blinding Vale",
+    "Voidscar Arena",
+    "Kings' Rest",
+    "Temple of Sethraliss",
+    "Ruby Life Pools"
+   ],
+   "dungeonRotationNote": "Blizzard's own announcement 'The Shadows Deepen: Midnight Season 2 Begins August 18' (news article 24294369), corroborated independently by Method, Icy Veins and Conquest Capped, which agree on all eight. Five are Midnight dungeons; Kings' Rest and Temple of Sethraliss return from Battle for Azeroth and Ruby Life Pools from Dragonflight. Filtering stays OFF until at least one mythicplus item carries a 'dungeon' (see SlotPool.in_rotation): naming the rotation without placing the items would exclude everything. Assign dungeons per item to switch it on.",
    "slots": {
     "trinket": {
      "baselineSource": "mythicplus",
