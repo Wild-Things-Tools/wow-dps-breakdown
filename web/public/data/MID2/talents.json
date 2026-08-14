@@ -1,0 +1,72 @@
+{
+ "schemaVersion": 1,
+ "generatedAt": "2026-08-14T19:50:17+00:00",
+ "tier": "MID2",
+ "settings": {
+  "iterations": 1000,
+  "deterministic": true
+ },
+ "note": "Every build of a spec on one character's gear and action list, so the difference is the talents. Ranked twice out of one run: by total damage and by damage to the priority target. simc does not optimise -- it runs a fixed action list, so this is what the shipped builds do rather than what they could do if played to funnel.",
+ "specs": [
+  {
+   "specId": "warlock_affliction",
+   "label": "Affliction Warlock",
+   "baseProfile": "warlock_affliction_hellcaller",
+   "targets": 1,
+   "builds": [
+    {
+     "id": "warlock_affliction_hellcaller",
+     "label": "Affliction Warlock (Hellcaller)",
+     "heroTalent": "Hellcaller",
+     "dps": 200043.2,
+     "dpsError": 0.0962,
+     "priorityDps": 200043.2,
+     "iterations": 1000
+    },
+    {
+     "id": "warlock_affliction_soul_harvester",
+     "label": "Affliction Warlock (Soul Harvester)",
+     "heroTalent": "Soul Harvester",
+     "dps": 208417.9,
+     "dpsError": 0.0931,
+     "priorityDps": 208417.9,
+     "iterations": 1000
+    }
+   ],
+   "bestByDps": "warlock_affliction_soul_harvester",
+   "bestByPriorityDps": "warlock_affliction_soul_harvester",
+   "rankingsDisagree": false,
+   "note": "One character's gear and action list, wearing each build's talents in turn. This is what the talents do, not which shipped profile is strongest -- simc's builds differ in gear too."
+  },
+  {
+   "specId": "warlock_affliction",
+   "label": "Affliction Warlock",
+   "baseProfile": "warlock_affliction_hellcaller",
+   "targets": 5,
+   "builds": [
+    {
+     "id": "warlock_affliction_hellcaller",
+     "label": "Affliction Warlock (Hellcaller)",
+     "heroTalent": "Hellcaller",
+     "dps": 431891.8,
+     "dpsError": 0.0895,
+     "priorityDps": 212833.2,
+     "iterations": 1000
+    },
+    {
+     "id": "warlock_affliction_soul_harvester",
+     "label": "Affliction Warlock (Soul Harvester)",
+     "heroTalent": "Soul Harvester",
+     "dps": 485731.1,
+     "dpsError": 0.103,
+     "priorityDps": 184523.6,
+     "iterations": 1000
+    }
+   ],
+   "bestByDps": "warlock_affliction_soul_harvester",
+   "bestByPriorityDps": "warlock_affliction_hellcaller",
+   "rankingsDisagree": true,
+   "note": "One character's gear and action list, wearing each build's talents in turn. This is what the talents do, not which shipped profile is strongest -- simc's builds differ in gear too."
+  }
+ ]
+}

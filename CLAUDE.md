@@ -617,9 +617,17 @@ when its name is written out beside it, so a screen reader hears the name once.
 
 **A hero tree is icon plus written name, everywhere.** Class and spec icons are
 recognisable enough to carry a tight axis label on their own; hero-tree emblems are
-new and are not. `heroTalent === 'Default'` is simc's marker for a spec it ships one
-build for — it is not a hero tree, gets no invented emblem, and renders as a muted
-"Single build" pill.
+new and are not. `heroTalent === 'Default'` is simc's marker for a profile that
+names no hero-talent tree — it is not a tree, gets no invented emblem, and renders
+as a muted **"No hero tree"** pill.
+
+It used to read "Single build", which is true only some of the time and visibly
+false the rest: MID2 Frost Death Knight ships `Default` *and* Rider of the
+Apocalypse, so the Builds view wrote "tie — the single build and Rider of the
+Apocalypse" about a spec with two builds on screen, and the pill contradicted the
+row beside it. `Default` does not mean "this spec has one build"; it means "this
+profile names no tree", which is true in both cases. Do not put the old wording
+back without a way to tell the two apart.
 
 ### Boss icons come from Warcraft Logs, and that is not laziness
 
