@@ -327,3 +327,27 @@ def test_filtering_switches_on_once_something_is_placed():
     pool = _pool_with(["Dungeon A"], ["Dungeon A", None])
     kept = pool.baseline_candidates("intellect")
     assert [item.dungeon for item in kept] == ["Dungeon A"]
+
+
+def test_a_derived_rotation_answer_beats_the_hand_written_one():
+    """Once the API has spoken, neither the rotation list nor a dungeon matters."""
+    from wowdps.equipment import DerivedSource
+
+    pool = _pool_with(["Dungeon A"], ["Dungeon A", "Dungeon A"])
+    kept, dropped = pool.items
+    object.__setattr__(
+        dropped,
+        "derived",
+        DerivedSource(
+            source="mythicplus",
+            encounter="Some Boss",
+            encounter_id=1,
+            instance="Dungeon Z",
+            instance_id=2,
+            expansion="Midnight",
+            in_rotation=False,
+        ),
+    )
+    ids = [item.item_id for item in pool.baseline_candidates("intellect")]
+    assert dropped.item_id not in ids
+    assert kept.item_id in ids

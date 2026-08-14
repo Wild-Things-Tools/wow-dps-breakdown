@@ -404,6 +404,12 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
     return fightprobe.cmd_fight_probe(args)
 
 
+def cmd_loot_sources(args: argparse.Namespace) -> int:
+    from . import lootsources
+
+    return lootsources.cmd_loot_sources(args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="wowdps", description=__doc__)
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -568,6 +574,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     fightprobe.add_arguments(p_fight_probe)
     p_fight_probe.set_defaults(func=cmd_fight_probe)
+
+    p_loot_sources = sub.add_parser(
+        "loot-sources",
+        help="derive item drop sources and this season's dungeons from Blizzard's "
+        "Game Data API (needs credentials)",
+    )
+    from . import lootsources
+
+    lootsources.add_arguments(p_loot_sources)
+    p_loot_sources.set_defaults(func=cmd_loot_sources)
 
     return parser
 
