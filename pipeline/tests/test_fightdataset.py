@@ -312,3 +312,56 @@ def test_a_changed_dataset_takes_the_new_timestamp(tmp_path):
     )
 
     assert json.loads(path.read_text())["generatedAt"] == "2026-06-06T00:00:00+00:00"
+
+
+# --------------------------------------------------------------------------------
+# What the logs could contribute, published rather than applied
+# --------------------------------------------------------------------------------
+
+
+def test_promotions_are_published_so_the_decision_can_be_looked_at():
+    entry = find(
+        fightdataset.build_document("MID2", load_profiles("MID2"), vanguard_payload()), 3180
+    )
+    plan = {promotion["key"]: promotion for promotion in entry["promotions"]}
+
+    # A gap the logs fill, offered.
+    assert plan["fightLengthSeconds"]["eligible"] is True
+    # A person's statement, held back with the reason on the page rather than in a
+    # commit message.
+    assert plan["targets"]["eligible"] is False
+    assert plan["targets"]["blockedBy"] == "hand"
+    # And the command that would apply them, spelled out.
+    assert "fight-promote" in entry["promoteCommand"]
+    assert "--write" in entry["promoteCommand"]
+
+
+def test_a_boss_nobody_probed_offers_no_promotions():
+    entry = find(fightdataset.build_document("MID2", load_profiles("MID2")), 3180)
+    assert entry["promotions"] == []
+
+
+def test_a_drawn_aura_window_names_the_enemy_that_carried_it():
+    """A band labelled only with an ability, over a three-target chart, does not
+    answer the question the band exists to raise."""
+    entry = find(
+        fightdataset.build_document("MID2", load_profiles("MID2"), vanguard_payload()), 3180
+    )
+    drawn = entry["measured"]["timeline"]["representative"]["auras"]
+
+    assert [window["actorName"] for window in drawn] == ["Champion"]
+    assert drawn[0]["role"] == "unknown"
+    # And the pooled block names it too, with the reasoning attached.
+    pooled = entry["measured"]["auras"][0]
+    assert pooled["carriedBy"][0]["name"] == "Champion"
+    assert "nominates one as the priority target" in pooled["roleEvidence"]
+
+
+def test_the_comparison_asks_which_enemy_carries_the_amplification():
+    entry = find(
+        fightdataset.build_document("MID2", load_profiles("MID2"), vanguard_payload()), 3180
+    )
+    row = next(row for row in entry["comparison"] if "carried by" in row["fact"])
+
+    assert row["profile"] == "unknown"
+    assert row["measured"] == "Champion (unknown)"

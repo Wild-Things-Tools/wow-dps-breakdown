@@ -316,6 +316,19 @@ def render(observation: fightextract.EncounterObservation, profile) -> list[str]
             f"lasts {_med(phase['duration'])}s, seen in {phase['seenInFights']} fight(s)"
         )
 
+    add("")
+    add("-- which enemy the priority target stands for ------------------------------")
+    add("   nothing in the API says 'this one is the boss'. These are nominations.")
+    for nomination in sorted({fight.priority.evidence for fight in observation.fights}):
+        named = sorted(
+            {
+                fight.priority.name or "nothing"
+                for fight in observation.fights
+                if fight.priority.evidence == nomination
+            }
+        )
+        add(f"  {', '.join(named)}: {nomination}")
+
     auras = observation.pooled_auras()
     add("")
     add("-- auras on enemies (seen in 2+ fights) -----------------------------------")
@@ -329,6 +342,14 @@ def render(observation: fightextract.EncounterObservation, profile) -> list[str]
             f"targets={aura['distinctTargets']}  fights={aura['seenInFights']}"
             + ("  [some windows truncated]" if aura["anyTruncated"] else "")
         )
+        # The answer to "which of the three does the amplification sit on",
+        # printed where somebody reading a probe run will meet it.
+        for carrier in aura.get("carriedBy") or []:
+            add(
+                f"      carried by {carrier['name']} ({carrier['role']}), "
+                f"{carrier['applications']} application(s) across "
+                f"{carrier['seenInFights']} fight(s)"
+            )
 
     warnings = sorted({w for fight in observation.fights for w in fight.warnings})
     if warnings or any(fight.truncated for fight in observation.fights):
@@ -349,6 +370,20 @@ def render(observation: fightextract.EncounterObservation, profile) -> list[str]
                 f"  {row['fact'][:46]:<46} {_cell(row['profile']):>12} "
                 f"{_cell(row['measured']):>12}  {row['provenance']}; {row['note']}"
             )
+        add("")
+        add("-- what these measurements could become ------------------------------------")
+        add("   nothing is written by this command. `wowdps fight-promote --write` does")
+        add("   that, and it never overwrites a fact a person asserted.")
+        promotions = fightprofile.plan_promotions(profile, observation)
+        if not promotions:
+            add("  nothing measured that this profile could take")
+        for promotion in promotions:
+            add(
+                f"  [{'PROMOTE' if promotion.eligible else 'hold   '}] "
+                f"{promotion.label}: {promotion.summary}"
+            )
+            add(f"            {promotion.reason}")
+
         plan = profile.to_plan()
         add("")
         add("-- the simc scenario this profile produces --------------------------------")

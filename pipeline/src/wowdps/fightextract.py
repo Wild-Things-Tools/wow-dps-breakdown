@@ -63,11 +63,34 @@ AURA_END_TYPES = frozenset({"removebuff", "removedebuff"})
 #: are different claims and the second is the one a scenario should be built from.
 DEFAULT_SIGNIFICANT_SHARE = 0.01
 
+#: Below this share of a fight read by the event fetch, no statistic averaged over
+#: the fight can be trusted, because the unread part is silently counted as empty.
+#: 0.95 rather than 1.0: a kill's last enemy dies a fraction of a second before the
+#: log closes, so a complete fetch still lands just short.
+COMPLETE_EVENT_COVERAGE = 0.95
+
 #: A fight counts as a constant-target fight when it spends at least this much of
 #: its length at its peak count. Not 100%: on a kill the targets die one after
 #: another over the last second or two, which would otherwise make every fight in
 #: the game "variable" for a reason that has nothing to do with its shape.
 CONSTANT_TARGET_SHARE = 0.95
+
+#: How much more damage the leading enemy must take than the next one before the
+#: damage stream is allowed to nominate it as the priority target. Below this the
+#: fight is "several things being hit about equally" -- which is a real encounter
+#: shape, not a measurement failure -- and the honest answer is that nothing in
+#: the events nominates a boss. Deliberately not a tie-break: picking the larger
+#: of two near-equal numbers would turn noise into an assertion about the fight.
+PRIORITY_DAMAGE_MARGIN = 1.25
+
+#: Roles an enemy can play relative to the simulation. Only ``priority`` has a
+#: simc equivalent for an amplification window (``vulnerable`` without ``target=``
+#: lands on ``sim->target``); ``add`` is carried so the gap is nameable.
+ROLE_PRIORITY = "priority"
+ROLE_ADD = "add"
+ROLE_UNKNOWN = "unknown"
+#: One aura that landed on a priority target in one pull and an add in another.
+ROLE_MIXED = "mixed"
 
 
 def _seconds(timestamp_ms: float, fight_start_ms: float) -> float:
@@ -141,27 +164,67 @@ class PhaseWindow:
 
 @dataclass(frozen=True)
 class TargetCountTimeline:
-    """How many enemies were alive at once, as a step function.
+    """How many enemies were being fought at once, as a step function.
 
     ``steps`` are ``(start second, count)`` pairs, each running until the next
     one. ``mean`` is time-weighted, which is the number a single ``desired_targets``
     would have to stand for; ``peak_share`` says whether that is even a fair
-    summary, by reporting how much of the fight was spent at the highest count.
+    summary, by reporting how much of the measured window was spent at the highest
+    count.
+
+    Why there are two lengths here, and why it matters
+    -------------------------------------------------
+    ``duration`` is how long the fight ran. ``observed`` is how much of it the
+    event fetch actually reached. They are not the same thing, and treating them
+    as the same produced a genuinely wrong number on the first real nine-boss
+    pass: enemy damage-taken is paginated and bounded, a twenty-player Mythic pull
+    generates events far faster than the budget allows, and the fetch stops
+    part-way through. Every enemy's last hit is then the cut point, the step
+    function falls to zero there, and a mean divided by the *whole* fight length
+    reads as though nothing was alive for the rest of it.
+
+    Measured on the MID2 pass: Midnight Falls was read for 11-22% of its length
+    and reported a mean of 0.34 concurrent targets; Vorasius, a single-target
+    boss, reported 0.59. A mean below one on a boss that is always there is not a
+    property of the encounter, it is a division by the wrong denominator.
+
+    So both statistics are computed over ``observed``, and ``coverage`` publishes
+    the ratio so nothing downstream can mistake a fifth of a fight for all of it.
+    A caller that wants a whole-fight claim has to check ``coverage`` first --
+    ``plan_promotions`` does exactly that and refuses.
     """
 
     steps: tuple[tuple[float, int], ...]
     duration: float
+    #: Seconds of the fight the events actually covered. ``None`` means "assume
+    #: the whole fight", which is right for a timeline built from something other
+    #: than a bounded event fetch.
+    observed: float | None = None
+
+    @property
+    def window(self) -> float:
+        """The length the statistics are averaged over: what was read, not what ran."""
+        if self.observed is None or self.observed <= 0:
+            return self.duration
+        return min(self.observed, self.duration)
+
+    @property
+    def coverage(self) -> float:
+        """Fraction of the fight the events reached. 1.0 when nothing was cut."""
+        if self.duration <= 0:
+            return 0.0
+        return round(min(self.window / self.duration, 1.0), 4)
 
     def _spans(self):
         for index, (start, count) in enumerate(self.steps):
-            end = self.steps[index + 1][0] if index + 1 < len(self.steps) else self.duration
-            yield count, max(0.0, end - start)
+            end = self.steps[index + 1][0] if index + 1 < len(self.steps) else self.window
+            yield count, max(0.0, min(end, self.window) - min(start, self.window))
 
     @property
     def mean(self) -> float:
-        if not self.steps or self.duration <= 0:
+        if not self.steps or self.window <= 0:
             return 0.0
-        return round(sum(count * span for count, span in self._spans()) / self.duration, 3)
+        return round(sum(count * span for count, span in self._spans()) / self.window, 3)
 
     @property
     def peak(self) -> int:
@@ -169,11 +232,11 @@ class TargetCountTimeline:
 
     @property
     def peak_share(self) -> float:
-        """Fraction of the fight spent at the peak count."""
-        if self.duration <= 0:
+        """Fraction of the measured window spent at the peak count."""
+        if self.window <= 0:
             return 0.0
         at_peak = sum(span for count, span in self._spans() if count == self.peak)
-        return round(at_peak / self.duration, 4)
+        return round(at_peak / self.window, 4)
 
     @property
     def constant(self) -> bool:
@@ -186,6 +249,11 @@ class TargetCountTimeline:
             "peak": self.peak,
             "peakShare": self.peak_share,
             "constant": self.constant,
+            # Published beside the numbers it qualifies, never in a footnote: a
+            # mean over 20% of a fight and a mean over all of it are different
+            # claims wearing the same name.
+            "observed": round(self.window, 3),
+            "coverage": self.coverage,
         }
 
 
@@ -230,6 +298,45 @@ class TargetDamage:
 
 
 @dataclass(frozen=True)
+class PriorityNomination:
+    """Which enemy a simulation's priority target would stand for, and on what grounds.
+
+    There is no "is the boss" field anywhere in the API. What there is: the
+    encounter's name, and how much damage each enemy took. So this nominates, it
+    does not decide, and it carries the sentence a person would need in order to
+    disagree with it.
+
+    ``actor_id`` is ``None`` when nothing nominates one, which is the correct
+    answer for a fight where three things are hit about equally. An encounter that
+    genuinely has no single priority target is a fact about the encounter; guessing
+    one there would invent the very thing this exists to establish.
+    """
+
+    actor_id: int | None
+    name: str | None
+    game_id: int | None
+    evidence: str
+
+    @property
+    def known(self) -> bool:
+        return self.actor_id is not None
+
+    def role_of(self, actor_id: int) -> str:
+        """``priority``/``add`` for an enemy, or ``unknown`` when nothing was nominated."""
+        if not self.known:
+            return ROLE_UNKNOWN
+        return ROLE_PRIORITY if actor_id == self.actor_id else ROLE_ADD
+
+    def to_json(self) -> dict:
+        return {
+            "actorId": self.actor_id,
+            "name": self.name,
+            "gameId": self.game_id,
+            "evidence": self.evidence,
+        }
+
+
+@dataclass(frozen=True)
 class FightObservation:
     """Everything one fight in one report says about its own shape."""
 
@@ -261,6 +368,51 @@ class FightObservation:
     #: player debuffs on an enemy, not something the encounter does, and they must
     #: not be offered as candidates for an encounter's own amplification window.
     player_ids: frozenset[int] = frozenset()
+    #: Which enemy this pull nominates as the priority target, and why. Never a
+    #: guess: an encounter where nothing stands out reports nothing.
+    priority: PriorityNomination = PriorityNomination(None, None, None, "not computed")
+    #: Report-local actor id to name, so an aura on an enemy that never took a hit
+    #: still has something to be called. Out of equality and hashing: it is a
+    #: lookup table, not part of what the fight *is*.
+    actor_names: dict[int, str] = field(default_factory=dict, compare=False, repr=False)
+    actor_game_ids: dict[int, int] = field(default_factory=dict, compare=False, repr=False)
+
+    @property
+    def event_coverage(self) -> float:
+        """Fraction of this pull the event fetch reached. See ``TargetCountTimeline``."""
+        return self.timeline.coverage
+
+    def is_encounter_aura(self, aura: AuraWindow) -> bool:
+        """Whether one aura window is something the *encounter* did to an enemy.
+
+        Two independent tests, because the first one on its own has already
+        failed in production twice:
+
+        1. **The aura must not be on a player.** A self-buff and a boss's buff on
+           its own add arrive in the same stream, and a paladin's Avenging Wrath
+           on himself is not an encounter mechanic on anything. This test needs
+           nothing but the target id, so it holds even when the event carried no
+           source at all -- which is exactly the case the source test lets
+           through, and exactly how Avenging Wrath reached the published MID2
+           dataset a second time after being fixed once.
+        2. **The aura must not have been applied by a player.** This is the older
+           test and it is still the one that catches a debuff a player put on an
+           enemy. An aura whose event carried no source is kept: unknown is not
+           the same as "a player did it".
+        """
+        if aura.actor_id in self.player_ids:
+            return False
+        return not (aura.source_id is not None and aura.source_id in self.player_ids)
+
+    def enemy_name(self, actor_id: int) -> str:
+        """A name for one enemy actor, from the report's master data or its damage."""
+        named = self.actor_names.get(actor_id)
+        if named:
+            return named
+        return next(
+            (enemy.name for enemy in self.enemies if enemy.actor_id == actor_id),
+            f"actor {actor_id}",
+        )
 
     def to_json(self) -> dict:
         return {
@@ -286,12 +438,19 @@ class FightObservation:
                 }
                 for phase in self.phases
             ],
+            "priorityEnemy": self.priority.to_json(),
             "auras": [
                 {
                     "abilityId": aura.ability_id,
                     "ability": aura.ability_name,
                     "actorId": aura.actor_id,
                     "instance": aura.instance,
+                    # Which enemy carried it, by name and by role. The owner was
+                    # being asked to say which of three targets an amplification
+                    # sits on; this is where the answer comes from instead.
+                    "actorName": self.enemy_name(aura.actor_id),
+                    "actorGameId": self.actor_game_ids.get(aura.actor_id),
+                    "role": self.priority.role_of(aura.actor_id),
                     "start": aura.start,
                     "duration": aura.duration,
                     "truncated": aura.truncated,
@@ -309,6 +468,9 @@ class FightObservation:
             ],
             "activeTimeFraction": self.active_time_fraction,
             "truncated": self.truncated,
+            # The single number that says how far any of the counts above can be
+            # read. A fight fetched to 20% is not a fight with few targets.
+            "eventCoverage": self.event_coverage,
             "warnings": list(self.warnings),
         }
 
@@ -403,10 +565,27 @@ def enemy_lives(
     return lives
 
 
-def target_count_timeline(lives: list[EnemyLife], duration: float) -> TargetCountTimeline:
-    """Concurrently-alive enemy count as a step function over the fight."""
+def observed_window(lives: list[EnemyLife], duration: float) -> float:
+    """How much of the fight the damage events actually reached.
+
+    The last moment any enemy was demonstrably being fought. On a complete fetch
+    that is the kill; on a fetch that hit its page limit it is the cut point, and
+    everything after it is unread rather than empty. See ``TargetCountTimeline``
+    for what goes wrong when the two are conflated.
+    """
     if not lives:
-        return TargetCountTimeline(steps=((0.0, 0),), duration=duration)
+        return 0.0
+    return round(min(max(life.last_seen for life in lives), duration), 3)
+
+
+def target_count_timeline(
+    lives: list[EnemyLife],
+    duration: float,
+    observed: float | None = None,
+) -> TargetCountTimeline:
+    """Concurrent enemy count as a step function over the part of the fight that was read."""
+    if not lives:
+        return TargetCountTimeline(steps=((0.0, 0),), duration=duration, observed=observed)
 
     deltas: dict[float, int] = {}
     for life in lives:
@@ -426,7 +605,7 @@ def target_count_timeline(lives: list[EnemyLife], duration: float) -> TargetCoun
 
     if not steps or steps[0][0] > 0:
         steps.insert(0, (0.0, 0))
-    return TargetCountTimeline(steps=tuple(steps), duration=duration)
+    return TargetCountTimeline(steps=tuple(steps), duration=duration, observed=observed)
 
 
 def add_patterns(lives: list[EnemyLife], total_damage: float) -> list[AddPattern]:
@@ -464,6 +643,84 @@ def add_patterns(lives: list[EnemyLife], total_damage: float) -> list[AddPattern
         _ = actor_id
     patterns.sort(key=lambda pattern: (-pattern.damage_share, pattern.first_seen))
     return patterns
+
+
+def nominate_priority_enemy(
+    lives: list[EnemyLife],
+    encounter_name: str = "",
+) -> PriorityNomination:
+    """Which of the enemies present is the one a sim's priority target stands for.
+
+    Two signals, in order, and a refusal:
+
+    1. **An enemy named for the encounter.** Warcraft Logs names the fight after
+       its boss, and the boss NPC almost always carries that name, so an exact or
+       containing match is the strongest thing available. It is also the only
+       signal that survives a fight where the adds out-damage the boss.
+    2. **The enemy that took clearly the most damage**, by a stated margin. A boss
+       with a five-minute health bar is not usually within 25% of an add.
+    3. Otherwise **nothing is nominated**. Three enemies hit about equally is the
+       shape of a permanent multi-target fight, and answering "the first one" there
+       would manufacture the fact this function exists to establish.
+
+    Nothing here decides what an aura *does* -- that is never in the API. It
+    decides which enemy an aura landed on can be *called*, which is what turns
+    "an amplification on one of the three" into something simc can or cannot be
+    given a ``target=`` for.
+    """
+    if not lives:
+        return PriorityNomination(None, None, None, "no enemy took damage: nothing to nominate")
+
+    by_actor: dict[int, list[EnemyLife]] = {}
+    for life in lives:
+        by_actor.setdefault(life.actor_id, []).append(life)
+
+    wanted = (encounter_name or "").strip().casefold()
+    if wanted:
+        for actor_id, group in sorted(by_actor.items()):
+            name = (group[0].name or "").strip().casefold()
+            if name and (name == wanted or name in wanted or wanted in name):
+                return PriorityNomination(
+                    actor_id,
+                    group[0].name,
+                    group[0].game_id,
+                    f"named for the encounter: {group[0].name!r} in {encounter_name!r}",
+                )
+
+    ranked = sorted(
+        (
+            (sum(life.damage for life in group), actor_id, group)
+            for actor_id, group in by_actor.items()
+        ),
+        key=lambda row: (-row[0], row[1]),
+    )
+    total = sum(damage for damage, _, _ in ranked)
+    top_damage, top_actor, top_group = ranked[0]
+    if len(ranked) == 1:
+        return PriorityNomination(
+            top_actor, top_group[0].name, top_group[0].game_id, "the only enemy that took damage"
+        )
+
+    runner_up = ranked[1][0]
+    ratio = (top_damage / runner_up) if runner_up > 0 else float("inf")
+    if top_damage > 0 and ratio >= PRIORITY_DAMAGE_MARGIN:
+        share = (top_damage / total) if total else 0.0
+        margin = "no other enemy was hit" if runner_up <= 0 else f"{ratio:.2g}x the next enemy"
+        return PriorityNomination(
+            top_actor,
+            top_group[0].name,
+            top_group[0].game_id,
+            f"took {share:.0%} of the damage dealt to enemies, {margin}",
+        )
+
+    return PriorityNomination(
+        None,
+        None,
+        None,
+        f"{len(ranked)} enemies took comparable damage (the top two within "
+        f"{ratio:.2g}x of each other): nothing in the events nominates one as the "
+        f"priority target",
+    )
 
 
 def aura_windows(
@@ -698,11 +955,31 @@ def observe_fight(
     ]
 
     friendly = fight.get("friendlyPlayers") or []
+    # How far into the fight the events reached. Both timelines are averaged over
+    # this rather than over the fight length, because a bounded event fetch that
+    # stopped at 20% would otherwise report the other 80% as an empty room.
+    window = observed_window(lives, duration)
     warnings: list[str] = []
     if not lives:
         warnings.append("no enemy damage events: target counts could not be measured")
     if not any(life.died for life in lives):
         warnings.append("no enemy deaths seen: every lifespan ends at its last hit, not a death")
+    if aura_events and not player_ids:
+        # Without a player list neither aura test can fire, and every player
+        # cooldown in the stream becomes a candidate for the encounter's own
+        # amplification window. Silent until now; the failure is invisible in the
+        # output because the extra auras look exactly like real ones.
+        warnings.append(
+            "no player actors were listed for this report, so auras players applied "
+            "cannot be told from auras the encounter applied: treat every aura here "
+            "as unfiltered"
+        )
+    if duration > 0 and window / duration < COMPLETE_EVENT_COVERAGE:
+        warnings.append(
+            f"the event fetch reached {window:.0f}s of a {duration:.0f}s fight "
+            f"({window / duration:.0%}): every target count here describes that "
+            f"prefix, not the whole pull"
+        )
 
     return FightObservation(
         report_code=report_code,
@@ -714,8 +991,12 @@ def observe_fight(
         duration=duration,
         raid_size=fight.get("size") if isinstance(fight.get("size"), int) else None,
         players=len(friendly),
-        timeline=target_count_timeline(lives, duration),
-        significant_timeline=target_count_timeline(significant, duration),
+        timeline=target_count_timeline(lives, duration, window),
+        # The significant timeline shares the *fight's* window, not its own: an
+        # add under the floor still proves the fetch was alive at that second, and
+        # recomputing the window from the survivors alone would shorten it for a
+        # reason that has nothing to do with the fetch.
+        significant_timeline=target_count_timeline(significant, duration, window),
         enemies=tuple(lives),
         adds=tuple(add_patterns(significant, total_damage)),
         phases=tuple(phase_windows(fight.get("phaseTransitions") or [], phase_metadata, duration)),
@@ -725,6 +1006,12 @@ def observe_fight(
         truncated=truncated,
         warnings=tuple(warnings),
         player_ids=player_ids,
+        # Nominated from the enemies that mattered rather than from everything
+        # that took a hit: a totem under the significance floor cannot be the
+        # boss, and letting it into the ranking only adds noise to the margin.
+        priority=nominate_priority_enemy(significant or lives, str(fight.get("name") or "")),
+        actor_names=dict(actor_names or {}),
+        actor_game_ids=dict(actor_game_ids or {}),
     )
 
 
@@ -781,6 +1068,18 @@ class EncounterObservation:
     def _values(self, pick) -> list[float]:
         return [value for value in (pick(fight) for fight in self.fights) if value is not None]
 
+    # `fights_sampled` and `reports` are the two things a promotion decision needs
+    # that are not a Spread. They are named to match the published document's keys
+    # so one planner reads a live observation and a downloaded artifact alike.
+
+    @property
+    def fights_sampled(self) -> int:
+        return len(self.fights)
+
+    @property
+    def reports(self) -> list[str]:
+        return sorted({fight.report_code for fight in self.fights})
+
     @property
     def duration(self) -> Spread | None:
         return _spread(self._values(lambda fight: fight.duration))
@@ -809,6 +1108,16 @@ class EncounterObservation:
     @property
     def uptime(self) -> Spread | None:
         return _spread(self._values(lambda fight: fight.active_time_fraction))
+
+    @property
+    def event_coverage(self) -> Spread | None:
+        """How much of each sampled fight the event fetch reached, pooled.
+
+        The gate on every whole-fight claim. On the first real nine-boss pass this
+        ran from 0.11 to 1.0 depending on the encounter, and nothing downstream had
+        any way to know.
+        """
+        return _spread(self._values(lambda fight: fight.event_coverage))
 
     def pooled_adds(self) -> list[dict]:
         """Per NPC, what the fights agreed on -- keyed by game id where there is one.
@@ -849,21 +1158,17 @@ class EncounterObservation:
         "this encounter does this" from "this pull went badly". Raising the floor
         is the knob; inventing a window from one observation is not.
 
-        ``encounter_only`` drops auras a *player* applied. Both a boss buffing its
-        own add and a warrior landing Colossus Smash put an aura on an enemy and
-        arrive in the same stream, so without this the nearest-window search
-        happily nominates a player cooldown as the encounter's amplification --
-        it nominated Avenging Wrath on the first real run. An aura whose event
-        carried no source is kept: unknown is not the same as "a player did it".
+        ``encounter_only`` drops auras that are not the encounter's own, by both
+        of the tests in ``FightObservation.is_encounter_aura``: not on a player,
+        and not applied by one. The first real probe run nominated Avenging Wrath
+        as an encounter mechanic with only the source test in place, and the first
+        real *nine-boss* run did it again -- self-buffs frequently carry no source
+        id at all, so only the target test catches them.
         """
         buckets: dict[int, list[tuple[str, AuraWindow]]] = {}
         for fight in self.fights:
             for aura in fight.auras:
-                if (
-                    encounter_only
-                    and aura.source_id is not None
-                    and aura.source_id in fight.player_ids
-                ):
+                if encounter_only and not fight.is_encounter_aura(aura):
                     continue
                 buckets.setdefault(aura.ability_id, []).append((fight.report_code, aura))
 
@@ -873,6 +1178,7 @@ class EncounterObservation:
             if len(reports) < min_fights:
                 continue
             windows = [aura for _, aura in group]
+            carriers = self._aura_carriers(ability_id, encounter_only=encounter_only)
             pooled.append(
                 {
                     "abilityId": ability_id,
@@ -882,6 +1188,13 @@ class EncounterObservation:
                     "start": _pooled(windows, lambda aura: aura.start),
                     "duration": _pooled(windows, lambda aura: aura.duration),
                     "distinctTargets": len({(a.actor_id, a.instance) for a in windows}),
+                    # *Which* enemy carried it, pooled by game id because actor ids
+                    # are report-local. This is the answer to "which of the three
+                    # targets does the amplification sit on", read out of the data
+                    # instead of asked of a person.
+                    "carriedBy": carriers,
+                    "role": _combined_role(carriers),
+                    "roleEvidence": self._role_evidence(carriers),
                     # A truncated window has no measured end, so its duration is a
                     # floor rather than a value.
                     "anyTruncated": any(aura.truncated for aura in windows),
@@ -889,6 +1202,62 @@ class EncounterObservation:
             )
         pooled.sort(key=lambda entry: (entry["start"] or {}).get("median", 0.0))
         return pooled
+
+    def _aura_carriers(self, ability_id: int, *, encounter_only: bool = True) -> list[dict]:
+        """The enemies one aura landed on, pooled across reports.
+
+        Keyed on the NPC's game id where there is one and on its name otherwise,
+        for the reason already established for adds: a report-local actor id means
+        nothing in the next report, so pooling on it reports the same NPC three
+        times. ``role`` is per fight, because which enemy a pull nominated as its
+        priority target is a property of that pull's own damage.
+        """
+        carriers: dict[object, dict] = {}
+        for fight in self.fights:
+            for aura in fight.auras:
+                if aura.ability_id != ability_id:
+                    continue
+                if encounter_only and not fight.is_encounter_aura(aura):
+                    continue
+                name = fight.enemy_name(aura.actor_id)
+                game_id = fight.actor_game_ids.get(aura.actor_id)
+                entry = carriers.setdefault(
+                    game_id if game_id is not None else name,
+                    {
+                        "name": name,
+                        "gameId": game_id,
+                        "applications": 0,
+                        "instances": set(),
+                        "reports": set(),
+                        "roles": set(),
+                    },
+                )
+                entry["applications"] += 1
+                entry["instances"].add(aura.instance)
+                entry["reports"].add(fight.report_code)
+                entry["roles"].add(fight.priority.role_of(aura.actor_id))
+
+        resolved = [
+            {
+                "name": entry["name"],
+                "gameId": entry["gameId"],
+                "applications": entry["applications"],
+                "instances": len(entry["instances"]),
+                "seenInFights": len(entry["reports"]),
+                "role": _one_role(entry["roles"]),
+            }
+            for entry in carriers.values()
+        ]
+        resolved.sort(key=lambda entry: (-entry["applications"], entry["name"]))
+        return resolved
+
+    def _role_evidence(self, carriers: list[dict]) -> str:
+        """Why the carriers were called what they were called, in one sentence."""
+        if not carriers:
+            return "no enemy carried this aura in the sampled fights"
+        nominations = sorted({fight.priority.evidence for fight in self.fights})
+        named = ", ".join(f"{entry['name']} ({entry['role']})" for entry in carriers[:4])
+        return f"carried by {named}. Priority target nominated because: " + "; ".join(nominations)
 
     def pooled_phases(self) -> list[dict]:
         buckets: dict[int, list[PhaseWindow]] = {}
@@ -921,11 +1290,43 @@ class EncounterObservation:
             "peakTargets": _json(self.peak_targets),
             "peakTargetShare": _json(self.peak_share),
             "activeTimeFraction": _json(self.uptime),
+            "eventCoverage": _json(self.event_coverage),
             "adds": self.pooled_adds(),
             "auras": self.pooled_auras(),
             "phases": self.pooled_phases(),
             "fights": [fight.to_json() for fight in self.fights],
         }
+
+
+def _one_role(roles: set[str]) -> str:
+    """One enemy's role across the pulls it was seen in.
+
+    An enemy that was the priority target in one pull and an add in another is
+    ``mixed``, which is a finding about the extraction rather than about the
+    encounter -- the same NPC cannot be both. ``unknown`` anywhere wins over a
+    resolved role, because a pull that nominated nothing is not evidence that the
+    other pulls were right.
+    """
+    known = {role for role in roles if role != ROLE_UNKNOWN}
+    if not known:
+        return ROLE_UNKNOWN
+    if ROLE_UNKNOWN in roles or len(known) > 1:
+        return ROLE_MIXED if len(known) > 1 else ROLE_UNKNOWN
+    return next(iter(known))
+
+
+def _combined_role(carriers: list[dict]) -> str:
+    """One role for a whole aura, across every enemy that carried it."""
+    roles = {entry["role"] for entry in carriers}
+    if not roles:
+        return ROLE_UNKNOWN
+    if roles == {ROLE_PRIORITY}:
+        return ROLE_PRIORITY
+    if roles == {ROLE_ADD}:
+        return ROLE_ADD
+    if roles == {ROLE_UNKNOWN}:
+        return ROLE_UNKNOWN
+    return ROLE_MIXED
 
 
 def _pooled(group: list, pick) -> dict | None:

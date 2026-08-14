@@ -651,3 +651,286 @@ def test_the_applying_source_wins_over_the_removing_one():
         fight_end_ms=300000,
     )
     assert windows[0].source_id == 11
+
+
+# --------------------------------------------------------------------------------
+# Which enemy carries an aura, and which one the priority target stands for
+# --------------------------------------------------------------------------------
+#
+# The question these answer: "the amplification sits on one of the three targets --
+# which one?" It was asked of a person twice and never answered. It is in the event
+# stream, keyed on (actor_id, instance), with the names in the report's master data.
+
+
+def test_an_enemy_named_for_the_encounter_is_the_priority_target():
+    lives = enemy_lives(
+        [damage(1, 10, amount=100), damage(1, 11, amount=9000)],
+        [],
+        FIGHT_START,
+        FIGHT_END,
+        actor_names={10: "Lightblinded Vanguard", 11: "Zealot"},
+    )
+    nomination = fightextract.nominate_priority_enemy(lives, "Lightblinded Vanguard")
+
+    # The name wins even though the add took ninety times the damage: an encounter
+    # where the adds out-damage the boss is ordinary and is not a naming problem.
+    assert nomination.name == "Lightblinded Vanguard"
+    assert "named for the encounter" in nomination.evidence
+
+
+def test_the_enemy_that_took_clearly_the_most_damage_is_nominated():
+    lives = enemy_lives(
+        [damage(1, 10, amount=8000), damage(1, 11, amount=1000)],
+        [],
+        FIGHT_START,
+        FIGHT_END,
+        actor_names={10: "Warlord", 11: "Zealot"},
+    )
+    nomination = fightextract.nominate_priority_enemy(lives, "Some Other Name")
+
+    assert nomination.name == "Warlord"
+    assert nomination.role_of(10) == fightextract.ROLE_PRIORITY
+    assert nomination.role_of(11) == fightextract.ROLE_ADD
+    assert "of the damage" in nomination.evidence
+
+
+def test_three_enemies_hit_about_equally_nominate_nothing():
+    """A permanent three-target fight is a shape, not a measurement failure.
+
+    Picking the largest of three near-equal numbers would manufacture exactly the
+    fact this is supposed to establish, so it refuses and says why.
+    """
+    lives = enemy_lives(
+        [damage(1, actor, amount=1000) for actor in (10, 11, 12)],
+        [],
+        FIGHT_START,
+        FIGHT_END,
+        actor_names={10: "Zealot", 11: "Champion", 12: "Seer"},
+    )
+    nomination = fightextract.nominate_priority_enemy(lives, "Lightblinded Vanguard")
+
+    assert nomination.known is False
+    assert nomination.role_of(11) == fightextract.ROLE_UNKNOWN
+    assert "nothing in the events nominates one" in nomination.evidence
+
+
+def test_an_aura_names_the_enemy_that_carried_it():
+    """The answer to "which of the three", in the published payload."""
+    observation = EncounterObservation(3180, "Lightblinded Vanguard", 5)
+    observation.fights = [
+        observe_fight(
+            report_code=code,
+            fight=fight(),
+            damage_events=[damage(1, actor) for actor in (10, 11, 12)],
+            death_events=[],
+            aura_events=[
+                aura(1.0, "applybuff", 555_001, 11),
+                aura(21.0, "removebuff", 555_001, 11),
+            ],
+            phase_metadata=[],
+            actor_names={10: "Zealot", 11: "Champion", 12: "Seer"},
+            actor_game_ids={10: 1, 11: 2, 12: 3},
+            ability_names={555_001: "Blinding Fervor"},
+        )
+        for code in ("r1", "r2")
+    ]
+
+    pooled = observation.pooled_auras()[0]
+    assert [entry["name"] for entry in pooled["carriedBy"]] == ["Champion"]
+    assert pooled["carriedBy"][0]["seenInFights"] == 2
+    # Named, but not classified: nothing in this fight nominates a boss, and the
+    # aura's role must not be invented out of the enemy merely having a name.
+    assert pooled["role"] == fightextract.ROLE_UNKNOWN
+    assert "Champion" in pooled["roleEvidence"]
+
+
+def test_an_aura_on_the_boss_is_reported_as_being_on_the_priority_target():
+    """The case that makes an amplification expressible in simc at all."""
+    observation = EncounterObservation(3180, "Warlord", 5)
+    observation.fights = [
+        observe_fight(
+            report_code=code,
+            fight=fight(name="Warlord"),
+            damage_events=[damage(1, 10, amount=9000), damage(1, 11, amount=1000)],
+            death_events=[],
+            aura_events=[
+                aura(1.0, "applybuff", 555_001, 10),
+                aura(21.0, "removebuff", 555_001, 10),
+            ],
+            phase_metadata=[],
+            actor_names={10: "Warlord", 11: "Zealot"},
+            ability_names={555_001: "Blinding Fervor"},
+        )
+        for code in ("r1", "r2")
+    ]
+
+    pooled = observation.pooled_auras()[0]
+    assert pooled["role"] == fightextract.ROLE_PRIORITY
+    assert pooled["carriedBy"][0]["name"] == "Warlord"
+
+
+def test_aura_carriers_pool_on_game_id_across_reports():
+    """Actor ids are report-local; the same NPC must not be reported twice."""
+    observation = EncounterObservation(3180, "Lightblinded Vanguard", 5)
+
+    def pull(code: str, actor: int):
+        return observe_fight(
+            report_code=code,
+            fight=fight(),
+            damage_events=[damage(1, actor)],
+            death_events=[],
+            aura_events=[
+                aura(1.0, "applybuff", 555_001, actor),
+                aura(21.0, "removebuff", 555_001, actor),
+            ],
+            phase_metadata=[],
+            actor_names={actor: "Champion"},
+            actor_game_ids={actor: 240_002},
+            ability_names={555_001: "Blinding Fervor"},
+        )
+
+    observation.fights = [pull("r1", 11), pull("r2", 88)]
+    carriers = observation.pooled_auras()[0]["carriedBy"]
+    assert len(carriers) == 1
+    assert carriers[0]["gameId"] == 240_002
+    assert carriers[0]["seenInFights"] == 2
+
+
+# --------------------------------------------------------------------------------
+# A bounded event fetch, and the statistic it destroys
+# --------------------------------------------------------------------------------
+#
+# The bug these pin, from the first real nine-boss pass: enemy damage-taken is
+# paginated and bounded, a twenty-player Mythic pull outruns the budget, and the
+# fetch stops part-way. Every enemy's last hit is then the cut point. Dividing a
+# time-weighted count by the *fight* length rather than by the part that was read
+# reported four of nine bosses at a mean concurrent target count below 1.0 --
+# including Vorasius, a single-target boss, at 0.59.
+
+
+def truncated_fight(read_to: float, fight_length: float = 300.0):
+    """One enemy, up the whole time, whose events stop being fetched at `read_to`."""
+    return observe_fight(
+        report_code="r1",
+        fight=fight(startTime=FIGHT_START, endTime=int(FIGHT_START + fight_length * 1000)),
+        damage_events=[damage(0.1, 10), damage(read_to, 10)],
+        death_events=[],
+        aura_events=[],
+        phase_metadata=[],
+        actor_names={10: "Boss"},
+        truncated=True,
+    )
+
+
+def test_a_single_target_boss_never_averages_below_one_target():
+    """The impossible number that gave the bug away."""
+    observed = truncated_fight(read_to=96.0, fight_length=163.0)
+
+    assert observed.significant_timeline.mean == pytest.approx(1.0, abs=0.01)
+    assert observed.event_coverage == pytest.approx(96.0 / 163.0, abs=0.001)
+
+
+def test_a_complete_fetch_leaves_the_mean_where_it_was():
+    """The fix must not move a number that was already right."""
+    observed = truncated_fight(read_to=299.9, fight_length=300.0)
+
+    assert observed.significant_timeline.mean == pytest.approx(1.0, abs=0.01)
+    assert observed.event_coverage > 0.99
+
+
+def test_a_partly_read_fight_says_how_far_it_got():
+    observed = truncated_fight(read_to=60.0, fight_length=300.0)
+
+    assert observed.event_coverage == pytest.approx(0.2, abs=0.001)
+    assert any("20%" in warning for warning in observed.warnings), observed.warnings
+
+
+def test_peak_survives_truncation_where_the_mean_does_not():
+    """Why the promotion path uses the peak.
+
+    Two targets for the first thirty seconds of a five-minute fight, read to sixty
+    seconds. The peak is 2 either way; the mean is whatever the denominator says.
+    """
+    observed = observe_fight(
+        report_code="r1",
+        fight=fight(startTime=FIGHT_START, endTime=FIGHT_START + 300_000),
+        damage_events=[damage(0.1, 10), damage(60.0, 10), damage(0.2, 11), damage(30.0, 11)],
+        death_events=[],
+        aura_events=[],
+        phase_metadata=[],
+        actor_names={10: "Boss", 11: "Add"},
+    )
+    assert observed.significant_timeline.peak == 2
+    # Over the sixty seconds that were read, not over three hundred: half of them
+    # had two enemies up.
+    assert observed.significant_timeline.mean == pytest.approx(1.5, abs=0.02)
+
+
+def test_pooled_coverage_is_published_so_a_caller_can_refuse():
+    observation = EncounterObservation(3180, "Midnight Falls", 5)
+    observation.fights = [
+        truncated_fight(read_to=95.0, fight_length=480.0),
+        truncated_fight(read_to=108.0, fight_length=486.0),
+    ]
+    coverage = observation.event_coverage
+    assert coverage is not None
+    assert coverage.high < 0.25
+
+
+def test_a_self_buff_with_no_source_is_not_an_encounter_mechanic():
+    """The regression the first real nine-boss pass shipped.
+
+    Avenging Wrath and Divine Shield reached the published MID2 aura list, on a
+    fight whose amplification is asserted as "about twenty seconds at the pull" --
+    and Avenging Wrath lasts twenty seconds and is cast at the pull. The source
+    test alone did not catch them, because a self-buff often carries no sourceID,
+    and "unknown is not a player" then keeps it. Only the target test does: an
+    aura on a player is not an aura on an enemy, whatever applied it.
+    """
+    from wowdps.fightextract import AuraWindow, FightObservation, TargetCountTimeline
+
+    def pull(code: str) -> FightObservation:
+        return FightObservation(
+            report_code=code,
+            fight_id=1,
+            encounter_id=3180,
+            encounter_name="Lightblinded Vanguard",
+            difficulty=5,
+            kill=True,
+            duration=300.0,
+            raid_size=20,
+            players=20,
+            timeline=TargetCountTimeline(steps=((0.0, 3),), duration=300.0),
+            significant_timeline=TargetCountTimeline(steps=((0.0, 3),), duration=300.0),
+            enemies=(),
+            adds=(),
+            phases=(),
+            auras=(
+                # The encounter's own buff on one of its enemies.
+                AuraWindow(1258659, "Light Infused", 90, 1, 0.0, 285.0, False, source_id=None),
+                # A paladin's twenty-second cooldown on himself, no source id --
+                # the exact shape of the asserted amplification window.
+                AuraWindow(1246385, "Avenging Wrath", 7, 0, 0.5, 20.5, False, source_id=None),
+            ),
+            damage_by_target=(),
+            active_time_fraction=None,
+            player_ids=frozenset({7}),
+        )
+
+    observation = EncounterObservation(3180, "Lightblinded Vanguard", 5, [pull("a"), pull("b")])
+    assert {aura["ability"] for aura in observation.pooled_auras()} == {"Light Infused"}
+
+
+def test_a_report_with_no_player_list_says_the_aura_filter_is_inoperative():
+    """Both aura tests need the player ids. Without them nothing is filtered, and
+    that is invisible in the output unless it is said."""
+    observed = observe_fight(
+        report_code="r1",
+        fight=fight(),
+        damage_events=[damage(1, 10)],
+        death_events=[],
+        aura_events=[aura(1.0, "applybuff", 42, 10), aura(21.0, "removebuff", 42, 10)],
+        phase_metadata=[],
+        player_ids=frozenset(),
+    )
+    assert any("cannot be told from" in warning for warning in observed.warnings)
