@@ -486,6 +486,50 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
     return fightprobe.cmd_fight_probe(args)
 
 
+def cmd_check_profiles(args: argparse.Namespace) -> int:
+    """Which of a tier's profiles still build an actor against current spell data.
+
+    Exists because "old-tier profiles rot" is a fact this project acts on -- the
+    previous tier is deliberately kept off the schedule because of it -- and a fact
+    that decides a schedule should be re-measurable in one command rather than
+    rediscovered as a loop somebody writes from the README.
+    """
+    profiles_dir = Path(args.profiles)
+    tier = _resolve_tier(profiles_dir, args.tier)
+    simc = simc_runner.find_simc(args.simc)
+
+    found = profiles.discover(profiles_dir, tier, dps_only=not args.include_tanks)
+    if not found:
+        logging.error("no profiles found for %s under %s", tier, profiles_dir)
+        return 1
+
+    healthy: list[profiles.ProfileHealth] = []
+    broken: list[profiles.ProfileHealth] = []
+    for index, profile in enumerate(found, start=1):
+        logging.debug("[%d/%d] %s", index, len(found), profile.display_name)
+        health = profiles.check_loads(simc, profile, timeout=args.timeout)
+        (healthy if health.loads else broken).append(health)
+
+    rotten = [entry for entry in broken if entry.rotten_talents]
+    for entry in broken:
+        print(f"{'TALENTS' if entry.rotten_talents else 'BROKEN '}  {entry.profile.id}")
+        print(f"          {entry.reason}")
+    print(
+        f"\n{tier}: {len(healthy)} of {len(found)} profiles load"
+        + (f"; {len(rotten)} fail on a talent hash the spec no longer offers" if rotten else "")
+    )
+    if broken:
+        print(
+            "A profile that does not load produces no actor, so a run over this tier "
+            "publishes a dataset with those builds missing -- and the breakage "
+            "correlates with the talent changes a season comparison is supposed to "
+            "surface. Weigh that before scheduling this tier."
+        )
+    # Reporting is the point, so a broken profile is not a failed command unless
+    # somebody is using this as a gate.
+    return 1 if broken and args.strict else 0
+
+
 def cmd_loot_sources(args: argparse.Namespace) -> int:
     from . import lootsources
 
@@ -677,6 +721,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     fightprobe.add_arguments(p_fight_probe)
     p_fight_probe.set_defaults(func=cmd_fight_probe)
+
+    p_check = sub.add_parser(
+        "check-profiles",
+        help="which of a tier's simc profiles still build an actor against current "
+        "spell data (old tiers rot as talents change)",
+    )
+    add_common(p_check)
+    p_check.add_argument("--simc", help="path to the simc binary (default: $PATH)")
+    p_check.add_argument("--timeout", type=int, default=120, help="seconds per profile")
+    p_check.add_argument(
+        "--strict", action="store_true", help="exit non-zero when any profile fails"
+    )
+    p_check.set_defaults(func=cmd_check_profiles)
 
     p_loot_sources = sub.add_parser(
         "loot-sources",

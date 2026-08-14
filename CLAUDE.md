@@ -786,11 +786,21 @@ Two things nearly threw it away, both fixed, both worth not reintroducing:
   balance. What travels is the within-run ratios: funnel gain, concentration, burst ratio,
   the shape of the scaling curve. Any future side-by-side tier view must be restricted to
   those, or it will present a gear difference as a balance change.
-- **Old-tier profiles rot.** Measured on simc 1210-01: 15 of MID1's 41 damage profiles
-  fail to load, because their talent hashes point at nodes current spell data does not
-  offer the spec (`Selected node N entry M is not available to player's spec`). All Mage,
-  all Hunter, both Warrior damage builds, Havoc, both Retribution builds, one Elemental
-  build. MID2: none. So a scheduled previous-tier run would publish a season 1 view with
+- **Old-tier profiles rot.** Re-measured on simc 1210-01 (8590ddb) on 14 August 2026:
+  **15 of MID1's 41 damage profiles fail to load, MID2's 26 all load.** The cause is
+  always the stored talent hash no longer fitting the tree, but simc words it two ways
+  and a check that knows only the first reports the tier as mostly healthy:
+
+  ```
+  9 x  Selected node N entry M is not available to player's spec
+  6 x  Node N is not a choice node but has index selection
+  ```
+
+  Affected: all six Mage builds, three Hunter, both Warrior, Havoc, both Retribution,
+  one Elemental. `wowdps check-profiles --tier MID1` is the command; do not rewrite it
+  as a shell loop, because `json2=` with an empty value is a **setup failure** where
+  `html=` is fine, and a loop that passes both reports every profile in the game as
+  broken. So a scheduled previous-tier run would publish a season 1 view with
   three classes missing, and the breakage correlates with the talent changes the
   comparison is supposed to surface. The tier axis stays; the *schedule* for the old tier
   does not. Re-measure before turning it back on — the script is one loop of
