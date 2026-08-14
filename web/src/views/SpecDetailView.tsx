@@ -4,12 +4,25 @@
  * The ability breakdown is where the funnel number stops being abstract -- a
  * build that funnels does it through identifiable abilities, and the shift in
  * this list between one target and ten is the mechanism.
+ *
+ * This is the one view that is inherently about one build at a time, so it opens
+ * on one rather than asking for it: the app hands it the top build of the current
+ * scenario, or whatever was clicked in the ranking. The strip along the top is
+ * navigation between builds, not a gate in front of them -- there is always
+ * something on screen behind it.
  */
 
 import { useMemo, useState } from 'react'
-import { EmptyState, Note, Panel, PanelHeader, Select, StatTile } from '../components/ui'
+import {
+  HeroTreeBadge,
+  SpecIcon,
+  buildName,
+  fullBuildName,
+  type BuildLike,
+} from '../components/BuildIdentity'
+import { EmptyState, Note, Panel, PanelHeader, Select, StatTile, cx } from '../components/ui'
 import { describeBurst, describeFunnelGain, fullNumber, percent } from '../lib/format'
-import { sequentialStep } from '../lib/palette'
+import { classColor, classWash, sequentialStep } from '../lib/palette'
 import type { ScenarioMeta, SpecDetail } from '../lib/types'
 
 export function SpecDetailView({
@@ -20,7 +33,7 @@ export function SpecDetailView({
 }: {
   detail: SpecDetail | null
   scenario: ScenarioMeta
-  allSpecs: Array<{ id: string; displayName: string }>
+  allSpecs: BuildLike[]
   onSelectSpec: (id: string) => void
 }) {
   const cells = detail?.scenarios[scenario.id]?.targets ?? []
@@ -29,126 +42,206 @@ export function SpecDetailView({
   const effective = available.includes(targets) ? targets : (available[0] ?? 1)
   const cell = cells.find((entry) => entry.targets === effective)
 
-  const picker = (
-    <Select
-      label="Build"
-      value={detail?.id ?? ''}
-      onChange={onSelectSpec}
-      options={allSpecs.map((spec) => ({ value: spec.id, label: spec.displayName }))}
-    />
-  )
-
-  if (!detail) {
-    return (
-      <Panel>
-        <PanelHeader title="Spec detail" actions={picker} />
-        <EmptyState>Pick a build to see what its damage is made of.</EmptyState>
-      </Panel>
-    )
-  }
-
   return (
     <div className="space-y-4">
-      <Panel>
-        <PanelHeader
-          title={detail.displayName}
-          subtitle={`${scenario.label} · ${effective} ${effective === 1 ? 'target' : 'targets'}`}
-          actions={
-            <>
-              {picker}
-              {available.length > 1 ? (
-                <Select
-                  label="Targets"
-                  value={effective}
-                  onChange={setTargets}
-                  options={available.map((count) => ({ value: count, label: String(count) }))}
+      <BuildStrip builds={allSpecs} current={detail?.id ?? null} onSelect={onSelectSpec} />
+
+      {!detail ? (
+        <Panel>
+          <PanelHeader title="Spec detail" />
+          <EmptyState>
+            No build is loaded. Pick one from the strip above, or open one from the ranking.
+          </EmptyState>
+        </Panel>
+      ) : (
+        <>
+          <Panel>
+            <PanelHeader
+              title={
+                <span className="inline-flex items-center gap-2.5">
+                  <SpecIcon build={detail} size={24} labelled />
+                  <span style={{ color: classColor(detail.class) }}>{buildName(detail)}</span>
+                  <HeroTreeBadge build={detail} size={16} />
+                </span>
+              }
+              subtitle={`${scenario.label} · ${effective} ${effective === 1 ? 'target' : 'targets'}`}
+              actions={
+                available.length > 1 ? (
+                  <Select
+                    label="Targets"
+                    value={effective}
+                    onChange={setTargets}
+                    options={available.map((count) => ({ value: count, label: String(count) }))}
+                  />
+                ) : null
+              }
+            />
+
+            {cell ? (
+              <div className="grid gap-3 px-5 pb-5 sm:grid-cols-2 lg:grid-cols-4">
+                <StatTile
+                  label="Damage per second"
+                  value={fullNumber(cell.dps)}
+                  caption={`±${cell.dpsError.toFixed(2)}% sampling error over ${fullNumber(cell.iterations)} pulls`}
+                  accent={classColor(detail.class)}
                 />
-              ) : null}
-            </>
-          }
-        />
+                <StatTile
+                  label="Funnel gain"
+                  value={cell.funnelGain !== undefined ? `${cell.funnelGain.toFixed(2)}x` : '—'}
+                  caption={
+                    cell.funnelGain !== undefined
+                      ? `${describeFunnelGain(cell.funnelGain)}. Main target takes ${percent(cell.priorityShare ?? 0)} of total damage, ${(cell.concentration ?? 0).toFixed(2)}x an even spread.`
+                      : 'Only one target, so there is nothing to funnel from.'
+                  }
+                />
+                <StatTile
+                  label="Burst"
+                  value={cell.burstRatio !== undefined ? `${cell.burstRatio.toFixed(2)}x` : '—'}
+                  caption={
+                    cell.burstRatio !== undefined
+                      ? describeBurst(cell.burstRatio)
+                      : 'No timeline kept at this target count.'
+                  }
+                />
+                <StatTile
+                  label="Fight length"
+                  value={`${Math.round(cell.fightLength)}s`}
+                  caption="Averaged across pulls; simulated length varies by ±20%."
+                />
+              </div>
+            ) : null}
+          </Panel>
 
-        {cell ? (
-          <div className="grid gap-3 px-5 pb-5 sm:grid-cols-2 lg:grid-cols-4">
-            <StatTile
-              label="Damage per second"
-              value={fullNumber(cell.dps)}
-              caption={`±${cell.dpsError.toFixed(2)}% sampling error over ${fullNumber(cell.iterations)} pulls`}
+          <Panel>
+            <PanelHeader
+              title="What the damage is made of"
+              subtitle="Share of the build's total damage, by ability. Compare across target counts to see which abilities carry the area damage and which stay on the main target."
             />
-            <StatTile
-              label="Funnel gain"
-              value={cell.funnelGain !== undefined ? `${cell.funnelGain.toFixed(2)}x` : '—'}
-              caption={
-                cell.funnelGain !== undefined
-                  ? `${describeFunnelGain(cell.funnelGain)}. Main target takes ${percent(cell.priorityShare ?? 0)} of total damage, ${(cell.concentration ?? 0).toFixed(2)}x an even spread.`
-                  : 'Only one target, so there is nothing to funnel from.'
-              }
-            />
-            <StatTile
-              label="Burst"
-              value={cell.burstRatio !== undefined ? `${cell.burstRatio.toFixed(2)}x` : '—'}
-              caption={
-                cell.burstRatio !== undefined
-                  ? describeBurst(cell.burstRatio)
-                  : 'No timeline kept at this target count.'
-              }
-            />
-            <StatTile
-              label="Fight length"
-              value={`${Math.round(cell.fightLength)}s`}
-              caption="Averaged across pulls; simulated length varies by ±20%."
-            />
-          </div>
-        ) : null}
-      </Panel>
+            {cell?.abilities.length ? (
+              <AbilityBreakdown abilities={cell.abilities} dps={cell.dps} />
+            ) : (
+              <EmptyState>No ability breakdown recorded for this cell.</EmptyState>
+            )}
+          </Panel>
 
-      <Panel>
-        <PanelHeader
-          title="What the damage is made of"
-          subtitle="Share of the build's total damage, by ability. Compare across target counts to see which abilities carry the area damage and which stay on the main target."
-        />
-        {cell?.abilities.length ? (
-          <AbilityBreakdown abilities={cell.abilities} dps={cell.dps} />
-        ) : (
-          <EmptyState>No ability breakdown recorded for this cell.</EmptyState>
-        )}
-      </Panel>
+          {detail.caveats.length > 0 ? (
+            <Panel>
+              <PanelHeader
+                title="Modelling caveats"
+                subtitle="Reported by SimulationCraft itself for this spec — the places where the simulation approximates rather than reproduces the game."
+              />
+              <ul className="space-y-2 px-5 pb-5">
+                {detail.caveats.map((caveat) => (
+                  <li
+                    key={caveat}
+                    className="border-l-2 border-hairline pl-3 text-[12.5px] leading-relaxed text-ink-secondary"
+                  >
+                    {caveat}
+                  </li>
+                ))}
+              </ul>
+            </Panel>
+          ) : null}
 
-      {detail.caveats.length > 0 ? (
-        <Panel>
-          <PanelHeader
-            title="Modelling caveats"
-            subtitle="Reported by SimulationCraft itself for this spec — the places where the simulation approximates rather than reproduces the game."
-          />
-          <ul className="space-y-2 px-5 pb-5">
-            {detail.caveats.map((caveat) => (
-              <li
-                key={caveat}
-                className="border-l-2 border-hairline pl-3 text-[12.5px] leading-relaxed text-ink-secondary"
-              >
-                {caveat}
-              </li>
-            ))}
-          </ul>
-        </Panel>
-      ) : null}
-
-      {detail.errors.length > 0 ? (
-        <Panel>
-          <PanelHeader
-            title="Failed simulations"
-            subtitle="Cells missing from this build's data, and why."
-          />
-          <ul className="space-y-1.5 px-5 pb-5">
-            {detail.errors.map((error) => (
-              <li key={error} className="text-[12.5px] leading-relaxed text-ink-secondary">
-                {error}
-              </li>
-            ))}
-          </ul>
-        </Panel>
-      ) : null}
+          {detail.errors.length > 0 ? (
+            <Panel>
+              <PanelHeader
+                title="Failed simulations"
+                subtitle="Cells missing from this build's data, and why."
+              />
+              <ul className="space-y-1.5 px-5 pb-5">
+                {detail.errors.map((error) => (
+                  <li key={error} className="text-[12.5px] leading-relaxed text-ink-secondary">
+                    {error}
+                  </li>
+                ))}
+              </ul>
+            </Panel>
+          ) : null}
+        </>
+      )}
     </div>
+  )
+}
+
+/**
+ * Every build in the tier as a row of chips, the current one filled.
+ *
+ * Icon plus written name, not icon alone: forty spec icons are not universally
+ * recognisable and a hero-tree emblem certainly is not, so each chip says what it
+ * is in words as well.
+ */
+function BuildStrip({
+  builds,
+  current,
+  onSelect,
+}: {
+  builds: BuildLike[]
+  current: string | null
+  onSelect: (id: string) => void
+}) {
+  const grouped = useMemo(() => {
+    const byClass = new Map<string, BuildLike[]>()
+    for (const build of builds) {
+      const bucket = byClass.get(build.class)
+      if (bucket) bucket.push(build)
+      else byClass.set(build.class, [build])
+    }
+    return [...byClass.entries()].sort(([a], [b]) => a.localeCompare(b))
+  }, [builds])
+
+  if (builds.length === 0) return null
+
+  return (
+    <Panel>
+      <div className="flex flex-wrap gap-x-5 gap-y-3 px-5 py-4">
+        {grouped.map(([wowClass, entries]) => (
+          <div key={wowClass} className="min-w-0">
+            <h3
+              className="text-[11px] font-semibold tracking-wide uppercase"
+              style={{ color: classColor(wowClass) }}
+            >
+              {wowClass}
+            </h3>
+            <ul className="mt-1.5 flex flex-wrap gap-1.5">
+              {entries.map((build) => {
+                const active = build.id === current
+                return (
+                  <li key={build.id}>
+                    <button
+                      type="button"
+                      onClick={() => onSelect(build.id)}
+                      aria-current={active ? 'true' : undefined}
+                      title={fullBuildName(build)}
+                      className={cx(
+                        'flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[12px] transition-colors',
+                        active
+                          ? 'border-transparent text-ink'
+                          : 'border-hairline text-ink-secondary hover:text-ink',
+                      )}
+                      style={
+                        active
+                          ? { background: classWash(build.class, 26), borderColor: classColor(build.class) }
+                          : undefined
+                      }
+                    >
+                      <SpecIcon build={build} size={15} labelled />
+                      <span>{build.spec}</span>
+                      <HeroTreeBadge build={build} size={12} />
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        ))}
+      </div>
+      <Note>
+        Every build SimulationCraft ships for this tier. The one on screen is filled in
+        its class colour; picking another changes what is below, nothing is hidden until
+        you do.
+      </Note>
+    </Panel>
   )
 }
 
@@ -198,6 +291,7 @@ function AbilityBreakdown({
       <Note>
         Right-hand column is that ability's contribution in damage per second. Pet and
         proc damage is attributed to the ability that produced it, so the shares add to 100%.
+        Magnitude here is a one-hue ramp, not a class colour — it encodes how much, not whose.
       </Note>
     </div>
   )

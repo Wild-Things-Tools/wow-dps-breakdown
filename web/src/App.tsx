@@ -1,45 +1,45 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AppHeader, type ViewId } from './components/AppHeader'
-import { SpecPicker } from './components/SpecPicker'
-import { ErrorState, Note, Panel, Spinner } from './components/ui'
+import { ErrorState, Panel, Spinner } from './components/ui'
 import { loadGear, loadManifest, loadSpecs, loadTierIndex } from './lib/data'
 import { describeConvergence, samplingError } from './lib/format'
-import { MAX_SERIES, SeriesPalette } from './lib/palette'
 import type { GearDataset, Manifest, SpecDetail, TierIndex } from './lib/types'
-import { BuildsView, groupBySpec } from './views/BuildsView'
+import { BuildsView } from './views/BuildsView'
 import { FunnelView } from './views/FunnelView'
-import { GearView, gearSpecIds } from './views/GearView'
+import { GearView } from './views/GearView'
 import { OverviewView } from './views/OverviewView'
 import { ScalingView } from './views/ScalingView'
 import { SpecDetailView } from './views/SpecDetailView'
 import { TimingView } from './views/TimingView'
 
 const VIEWS: ViewId[] = ['overview', 'scaling', 'funnel', 'builds', 'gear', 'timing', 'spec']
-type Theme = 'light' | 'dark' | 'system'
 
-/** URL state, so a configured comparison is a link somebody can share. */
+/** Views that need the full per-spec files rather than just the manifest. */
+const DETAIL_VIEWS: ViewId[] = ['scaling', 'funnel', 'timing', 'builds']
+
+/**
+ * URL state, so a configured view is a link somebody can share.
+ *
+ * There is no `specs` parameter any more: nothing on this site is selected before
+ * it will show you anything, so there is no selection to put in a link.
+ */
 interface UrlState {
   view: ViewId
   /** Which tier's dataset is loaded. Null follows whichever tier is current. */
   tier: string | null
   scenario: string | null
-  selected: string[]
+  /** Spec detail: which build is open. Null opens the top build of the scenario. */
   focus: string | null
-  /** Builds view: which spec's builds are being compared. */
-  buildSpec: string | null
 }
 
 function readUrl(): UrlState {
   const params = new URLSearchParams(window.location.search)
   const view = params.get('view')
-  const selected = params.get('specs')
   return {
     view: VIEWS.includes(view as ViewId) ? (view as ViewId) : 'overview',
     tier: params.get('tier'),
     scenario: params.get('scenario'),
-    selected: selected ? selected.split(',').filter(Boolean).slice(0, MAX_SERIES) : [],
     focus: params.get('spec'),
-    buildSpec: params.get('buildSpec'),
   }
 }
 
@@ -48,9 +48,7 @@ function writeUrl(state: UrlState): void {
   if (state.view !== 'overview') params.set('view', state.view)
   if (state.tier) params.set('tier', state.tier)
   if (state.scenario) params.set('scenario', state.scenario)
-  if (state.selected.length) params.set('specs', state.selected.join(','))
   if (state.focus) params.set('spec', state.focus)
-  if (state.buildSpec) params.set('buildSpec', state.buildSpec)
   const query = params.toString()
   const next = query ? `${window.location.pathname}?${query}` : window.location.pathname
   window.history.replaceState(null, '', next)
@@ -73,14 +71,11 @@ export default function App() {
 
   const [view, setView] = useState<ViewId>(initial.view)
   const [scenarioId, setScenarioId] = useState<string | null>(initial.scenario)
-  const [selected, setSelected] = useState<string[]>(initial.selected)
   const [focus, setFocus] = useState<string | null>(initial.focus)
-  const [buildSpec, setBuildSpec] = useState<string | null>(initial.buildSpec)
 
   const [gear, setGear] = useState<GearDataset | null>(null)
   const [details, setDetails] = useState<SpecDetail[]>([])
   const [detailsLoading, setDetailsLoading] = useState(false)
-  const [theme, setTheme] = useState<Theme>(readTheme)
 
   // The tier index comes first: it decides which tier's files to fetch, and an
   // unknown tier in the URL falls back to the current one rather than 404ing.
@@ -142,33 +137,18 @@ export default function App() {
     [scenarios, scenarioId],
   )
 
-  // The palette hands out colour slots per spec id and keeps them until the spec
-  // is deselected, so filtering never repaints the remaining series.
-  // The gear sweep covers part of the tier, so its picker is narrowed to what was
-  // swept and opens on everything it has -- the chart's whole point is the
-  // cross-spec comparison, and an empty default would hide it behind six clicks.
-  const gearIds = useMemo(() => gearSpecIds(gear), [gear])
-  const gearVisible = useMemo(() => {
-    const covered = selected.filter((id) => gearIds.includes(id))
-    return covered.length ? covered : gearIds.slice(0, MAX_SERIES)
-  }, [selected, gearIds])
-
-  const palette = useRef(new SeriesPalette()).current
-  // Colour follows the entity, so the ids handed to the palette are the ones
-  // actually being drawn -- otherwise the gear view's default set has no slots.
-  palette.sync(view === 'gear' ? gearVisible : selected)
-  const colorOf = useCallback((id: string) => palette.colorOf(id), [palette])
-
-  // Views other than the overview need the full per-spec files.
-  const needsDetails = view === 'scaling' || view === 'funnel' || view === 'timing'
+  // Every comparison view now covers the whole tier, so they all want the same
+  // thing: every per-spec file. One list, fetched once, cached by `loadSpec`.
+  const allSpecIds = useMemo(() => (manifest?.specs ?? []).map((spec) => spec.id), [manifest])
+  const specKey = allSpecIds.join(',')
+  const needsDetails = DETAIL_VIEWS.includes(view)
   useEffect(() => {
-    if (!tier || !needsDetails || selected.length === 0) {
-      setDetails([])
+    if (!tier || !needsDetails || !specKey) {
       return
     }
     let cancelled = false
     setDetailsLoading(true)
-    loadSpecs(tier, selected)
+    loadSpecs(tier, specKey.split(','))
       .then((loaded) => {
         if (!cancelled) setDetails(loaded)
       })
@@ -181,16 +161,31 @@ export default function App() {
     return () => {
       cancelled = true
     }
-  }, [needsDetails, selected, tier])
+  }, [needsDetails, specKey, tier])
+
+  // Spec detail is inherently one build at a time, so it opens on the scenario's
+  // top build rather than on an empty picker.
+  const defaultFocus = useMemo(() => {
+    if (!manifest || !scenario) return null
+    const key = String(scenario.targetCounts[0] ?? 1)
+    let best: { id: string; dps: number } | null = null
+    for (const spec of manifest.specs) {
+      const dps = spec.scenarios[scenario.id]?.dps[key]
+      if (typeof dps !== 'number') continue
+      if (!best || dps > best.dps) best = { id: spec.id, dps }
+    }
+    return best?.id ?? manifest.specs[0]?.id ?? null
+  }, [manifest, scenario])
+  const activeFocus = focus ?? defaultFocus
 
   const [focusDetail, setFocusDetail] = useState<SpecDetail | null>(null)
   useEffect(() => {
-    if (!tier || view !== 'spec' || !focus) {
+    if (!tier || view !== 'spec' || !activeFocus) {
       setFocusDetail(null)
       return
     }
     let cancelled = false
-    loadSpecs(tier, [focus])
+    loadSpecs(tier, [activeFocus])
       .then(([loaded]) => {
         if (!cancelled) setFocusDetail(loaded ?? null)
       })
@@ -200,84 +195,20 @@ export default function App() {
     return () => {
       cancelled = true
     }
-  }, [view, focus, tier])
-
-  // The builds view compares one spec's own hero-talent builds, so it is addressed
-  // by a spec id rather than through the shared multi-spec picker.
-  const buildGroups = useMemo(() => groupBySpec(manifest?.specs ?? []), [manifest])
-  const activeBuildSpec = buildSpec ?? buildGroups[0]?.specId ?? null
-  const buildIds = useMemo(
-    () =>
-      buildGroups.find((group) => group.specId === activeBuildSpec)?.builds.map((b) => b.id) ??
-      [],
-    [buildGroups, activeBuildSpec],
-  )
-  const buildKey = buildIds.join(',')
-  const [buildDetails, setBuildDetails] = useState<SpecDetail[]>([])
-  const [buildsLoading, setBuildsLoading] = useState(false)
-  useEffect(() => {
-    if (!tier || view !== 'builds' || !buildKey) {
-      setBuildDetails([])
-      return
-    }
-    let cancelled = false
-    setBuildsLoading(true)
-    loadSpecs(tier, buildKey.split(','))
-      .then((loaded) => {
-        if (!cancelled) setBuildDetails(loaded)
-      })
-      .catch(() => {
-        if (!cancelled) setBuildDetails([])
-      })
-      .finally(() => {
-        if (!cancelled) setBuildsLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [view, buildKey, tier])
+  }, [view, activeFocus, tier])
 
   // Switching tier changes the spec list: season 1 has builds season 2 does not,
-  // and vice versa. Selections the new tier does not contain have to go, or the
-  // views fail their fetches -- but dropping them silently would leave a comparison
-  // quietly missing a line, so the count is reported until the next change.
-  const [droppedBuilds, setDroppedBuilds] = useState(0)
+  // and vice versa. A build the new tier has no profile for cannot stay open.
   useEffect(() => {
     if (!manifest) return
     const available = new Set(manifest.specs.map((spec) => spec.id))
-    setSelected((current) => {
-      const kept = current.filter((id) => available.has(id))
-      setDroppedBuilds(current.length - kept.length)
-      return kept.length === current.length ? current : kept
-    })
     setFocus((current) => (current && !available.has(current) ? null : current))
+    setDetails((current) => current.filter((detail) => available.has(detail.id)))
   }, [manifest])
 
   useEffect(() => {
-    writeUrl({ view, tier, scenario: scenario?.id ?? null, selected, focus, buildSpec })
-  }, [view, tier, scenario, selected, focus, buildSpec])
-
-  useEffect(() => {
-    if (theme === 'system') delete document.documentElement.dataset.theme
-    else document.documentElement.dataset.theme = theme
-    try {
-      if (theme === 'system') localStorage.removeItem('wowdps-theme')
-      else localStorage.setItem('wowdps-theme', theme)
-    } catch {
-      /* private mode: the toggle still works for this session */
-    }
-  }, [theme])
-
-  const toggleSpec = useCallback((id: string) => {
-    setDroppedBuilds(0)
-    setSelected((current) =>
-      current.includes(id)
-        ? current.filter((entry) => entry !== id)
-        : current.length >= MAX_SERIES
-          ? current
-          : [...current, id],
-    )
-  }, [])
+    writeUrl({ view, tier, scenario: scenario?.id ?? null, focus })
+  }, [view, tier, scenario, focus])
 
   const openSpec = useCallback((id: string) => {
     setFocus(id)
@@ -287,8 +218,6 @@ export default function App() {
   if (loadError) {
     return (
       <Shell
-        theme={theme}
-        onThemeToggle={() => setTheme(nextTheme)}
         view={view}
         onViewChange={setView}
         manifest={null}
@@ -306,8 +235,6 @@ export default function App() {
   if (!manifest || !scenario) {
     return (
       <Shell
-        theme={theme}
-        onThemeToggle={() => setTheme(nextTheme)}
         view={view}
         onViewChange={setView}
         manifest={manifest}
@@ -322,14 +249,10 @@ export default function App() {
     )
   }
 
-  const comparisonView = needsDetails || view === 'gear'
-  const tierLabel =
-    tierIndex?.tiers.find((entry) => entry.id === tier)?.label ?? `tier ${manifest.tier}`
+  const waitingForDetails = needsDetails && (detailsLoading || details.length === 0)
 
   return (
     <Shell
-      theme={theme}
-      onThemeToggle={() => setTheme(nextTheme)}
       view={view}
       onViewChange={setView}
       manifest={manifest}
@@ -337,34 +260,6 @@ export default function App() {
       tier={tier}
       onTierChange={setTier}
     >
-      {comparisonView ? (
-        <SpecPicker
-          specs={
-            view === 'gear'
-              ? manifest.specs.filter((spec) => gearIds.includes(spec.id))
-              : manifest.specs
-          }
-          selected={selected}
-          onToggle={toggleSpec}
-          onClear={() => {
-            setDroppedBuilds(0)
-            setSelected([])
-          }}
-          colorOf={colorOf}
-          max={MAX_SERIES}
-        />
-      ) : null}
-
-      {droppedBuilds > 0 ? (
-        <Panel>
-          <Note>
-            {droppedBuilds === 1 ? 'One build was' : `${droppedBuilds} builds were`} dropped
-            from the comparison: SimulationCraft ships no profile for{' '}
-            {droppedBuilds === 1 ? 'it' : 'them'} in {tierLabel}.
-          </Note>
-        </Panel>
-      ) : null}
-
       {view === 'overview' ? (
         <OverviewView
           manifest={manifest}
@@ -374,42 +269,28 @@ export default function App() {
         />
       ) : null}
 
-      {comparisonView && detailsLoading ? (
+      {waitingForDetails ? (
         <Panel>
-          <Spinner label="Loading builds…" />
+          <Spinner label="Loading every build in the tier…" />
         </Panel>
       ) : null}
 
-      {view === 'scaling' && !detailsLoading ? (
-        <ScalingView details={details} scenario={scenario} colorOf={colorOf} />
+      {view === 'scaling' && !waitingForDetails ? (
+        <ScalingView details={details} scenario={scenario} />
       ) : null}
 
-      {view === 'funnel' && !detailsLoading ? (
-        <FunnelView details={details} scenario={scenario} colorOf={colorOf} />
+      {view === 'funnel' && !waitingForDetails ? (
+        <FunnelView details={details} scenario={scenario} />
       ) : null}
 
-      {view === 'builds' ? (
-        buildsLoading ? (
-          <Panel>
-            <Spinner label="Loading builds…" />
-          </Panel>
-        ) : (
-          <BuildsView
-            specs={manifest.specs}
-            specId={activeBuildSpec}
-            onSpecChange={setBuildSpec}
-            details={buildDetails}
-            scenario={scenario}
-          />
-        )
+      {view === 'builds' && !waitingForDetails ? (
+        <BuildsView details={details} scenario={scenario} />
       ) : null}
 
-      {view === 'gear' ? (
-        <GearView gear={gear} visible={gearVisible} colorOf={colorOf} />
-      ) : null}
+      {view === 'gear' ? <GearView gear={gear} /> : null}
 
-      {view === 'timing' && !detailsLoading ? (
-        <TimingView details={details} scenario={scenario} colorOf={colorOf} />
+      {view === 'timing' && !waitingForDetails ? (
+        <TimingView details={details} scenario={scenario} />
       ) : null}
 
       {view === 'spec' ? (
@@ -434,8 +315,6 @@ function Shell({
   onTierChange,
   view,
   onViewChange,
-  theme,
-  onThemeToggle,
 }: {
   children: React.ReactNode
   manifest: Manifest | null
@@ -444,8 +323,6 @@ function Shell({
   onTierChange: (tier: string) => void
   view: ViewId
   onViewChange: (view: ViewId) => void
-  theme: Theme
-  onThemeToggle: () => void
 }) {
   return (
     <div className="min-h-dvh bg-page">
@@ -456,8 +333,6 @@ function Shell({
         onTierChange={onTierChange}
         view={view}
         onViewChange={onViewChange}
-        theme={theme}
-        onThemeToggle={onThemeToggle}
       />
       <main className="mx-auto max-w-[1400px] space-y-4 px-5 py-6">{children}</main>
     </div>
@@ -476,23 +351,10 @@ function Footer({ manifest }: { manifest: Manifest }) {
         shape of a spec, not to predict your own parse.
       </p>
       <p className="mt-2">
-        Not affiliated with Blizzard Entertainment. World of Warcraft is a trademark of
+        Class, specialisation and hero-talent icons are Blizzard artwork served by Wowhead;
+        this site is not affiliated with either. World of Warcraft is a trademark of
         Blizzard Entertainment, Inc.
       </p>
     </footer>
   )
-}
-
-function readTheme(): Theme {
-  try {
-    const stored = localStorage.getItem('wowdps-theme')
-    if (stored === 'dark' || stored === 'light') return stored
-  } catch {
-    /* private mode */
-  }
-  return 'system'
-}
-
-function nextTheme(current: Theme): Theme {
-  return current === 'system' ? 'light' : current === 'light' ? 'dark' : 'system'
 }

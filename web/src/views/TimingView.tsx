@@ -8,48 +8,45 @@
  * Fight length is randomised per iteration, so cooldown windows land at slightly
  * different times and the averaged curve smooths them out. Read the shape (a big
  * opener, a mid-fight bump, a flat line) rather than the exact position of a peak.
+ *
+ * Form: a ranked bar for the headline number, small multiples for the curves.
+ * Twenty-six damage curves overlap almost completely in the middle of a fight, so
+ * one plot with everything on it is a smear whatever colours it uses -- and with
+ * no picker there is no smaller set to fall back on.
  */
 
 import { useMemo, useState } from 'react'
 import {
+  Bar,
+  BarChart,
   CartesianGrid,
-  Line,
-  LineChart,
+  Cell as RBCell,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts'
-import {
-  AXIS_LINE,
-  AXIS_TICK,
-  CURSOR_LINE,
-  GRID,
-  TooltipCard,
-  makeEndLabel,
-  resolveLabelOffsets,
-  shortLabel,
-} from '../components/chart'
-import {
-  EmptyState,
-  Legend,
-  Note,
-  Panel,
-  PanelHeader,
-  Select,
-  StatTile,
-} from '../components/ui'
+import { AXIS_LINE, AXIS_TICK, CURSOR_FILL, GRID, TooltipCard } from '../components/chart'
+import { BuildIdentity, makeBuildTick } from '../components/BuildIdentity'
+import { SmallMultiples, type SparkPanel } from '../components/SmallMultiples'
+import { EmptyState, Note, Panel, PanelHeader, Select } from '../components/ui'
 import { compactNumber, describeBurst, fullNumber } from '../lib/format'
+import { classColor } from '../lib/palette'
 import type { ScenarioMeta, SpecDetail } from '../lib/types'
+
+const TIMING_EXPLAINER =
+  'Damage per second at each point of the fight, averaged over thousands of simulated pulls.'
+
+const ROW_HEIGHT = 32
+const TICK_WIDTH = 205
 
 export function TimingView({
   details,
   scenario,
-  colorOf,
 }: {
   details: SpecDetail[]
   scenario: ScenarioMeta
-  colorOf: (id: string) => string
 }) {
   const available = useMemo(() => {
     const counts = new Set<number>()
@@ -64,37 +61,25 @@ export function TimingView({
   const [targets, setTargets] = useState(1)
   const effective = available.includes(targets) ? targets : (available[0] ?? 1)
 
-  const { data, burst } = useMemo(
-    () => buildTimeline(details, scenario.id, effective),
+  const burst = useMemo(
+    () => burstRows(details, scenario.id, effective),
     [details, scenario.id, effective],
   )
-
-  // Damage curves all settle into the same band by the end of the fight, so their
-  // end labels land almost on top of each other without this.
-  const labelOffsets = useMemo(() => {
-    const last = data[data.length - 1]
-    if (!last) return new Map<string, number>()
-    const finals = details
-      .map((detail) => ({ id: detail.id, value: last[detail.id] ?? 0 }))
-      .filter((entry) => entry.value > 0)
-    const peak = data.reduce(
-      (best, row) =>
-        Math.max(best, ...Object.entries(row).filter(([k]) => k !== 'second').map(([, v]) => v)),
-      0,
-    )
-    return resolveLabelOffsets(finals, [0, peak || 1], PLOT_HEIGHT)
-  }, [data, details])
+  const panels = useMemo(
+    () => timelinePanels(details, scenario.id, effective),
+    [details, scenario.id, effective],
+  )
 
   if (details.length === 0) {
     return (
       <Panel>
         <PanelHeader title="Timing" subtitle={TIMING_EXPLAINER} />
-        <EmptyState>Pick a build above to see when its damage lands.</EmptyState>
+        <EmptyState>No per-build data has been generated for this tier yet.</EmptyState>
       </Panel>
     )
   }
 
-  if (data.length === 0) {
+  if (panels.length === 0 && burst.length === 0) {
     return (
       <Panel>
         <PanelHeader title="Timing" subtitle={TIMING_EXPLAINER} />
@@ -106,123 +91,51 @@ export function TimingView({
     )
   }
 
+  const targetSelect =
+    available.length > 1 ? (
+      <Select
+        label="Targets"
+        value={effective}
+        onChange={setTargets}
+        options={available.map((count) => ({ value: count, label: String(count) }))}
+      />
+    ) : null
+
   return (
     <div className="space-y-4">
       <Panel>
         <PanelHeader
           title="Burst versus sustain"
-          subtitle="How much the best twenty seconds beat the build's own average. A steady build sits near 1.0; a cooldown-driven one climbs well above it."
+          subtitle="How much the best twenty seconds beat the build's own average. Bars grow from 1.0 — a build sitting on the line is perfectly steady, one far to the right is cooldown-driven."
+          actions={targetSelect}
         />
-        <div className="grid gap-3 px-5 pb-5 sm:grid-cols-2 lg:grid-cols-3">
-          {burst.map((entry) => (
-            <StatTile
-              key={entry.id}
-              accent={colorOf(entry.id)}
-              label={entry.label}
-              value={`${entry.ratio.toFixed(2)}x`}
-              caption={describeBurst(entry.ratio)}
-            />
-          ))}
-        </div>
+        {burst.length === 0 ? (
+          <EmptyState>No burst measurement at this target count.</EmptyState>
+        ) : (
+          <>
+            <BurstChart rows={burst} />
+            <BurstTable rows={burst} />
+          </>
+        )}
       </Panel>
 
       <Panel>
         <PanelHeader
           title="Damage over the course of the fight"
           subtitle={TIMING_EXPLAINER}
-          actions={
-            available.length > 1 ? (
-              <Select
-                label="Targets"
-                value={effective}
-                onChange={setTargets}
-                options={available.map((count) => ({ value: count, label: String(count) }))}
-              />
-            ) : null
-          }
+          actions={targetSelect}
         />
-
-        <div className="px-2 py-4">
-          <ResponsiveContainer width="100%" height={360}>
-            <LineChart data={data} margin={{ top: 8, right: 130, bottom: 8, left: 8 }}>
-              <CartesianGrid {...GRID} />
-              <XAxis
-                dataKey="second"
-                type="number"
-                domain={['dataMin', 'dataMax']}
-                tick={AXIS_TICK}
-                axisLine={AXIS_LINE}
-                tickLine={false}
-                tickFormatter={(value: number) => `${Math.round(value)}s`}
-                label={{
-                  value: 'Seconds into the fight',
-                  position: 'insideBottom',
-                  offset: -4,
-                  fill: 'var(--text-muted)',
-                  fontSize: 11.5,
-                }}
-              />
-              <YAxis
-                tick={AXIS_TICK}
-                axisLine={false}
-                tickLine={false}
-                width={56}
-                tickFormatter={compactNumber}
-              />
-              <Tooltip
-                cursor={CURSOR_LINE}
-                content={({ active, payload, label }) => {
-                  if (!active || !payload?.length) return null
-                  const sorted = [...payload].sort(
-                    (a, b) => Number(b.value ?? 0) - Number(a.value ?? 0),
-                  )
-                  return (
-                    <TooltipCard
-                      title={`${Math.round(Number(label))}s into the fight`}
-                      rows={sorted.map((entry) => ({
-                        id: String(entry.dataKey),
-                        label: String(entry.name),
-                        color: entry.color,
-                        value: fullNumber(Number(entry.value ?? 0)),
-                      }))}
-                    />
-                  )
-                }}
-              />
-              {details.map((detail) => (
-                <Line
-                  key={detail.id}
-                  type="monotone"
-                  dataKey={detail.id}
-                  name={detail.displayName}
-                  stroke={colorOf(detail.id)}
-                  // Thinner than the other charts: these curves overlap heavily and
-                  // 2px strokes turn the busy middle of the fight into a smear.
-                  strokeWidth={1.5}
-                  dot={false}
-                  activeDot={{ r: 4, strokeWidth: 2, stroke: 'var(--surface-1)' }}
-                  isAnimationActive={false}
-                  label={makeEndLabel(
-                    shortLabel(detail.displayName),
-                    data.length - 1,
-                    labelOffsets.get(detail.id) ?? 0,
-                  )}
-                />
-              ))}
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-
-        <Legend
-          items={details
-            .filter((detail) => data.some((row) => row[detail.id] !== undefined))
-            .map((detail) => ({
-              id: detail.id,
-              label: detail.displayName,
-              color: colorOf(detail.id),
-            }))}
-        />
-
+        {panels.length === 0 ? (
+          <EmptyState>No timeline recorded at this target count.</EmptyState>
+        ) : (
+          <SmallMultiples
+            panels={panels}
+            height={78}
+            formatX={(value) => `${Math.round(value)}s into the fight`}
+            formatY={(value) => fullNumber(value)}
+            referenceLabel="Every panel shares one axis, so panel heights compare directly. The faint curve behind each is the median build at that second."
+          />
+        )}
         <Note>
           Averaged across every simulated pull, so a cooldown that fires at slightly
           different times shows up as a broad bump rather than a spike. The opening seconds
@@ -234,37 +147,161 @@ export function TimingView({
   )
 }
 
-/** Plot area of the chart: its 360px height less margins and the x-axis. */
-const PLOT_HEIGHT = 300
+// --------------------------------------------------------------------------------
+// Burst
+// --------------------------------------------------------------------------------
 
-const TIMING_EXPLAINER =
-  'Damage per second at each point of the fight, averaged over thousands of simulated pulls.'
+interface BurstRow {
+  build: SpecDetail
+  label: string
+  ratio: number
+  /** ratio - 1, so the bar grows from "perfectly flat" rather than from zero. */
+  delta: number
+}
 
-function buildTimeline(details: SpecDetail[], scenarioId: string, targets: number) {
-  const rows = new Map<number, Record<string, number>>()
-  const burst: Array<{ id: string; label: string; ratio: number }> = []
+function burstRows(details: SpecDetail[], scenarioId: string, targets: number): BurstRow[] {
+  const rows: BurstRow[] = []
+  for (const detail of details) {
+    const cell = detail.scenarios[scenarioId]?.targets.find((entry) => entry.targets === targets)
+    if (cell?.burstRatio === undefined) continue
+    rows.push({
+      build: detail,
+      label: detail.displayName,
+      ratio: cell.burstRatio,
+      delta: cell.burstRatio - 1,
+    })
+  }
+  return rows.sort((a, b) => b.ratio - a.ratio)
+}
 
+function BurstChart({ rows }: { rows: BurstRow[] }) {
+  const byLabel = useMemo(() => new Map(rows.map((row) => [row.label, row.build])), [rows])
+  const tick = useMemo(() => makeBuildTick(byLabel, { width: TICK_WIDTH }), [byLabel])
+  const span = Math.max(...rows.map((row) => row.delta), 0.1) * 1.08
+
+  return (
+    <div className="px-2 py-4">
+      <ResponsiveContainer width="100%" height={Math.max(220, rows.length * ROW_HEIGHT + 50)}>
+        <BarChart
+          data={rows}
+          layout="vertical"
+          margin={{ top: 4, right: 40, bottom: 4, left: 8 }}
+          barCategoryGap={4}
+        >
+          <CartesianGrid {...GRID} vertical horizontal={false} />
+          <XAxis
+            type="number"
+            domain={[0, span]}
+            tick={AXIS_TICK}
+            axisLine={AXIS_LINE}
+            tickLine={false}
+            tickFormatter={(value: number) => `${(1 + value).toFixed(2)}x`}
+          />
+          <YAxis
+            type="category"
+            dataKey="label"
+            width={TICK_WIDTH}
+            tick={tick}
+            axisLine={false}
+            tickLine={false}
+          />
+          <ReferenceLine x={0} stroke="var(--baseline)" />
+          <Tooltip
+            cursor={CURSOR_FILL}
+            content={({ active, payload }) => {
+              if (!active || !payload?.length) return null
+              const row = payload[0]?.payload as BurstRow | undefined
+              if (!row) return null
+              return (
+                <TooltipCard
+                  title={row.label}
+                  rows={[
+                    {
+                      id: 'burst',
+                      label: 'Peak 20s vs average',
+                      color: classColor(row.build.class),
+                      value: `${row.ratio.toFixed(2)}x`,
+                      hint: describeBurst(row.ratio),
+                    },
+                  ]}
+                />
+              )
+            }}
+          />
+          <Bar dataKey="delta" barSize={14} radius={[0, 2, 2, 0]} isAnimationActive={false}>
+            {rows.map((row) => (
+              <RBCell key={row.build.id} fill={classColor(row.build.class)} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  )
+}
+
+function BurstTable({ rows }: { rows: BurstRow[] }) {
+  return (
+    <div className="overflow-x-auto pb-2">
+      <table className="w-full min-w-[560px] border-collapse text-[13px]">
+        <thead>
+          <tr className="border-b border-hairline text-left text-[11.5px] tracking-wide text-ink-muted uppercase">
+            <th scope="col" className="py-2.5 pr-4 pl-5 font-medium">
+              Build
+            </th>
+            <th scope="col" className="py-2.5 pr-4 text-right font-medium">
+              Peak 20s ÷ average
+            </th>
+            <th scope="col" className="py-2.5 pr-5 font-medium">
+              Reading
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.build.id} className="border-b border-hairline/60 last:border-0">
+              <td className="py-2 pr-4 pl-5">
+                <BuildIdentity build={row.build} />
+              </td>
+              <td className="tnum py-2 pr-4 text-right font-medium text-ink">
+                {row.ratio.toFixed(2)}x
+              </td>
+              <td className="py-2 pr-5 text-ink-secondary">{describeBurst(row.ratio)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// --------------------------------------------------------------------------------
+// Timelines
+// --------------------------------------------------------------------------------
+
+function timelinePanels(
+  details: SpecDetail[],
+  scenarioId: string,
+  targets: number,
+): SparkPanel[] {
+  const panels: SparkPanel[] = []
   for (const detail of details) {
     const cell = detail.scenarios[scenarioId]?.targets.find((entry) => entry.targets === targets)
     if (!cell?.timeline?.length) continue
-
     const bin = cell.timelineBin ?? 1
-    cell.timeline.forEach((value, index) => {
-      const second = index * bin
-      let row = rows.get(second)
-      if (!row) {
-        row = { second }
-        rows.set(second, row)
-      }
-      row[detail.id] = value
+    const points = cell.timeline.map((value, index) => ({ x: index * bin, y: value }))
+    const peak = Math.max(...points.map((point) => point.y))
+    panels.push({
+      build: detail,
+      points,
+      headline: compactNumber(cell.dps),
+      caption: `Peaks at ${compactNumber(peak)}${
+        cell.burstRatio !== undefined ? ` · ${describeBurst(cell.burstRatio)}` : ''
+      }`,
     })
-
-    if (cell.burstRatio !== undefined) {
-      burst.push({ id: detail.id, label: detail.displayName, ratio: cell.burstRatio })
-    }
   }
-
-  const data = [...rows.values()].sort((a, b) => (a.second ?? 0) - (b.second ?? 0))
-  burst.sort((a, b) => b.ratio - a.ratio)
-  return { data, burst }
+  return panels.sort((a, b) => {
+    const av = Math.max(...a.points.map((point) => point.y))
+    const bv = Math.max(...b.points.map((point) => point.y))
+    return bv - av
+  })
 }
