@@ -7,10 +7,26 @@ import logging
 import sys
 from pathlib import Path
 
-from . import dataset, profiles, scenarios, simc_runner
+from . import dataset, equipment, gearsweep, profiles, scenarios, simc_runner
 from .scenarios import SimSettings
 
 DEFAULT_OUT = Path("web/public/data")
+
+#: Target counts the gear sweep runs at unless asked otherwise. One target is the
+#: raid-loot question these numbers exist to answer; more is a flag away and costs
+#: proportionally.
+DEFAULT_GEAR_TARGETS = (1,)
+
+#: Iterations per gear variant, and deliberately a third of what `build` uses.
+#:
+#: The 3000 default elsewhere exists to resolve sub-percent gaps *between specs* in a
+#: dataset that is committed nightly. This sweep measures trinket differences, which
+#: run 1-5% of DPS, and it has to be cheap enough to re-run after every tuning pass
+#: rather than once a season. 1000 deterministic iterations measure to about 0.15%
+#: standard error against 0.09% at 3000 -- both far inside the effect -- for a third
+#: of the cost. Verified on Arcane Mage: the two settings rank the raid trinkets
+#: identically. Raise it with --max-iterations for an official run.
+DEFAULT_GEAR_ITERATIONS = 1000
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -162,6 +178,122 @@ def cmd_build(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_gear(args: argparse.Namespace) -> int:
+    """Sweep one equipment slot: which drops are an upgrade over what is already worn."""
+    profiles_dir = Path(args.profiles)
+    tier = _resolve_tier(profiles_dir, args.tier)
+    simc = simc_runner.find_simc(args.simc)
+    out_dir = Path(args.out) / tier
+
+    pools = equipment.load_pools(tier, Path(args.pools) if args.pools else None)
+    wanted_slots = args.slot or sorted(pools.slots)
+    missing = [slot for slot in wanted_slots if slot not in pools.slots]
+    if missing:
+        logging.error("no pool defined for slot(s) %s in tier %s", ", ".join(missing), tier)
+        return 1
+
+    all_profiles = profiles.discover(profiles_dir, tier, dps_only=not args.include_tanks)
+    selected = _select(
+        all_profiles, args.wow_class, args.spec, args.limit, _parse_shard(args.shard)
+    )
+    if not selected:
+        logging.error("no profiles matched the selection")
+        return 1
+
+    settings = SimSettings(
+        target_error=args.target_error,
+        max_iterations=args.max_iterations,
+        threads=args.threads,
+    )
+    targets = args.targets or list(DEFAULT_GEAR_TARGETS)
+
+    logging.info(
+        "tier %s | %d specs x %d slot(s) x %d target count(s) | simc %s",
+        tier,
+        len(selected),
+        len(wanted_slots),
+        len(targets),
+        simc,
+    )
+
+    results: list[gearsweep.SpecSlotResult] = []
+    simc_meta: dict = {}
+    for index, profile in enumerate(selected, start=1):
+        logging.info("[%d/%d] %s", index, len(selected), profile.display_name)
+        for slot_id in wanted_slots:
+            result = gearsweep.sweep_spec(
+                simc, profile, pools.slots[slot_id], settings, targets, timeout=args.timeout
+            )
+            if result.targets:
+                results.append(result)
+            else:
+                logging.error("  no successful gear sims for %s / %s", profile.id, slot_id)
+
+        if not simc_meta and results:
+            simc_meta = _probe_simc_metadata(simc, profile)
+
+    if not results:
+        logging.error("every spec failed; not writing a gear dataset")
+        return 1
+
+    path = dataset.write_gear(
+        out_dir,
+        results,
+        {slot: pools.slots[slot] for slot in wanted_slots},
+        tier,
+        simc_meta,
+        settings,
+        specs_available=len(all_profiles),
+    )
+    failed = sum(len(result.errors) for result in results)
+    logging.info(
+        "wrote %s (%d spec-slot results of %d profiles, %d failures)",
+        path,
+        len(results),
+        len(all_profiles),
+        failed,
+    )
+    return 0
+
+
+def cmd_gear_candidates(args: argparse.Namespace) -> int:
+    """Enumerate what simc's item tables offer for a slot, so a pool can be curated.
+
+    Prints everything the pool file needs except ``source``: simc's shipped data
+    carries no drop source at all (see equipment.py), so that column is the one thing
+    a human or an external item database has to supply.
+    """
+    slot = equipment.SLOTS_BY_ID[args.slot]
+    found = equipment.discover_items(Path(args.simc_source), slot.inventory_type)
+    if args.min_ilevel:
+        found = [item for item in found if item.base_ilevel >= args.min_ilevel]
+    if args.effects_only:
+        found = [item for item in found if item.has_effect]
+
+    print(f"{len(found)} {slot.label.lower()} item(s); source is NOT in simc's data")
+    print(f"{'id':>7} {'base':>5} {'q':>2} {'effect':>6}  {'primary':<12} {'secondary':<11} name")
+    for item in found:
+        print(
+            f"{item.item_id:>7} {item.base_ilevel:>5} {item.base_quality:>2} "
+            f"{'yes' if item.has_effect else 'no':>6}  {item.primary_stat or '-':<12} "
+            f"{item.secondary_stat or '-':<11} {item.name}"
+        )
+    return 0
+
+
+def _probe_simc_metadata(simc: Path, profile: profiles.SpecProfile) -> dict:
+    """Version and build info, from a throwaway one-iteration run."""
+    probe = simc_runner.SimRequest(profile=profile, scenario=scenarios.PATCHWERK, targets=1)
+    try:
+        report = simc_runner.run(
+            simc, probe, SimSettings(target_error=0, max_iterations=10), timeout=300
+        )
+    except Exception as exc:  # noqa: BLE001
+        logging.warning("could not capture simc metadata: %s", exc)
+        return {}
+    return simc_runner.simc_metadata(report)
+
+
 def cmd_merge(args: argparse.Namespace) -> int:
     shard_dirs = [Path(p) for p in args.shards]
     missing = [p for p in shard_dirs if not p.is_dir()]
@@ -250,6 +382,59 @@ def build_parser() -> argparse.ArgumentParser:
     p_build.add_argument("--threads", type=int, default=0)
     p_build.add_argument("--timeout", type=int, default=1800)
     p_build.set_defaults(func=cmd_build)
+
+    p_gear = sub.add_parser(
+        "gear", help="compare drops for an equipment slot against what is already worn"
+    )
+    add_common(p_gear)
+    p_gear.add_argument("--simc", help="path to the simc binary (default: $PATH)")
+    p_gear.add_argument("--out", default=str(DEFAULT_OUT), help="output directory")
+    p_gear.add_argument(
+        "--pools", help="alternative gear pool file (default: the one shipped in the package)"
+    )
+    p_gear.add_argument(
+        "--slot",
+        action="append",
+        choices=sorted(equipment.SLOTS_BY_ID),
+        help="limit to one equipment slot (repeatable); default is every slot with a pool",
+    )
+    p_gear.add_argument(
+        "--targets",
+        type=int,
+        action="append",
+        help=f"target count to sweep at (repeatable); default {DEFAULT_GEAR_TARGETS[0]}",
+    )
+    p_gear.add_argument("--wow-class", action="append", help="limit to one class (repeatable)")
+    p_gear.add_argument("--spec", action="append", help="limit to one spec id (repeatable)")
+    p_gear.add_argument("--limit", type=int, help="only the first N profiles")
+    p_gear.add_argument("--shard", help="run only part of the matrix, as INDEX/COUNT")
+    p_gear.add_argument("--target-error", type=float, default=0.0)
+    p_gear.add_argument(
+        "--max-iterations",
+        type=int,
+        default=DEFAULT_GEAR_ITERATIONS,
+        help=f"fixed iteration count per variant (default {DEFAULT_GEAR_ITERATIONS}); "
+        f"raise it for an official run, lower it for an exploratory one",
+    )
+    p_gear.add_argument("--threads", type=int, default=0)
+    p_gear.add_argument("--timeout", type=int, default=3600)
+    p_gear.set_defaults(func=cmd_gear)
+
+    p_candidates = sub.add_parser(
+        "gear-candidates",
+        help="list the items simc knows for a slot, as raw material for a pool file",
+    )
+    p_candidates.add_argument(
+        "--simc-source", default=".work/simc", help="path to the simc source checkout"
+    )
+    p_candidates.add_argument("--slot", default="trinket", choices=sorted(equipment.SLOTS_BY_ID))
+    p_candidates.add_argument(
+        "--min-ilevel", type=int, default=0, help="hide items below this base item level"
+    )
+    p_candidates.add_argument(
+        "--effects-only", action="store_true", help="only items with an on-use or equip effect"
+    )
+    p_candidates.set_defaults(func=cmd_gear_candidates)
 
     p_merge = sub.add_parser("merge", help="merge sharded dataset directories")
     p_merge.add_argument("shards", nargs="+", help="shard directories to merge")

@@ -1,0 +1,211 @@
+name: Gear comparison
+
+# On demand only, and deliberately so.
+#
+# The arithmetic, measured rather than guessed. One spec's trinket sweep is two simc
+# invocations covering ~36 profilesets: every eligible Mythic+ trinket on its own to
+# find the baseline pair, then the baseline plus every eligible raid trinket at two
+# item levels. At 3,000 deterministic iterations a variant costs roughly 11 CPU-
+# seconds at one target for a caster and about 2.5x that for a pet spec, so a spec
+# lands between 7 and 18 CPU-minutes at one target, and roughly three times that at
+# five.
+#
+#   full tier, one target  : 26 specs x ~12 CPU-min  = ~310 CPU-min = ~155 job-min on 2 vCPU
+#   full tier, 1 + 5 targets                          = ~600 job-min
+#
+# Against 2,000 Actions minutes a month with ~800 already committed to the weekly
+# simulation pass, CI and deploys: a single-target full pass fits comfortably as an
+# occasional run, and 1+5 targets fits about twice. Neither fits a schedule. Trinkets
+# change when a raid tier changes, which is not a weekly event, so a schedule would
+# buy nothing anyway -- run this when the loot table changes or when simc's item
+# modelling for the tier lands.
+#
+# Sharded because one job cannot hold a full pass: 26 specs at ~12 CPU-minutes is
+# over five hours on a 2-vCPU runner and the job limit is six. Sharding does not
+# reduce the bill -- matrix jobs bill as the sum of their job-minutes -- it just
+# keeps each job inside the limit.
+on:
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: "Tier to sweep: a name, 'latest' or 'previous'"
+        default: 'latest'
+      slot:
+        description: 'Equipment slot to sweep'
+        default: 'trinket'
+        type: choice
+        options: [trinket]
+      targets:
+        description: 'Space-separated target counts, e.g. "1" or "1 5"'
+        default: '1'
+      specs:
+        description: 'Space-separated spec ids, or empty for the whole tier'
+        default: ''
+      shards:
+        description: 'How many parallel jobs to split the specs across'
+        default: '4'
+      iterations:
+        description: 'Fixed iteration count per variant (deterministic)'
+        default: '1000'
+
+concurrency:
+  group: gear
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  TIER: ${{ inputs.tier }}
+  SLOT: ${{ inputs.slot }}
+  TARGETS: ${{ inputs.targets }}
+  SPECS: ${{ inputs.specs }}
+  SHARDS: ${{ inputs.shards }}
+  ITERATIONS: ${{ inputs.iterations }}
+
+jobs:
+  build-simc:
+    name: Build SimulationCraft
+    runs-on: ubuntu-latest
+    outputs:
+      shards: ${{ steps.matrix.outputs.shards }}
+    steps:
+      - name: Checkout SimulationCraft
+        id: simc
+        run: |
+          git clone --depth 1 https://github.com/simulationcraft/simc.git simc
+          echo "sha=$(git -C simc rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache build tree
+        id: cache
+        uses: actions/cache@v4
+        with:
+          # Shared with sims.yml on purpose: the same key means whichever workflow
+          # runs first pays for the build and the other one gets it for nothing.
+          path: simc/build
+          key: simc-build-${{ runner.os }}-${{ steps.simc.outputs.sha }}
+          restore-keys: simc-build-${{ runner.os }}-
+
+      - name: Build
+        run: |
+          cmake -B simc/build -S simc \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSC_NO_NETWORKING=ON \
+            -DBUILD_GUI=OFF
+          cmake --build simc/build -j"$(nproc)"
+
+      - name: Package binary and profiles
+        run: |
+          mkdir -p bundle
+          cp simc/build/simc bundle/simc
+          strip bundle/simc || true
+          cp -r simc/profiles bundle/profiles
+          # The gear sweep also needs simc's *source* item tables, because that is
+          # where `wowdps gear-candidates` reads the item catalogue from -- there is
+          # no simc command that lists items.
+          mkdir -p bundle/dbc
+          cp -r simc/engine/dbc/generated bundle/dbc/generated
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: simc-bundle-gear
+          path: bundle
+          retention-days: 1
+          compression-level: 6
+
+      - id: matrix
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          print("shards=" + json.dumps(list(range(int(os.environ["SHARDS"])))))
+          PY
+
+  sweep:
+    name: Sweep ${{ inputs.slot }} (shard ${{ matrix.shard }})
+    needs: build-simc
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJson(needs.build-simc.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: simc-bundle-gear
+          path: bundle
+
+      - name: Install pipeline
+        run: |
+          chmod +x bundle/simc
+          pip install -e ./pipeline
+
+      - name: Sweep
+        run: |
+          args=()
+          for count in $TARGETS; do args+=(--targets "$count"); done
+          for spec in $SPECS; do args+=(--spec "$spec"); done
+          wowdps gear \
+            --simc bundle/simc \
+            --profiles bundle/profiles \
+            --tier "$TIER" \
+            --slot "$SLOT" \
+            --shard "${{ matrix.shard }}/$SHARDS" \
+            --max-iterations "$ITERATIONS" \
+            "${args[@]}" \
+            --out shard
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gear-shard-${{ matrix.shard }}
+          path: shard
+          retention-days: 3
+
+  publish:
+    name: Merge and commit
+    needs: [build-simc, sweep]
+    # Publish whatever finished. The dataset carries its own coverage count and the
+    # view shows it, so a partial sweep is a smaller honest answer rather than a
+    # silently incomplete one.
+    if: always() && needs.sweep.result != 'cancelled'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: gear-shard-*
+          path: shards
+
+      - name: Install pipeline
+        run: pip install -e ./pipeline
+
+      - name: Merge shards
+        run: |
+          shopt -s nullglob
+          dirs=(shards/gear-shard-*)
+          if [ ${#dirs[@]} -eq 0 ]; then
+            echo "::error::no shard produced any gear data"
+            exit 1
+          fi
+          wowdps merge "${dirs[@]}" --out web/public/data
+
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add web/public/data
+          if git diff --staged --quiet; then
+            echo "gear dataset unchanged"
+            exit 0
+          fi
+          git commit -m "data: refresh ${SLOT} comparison $(date -u +%Y-%m-%d)"
+          git push

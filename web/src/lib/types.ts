@@ -176,3 +176,114 @@ export interface LogsVerification {
   note: string
   comparisons: LogsComparison[]
 }
+
+// --------------------------------------------------------------------------------
+// Gear comparison (<tier>/gear.json)
+// --------------------------------------------------------------------------------
+
+/**
+ * One item level candidates are run at, with the evidence for the number.
+ *
+ * simc's data does not name Blizzard's upgrade tracks, so the label is a reading of
+ * the item level ladder rather than something read out of the game files. The
+ * evidence string says which, and the view shows it.
+ */
+export interface GearItemLevel {
+  id: string
+  label: string
+  ilevel: number
+  evidence?: string
+}
+
+export interface GearItemMeta {
+  id: number
+  name: string
+  slug: string
+  /** "raid" | "mythicplus". Asserted by the pipeline's pool file, not derived. */
+  source: string
+  /** null for trinkets that allocate no primary stat, which anyone can use. */
+  primaryStat: string | null
+  secondaryStat?: string
+}
+
+/** One baseline-pool item measured on its own, with every other socket empty. */
+export interface GearPoolEntry {
+  id: number
+  ilevel: number
+  dps: number
+  dpsError: number
+  /** DPS this item adds over wearing nothing at all in the slot. */
+  standaloneGain: number
+  /** True for the items that became the baseline. */
+  chosen: boolean
+}
+
+export interface GearCandidate {
+  id: number
+  /** Matches a GearItemLevel id. */
+  level: string
+  ilevel: number
+  /** Item id this candidate was put in place of. */
+  replaces: number
+  dps: number
+  dpsError: number
+  /** Fraction of baseline DPS gained. Negative means the baseline is better. */
+  gain: number
+  /**
+   * The baseline's and the candidate's standard errors in quadrature. A gain
+   * smaller than this is a tie, not a lead — the same rule the Builds view uses.
+   */
+  gainError: number
+  priorityDps?: number
+}
+
+export interface GearTargetResult {
+  targets: number
+  /** DPS with every socket in the slot empty. The floor the pool is measured from. */
+  emptyDps: number
+  baseline: {
+    items: number[]
+    ilevel: number
+    dps: number
+    dpsError: number
+  }
+  pool: GearPoolEntry[]
+  candidates: GearCandidate[]
+}
+
+export interface GearSpecResult {
+  id: string
+  class: string
+  spec: string
+  heroTalent: string
+  specId: string
+  displayName: string
+  primaryStat: string
+  targets: GearTargetResult[]
+  errors?: string[]
+}
+
+export interface GearSlot {
+  id: string
+  label: string
+  sockets: string[]
+  baselineSource: string
+  baselineSourceLabel: string
+  candidateSource: string
+  candidateSourceLabel: string
+  note: string
+  itemLevels: GearItemLevel[]
+  items: GearItemMeta[]
+  specs: GearSpecResult[]
+}
+
+export interface GearDataset {
+  schemaVersion: number
+  generatedAt: string
+  tier: string
+  simc: SimcMeta
+  settings: RunSettings
+  /** How much of the tier this run actually covered. Never inferred from length. */
+  coverage: { specs: number; specsAvailable: number }
+  slots: GearSlot[]
+}

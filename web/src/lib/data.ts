@@ -1,6 +1,6 @@
 /** Loading the static dataset, with a small in-memory cache. */
 
-import type { LogsVerification, Manifest, SpecDetail, TierIndex } from './types'
+import type { GearDataset, LogsVerification, Manifest, SpecDetail, TierIndex } from './types'
 
 const BASE = import.meta.env.BASE_URL
 
@@ -49,6 +49,18 @@ export function loadSpecs(tier: string, ids: string[]): Promise<SpecDetail[]> {
 export async function loadLogsVerification(tier: string): Promise<LogsVerification | null> {
   try {
     return await fetchJson<LogsVerification>(`${tier}/logs-verification.json`)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Gear comparison for one tier. Optional: a tier can have a spec dataset without a
+ * gear sweep having been run for it, and the view says so rather than erroring.
+ */
+export async function loadGear(tier: string): Promise<GearDataset | null> {
+  try {
+    return await fetchJson<GearDataset>(`${tier}/gear.json`)
   } catch {
     return null
   }
