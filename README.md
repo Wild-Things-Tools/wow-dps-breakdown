@@ -174,9 +174,18 @@ both are inference. Correcting one is editing one row of a JSON file, and the
 smallest thing that would remove the guesswork entirely is a source column imported
 from any item database that does read the journal.
 
+The Wowhead card that now appears on hover in that view is, as it happens, printing
+exactly that column — a `Dropped by:` line. It is not imported and the split in
+`gear_pools.json` is unchanged; a card rendered in a reader's browser is not a
+dataset. But the assertion is now checkable by hand, one hover at a time.
+
 Two item levels are labelled "Heroic track" and "Mythic track" in the UI because
 that is what they are for, but simc's files contain neither word; the numbers carry
-their evidence with them and the view shows it.
+their evidence with them and the view shows it. Wowhead's card names a track too, and
+disagrees — it prints "Upgrade Level: Myth 6/6" at the item level this view labels
+"Heroic track · 334". That is Wowhead's reading of an item level rather than anything
+in simc's data either, so the view says as much beneath the table instead of letting
+the two quietly contradict each other.
 
 ### Honesty constraints this view enforces
 
@@ -541,6 +550,52 @@ re-randomises every night grows history for no information gain. That is a large
 why the simulations are deterministic — a night with no upstream change produces
 byte-identical output and therefore no commit at all.
 
+### The one third-party script
+
+Item names in the Loot view are Wowhead links: hover one and the item's tooltip and
+icon appear, which is what turns a name in a table into something a loot council can
+act on. Wowhead serves that as a script, so a viewer's browser talks to a third party.
+The published site sits behind a Discord login and its readers did not choose Wowhead,
+so what that costs them is worth stating exactly. All the figures below were measured
+against the live endpoints on 14 August 2026.
+
+- The script is `https://wow.zamimg.com/widgets/power.js` — note `/widgets/`; the
+  widely quoted `/js/power.js` is a 404. It is fetched **lazily, by the first item
+  link that renders**, and only the Loot view has item links, so a visit that never
+  opens it makes **zero** requests to Wowhead.
+- Opening the Loot view made **31** third-party requests: the script, the 800 kB
+  stylesheet it injects into the page (`wow.zamimg.com/css/universal.css`), one
+  item-scaling data file, and then one tooltip JSON from `nether.wowhead.com` plus one
+  13px icon from `wow.zamimg.com` for each *distinct* item on screen — fourteen of
+  each. Those fire on load rather than on hover, because that is when the icons have
+  to appear; hovering costs nothing further.
+- So Wowhead learns a viewer's IP address and which items were on their screen. It
+  does not learn which page they were on: the links carry `rel="noreferrer"`. The
+  tooltip requests are made without credentials — the script only sets
+  `credentials: include` on Wowhead's own testing host — and neither endpoint returned
+  a `Set-Cookie` when checked from here.
+- **No Content-Security-Policy is set anywhere**, so nothing blocks any of this today:
+  not in this repository, and not in `wt-gate` — no `_headers` file, no meta tag, and
+  the gate middleware writes no security headers. If a policy is ever added it needs
+  `script-src` for `wow.zamimg.com` *and* `nether.wowhead.com` (the scaling data
+  arrives as a script tag), `connect-src` for `nether.wowhead.com`, `img-src` and
+  `style-src` for `wow.zamimg.com`, and inline styles allowed — the card is positioned
+  with a `style` attribute. A policy missing any of those switches the tooltips off
+  silently; it looks exactly like the degradation case below, which nobody sees as an
+  error.
+- **When it does not load, nothing moves.** With both hosts blocked outright the page
+  renders the same names in the same places — verified by measuring where an item
+  name's text starts, which is 124.3px from the left of the viewport whether the
+  script is blocked, still loading, or loaded and finished; the document is 4031px
+  tall in all three states. That is not luck: each link reserves the icon slot itself,
+  and the slot collapses at the exact moment Wowhead's stylesheet adds its own padding
+  in place of it.
+- Wowhead is never allowed to rename a link (`renameLinks: false`). The name beside a
+  number has to be the name of the thing that was simulated, and it has to match the
+  chart axis, which is SVG and can never be rewritten. Checked on the current tier: all
+  40 trinket names are identical either way, so the option would buy nothing and could
+  only ever introduce a disagreement.
+
 ### Enabling the Warcraft Logs cross-check
 
 Register a client at <https://www.warcraftlogs.com/api/clients/> and add
@@ -566,6 +621,15 @@ correction factor, and the site presents both rather than reconciling them.
   never as the series encoding.
 - Dark mode is a separately chosen set of steps validated against the dark surface, not
   an automatic inversion.
+- Wowhead tooltips and icons are an enhancement on top of a page that is complete
+  without them: a name is a name, in the cell's own ink, with the icon's space reserved
+  so nothing moves when the icon arrives or never does. Quality colouring stays off —
+  every trinket in the sweep is an epic, so it would be a constant, and text colour in
+  those tables already means something (a muted cell is a tie).
+- Only HTML can carry a tooltip: the script enriches `document.links`, and an SVG
+  anchor is in neither that collection nor its `nodeName` check. So chart axis labels
+  stay plain text and every chart that names items is paired with a table that links
+  them — which the palette's relief rule already required for other reasons.
 
 ---
 

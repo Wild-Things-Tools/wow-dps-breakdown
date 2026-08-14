@@ -296,6 +296,38 @@ here:
   in quadrature. Do not replace this with a fixed percentage threshold — the whole point
   is that it tracks the precision the run actually achieved.
 
+## Wowhead tooltips, measured rather than assumed
+
+`components/GameLink.tsx` plus `lib/wowhead.ts` are the whole of it. Facts that cost
+time to establish, all read out of the shipped script or measured in a browser on
+14 August 2026:
+
+- The script is `https://wow.zamimg.com/widgets/power.js`. The widely quoted
+  `https://wow.zamimg.com/js/power.js` **404s**.
+- It enriches `document.links` and bails on anything whose `nodeName` is not `A` or
+  `AREA`. An SVG `<a>` is in neither, so **Recharts axis labels can never carry a
+  tooltip or an icon**. Any chart naming items needs a table beside it that does.
+- **simc has no icon data.** `dbc_item_data_t` (`engine/dbc/item_data.hpp`) has no
+  icon field, and neither does anything in `generated/`. Icon names exist only in
+  Wowhead's tooltip JSON, so drawing icons inside the SVG would mean importing an
+  external, non-reproducible field into a dataset whose value is that it is derived
+  from simc and byte-reproducible. Hence icons in HTML contexts only.
+- `iconizeLinks` costs **one XHR to `nether.wowhead.com` per distinct entity on
+  load**, not on hover — the icon has to be there before anyone hovers. Measured on
+  the Loot view: 31 third-party requests, 14 of them tooltip JSON and 14 icons.
+- The iconised link's left padding is **1.3em**, not the 18px the same file also
+  declares: `universal.css` carries `.icontinyl{padding-left:18px !important}` early
+  and `.icontinyl{padding-left:1.3em !important}` later, and the cascade takes the
+  later one. `.gamelink-icon` reserves 1.3em for that reason; a fixed 18px slot was
+  measurably 1.7px wrong on 12.5px text.
+- React renders after the script's own startup walk, so every link asks for
+  `$WowheadPower.refreshLinks()` on mount (batched to one call per tick). Without it
+  the tooltips work on a reload and never after a view change.
+- Wowhead's card prints its own upgrade-track name (`Upgrade Level: Myth 6/6` at
+  ilvl 334), which contradicts the view's own label. Both are inferences from an item
+  level; the Note under the baseline table says so. Do not "fix" this by renaming
+  either side.
+
 ## Verifying a change
 
 ```bash
