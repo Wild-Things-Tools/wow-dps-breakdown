@@ -200,8 +200,41 @@ the profile's `bonus_id=12854/13440` returned **187,829.9** -- identical to the 
 digit. Trinket bonus ids only add quality, sockets (trinkets have none) and flavour
 text, and an explicit `ilevel` overrides the scaling config they would otherwise set.
 
-**Rings and necks are different**: their bonus ids add gem sockets, and a socket is
-real stats. `GearItem.bonusIds` exists for that day; it is empty for every trinket.
+**Rings and necks are different, but not in the way this file used to say.** The
+assumption was that their bonus ids add gem sockets and that `GearItem.bonusIds`
+was the field for it. Measured on Arcane Mage, MID2, one target, 1000 deterministic
+iterations, overriding `finger1` four ways:
+
+```
+as shipped   (bonus_id + ilevel + gem + enchant)   175,654.4
+ilevel + gem + enchant, no bonus_id                175,654.4   identical
+ilevel + bonus_id, no gem                          172,973.2
+ilevel only                                        172,973.2   identical
+```
+
+So **bonus ids are inert for rings too**, exactly as they are for trinkets. What
+carries the socket is `gem_id`, and the split is worth knowing before building the
+sweep:
+
+```
+enchant only        +1.09%
+gem only            +0.44%
+both                +1.55%     (they add)
+334 -> 344 ilevel   +0.09%     on top of both
+```
+
+The enchant is worth **twelve times the whole ten-item-level step**. A ring
+comparison that carries item level and drops gem and enchant is measuring the wrong
+thing by an order of magnitude, and against an unenchanted baseline every candidate
+would "win" by the enchant. `GearItem` carries `gem_ids` and `enchant_id` for that
+reason; `bonus_ids` stays because it costs nothing, not because anything needs it.
+
+Ring and neck pools have the same structural shape as the trinket pools, from
+`wowdps gear-candidates`: **4 epic rings at base ilevel 219** and 7 rares at 108,
+against 15 and 25 trinkets. Small enough that a full pairwise sweep is affordable
+where it was not for trinkets -- but two finger slots and two neck gems mean the
+baseline construction is a different problem, not the trinket one with a new slot
+name.
 
 ### Compare profilesets to profilesets, never to the base actor
 

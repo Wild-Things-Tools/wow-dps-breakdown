@@ -217,9 +217,23 @@ class GearItem:
     source: str
     base_ilevel: int
     base_quality: int
-    #: Extra bonus ids to pass alongside ``ilevel``. Empty for trinkets, which need
-    #: none; rings and necks will need their socket bonuses here.
+    #: Extra bonus ids to pass alongside ``ilevel``.
+    #:
+    #: Empty everywhere, and measurement says it can stay that way. It was kept for
+    #: the day rings and necks joined the sweep, on the assumption that their socket
+    #: bonuses live here -- that assumption is wrong. Arcane Mage, MID2, one target,
+    #: 1000 deterministic iterations, one ring: passing the profile's own
+    #: ``bonus_id=12854/13440/13668`` alongside an explicit ``ilevel`` returned DPS
+    #: **identical to the last digit** to passing no bonus ids at all, both with a
+    #: gem and without one. What a socket is worth arrives through ``gem_id``.
     bonus_ids: tuple[int, ...] = ()
+    #: The gem in the item's socket, and the enchant on it. Not decoration: on the
+    #: same run the enchant was worth **+1.09%** and the gem **+0.44%** (together
+    #: +1.55%, so they add), against **+0.09%** for the whole ten-item-level step
+    #: from 334 to 344. A ring comparison that carries item level and drops these is
+    #: measuring the wrong thing by an order of magnitude.
+    gem_ids: tuple[int, ...] = ()
+    enchant_id: int | None = None
     #: Which dungeon drops it, when somebody has said so by hand. ``None`` means
     #: unknown. Superseded in practice by ``derived.instance`` once a
     #: ``loot-sources`` pass has run, which is the point -- this field is the
@@ -244,11 +258,20 @@ class GearItem:
         return self.primary_stat in _ELIGIBLE.get(primary, frozenset())
 
     def simc_item(self, socket: str, ilevel: int) -> str:
-        """``trinket1=,id=270164,ilevel=344`` -- the form simc's own test profiles use."""
+        """``trinket1=,id=270164,ilevel=344`` -- the form simc's own test profiles use.
+
+        Gems and the enchant come after the item level, in simc's own profile order.
+        A slot that carries them must carry them on *both* sides of a comparison:
+        against an unenchanted baseline every candidate wins by the enchant.
+        """
         parts = [f"{socket}=,id={self.item_id}"]
         if self.bonus_ids:
             parts.append("bonus_id=" + "/".join(str(b) for b in self.bonus_ids))
         parts.append(f"ilevel={ilevel}")
+        if self.gem_ids:
+            parts.append("gem_id=" + "/".join(str(g) for g in self.gem_ids))
+        if self.enchant_id is not None:
+            parts.append(f"enchant_id={self.enchant_id}")
         return ",".join(parts)
 
     def to_json(self) -> dict:
@@ -425,6 +448,8 @@ def load_pools(tier: str, path: Path | None = None) -> GearPools:
                 base_ilevel=int(item.get("baseIlevel", 0)),
                 base_quality=int(item.get("baseQuality", 0)),
                 bonus_ids=tuple(item.get("bonusIds") or ()),
+                gem_ids=tuple(item.get("gemIds") or ()),
+                enchant_id=item.get("enchantId"),
                 dungeon=item.get("dungeon"),
                 derived=(DerivedSource.from_json(item["derived"]) if item.get("derived") else None),
             )
