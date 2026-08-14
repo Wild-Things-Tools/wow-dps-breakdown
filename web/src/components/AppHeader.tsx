@@ -48,6 +48,11 @@ export function AppHeader({
 }) {
   // One tier is the normal case; the switcher only earns its space once there is
   // something to switch to.
+  //
+  // Labelled "Season" rather than "Tier" because that is what the Fights view
+  // calls it and the dataset labels already read "Midnight Season 2". One word
+  // for one axis: this control and the season control on the Fights view are the
+  // same piece of state, and two names for it would read as two things.
   const showTiers = (tierIndex?.tiers.length ?? 0) > 1
   return (
     <header className="border-b border-hairline bg-surface">
@@ -64,7 +69,7 @@ export function AppHeader({
         <div className="flex items-center gap-3">
           {showTiers && tierIndex && tier ? (
             <Select
-              label="Tier"
+              label="Season"
               value={tier}
               onChange={onTierChange}
               options={[...tierIndex.tiers].reverse().map((entry) => ({

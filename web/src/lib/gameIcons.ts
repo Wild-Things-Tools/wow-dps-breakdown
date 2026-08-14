@@ -44,6 +44,34 @@
 const ICON_BASE = 'https://wow.zamimg.com/images/wow/icons'
 const ATLAS_BASE = 'https://wow.zamimg.com/images/wow/TextureAtlas/live'
 
+/**
+ * Boss portraits, keyed on the Warcraft Logs encounter id.
+ *
+ * There is a real id problem here and this path is the one that does not have
+ * it. `fight_profiles.json` carries **Warcraft Logs** encounter ids, because the
+ * probe reaches its logs through `worldData.encounter(id)`. Blizzard's Encounter
+ * Journal uses its own journal ids, and its artwork is addressed by a third id
+ * again -- a creature *display* id. So every Blizzard-side portrait path needs a
+ * mapping this repository does not have and could not keep current: a new raid
+ * tier would arrive with nine WCL ids and no journal ids beside them, and the
+ * icons would silently stop appearing for exactly the tier somebody is looking at.
+ *
+ * Warcraft Logs serves its own boss icons keyed on the id we already hold, so
+ * there is no mapping at all and a new tier's icons work the day its ids are
+ * written down. Verified by request on 14 August 2026: all nine MID2 encounters
+ * return 200 at ~2 KB, 56x56 JPEG, and nine distinct images (checked by hash --
+ * a CDN handing back one placeholder for every id would look identical from a
+ * status code). An id with no asset returns 403, so a wrong id degrades to the
+ * fallback tile rather than to a picture of the wrong boss.
+ *
+ * This is a second CDN host, which the class/spec icons deliberately avoided. It
+ * earns the exception: the data on this view *is* Warcraft Logs data, so their
+ * asset host is not a new third party in the way an unrelated image host would
+ * be, and it is the only source keyed on an id that is derived rather than
+ * asserted. `BOSS_BASE` is the one line to change to self-host.
+ */
+const BOSS_BASE = 'https://assets.rpglogs.com/img/warcraft/bosses'
+
 /** Wowhead serves four sizes; `medium` (36px) is the smallest that stays sharp at 2x. */
 export type IconSize = 'tiny' | 'small' | 'medium' | 'large'
 
@@ -174,6 +202,18 @@ export function heroTreeIconUrl(heroTalent: string): string | null {
   if (heroTalent === NO_HERO_TREE) return null
   const element = HERO_TREE_ATLAS[heroTalent]
   return element ? `${ATLAS_BASE}/${element}.webp` : null
+}
+
+/**
+ * A boss portrait, or null for an encounter id that cannot address one.
+ *
+ * Null rather than a guessed URL: the caller draws a lettered tile either way,
+ * and a `<img>` pointing at a 403 costs a request to find that out.
+ */
+export function bossIconUrl(encounterId: number): string | null {
+  return Number.isInteger(encounterId) && encounterId > 0
+    ? `${BOSS_BASE}/${encounterId}-icon.jpg`
+    : null
 }
 
 /**

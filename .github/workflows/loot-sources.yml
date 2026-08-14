@@ -1,0 +1,148 @@
+name: Loot sources
+
+# Derives the two facts the loot sweep used to have asserted by hand -- which pool an
+# item belongs to, and which dungeons this Mythic+ season runs -- from Blizzard's Game
+# Data API, and commits the result into `pipeline/src/wowdps/data/gear_pools.json`.
+#
+# This is the only place `wowdps loot-sources` can run: the Blizzard credentials are
+# repository secrets, so a development checkout cannot reach the API at all. The
+# offline tests pin the extraction and the merge against hand-written payloads; the
+# first run of this workflow is what checks the field names against the live service.
+#
+# `workflow_dispatch` only, for the same reason `gear.yml` is:
+#
+# * The answer changes when a raid tier or a Mythic+ season changes, which is a few
+#   times a year, not nightly.
+# * It commits, and the merge deliberately does *not* overwrite anything a human
+#   asserted. A disagreement between the API and the pool file is a finding to read,
+#   not a change to apply, so a run wants somebody looking at its output.
+#
+# Cost is a couple of thousand requests against a published limit of 36,000 an hour,
+# so a full walk is a few percent of the budget. The command reports what it spent.
+on:
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: 'Tier whose pool file is enriched'
+        default: 'MID2'
+      region:
+        description: 'API region; sets the static-<region> / dynamic-<region> namespaces'
+        default: 'us'
+      locale:
+        description: 'Names come back in this locale, and they are the join key against simc'
+        default: 'en_US'
+      expansion:
+        description: 'Limit the walk to one expansion by name (empty walks every encounter, which needs no knowledge of which expansion is current)'
+        default: ''
+      rate:
+        description: 'Requests per second; Blizzard allows 100'
+        default: '20'
+      max_requests:
+        description: 'Stop after this many requests and report what was collected (empty for no ceiling)'
+        default: ''
+      dry_run:
+        description: 'Report without touching the pool file'
+        type: boolean
+        default: false
+
+concurrency:
+  group: loot-sources
+
+permissions:
+  contents: write
+
+jobs:
+  derive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check credentials
+        id: creds
+        env:
+          BLIZZARD_CLIENT_ID: ${{ secrets.BLIZZARD_CLIENT_ID }}
+        run: |
+          if [ -z "$BLIZZARD_CLIENT_ID" ]; then
+            echo "::notice::BLIZZARD_CLIENT_ID is not set — skipping. Add BLIZZARD_CLIENT_ID and BLIZZARD_CLIENT_SECRET as repository secrets to enable this; a client is free at https://develop.battle.net/access/clients"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.creds.outputs.enabled == 'true'
+        with:
+          python-version: '3.12'
+
+      - name: Install pipeline
+        if: steps.creds.outputs.enabled == 'true'
+        run: pip install -e ./pipeline
+
+      - name: Derive
+        if: steps.creds.outputs.enabled == 'true'
+        env:
+          BLIZZARD_CLIENT_ID: ${{ secrets.BLIZZARD_CLIENT_ID }}
+          BLIZZARD_CLIENT_SECRET: ${{ secrets.BLIZZARD_CLIENT_SECRET }}
+          TIER: ${{ inputs.tier }}
+          REGION: ${{ inputs.region }}
+          LOCALE: ${{ inputs.locale }}
+          EXPANSION: ${{ inputs.expansion }}
+          RATE: ${{ inputs.rate }}
+          MAX_REQUESTS: ${{ inputs.max_requests }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=()
+          if [ -n "$EXPANSION" ]; then args+=(--expansion "$EXPANSION"); fi
+          if [ -n "$MAX_REQUESTS" ]; then args+=(--max-requests "$MAX_REQUESTS"); fi
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          # Exit code 2 means a request ceiling ended the walk early; the partial
+          # derivation is still written and reported, so it is a warning.
+          set +e
+          wowdps -v loot-sources \
+            --tier "$TIER" \
+            --region "$REGION" \
+            --locale "$LOCALE" \
+            --rate "$RATE" \
+            --out loot-sources \
+            "${args[@]}"
+          status=$?
+          set -e
+          if [ "$status" = "2" ]; then
+            echo "::warning::the walk stopped early on the request ceiling; partial output uploaded"
+          elif [ "$status" != "0" ]; then
+            exit "$status"
+          fi
+
+      - name: Summary
+        if: steps.creds.outputs.enabled == 'true'
+        run: |
+          {
+            echo '## Loot sources'
+            echo
+            echo '```'
+            cat loot-sources/loot-sources-*.txt || echo 'no output'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit
+        if: steps.creds.outputs.enabled == 'true' && inputs.dry_run != true
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add pipeline/src/wowdps/data/gear_pools.json
+          if git diff --staged --quiet; then
+            echo "no change: the derivation matches what is already committed"
+            exit 0
+          fi
+          git commit -m "data: refresh derived loot sources ${{ inputs.tier }} $(date -u +%Y-%m-%d)"
+          git push
+
+      # The response cache is the reason a second run costs nothing: download it,
+      # point a local run at it with --cache, and the extraction can be iterated on
+      # offline against real payloads.
+      - uses: actions/upload-artifact@v4
+        if: steps.creds.outputs.enabled == 'true'
+        with:
+          name: loot-sources
+          path: loot-sources
+          retention-days: 14

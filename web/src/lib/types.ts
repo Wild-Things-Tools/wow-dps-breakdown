@@ -341,10 +341,56 @@ export interface FightAmplification {
   /** "priority" | "add" | "unknown". Only "priority" has a simc equivalent. */
   target: string
   magnitudeSource: string
+  /**
+   * Where `target` came from, separately from the fact's own provenance.
+   *
+   * An amplification whose magnitude a person stated and whose carrier the logs
+   * measured is the normal end state, so one source over the whole thing would
+   * misdescribe both halves. Null means nobody has filled it in.
+   */
+  targetSource: string | null
+  /** Which enemy, in how many pulls, and why it was called priority or add. */
+  targetEvidence: string | null
   /** Always false: no field in the Warcraft Logs API says what an aura does. */
   magnitudeMeasurable: boolean
   /** False when simc has nothing to express this with. */
   representable: boolean
+}
+
+/** One enemy an aura landed on, pooled across the sampled pulls. */
+export interface AuraCarrier {
+  name: string
+  gameId: number | null
+  applications: number
+  instances: number
+  seenInFights: number
+  /** "priority" | "add" | "unknown" | "mixed". */
+  role: string
+}
+
+/**
+ * What the logs could contribute to a fight profile, and what stops them.
+ *
+ * Published, never applied: writing one into the profile takes an explicit
+ * `wowdps fight-promote --write`, and a measurement never overwrites a fact a
+ * person asserted. This is the proposal, so the decision can be read before
+ * anybody runs the command.
+ */
+export interface FightPromotion {
+  key: string
+  label: string
+  value: unknown
+  summary: string
+  evidence: string
+  sample: number
+  reports: string[]
+  eligible: boolean
+  reason: string
+  /** "hand" when a person's statement is what holds it back. */
+  blockedBy: string | null
+  current: unknown
+  /** True only for a real contradiction, never for a blank being filled. */
+  disagrees: boolean
 }
 
 export interface FightProfileBlock {
@@ -395,6 +441,11 @@ export interface MeasuredAura {
   start: FightSpread | null
   duration: FightSpread | null
   distinctTargets: number
+  /** Which enemies carried it. Absent on a run made before this was extracted. */
+  carriedBy?: AuraCarrier[]
+  /** "priority" | "add" | "unknown" | "mixed" across every carrier. */
+  role?: string
+  roleEvidence?: string
   anyTruncated: boolean
 }
 
@@ -423,6 +474,9 @@ export interface FightAuraWindow {
   /** No measured end: the window is a floor, not a value. */
   truncated: boolean
   instance: number | null
+  /** The enemy this window was on. Absent before the carrier extraction. */
+  actorName?: string | null
+  role?: string | null
 }
 
 /** One sampled pull, published whole. Never an average of pulls. */
@@ -440,6 +494,9 @@ export interface RepresentativeFight {
   /** Every enemy that took a hit, including ones under the significance floor. */
   allEnemySteps: Array<[number, number]>
   allEnemyPeak: number
+  /** Seconds of this pull the event fetch reached, and that over its length. */
+  observed?: number | null
+  coverage?: number | null
   phases: FightPhaseWindow[]
   auras: FightAuraWindow[]
   truncated: boolean
@@ -458,6 +515,7 @@ export interface FightTimeline {
     durationSeconds: number
     kill: boolean
     steps: Array<[number, number]>
+    coverage?: number | null
   }>
 }
 
@@ -471,6 +529,16 @@ export interface MeasuredFight {
   peakTargets?: FightSpread | null
   peakTargetShare?: FightSpread | null
   activeTimeFraction?: FightSpread | null
+  /**
+   * How much of each sampled fight the event fetch actually reached.
+   *
+   * The gate on every count in this block. Enemy damage-taken is paginated and
+   * bounded, and a twenty-player Mythic pull outruns the budget, so a fight can
+   * be read for a fifth of its length with every count silently averaged over
+   * all of it. Absent on a run made before this was measured, which is itself a
+   * reason not to trust a whole-fight claim from that run.
+   */
+  eventCoverage?: FightSpread | null
   adds?: MeasuredAdd[]
   auras?: MeasuredAura[]
   phases?: MeasuredPhase[]
@@ -509,6 +577,9 @@ export interface FightEncounter {
   /** Null when no probe has ever looked. Present with 0 fights when one looked and found nothing. */
   measured: MeasuredFight | null
   comparison: FightComparisonRow[]
+  /** Absent on a dataset published before the promotion machinery existed. */
+  promotions?: FightPromotion[]
+  promoteCommand?: string
 }
 
 export interface FightMeasurementRun {
