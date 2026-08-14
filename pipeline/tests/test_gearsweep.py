@@ -84,12 +84,21 @@ def profile(tmp_path) -> SpecProfile:
 # --------------------------------------------------------------------------------
 
 
+def as_options(variants):
+    """What the shared profileset runner will render these variants as."""
+    from wowdps.simc_runner import Profileset, profileset_options
+
+    return profileset_options(
+        [Profileset(key=v.key, options=tuple(v.equipped.simc_options())) for v in variants]
+    )
+
+
 def test_profileset_options_open_with_equals_and_continue_with_plus_equals():
     variant = Variant(
         key="standard",
         equipped=Equipped(sockets=(("trinket1", MPLUS[0], 334), ("trinket2", MPLUS[1], 334))),
     )
-    assert gearsweep._profileset_options([variant]) == [
+    assert as_options([variant]) == [
         "profileset.standard=trinket1=,id=101,ilevel=334",
         "profileset.standard+=trinket2=,id=102,ilevel=334",
     ]
@@ -99,7 +108,7 @@ def test_a_solo_variant_leaves_every_other_socket_empty():
     # An empty partner is the neutral partner: it cannot share an on-use window with
     # the item being measured, so the value is the item's own.
     [variant] = gearsweep._solo_variants(TRINKET, [MPLUS[0]], 334)
-    assert gearsweep._profileset_options([variant]) == [
+    assert as_options([variant]) == [
         "profileset.solo_item_101=trinket1=,id=101,ilevel=334",
         "profileset.solo_item_101+=trinket2=",
     ]

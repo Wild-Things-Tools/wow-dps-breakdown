@@ -55,11 +55,17 @@ export function buildName(build: Pick<BuildLike, 'spec' | 'class'>): string {
 /**
  * A hero tree's name in running prose.
  *
- * simc writes `Default` where it ships one build for a spec. That is not a tree,
- * so it must not appear in a sentence as if it were the name of one.
+ * simc writes `Default` where a profile names no hero-talent tree. That is not a
+ * tree, so it must not appear in a sentence as if it were the name of one.
+ *
+ * It used to read "the single build", which is true only some of the time and
+ * visibly false the rest: MID2 Frost Death Knight ships `Default` *and* Rider of
+ * the Apocalypse, so the Builds view was writing "tie — the single build and Rider
+ * of the Apocalypse" about a spec with two builds on screen. What `Default` always
+ * means is that this profile names no tree, so that is what it says now.
  */
 export function heroLabel(heroTalent: string): string {
-  return heroTalent === NO_HERO_TREE ? 'the single build' : heroTalent
+  return heroTalent === NO_HERO_TREE ? 'the build with no hero tree' : heroTalent
 }
 
 /** "Frost Death Knight · Rider of the Apocalypse", for titles and alt text. */
@@ -218,9 +224,9 @@ export function HeroTreeBadge({
           'text-[11px] text-ink-muted',
           className,
         )}
-        title="SimulationCraft ships one build for this spec, so there is no hero tree to pick"
+        title="SimulationCraft's profile for this build names no hero-talent tree"
       >
-        Single build
+        No hero tree
       </span>
     )
   }

@@ -116,16 +116,6 @@ class VariantResult:
     priority_dps: float | None = None
 
 
-def _profileset_options(variants: list[Variant]) -> list[str]:
-    """``profileset.<name>=<option>`` lines, one per socket, ``+=`` after the first."""
-    options: list[str] = []
-    for variant in variants:
-        for index, item_option in enumerate(variant.equipped.simc_options()):
-            operator = "=" if index == 0 else "+="
-            options.append(f"profileset.{variant.key}{operator}{item_option}")
-    return options
-
-
 def _run(
     simc: Path,
     profile: SpecProfile,
@@ -134,46 +124,29 @@ def _run(
     variants: list[Variant],
     timeout: int,
 ) -> dict[str, VariantResult]:
-    """One simc invocation covering every variant, returning results by key."""
-    request = simc_runner.SimRequest(profile=profile, scenario=PATCHWERK, targets=targets)
-    extra = [
-        # Without this each variant silently runs at iterations/threads. Everything
-        # in this module assumes the full count.
-        "profileset_work_threads=1",
-        "profileset_metric=dps,prioritydps",
-        *_profileset_options(variants),
-    ]
-    report = simc_runner.run(
-        simc,
-        request,
-        SimSettings(
-            target_error=settings.target_error,
-            max_iterations=settings.max_iterations,
-            threads=settings.threads,
-            extra_options=(*settings.extra_options, *extra),
-        ),
-        timeout=timeout,
-    )
+    """One simc invocation covering every variant, returning results by key.
 
-    results: dict[str, VariantResult] = {}
-    for entry in ((report.get("sim") or {}).get("profilesets") or {}).get("results") or []:
-        mean = float(entry.get("mean") or 0.0)
-        if mean <= 0:
-            continue
-        # simc keys the extra metric by its display name, so match on the field it
-        # is about rather than on an exact string that could be reworded upstream.
-        priority = None
-        for metric in entry.get("additional_metrics") or []:
-            if "priority" in str(metric.get("metric", "")).lower():
-                priority = float(metric.get("mean") or 0.0) or None
-        results[entry["name"]] = VariantResult(
-            key=entry["name"],
-            dps=mean,
-            dps_error=float(entry.get("mean_stddev") or 0.0) / mean * 100,
-            iterations=int(entry.get("iterations") or 0),
-            priority_dps=priority,
+    The profileset mechanics live in ``simc_runner`` -- the measurements that
+    justify them are in its comment, and the talent sweep needs the same machinery
+    with different option strings.
+    """
+    request = simc_runner.SimRequest(profile=profile, scenario=PATCHWERK, targets=targets)
+    sets = [
+        simc_runner.Profileset(key=variant.key, options=tuple(variant.equipped.simc_options()))
+        for variant in variants
+    ]
+    return {
+        key: VariantResult(
+            key=result.key,
+            dps=result.dps,
+            dps_error=result.dps_error,
+            iterations=result.iterations,
+            priority_dps=result.priority_dps,
         )
-    return results
+        for key, result in simc_runner.run_profilesets(
+            simc, request, settings, sets, timeout=timeout
+        ).items()
+    }
 
 
 # --------------------------------------------------------------------------------

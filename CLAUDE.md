@@ -54,6 +54,52 @@ machinery**: build profilesets over build variants once, and rank them twice.
 `profileset_metric` takes a list, so a single sweep yields the best build by `dps` and the
 best build by `prioritydps` together. Do not plan them as two projects.
 
+**Both are built now**, as `talentsweep.py` and `wowdps talents`. The variants are the
+spec's *hero builds*, which are the hashes simc hands us for free; permutations within a
+build would need hashes nobody has generated. The profileset mechanics are shared with
+the gear sweep in `simc_runner.run_profilesets`, so the measurements that justify them
+(bit-identical repeats, the base actor being 0.09% off, `profileset_work_threads=1`) live
+in one place.
+
+Verified on MID2 Arcane Mage, 1000 deterministic iterations, gear held at
+Spellslinger's:
+
+```
+1 target    Sunfury 187,147   Spellslinger 175,654    Sunfury +6.5%
+5 targets   Sunfury 473,927   Spellslinger 456,062    Sunfury +3.9%
+            priority 186,376  priority 178,176        Sunfury +4.6% on the boss
+```
+
+Against the published dataset, where each build wears its own gear, Sunfury leads by
+7.1% at one target. So for Arcane the two questions agree and the gear is worth about
+0.6 points of the 7.1. Two sanity checks that should keep holding: at one target
+`prioritydps` equals `dps` exactly, and the base build's talents-only number reproduced
+its shipped number to 0.3% (across different iteration counts, so different seeds).
+
+### The finding: on four specs of eleven, the two rankings disagree
+
+The whole tier at five targets, 1000 deterministic iterations, gear held at each
+spec's base build. **Eleven specs ship more than one build; on four of them the build
+that does the most total damage is not the build that puts the most on the boss.**
+
+| Spec | Most total damage | Most on the boss |
+|---|---|---|
+| Unholy Death Knight | San'layn **+4.1%** | Rider of the Apocalypse **+3.5%** |
+| Fire Mage | Sunfury **+1.4%** | Frostfire **+5.8%** |
+| Assassination Rogue | Deathstalker **+4.3%** | Fatebound **+9.9%** |
+| Affliction Warlock | Soul Harvester **+12.5%** | Hellcaller **+15.3%** |
+
+Every one of those margins is far outside the project's tie band (`hypot` of the two
+errors, 0.10-0.18% here), so none of them is noise. The other seven specs agree with
+themselves: Frost DK, Arcane, Frost Mage, Shadow, both Shamans and Destruction all put
+the same build top on both metrics.
+
+This is the reason the funnel view exists, stated as a build choice: on those four
+specs, picking a build off a damage meter is the wrong call when the boss is what has
+to die. Caveats that travel with it -- one target count, gear held at whichever build
+sorts first (which moves the absolute numbers and not the comparison), and simc's
+shipped action list, which does not itself try to funnel.
+
 Budget accordingly: N variants multiply a cell that already costs ~9s at 3000 deterministic
 iterations, so a talent sweep will have to be restricted to selected target counts (1, 5,
 10) rather than all ten.
@@ -200,8 +246,41 @@ the profile's `bonus_id=12854/13440` returned **187,829.9** -- identical to the 
 digit. Trinket bonus ids only add quality, sockets (trinkets have none) and flavour
 text, and an explicit `ilevel` overrides the scaling config they would otherwise set.
 
-**Rings and necks are different**: their bonus ids add gem sockets, and a socket is
-real stats. `GearItem.bonusIds` exists for that day; it is empty for every trinket.
+**Rings and necks are different, but not in the way this file used to say.** The
+assumption was that their bonus ids add gem sockets and that `GearItem.bonusIds`
+was the field for it. Measured on Arcane Mage, MID2, one target, 1000 deterministic
+iterations, overriding `finger1` four ways:
+
+```
+as shipped   (bonus_id + ilevel + gem + enchant)   175,654.4
+ilevel + gem + enchant, no bonus_id                175,654.4   identical
+ilevel + bonus_id, no gem                          172,973.2
+ilevel only                                        172,973.2   identical
+```
+
+So **bonus ids are inert for rings too**, exactly as they are for trinkets. What
+carries the socket is `gem_id`, and the split is worth knowing before building the
+sweep:
+
+```
+enchant only        +1.09%
+gem only            +0.44%
+both                +1.55%     (they add)
+334 -> 344 ilevel   +0.09%     on top of both
+```
+
+The enchant is worth **twelve times the whole ten-item-level step**. A ring
+comparison that carries item level and drops gem and enchant is measuring the wrong
+thing by an order of magnitude, and against an unenchanted baseline every candidate
+would "win" by the enchant. `GearItem` carries `gem_ids` and `enchant_id` for that
+reason; `bonus_ids` stays because it costs nothing, not because anything needs it.
+
+Ring and neck pools have the same structural shape as the trinket pools, from
+`wowdps gear-candidates`: **4 epic rings at base ilevel 219** and 7 rares at 108,
+against 15 and 25 trinkets. Small enough that a full pairwise sweep is affordable
+where it was not for trinkets -- but two finger slots and two neck gems mean the
+baseline construction is a different problem, not the trinket one with a new slot
+name.
 
 ### Compare profilesets to profilesets, never to the base actor
 
@@ -538,9 +617,17 @@ when its name is written out beside it, so a screen reader hears the name once.
 
 **A hero tree is icon plus written name, everywhere.** Class and spec icons are
 recognisable enough to carry a tight axis label on their own; hero-tree emblems are
-new and are not. `heroTalent === 'Default'` is simc's marker for a spec it ships one
-build for — it is not a hero tree, gets no invented emblem, and renders as a muted
-"Single build" pill.
+new and are not. `heroTalent === 'Default'` is simc's marker for a profile that
+names no hero-talent tree — it is not a tree, gets no invented emblem, and renders
+as a muted **"No hero tree"** pill.
+
+It used to read "Single build", which is true only some of the time and visibly
+false the rest: MID2 Frost Death Knight ships `Default` *and* Rider of the
+Apocalypse, so the Builds view wrote "tie — the single build and Rider of the
+Apocalypse" about a spec with two builds on screen, and the pill contradicted the
+row beside it. `Default` does not mean "this spec has one build"; it means "this
+profile names no tree", which is true in both cases. Do not put the old wording
+back without a way to tell the two apart.
 
 ### Boss icons come from Warcraft Logs, and that is not laziness
 
@@ -786,11 +873,21 @@ Two things nearly threw it away, both fixed, both worth not reintroducing:
   balance. What travels is the within-run ratios: funnel gain, concentration, burst ratio,
   the shape of the scaling curve. Any future side-by-side tier view must be restricted to
   those, or it will present a gear difference as a balance change.
-- **Old-tier profiles rot.** Measured on simc 1210-01: 15 of MID1's 41 damage profiles
-  fail to load, because their talent hashes point at nodes current spell data does not
-  offer the spec (`Selected node N entry M is not available to player's spec`). All Mage,
-  all Hunter, both Warrior damage builds, Havoc, both Retribution builds, one Elemental
-  build. MID2: none. So a scheduled previous-tier run would publish a season 1 view with
+- **Old-tier profiles rot.** Re-measured on simc 1210-01 (8590ddb) on 14 August 2026:
+  **15 of MID1's 41 damage profiles fail to load, MID2's 26 all load.** The cause is
+  always the stored talent hash no longer fitting the tree, but simc words it two ways
+  and a check that knows only the first reports the tier as mostly healthy:
+
+  ```
+  9 x  Selected node N entry M is not available to player's spec
+  6 x  Node N is not a choice node but has index selection
+  ```
+
+  Affected: all six Mage builds, three Hunter, both Warrior, Havoc, both Retribution,
+  one Elemental. `wowdps check-profiles --tier MID1` is the command; do not rewrite it
+  as a shell loop, because `json2=` with an empty value is a **setup failure** where
+  `html=` is fine, and a loop that passes both reports every profile in the game as
+  broken. So a scheduled previous-tier run would publish a season 1 view with
   three classes missing, and the breakage correlates with the talent changes the
   comparison is supposed to surface. The tier axis stays; the *schedule* for the old tier
   does not. Re-measure before turning it back on — the script is one loop of
@@ -1041,8 +1138,23 @@ that are easy to get wrong a second time:
   something different for each.
 - `write_fights` keeps `generatedAt` when the rest of the document is unchanged, for the
   same reason `_settle_provenance` does in the manifest.
-- **Nothing is wired into `wowdps build`.** The scenario is published, not run. Nine
-  bosses × 26 builds is a cost decision, and the profiles are one boss deep.
+- **The scenario can be run now, and is not run by default.** `wowdps build
+  --scenario bosses` expands to every boss whose profile has a `hand` or `logs` fact;
+  `--scenario boss_<encounterId>` picks one. The default scenario set is untouched, so
+  the nightly run's cost and content do not move until somebody decides they should.
+- **A profile of pure fallbacks gets no scenario at all**, and one that carries facts
+  but no *representable* ones is warned about rather than run silently.
+  `ScenarioPlan.restates_a_static_sweep()` is the test: no add waves, no expressible
+  amplification and the default fight length means N static targets for 300s, which is
+  Patchwerk at N with a boss's name on it. Correct number, unearned label. MID2's only
+  asserted boss is exactly that case today -- Lightblinded Vanguard is three permanent
+  targets and an amplification whose target simc cannot name -- so the feature is
+  wiring waiting on profiles, and it says so when you run it.
+- **That equivalence is measured, not argued.** Frost Death Knight, MID2, 300
+  deterministic iterations: `boss_3180` returned **486,157** DPS and `patchwerk` at
+  three targets returned **486,157** -- the same number to the unit, because they are
+  the same simc invocation with different labels on it. Re-check this the first time
+  a boss profile grows an add wave; the numbers should then diverge.
 
 The view's one deviation from the chart specs is deliberate and commented: the simulated
 line is 3.5px where lines are 2px everywhere else. Where the simulation and the pull agree

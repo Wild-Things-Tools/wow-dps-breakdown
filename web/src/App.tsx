@@ -6,6 +6,7 @@ import {
   loadGear,
   loadLogsVerification,
   loadManifest,
+  loadTalents,
   loadSpecs,
   loadTierIndex,
 } from './lib/data'
@@ -16,6 +17,7 @@ import type {
   LogsVerification,
   Manifest,
   SpecDetail,
+  TalentDataset,
   TierIndex,
 } from './lib/types'
 import { BuildsView } from './views/BuildsView'
@@ -106,6 +108,7 @@ export default function App() {
 
   const [gear, setGear] = useState<GearDataset | null>(null)
   const [logs, setLogs] = useState<LogsVerification | null>(null)
+  const [talents, setTalents] = useState<TalentDataset | null>(null)
   const [details, setDetails] = useState<SpecDetail[]>([])
   const [detailsLoading, setDetailsLoading] = useState(false)
 
@@ -186,6 +189,20 @@ export default function App() {
     setLogs(null)
     loadLogsVerification(tier).then((data) => {
       if (!cancelled) setLogs(data)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [tier, reloadToken])
+
+  // The build comparison with the gear held still. Same optional treatment again:
+  // the file exists once `wowdps talents` has been run for the tier.
+  useEffect(() => {
+    if (!tier) return
+    let cancelled = false
+    setTalents(null)
+    loadTalents(tier).then((data) => {
+      if (!cancelled) setTalents(data)
     })
     return () => {
       cancelled = true
@@ -354,7 +371,7 @@ export default function App() {
       ) : null}
 
       {view === 'builds' && !waitingForDetails ? (
-        <BuildsView details={details} scenario={scenario} />
+        <BuildsView details={details} scenario={scenario} talents={talents} />
       ) : null}
 
       {view === 'gear' ? <GearView gear={gear} /> : null}

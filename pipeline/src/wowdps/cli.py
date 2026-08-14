@@ -108,6 +108,57 @@ def cmd_list(args: argparse.Namespace) -> int:
     return 0
 
 
+#: Scenario name that expands to every boss the tier's profiles know something
+#: about. Spelled as a word rather than a flag so `--scenario` stays the one place
+#: a run's scenario set is decided.
+BOSS_SCENARIO_TOKEN = "bosses"
+
+
+def _resolve_scenarios(
+    names: list[str] | None, tier: str, profiles_file: str | None = None
+) -> list[scenarios.Scenario]:
+    """Scenario objects for the names given, built-in or boss.
+
+    Boss scenarios come from `fight_profiles.json` rather than from the built-in
+    table, because a boss's shape is data that changes with the tier while the four
+    fight styles are code. Loading the profiles is deferred to the point where a
+    boss name is actually asked for, so a plain run never touches the file.
+    """
+    if not names:
+        return list(scenarios.ALL_SCENARIOS)
+
+    wants_boss = any(name == BOSS_SCENARIO_TOKEN or name.startswith("boss_") for name in names)
+    available: dict[str, scenarios.Scenario] = {}
+    if wants_boss:
+        loaded = fightprofile.load_profiles(tier, Path(profiles_file) if profiles_file else None)
+        available = fightprofile.boss_scenarios(loaded)
+        if not available:
+            raise KeyError(
+                f"no boss in {tier} has a fight profile with anything asserted or "
+                f"measured in it, so there is no boss scenario to run. "
+                f"`wowdps fight-probe` measures them; `wowdps fight-promote` writes "
+                f"a measurement into a profile."
+            )
+
+    resolved: list[scenarios.Scenario] = []
+    for name in names:
+        if name == BOSS_SCENARIO_TOKEN:
+            resolved.extend(available.values())
+        elif name in available:
+            resolved.append(available[name])
+        elif name.startswith("boss_"):
+            known = ", ".join(sorted(available)) or "none"
+            raise KeyError(f"unknown boss scenario {name!r}; this tier offers: {known}")
+        else:
+            resolved.append(scenarios.get(name))
+
+    # Repeating a name is a typo, not a request to sim it twice.
+    unique: dict[str, scenarios.Scenario] = {}
+    for scenario in resolved:
+        unique.setdefault(scenario.id, scenario)
+    return list(unique.values())
+
+
 def cmd_build(args: argparse.Namespace) -> int:
     profiles_dir = Path(args.profiles)
     tier = _resolve_tier(profiles_dir, args.tier)
@@ -116,10 +167,18 @@ def cmd_build(args: argparse.Namespace) -> int:
     out_root = Path(args.out)
     out_dir = out_root / tier
 
-    selected_scenarios = (
-        [scenarios.get(s) for s in args.scenario]
-        if args.scenario
-        else list(scenarios.ALL_SCENARIOS)
+    try:
+        selected_scenarios = _resolve_scenarios(args.scenario, tier, args.profiles_file)
+    except KeyError as exc:
+        logging.error("%s", exc.args[0])
+        return 1
+
+    boss_profiles = (
+        fightprofile.load_profiles(
+            tier, Path(args.profiles_file) if args.profiles_file else None
+        ).profiles
+        if any(s.id.startswith("boss_") for s in selected_scenarios)
+        else {}
     )
 
     all_profiles = profiles.discover(profiles_dir, tier, dps_only=not args.include_tanks)
@@ -135,6 +194,29 @@ def cmd_build(args: argparse.Namespace) -> int:
         max_iterations=args.max_iterations,
         threads=args.threads,
     )
+
+    # A boss whose profile carries no add waves, no representable amplification and
+    # the default fight length sims as N static targets for 300s -- which is the
+    # target sweep's own cell with a boss's name on it. Correct number, unearned
+    # label, so it is said out loud rather than discovered in the output.
+    for scenario in selected_scenarios:
+        if not scenario.id.startswith("boss_"):
+            continue
+        profile = boss_profiles.get(int(scenario.id.removeprefix("boss_")))
+        if profile is None:
+            continue
+        plan = profile.to_plan()
+        if plan.restates_a_static_sweep():
+            logging.warning(
+                "%s adds nothing to the target sweep: %d static target(s) for %ds, "
+                "which is Patchwerk at %d. Its profile has no add waves and no "
+                "amplification simc can express%s",
+                scenario.id,
+                plan.targets,
+                plan.max_time,
+                plan.targets,
+                f" ({plan.unrepresented[0]})" if plan.unrepresented else "",
+            )
 
     total_sims = sum(len(s.sims()) for s in selected_scenarios) * len(selected)
     logging.info(
@@ -404,6 +486,123 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
     return fightprobe.cmd_fight_probe(args)
 
 
+def cmd_talents(args: argparse.Namespace) -> int:
+    """Compare a spec's hero builds with the gear held still, ranked two ways."""
+    from . import talentsweep
+
+    profiles_dir = Path(args.profiles)
+    tier = _resolve_tier(profiles_dir, args.tier)
+    simc = simc_runner.find_simc(args.simc)
+
+    found = profiles.discover(profiles_dir, tier, dps_only=not args.include_tanks)
+    # Filtered by *spec name* rather than by build id: this command compares the
+    # builds of a spec, so naming one build would leave it nothing to compare
+    # against. `--spec Arcane`, not `--spec mage_arcane_sunfury`.
+    if args.wow_class:
+        wanted = {c.lower().replace("_", " ").replace("-", " ") for c in args.wow_class}
+        found = [p for p in found if p.wow_class.lower() in wanted]
+    if args.spec:
+        wanted_specs = {name.lower() for name in args.spec}
+        found = [p for p in found if p.spec.lower() in wanted_specs]
+    if not found:
+        logging.error("no profiles matched the selection")
+        return 1
+
+    by_spec: dict[str, list] = {}
+    for profile in found:
+        by_spec.setdefault(profile.spec_id, []).append(profile)
+
+    settings = SimSettings(
+        target_error=args.target_error,
+        max_iterations=args.max_iterations,
+        threads=args.threads,
+    )
+
+    results = []
+    for _spec_id, group in sorted(by_spec.items()):
+        for targets in args.targets:
+            result = talentsweep.sweep_spec(
+                simc, group, settings, targets=targets, timeout=args.timeout
+            )
+            if result is None:
+                continue
+            results.append(result)
+            by_dps = result.ranked_by("dps")
+            by_priority = result.ranked_by("prioritydps")
+            print(f"\n{result.spec_label} at {targets} target(s), on {result.base_profile_id}")
+            for build in by_dps:
+                priority = (
+                    f"  priority {build.priority_dps:>10,.0f}"
+                    if build.priority_dps is not None
+                    else ""
+                )
+                print(
+                    f"  {build.hero_talent:<28} {build.dps:>11,.0f}"
+                    f"  +/-{build.dps_error:.2f}%{priority}"
+                )
+            if by_priority and by_dps and by_priority[0].key != by_dps[0].key:
+                print(
+                    f"  -> {by_dps[0].hero_talent} does the most damage, but "
+                    f"{by_priority[0].hero_talent} puts the most on the priority target"
+                )
+
+    if args.out and results:
+        # Written into the tier layout the site already reads, beside gear.json and
+        # fights.json. Optional in exactly the same way: a tier without one is a
+        # tier nobody has run this for, and the view says so.
+        out_dir = Path(args.out) / tier
+        out_dir.mkdir(parents=True, exist_ok=True)
+        talentsweep.write_talents(out_dir, tier, results, settings)
+        logging.info(
+            "wrote %s (%d spec/target combination(s))", out_dir / "talents.json", len(results)
+        )
+    return 0 if results else 1
+
+
+def cmd_check_profiles(args: argparse.Namespace) -> int:
+    """Which of a tier's profiles still build an actor against current spell data.
+
+    Exists because "old-tier profiles rot" is a fact this project acts on -- the
+    previous tier is deliberately kept off the schedule because of it -- and a fact
+    that decides a schedule should be re-measurable in one command rather than
+    rediscovered as a loop somebody writes from the README.
+    """
+    profiles_dir = Path(args.profiles)
+    tier = _resolve_tier(profiles_dir, args.tier)
+    simc = simc_runner.find_simc(args.simc)
+
+    found = profiles.discover(profiles_dir, tier, dps_only=not args.include_tanks)
+    if not found:
+        logging.error("no profiles found for %s under %s", tier, profiles_dir)
+        return 1
+
+    healthy: list[profiles.ProfileHealth] = []
+    broken: list[profiles.ProfileHealth] = []
+    for index, profile in enumerate(found, start=1):
+        logging.debug("[%d/%d] %s", index, len(found), profile.display_name)
+        health = profiles.check_loads(simc, profile, timeout=args.timeout)
+        (healthy if health.loads else broken).append(health)
+
+    rotten = [entry for entry in broken if entry.rotten_talents]
+    for entry in broken:
+        print(f"{'TALENTS' if entry.rotten_talents else 'BROKEN '}  {entry.profile.id}")
+        print(f"          {entry.reason}")
+    print(
+        f"\n{tier}: {len(healthy)} of {len(found)} profiles load"
+        + (f"; {len(rotten)} fail on a talent hash the spec no longer offers" if rotten else "")
+    )
+    if broken:
+        print(
+            "A profile that does not load produces no actor, so a run over this tier "
+            "publishes a dataset with those builds missing -- and the breakage "
+            "correlates with the talent changes a season comparison is supposed to "
+            "surface. Weigh that before scheduling this tier."
+        )
+    # Reporting is the point, so a broken profile is not a failed command unless
+    # somebody is using this as a gate.
+    return 1 if broken and args.strict else 0
+
+
 def cmd_loot_sources(args: argparse.Namespace) -> int:
     from . import lootsources
 
@@ -451,8 +650,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_build.add_argument(
         "--scenario",
         action="append",
-        choices=sorted(scenarios.BY_ID),
-        help="limit to one scenario (repeatable)",
+        metavar="NAME",
+        help=(
+            "limit to one scenario (repeatable). One of "
+            + ", ".join(sorted(scenarios.BY_ID))
+            + "; or 'boss_<encounterId>' to run a boss's own fight profile, or "
+            "'bosses' for every boss the tier's profiles know something about"
+        ),
+    )
+    p_build.add_argument(
+        "--profiles-file",
+        help="alternative fight profile file, for the boss scenarios",
     )
     p_build.add_argument(
         "--wow-class",
@@ -586,6 +794,55 @@ def build_parser() -> argparse.ArgumentParser:
 
     fightprobe.add_arguments(p_fight_probe)
     p_fight_probe.set_defaults(func=cmd_fight_probe)
+
+    p_talents = sub.add_parser(
+        "talents",
+        help="compare a spec's hero builds with the gear held still, ranked by "
+        "damage and by damage to the priority target",
+    )
+    add_common(p_talents)
+    p_talents.add_argument("--simc", help="path to the simc binary (default: $PATH)")
+    p_talents.add_argument(
+        "--wow-class", action="append", help="limit to one class, e.g. 'Mage' (repeatable)"
+    )
+    p_talents.add_argument(
+        "--spec",
+        action="append",
+        help="limit to one specialisation by name, e.g. 'Arcane' (repeatable). Not a "
+        "build id: this command compares the builds of a spec against each other",
+    )
+    p_talents.add_argument(
+        "--targets",
+        type=int,
+        nargs="+",
+        default=[1],
+        help="target counts to compare the builds at (default: 1)",
+    )
+    p_talents.add_argument("--target-error", type=float, default=0.0)
+    p_talents.add_argument("--max-iterations", type=int, default=3000)
+    p_talents.add_argument("--threads", type=int, default=0)
+    p_talents.add_argument("--timeout", type=int, default=1800)
+    p_talents.add_argument(
+        "--out",
+        nargs="?",
+        const=str(DEFAULT_OUT),
+        help="also publish the results to <out>/<tier>/talents.json "
+        f"(default when given with no value: {DEFAULT_OUT})",
+    )
+    p_talents.set_defaults(func=cmd_talents)
+
+    p_check = sub.add_parser(
+        "check-profiles",
+        help="which of a tier's simc profiles still build an actor against current "
+        "spell data (old tiers rot as talents change)",
+    )
+    add_common(p_check)
+    p_check.add_argument("--simc", help="path to the simc binary (default: $PATH)")
+    p_check.add_argument("--timeout", type=int, default=120, help="seconds per profile")
+    p_check.add_argument(
+        "--strict", action="store_true", help="exit non-zero when any profile fails"
+    )
+    p_check.set_defaults(func=cmd_check_profiles)
 
     p_loot_sources = sub.add_parser(
         "loot-sources",

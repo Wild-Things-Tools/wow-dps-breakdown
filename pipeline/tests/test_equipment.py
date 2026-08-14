@@ -351,3 +351,61 @@ def test_a_derived_rotation_answer_beats_the_hand_written_one():
     ids = [item.item_id for item in pool.baseline_candidates("intellect")]
     assert dropped.item_id not in ids
     assert kept.item_id in ids
+
+
+def test_a_socketed_item_carries_its_gem_and_enchant_into_the_sim():
+    """Measured on Arcane Mage, MID2, one target, 1000 deterministic iterations:
+    the enchant on a ring is worth +1.09% and the gem +0.44%, against +0.09% for
+    the whole 334->344 item level step. Dropping them measures the wrong thing."""
+    from wowdps.equipment import GearItem
+
+    ring = GearItem(
+        item_id=159459,
+        name="Ritual Binder's Ring",
+        slug="ritual_binders_ring",
+        primary_stat=None,
+        secondary_stat="crit",
+        source="raid",
+        base_ilevel=219,
+        base_quality=4,
+        gem_ids=(240906,),
+        enchant_id=7967,
+    )
+    assert ring.simc_item("finger1", 334) == (
+        "finger1=,id=159459,ilevel=334,gem_id=240906,enchant_id=7967"
+    )
+
+
+def test_an_item_with_no_socket_is_unchanged():
+    """Trinkets need none of this, and the option must not grow empty fields."""
+    from wowdps.equipment import GearItem
+
+    trinket = GearItem(
+        item_id=270164,
+        name="Gebbo's Bottomless Bag",
+        slug="gebbos_bottomless_bag",
+        primary_stat=None,
+        secondary_stat=None,
+        source="raid",
+        base_ilevel=219,
+        base_quality=4,
+    )
+    assert trinket.simc_item("trinket2", 344) == "trinket2=,id=270164,ilevel=344"
+
+
+def test_two_gems_are_written_the_way_simc_writes_them():
+    """A neck carries two: MID2's shipped profiles use gem_id=240892/240906."""
+    from wowdps.equipment import GearItem
+
+    neck = GearItem(
+        item_id=268265,
+        name="Aqirbane Reliquary",
+        slug="aqirbane_reliquary",
+        primary_stat=None,
+        secondary_stat=None,
+        source="raid",
+        base_ilevel=219,
+        base_quality=4,
+        gem_ids=(240892, 240906),
+    )
+    assert neck.simc_item("neck", 344).endswith("ilevel=344,gem_id=240892/240906")

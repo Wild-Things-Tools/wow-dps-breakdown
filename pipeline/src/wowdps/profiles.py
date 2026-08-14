@@ -257,3 +257,66 @@ def previous_tier(profiles_dir: Path) -> str:
             f"only {len(tiers)} tier(s) under {profiles_dir}; there is no previous one"
         )
     return tiers[-2]
+
+
+#: What "an old tier's profiles rot" looks like on the wire.
+#:
+#: It is an *initialization* error rather than a parse error -- the profile reads
+#: fine and then produces no actor -- and it comes in at least two shapes, both of
+#: which are the same thing: the stored talent hash no longer fits the tree.
+#: Measured on MID1 against simc 1210-01, 15 profiles fail and they split 9/6:
+#:
+#:     Selected node N entry M is not available to player's spec
+#:     Node N is not a choice node but has index selection
+#:
+#: So the test is not either message but the pair "initialization error" and a
+#: quoted hash, which covers both and whatever simc words it as next season.
+_INIT_ERROR = "Initialization error"
+_HASH_QUOTED = "Hash '"
+
+
+@dataclass(frozen=True)
+class ProfileHealth:
+    """Whether one profile still produces an actor against current spell data."""
+
+    profile: SpecProfile
+    loads: bool
+    #: simc's own first error line, trimmed. None when the profile loaded.
+    reason: str | None = None
+    #: True when the reason is specifically a talent hash the spec no longer offers,
+    #: which is the failure an ageing tier produces and the one worth counting.
+    rotten_talents: bool = False
+
+
+def check_loads(simc: Path, profile: SpecProfile, timeout: int = 120) -> ProfileHealth:
+    """Run one profile for a single iteration and report whether it produced an actor.
+
+    One iteration is enough: what is being tested is whether simc can build the
+    player at all, which happens before any combat is simulated.
+
+    Two simc traps are baked in here rather than left to each caller:
+
+    * ``html=`` with an empty value suppresses the HTML report, but ``json2=`` with
+      an empty value is a **setup failure** -- "Missing JSON report output file
+      name". A check that passes both reports every profile in the game as broken,
+      which is exactly what the first version of this did.
+    * The interesting failure is an *initialization* error, not a non-zero exit on
+      its own, so the output is read rather than just the return code.
+    """
+    import subprocess
+
+    completed = subprocess.run(
+        [str(simc), str(profile.path), "iterations=1", "threads=1", "html="],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    output = f"{completed.stdout}\n{completed.stderr}"
+    for marker in ("Error:", "Setup failure", "Unable to generate"):
+        if marker not in output:
+            continue
+        line = next((row for row in output.splitlines() if marker in row), "").strip()
+        rotten = _INIT_ERROR in line and _HASH_QUOTED in line
+        return ProfileHealth(profile, loads=False, reason=line[:200], rotten_talents=rotten)
+    return ProfileHealth(profile, loads=True)
