@@ -774,6 +774,97 @@ def _patterns(payload: dict, pooled: list[dict]) -> list[dict]:
     return patterns
 
 
+#: Buckets the aggregate band is sampled at over normalised fight time. Finer than
+#: the pattern buckets because this is drawn as a curve, not compared as a shape.
+_BAND_BUCKETS = 60
+
+#: A fight read to less than this fraction is left out of the band: a partial fetch
+#: reports the tail as an empty room, and one such curve drags the whole distribution
+#: down at the times it never read. The band says how many it kept.
+_MIN_BAND_COVERAGE = 0.95
+
+
+def _percentile_at(values: list[float], fraction: float) -> float:
+    """Linear-interpolated percentile of an unsorted list of one bucket's counts."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    position = fraction * (len(ordered) - 1)
+    low = int(position)
+    high = min(low + 1, len(ordered) - 1)
+    return ordered[low] + (ordered[high] - ordered[low]) * (position - low)
+
+
+def _target_band(payload: dict) -> dict | None:
+    """How many targets are up at each point of the fight, across every kill.
+
+    The answer to "how many are normally up, and when", built the way that question
+    should be answered: not from one representative pull but from the distribution
+    over all of them. Each kill's target-count curve is resampled onto the same grid
+    of *normalised* fight time -- so kills of slightly different length line up -- and
+    at each point the band reports the median and the inter-quartile range across
+    kills, plus the full min/max. A wide band at some moment means the kills genuinely
+    disagreed there; a tight one means that many targets were reliably up.
+
+    Only fully-read fights are included, because a bounded event fetch reports the
+    unread tail as zero and would drag the band down at exactly the times it never
+    saw. The count kept is published so a thin band is visible as thin.
+
+    Normalised time is turned back into seconds for the reader by the median kill
+    length, which is meaningful precisely because the user asked for kills whose
+    timings are alike -- when they are, one length fits them all.
+    """
+    fights = [
+        fight
+        for fight in payload.get("fights") or []
+        if isinstance(fight, dict)
+        and float(fight.get("eventCoverage") or 0.0) >= _MIN_BAND_COVERAGE
+    ]
+    if len(fights) < 2:
+        return None
+
+    curves = [
+        _resample(
+            (fight.get("significantTargetCount") or {}).get("steps") or [],
+            float(fight.get("durationSeconds") or 0.0),
+            _BAND_BUCKETS,
+        )
+        for fight in fights
+    ]
+    lengths = sorted(float(fight.get("durationSeconds") or 0.0) for fight in fights)
+    median_length = lengths[len(lengths) // 2]
+
+    band = []
+    for bucket in range(_BAND_BUCKETS):
+        column = [curve[bucket] for curve in curves]
+        band.append(
+            {
+                "t": round((bucket + 0.5) / _BAND_BUCKETS, 4),
+                "second": round(median_length * (bucket + 0.5) / _BAND_BUCKETS, 1),
+                "median": round(_percentile_at(column, 0.5), 2),
+                "low": round(_percentile_at(column, 0.25), 2),
+                "high": round(_percentile_at(column, 0.75), 2),
+                "min": round(min(column), 2),
+                "max": round(max(column), 2),
+            }
+        )
+
+    return {
+        "fights": len(fights),
+        "buckets": _BAND_BUCKETS,
+        "medianLengthSeconds": round(median_length, 1),
+        "band": band,
+        "why": (
+            "The median and inter-quartile range of how many targets were up at each "
+            "point of the fight, across every fully-read kill sampled -- not one "
+            "representative pull. Time is normalised across kills and shown in seconds "
+            "at the median kill length. A wide band is a moment the kills disagreed on."
+        ),
+    }
+
+
 def _timeline_block(payload: dict) -> dict | None:
     pooled = [aura for aura in payload.get("auras") or [] if isinstance(aura, dict)]
     patterns = _patterns(payload, pooled)
@@ -841,11 +932,17 @@ def _caveats(payload: dict, rankings_page: int | None) -> list[str]:
             "At least one event fetch stopped at its page limit, so the tail of that "
             "fight is incomplete rather than absent."
         )
-    if rankings_page == 1:
+    order = payload.get("order")
+    if order == "first":
+        notes.append(
+            "Sampled from the earliest kills of the boss by kill date -- long kills "
+            "at the intended tuning, whose timings are alike."
+        )
+    elif rankings_page == 1:
         notes.append(
             "Sampled from page 1 of the rankings: the world's best pulls, which are "
-            "shorter than a typical kill and kill adds faster. Probe with --page for a "
-            "more ordinary sample."
+            "shorter than a typical kill and kill adds faster. Probe with --order "
+            "first for the earliest kills instead."
         )
     for warning in sorted({w for fight in fights for w in (fight.get("warnings") or [])}):
         notes.append(str(warning))
@@ -905,6 +1002,9 @@ def _encounter_document(
             "phases": payload.get("phases") or [],
             "truncated": any(fight.get("truncated") for fight in measured.fights),
             "caveats": _caveats(payload, rankings_page),
+            # The distribution of concurrent targets over the fight, across every
+            # fully-read kill: the direct answer to "how many are normally up, when".
+            "targetBand": _target_band(payload),
             "timeline": _timeline_block(payload),
         }
     elif payload is not None:

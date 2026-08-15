@@ -60,7 +60,7 @@ from .warcraftlogs import (
     Credentials,
     WarcraftLogsClient,
     WarcraftLogsError,
-    top_report_fights,
+    select_report_fights,
 )
 
 log = logging.getLogger(__name__)
@@ -96,6 +96,12 @@ class ProbeSettings:
     metric: str
     reports: int
     rankings_page: int
+    #: How the sampled kills are chosen: "first" (earliest kills, alike and at the
+    #: intended tuning) or "top" (the rankings' own damage order, i.e. speed kills).
+    order: str
+    #: How many ranking pages to gather before choosing, so the earliest kills are in
+    #: the pool WCL sorts by damage rather than by date.
+    rankings_pages: int
     streams: tuple[str, ...]
     events_limit: int
     max_pages: int
@@ -126,13 +132,24 @@ def probe_encounter(
     are two fights' worth of evidence, and throwing them away to raise an exception
     would mean paying for them twice.
     """
-    encounter = client.encounter_rankings(
-        encounter_id,
-        difficulty=settings.difficulty,
-        metric=settings.metric,
-        page=settings.rankings_page,
-    )
-    pairs = top_report_fights(encounter, settings.reports)
+    # Gather several ranking pages so the earliest kills are actually in the pool:
+    # WCL sorts rankings by damage, so the first kills sit deep in the list, not on
+    # page one. The pages are cheap -- the per-fight event streams are the cost -- so
+    # one extra page than strictly needed is a rounding error against a probe run.
+    pages = settings.rankings_pages if settings.order == "first" else 1
+    gathered = []
+    for page in range(settings.rankings_page, settings.rankings_page + max(pages, 1)):
+        _check_budget(client, settings.point_ceiling)
+        gathered.append(
+            client.encounter_rankings(
+                encounter_id,
+                difficulty=settings.difficulty,
+                metric=settings.metric,
+                page=page,
+            )
+        )
+    encounter = gathered[0]
+    pairs = select_report_fights(gathered, settings.reports, order=settings.order)
     observation = fightextract.EncounterObservation(
         encounter_id=encounter_id,
         encounter_name=str(encounter.get("name") or encounter_id),
@@ -442,6 +459,8 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         metric=args.metric,
         reports=args.reports,
         rankings_page=args.page,
+        order=args.order,
+        rankings_pages=args.rankings_pages,
         streams=streams,
         events_limit=args.events_limit,
         max_pages=args.max_pages,
@@ -496,12 +515,16 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         "metric": settings.metric,
         "reportsPerEncounter": settings.reports,
         "rankingsPage": settings.rankings_page,
+        "order": settings.order,
         "eventStreams": list(settings.streams),
         "significantDamageShare": settings.significant_share,
         "sampling": (
-            "Fights come from the top of the encounter's rankings, so they are "
-            "speed-kill shaped: shorter than a typical pull and with adds dying "
-            "faster. Use --page to sample further down."
+            "The earliest kills of the boss, taken by kill date across the gathered "
+            "ranking pages -- long kills at the intended tuning, whose timings are "
+            "alike, which is what lets an aggregate across them mean something."
+            if settings.order == "first"
+            else "The top of the encounter's rankings: speed-kill shaped, shorter "
+            "than a typical pull and with adds dying faster."
         ),
         "cost": ledger,
         "pointsBefore": before,
@@ -601,16 +624,31 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--reports",
         type=int,
-        default=3,
-        help="how many distinct reports to read per encounter (default 3); each one "
-        "costs several event queries, so this is the main cost dial",
+        default=30,
+        help="how many distinct kills to read per encounter (default 30); each one "
+        "costs several event queries, so this is the main cost dial. A larger sample "
+        "is what makes the aggregate 'how many targets up when' band mean something",
+    )
+    parser.add_argument(
+        "--order",
+        choices=("first", "top"),
+        default="first",
+        help="which kills to sample: 'first' (the earliest kills, alike and at the "
+        "intended tuning -- the default) or 'top' (the rankings' damage order, i.e. "
+        "speed kills)",
+    )
+    parser.add_argument(
+        "--rankings-pages",
+        type=int,
+        default=8,
+        help="how many ranking pages to gather before choosing the first kills; WCL "
+        "sorts by damage not date, so the earliest kills sit deep in the list",
     )
     parser.add_argument(
         "--page",
         type=int,
         default=1,
-        help="rankings page to sample from; page 1 is the world's best pulls, which "
-        "are not shaped like a median guild's",
+        help="first rankings page to gather from (default 1)",
     )
     parser.add_argument(
         "--stream",

@@ -506,34 +506,67 @@ class WarcraftLogsClient:
         return encounter
 
 
-def top_report_fights(encounter: dict, limit: int) -> list[tuple[str, int]]:
-    """``(report code, fight id)`` for the highest parses, one fight per report.
-
-    One per report on purpose: two parses from the same pull describe the same
-    fight, so a sample of five entries could easily be a sample of one kill. The
-    order of ``rankings`` is the site's own ranking order, so taking the first
-    distinct reports takes the top guilds' pulls.
-    """
+def _ranking_entries(encounter: dict) -> list[dict]:
+    """The ranking rows out of one encounter payload, decoding the JSON scalar."""
     rankings = encounter.get("characterRankings")
     if isinstance(rankings, str):
         rankings = json.loads(rankings)
     if not isinstance(rankings, dict):
         return []
+    return [entry for entry in (rankings.get("rankings") or []) if isinstance(entry, dict)]
 
+
+def _entry_start(entry: dict) -> float:
+    """A ranking row's kill start time in epoch ms, wherever WCL put it."""
+    for value in (entry.get("startTime"), (entry.get("report") or {}).get("startTime")):
+        if isinstance(value, (int, float)):
+            return float(value)
+    return 0.0
+
+
+def select_report_fights(
+    encounters: list[dict], limit: int, order: str = "first"
+) -> list[tuple[str, int]]:
+    """``(report code, fight id)`` for the kills to probe, one fight per report.
+
+    One per report on purpose: two parses from the same pull describe the same
+    fight, so a sample of five entries could be a sample of one kill.
+
+    ``order`` decides *which* kills:
+
+    * ``top`` keeps the rankings' own order, which is by damage -- the world's best
+      pulls, shorter than a typical kill and with adds dying faster. What the probe
+      used to take, and the wrong sample for "what does this fight normally look
+      like".
+    * ``first`` sorts every gathered row by kill start time and takes the earliest.
+      The guilds that killed the boss first did it near the enrage, at the intended
+      tuning and before gear caught up, so their kills are long and -- crucially --
+      alike, which is what makes an aggregate across them mean something. WCL sorts
+      rankings by damage and not by date, so this reads the ``startTime`` every row
+      already carries and sorts on it; the gather just has to be wide enough to
+      contain the early kills, which is why the probe hands several pages in.
+    """
     seen: set[str] = set()
-    found: list[tuple[str, int]] = []
-    for entry in rankings.get("rankings") or []:
-        if not isinstance(entry, dict):
-            continue
-        report = entry.get("report") or {}
-        code, fight_id = report.get("code"), report.get("fightID")
-        if not isinstance(code, str) or not isinstance(fight_id, int) or code in seen:
-            continue
-        seen.add(code)
-        found.append((code, fight_id))
-        if len(found) >= limit:
-            break
-    return found
+    rows: list[tuple[float, str, int]] = []
+    for encounter in encounters:
+        for entry in _ranking_entries(encounter):
+            report = entry.get("report") or {}
+            code, fight_id = report.get("code"), report.get("fightID")
+            if not isinstance(code, str) or not isinstance(fight_id, int) or code in seen:
+                continue
+            seen.add(code)
+            rows.append((_entry_start(entry), code, fight_id))
+
+    if order == "first":
+        # A zero (no timestamp) sorts to the front and would masquerade as the
+        # earliest kill, so those go last rather than first.
+        rows.sort(key=lambda row: (row[0] == 0.0, row[0]))
+    return [(code, fight_id) for _, code, fight_id in rows[:limit]]
+
+
+def top_report_fights(encounter: dict, limit: int) -> list[tuple[str, int]]:
+    """Back-compat single-page helper: the highest parses, one fight per report."""
+    return select_report_fights([encounter], limit, order="top")
 
 
 #: Below this many ranked parses a row is not published at all: the median of a

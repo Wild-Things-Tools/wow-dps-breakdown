@@ -98,6 +98,8 @@ def settings(**overrides) -> fightprobe.ProbeSettings:
         metric="dps",
         reports=1,
         rankings_page=1,
+        order="top",
+        rankings_pages=1,
         streams=("damage", "deaths", "buffs", "debuffs"),
         events_limit=10000,
         max_pages=3,
@@ -352,8 +354,69 @@ def test_the_command_writes_a_dump_a_json_file_and_a_measured_cost(tmp_path, mon
     # The cost is the difference between the two bracketing readings, not a guess.
     assert payload["cost"]["pointsSpentThisRun"] == 40.0
     assert payload["encounters"][0]["peakTargets"]["median"] == 3
-    # And the sampling bias is stated in the artifact rather than in a commit message.
-    assert "speed-kill" in payload["sampling"]
+    # And the sampling is stated in the artifact rather than in a commit message.
+    # The default order is "first", so it names the earliest kills.
+    assert payload["order"] == "first"
+    assert "earliest kills" in payload["sampling"]
 
     text = (tmp_path / "fight-probe-MID2.txt").read_text()
     assert "Lightblinded Vanguard" in text and "profile vs measurement" in text
+
+
+def test_first_kills_are_taken_by_date_across_gathered_pages():
+    """WCL sorts rankings by damage, so the earliest kills sit deep in the list. The
+    selector reads the startTime every row carries and takes the earliest, across
+    every gathered page, one fight per report."""
+    from wowdps.warcraftlogs import select_report_fights
+
+    def page(*rows):
+        return {"characterRankings": {"rankings": list(rows)}}
+
+    def row(code, fight, start):
+        return {"report": {"code": code, "fightID": fight}, "startTime": start}
+
+    # Page 1 is the highest damage (recent, geared, fast). Page 2 has the early kills.
+    p1 = page(row("SPEED1", 1, 5000), row("SPEED2", 2, 5200))
+    p2 = page(row("FIRST1", 1, 1000), row("FIRST2", 3, 1100), row("SPEED1", 9, 5000))
+
+    first = select_report_fights([p1, p2], 2, order="first")
+    assert first == [("FIRST1", 1), ("FIRST2", 3)]
+
+    top = select_report_fights([p1, p2], 2, order="top")
+    assert top == [("SPEED1", 1), ("SPEED2", 2)]
+
+
+def test_one_fight_per_report_even_across_pages():
+    from wowdps.warcraftlogs import select_report_fights
+
+    pages = [
+        {
+            "characterRankings": {
+                "rankings": [{"report": {"code": "A", "fightID": 1}, "startTime": 10}]
+            }
+        },
+        {
+            "characterRankings": {
+                "rankings": [{"report": {"code": "A", "fightID": 2}, "startTime": 5}]
+            }
+        },
+    ]
+    # Same report on two pages is one kill; the first-seen fight id is kept.
+    assert select_report_fights(pages, 5, order="first") == [("A", 1)]
+
+
+def test_a_row_without_a_timestamp_sorts_last_not_first():
+    """A missing startTime is zero, which would masquerade as the earliest kill."""
+    from wowdps.warcraftlogs import select_report_fights
+
+    pages = [
+        {
+            "characterRankings": {
+                "rankings": [
+                    {"report": {"code": "NOTS", "fightID": 1}},
+                    {"report": {"code": "REAL", "fightID": 2}, "startTime": 999},
+                ]
+            }
+        }
+    ]
+    assert select_report_fights(pages, 2, order="first") == [("REAL", 2), ("NOTS", 1)]

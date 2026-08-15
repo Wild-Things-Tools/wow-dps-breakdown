@@ -31,7 +31,9 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
+  Area,
   CartesianGrid,
+  ComposedChart,
   Line,
   LineChart,
   ReferenceArea,
@@ -60,6 +62,7 @@ import { bossIconUrl } from '../lib/gameIcons'
 import type {
   ContextPull,
   FightAmplification,
+  TargetBand,
   FightAuraWindow,
   FightEncounter,
   FightPattern,
@@ -477,6 +480,7 @@ function Encounter({
 
   return (
     <>
+      <TargetBandPanel encounter={encounter} />
       <TimelinePanel encounter={encounter} fights={fights} />
       <ComparisonPanel encounter={encounter} />
       {measured && sampled > 0 ? <MeasurementPanel measured={measured} /> : null}
@@ -708,6 +712,176 @@ function PatternNote({
 function sampledPulls(patterns: FightPattern[]): number {
   const first = patterns[0]
   return first ? first.pulls + first.unmatched.length : 0
+}
+
+/**
+ * How many targets are up, and when — the aggregate across every kill.
+ *
+ * This is the answer to the question the whole page exists for, and it is answered
+ * from the *distribution* over kills rather than from one representative pull: a
+ * shaded inter-quartile band with the median drawn through it, and a fainter
+ * min/max envelope behind. Where the band is tight, that many targets were reliably
+ * up at that moment; where it flares, the sampled kills genuinely disagreed. The
+ * simulated line rides over it so the reader sees what the sim would run against
+ * what the kills actually did.
+ *
+ * Falls back cleanly: a dataset without a band (an older probe run, or a boss with
+ * too few fully-read kills) simply does not render this panel, and the per-pull
+ * timeline below still does.
+ */
+function TargetBandPanel({ encounter }: { encounter: FightEncounter }) {
+  const band: TargetBand | null = encounter.measured?.targetBand ?? null
+  const targetsFact = encounter.facts.find((fact) => fact.key === 'targets')
+  const simIsFallback = targetsFact?.source === 'default'
+
+  const rows = useMemo(() => {
+    if (!band) return []
+    // Resample the simulated step function onto the band's own time points, so the
+    // two are drawn on one axis without a second scale.
+    const sim = encounter.scenario.steps
+    const simAt = (second: number) => {
+      let value = 0
+      for (const [t, count] of sim) {
+        if (t <= second) value = count
+        else break
+      }
+      return value
+    }
+    const scale = band.medianLengthSeconds / (encounter.scenario.maxTime || band.medianLengthSeconds)
+    return band.band.map((point) => ({
+      second: point.second,
+      median: point.median,
+      iqr: [point.low, point.high] as [number, number],
+      envelope: [point.min, point.max] as [number, number],
+      sim: simAt(point.second / (scale || 1)),
+    }))
+  }, [band, encounter.scenario])
+
+  if (!band || rows.length === 0) return null
+
+  const peak = Math.max(...band.band.map((point) => point.max), encounter.scenario.targets)
+
+  return (
+    <Panel>
+      <PanelHeader
+        title={
+          <span className="inline-flex items-center gap-2">
+            <BossIcon encounterId={encounter.encounterId} name={encounter.name} />
+            {`${encounter.name}: how many targets are up, and when`}
+          </span>
+        }
+        subtitle={
+          <>
+            Across <strong>{band.fights} kills</strong>, read in full. The dark band is
+            where the middle half of kills sat; the faint band is the full range; the line
+            is the median. Time is shown in seconds at the median kill length (
+            {Math.round(band.medianLengthSeconds)}s).
+          </>
+        }
+      />
+      <div className="px-2 py-4">
+        <ResponsiveContainer width="100%" height={320}>
+          <ComposedChart data={rows} margin={{ top: 16, right: 24, bottom: 8, left: 8 }}>
+            <CartesianGrid {...GRID} />
+            <XAxis
+              dataKey="second"
+              type="number"
+              domain={[0, Math.round(band.medianLengthSeconds)]}
+              tick={AXIS_TICK}
+              axisLine={AXIS_LINE}
+              tickLine={false}
+              tickFormatter={(value: number) => `${Math.round(value)}s`}
+            />
+            <YAxis
+              allowDecimals={false}
+              domain={[0, Math.ceil(peak)]}
+              tick={AXIS_TICK}
+              axisLine={AXIS_LINE}
+              tickLine={false}
+              width={28}
+            />
+            {/* Full range behind, inter-quartile in front: two stacked range areas. */}
+            <Area
+              dataKey="envelope"
+              stroke="none"
+              fill={LOGGED_COLOR}
+              fillOpacity={0.12}
+              isAnimationActive={false}
+              activeDot={false}
+            />
+            <Area
+              dataKey="iqr"
+              stroke="none"
+              fill={LOGGED_COLOR}
+              fillOpacity={0.28}
+              isAnimationActive={false}
+              activeDot={false}
+            />
+            <Line
+              dataKey="median"
+              name="Median kill"
+              type="stepAfter"
+              stroke={LOGGED_COLOR}
+              strokeWidth={2}
+              dot={false}
+              isAnimationActive={false}
+            />
+            <Line
+              dataKey="sim"
+              name={simIsFallback ? 'Simulated (fallback)' : 'Simulated'}
+              type="stepAfter"
+              stroke={SIM_COLOR}
+              strokeWidth={3}
+              strokeOpacity={0.9}
+              dot={false}
+              isAnimationActive={false}
+            />
+            <Tooltip
+              cursor={CURSOR_LINE}
+              content={({ active, payload, label }) => {
+                if (!active || !payload?.length) return null
+                const row = payload[0]?.payload as (typeof rows)[number] | undefined
+                if (!row) return null
+                return (
+                  <TooltipCard
+                    title={`${Math.round(Number(label))}s into the fight`}
+                    rows={[
+                      {
+                        id: 'median',
+                        label: 'Median kill',
+                        color: LOGGED_COLOR,
+                        value: `${row.median} up`,
+                      },
+                      {
+                        id: 'iqr',
+                        label: 'Middle half',
+                        color: LOGGED_COLOR,
+                        value: `${row.iqr[0]}–${row.iqr[1]}`,
+                      },
+                      {
+                        id: 'range',
+                        label: 'Full range',
+                        color: 'var(--text-muted)',
+                        value: `${row.envelope[0]}–${row.envelope[1]}`,
+                      },
+                      { id: 'sim', label: 'Simulated', color: SIM_COLOR, value: `${row.sim} up` },
+                    ]}
+                  />
+                )
+              }}
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+      <Legend
+        items={[
+          { id: 'median', label: `Median of ${band.fights} kills`, color: LOGGED_COLOR },
+          { id: 'sim', label: simIsFallback ? 'Simulated (fallback)' : 'Simulated', color: SIM_COLOR },
+        ]}
+      />
+      <Note>{band.why}</Note>
+    </Panel>
+  )
 }
 
 function TimelinePanel({

@@ -668,6 +668,34 @@ export interface FightTimeline {
   others: ContextPull[]
 }
 
+/** One point of the aggregate distribution: how many targets were up here, across kills. */
+export interface TargetBandPoint {
+  /** Normalised fight time, 0..1. */
+  t: number
+  /** That time in seconds at the median kill length, for labelling. */
+  second: number
+  median: number
+  /** Inter-quartile range across kills. */
+  low: number
+  high: number
+  min: number
+  max: number
+}
+
+/**
+ * How many targets are up at each point of the fight, across every kill sampled --
+ * the direct answer to "how many are normally up, and when". Built from the
+ * distribution over kills, not from one representative pull, and only from kills the
+ * event fetch read in full.
+ */
+export interface TargetBand {
+  fights: number
+  buckets: number
+  medianLengthSeconds: number
+  band: TargetBandPoint[]
+  why: string
+}
+
 export interface MeasuredFight {
   fightsSampled: number
   reports: string[]
@@ -678,6 +706,8 @@ export interface MeasuredFight {
   peakTargets?: FightSpread | null
   peakTargetShare?: FightSpread | null
   activeTimeFraction?: FightSpread | null
+  /** The aggregate distribution of concurrent targets over the fight. */
+  targetBand?: TargetBand | null
   /**
    * How much of each sampled fight the event fetch actually reached.
    *

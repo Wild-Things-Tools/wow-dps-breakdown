@@ -1179,6 +1179,39 @@ the two lines land on identical pixels, and a 2px line under a 2px line reads as
 that failed to draw. Context pulls are also drawn *first*, so the two identity series sit
 on top of them.
 
+### Sample size and which kills: the band, and "first kills" not speed kills
+
+The probe used to read 6 kills of each boss off page 1 of the rankings -- the world's
+best pulls, which are speed-kill shaped. That is the wrong sample twice over: too few
+to see a distribution, and biased toward short, add-melting kills. Both are fixed.
+
+**`--order first` (the default) takes the earliest kills by date.** WCL sorts rankings
+by damage, not by date, so the first kills sit deep in the list, not on page one.
+`select_report_fights` gathers several ranking pages (`--rankings-pages`, default 8),
+reads the `startTime` every row already carries, and takes the earliest N distinct
+reports. The guilds that killed first did it near the enrage, at the intended tuning
+and before gear caught up, so their kills are long and -- the point -- *alike*, which
+is what lets an aggregate across them mean anything. `--order top` restores the old
+speed-kill sample. A row with no `startTime` sorts last, never first, so a missing
+timestamp cannot masquerade as the earliest kill.
+
+**The aggregate band is the headline, not a representative pull.** `_target_band` in
+`fightdataset.py` resamples every fully-read kill onto 60 buckets of normalised fight
+time and, at each bucket, reports the median and inter-quartile range across kills,
+plus min/max. Drawn as a shaded IQR band with the median line and a faint min/max
+envelope, in seconds at the median kill length. Where the band is tight, that many
+targets were reliably up; where it flares, the kills genuinely disagreed. Only kills
+read to >= 95% coverage are included (a partial fetch reports the tail as an empty
+room and would drag the band down at the times it never saw), and the count kept is
+published so a thin band reads as thin. `medianLengthSeconds` is meaningful precisely
+because the first-kills sample has alike timings -- one length fits them all.
+
+**Default `--reports` is 30, up from 3.** The band needs a real sample; 30 is a
+starting point, not a ceiling, and `--point-ceiling` gates the WCL cost. The per-fight
+event streams are the cost, not the ranking pages, so gathering 8 pages to find the
+first kills is a rounding error against the run. The per-pull pattern presets and the
+representative timeline stay below the band as the individual-kill detail.
+
 ### The event fetch is bounded, and it silently destroyed every mean
 
 **This is the most expensive thing on this page. Read it before trusting any count

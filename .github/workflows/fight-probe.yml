@@ -40,8 +40,14 @@ on:
         description: '5 = Mythic, 4 = Heroic'
         default: '5'
       reports:
-        description: 'Distinct reports to read per encounter (the main cost dial)'
-        default: '3'
+        description: 'Distinct kills to read per encounter (the main cost dial). Larger is what makes the aggregate band meaningful'
+        default: '30'
+      order:
+        description: "Which kills: 'first' (earliest, alike, intended tuning) or 'top' (speed kills)"
+        default: 'first'
+      rankings_pages:
+        description: 'Ranking pages to gather before choosing the first kills'
+        default: '8'
       page:
         description: 'Rankings page to sample from; 1 is the world best, which is not a typical pull'
         default: '1'
@@ -102,6 +108,8 @@ jobs:
           TIER: ${{ inputs.tier }}
           DIFFICULTY: ${{ inputs.difficulty }}
           REPORTS: ${{ inputs.reports }}
+          ORDER: ${{ inputs.order }}
+          RANKINGS_PAGES: ${{ inputs.rankings_pages }}
           PAGE: ${{ inputs.page }}
           MAX_PAGES: ${{ inputs.max_pages }}
           POINT_CEILING: ${{ inputs.point_ceiling }}
@@ -121,6 +129,8 @@ jobs:
             --tier "$TIER" \
             --difficulty "$DIFFICULTY" \
             --reports "$REPORTS" \
+            --order "$ORDER" \
+            --rankings-pages "$RANKINGS_PAGES" \
             --page "$PAGE" \
             --max-pages "$MAX_PAGES" \
             --point-ceiling "$POINT_CEILING" \
