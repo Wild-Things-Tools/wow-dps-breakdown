@@ -842,6 +842,13 @@ anything is outstanding -- distinct from **2**, which is the ceiling stopping a 
 mid-encounter -- and `fight-probe.yml` has an hourly `schedule` whose only job is to
 clear that state. With nothing outstanding it fetches nothing and spends nothing.
 
+**The schedule only runs once the workflow is on `main`.** GitHub fires `schedule`
+triggers from the default branch alone, so a cron added on a feature branch is inert --
+measured after adding this one: seven consecutive runs were still `workflow_dispatch`
+with the `:25` window long past. Until it merges, continue an unfinished pass by
+dispatching the workflow by hand; it resumes identically, because the resume comes from
+the payload rather than from the trigger.
+
 Three things that would otherwise bite:
 
 - **Raising `--reports` re-opens every encounter**, on purpose: somebody raising it

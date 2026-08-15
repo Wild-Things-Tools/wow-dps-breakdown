@@ -45,6 +45,13 @@ name: Fight probe
 on:
   # Only ever *continues* an unfinished pass. With nothing outstanding this does no
   # work and spends no points; see the note above.
+  #
+  # NOTE: GitHub runs `schedule` triggers from the **default branch only**. This cron
+  # does nothing at all while it lives on a feature branch -- measured, not assumed:
+  # after adding it, seven consecutive fight-probe runs were still `workflow_dispatch`
+  # with the :25 window long past. So an unfinished pass does not start continuing
+  # itself until this file is on `main`; until then, continue it by dispatching the
+  # workflow by hand, which resumes exactly the same way.
   schedule:
     - cron: '25 * * * *'
   workflow_dispatch:
