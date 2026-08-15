@@ -40,7 +40,16 @@
        "source": "raid",
        "primaryStat": "str_agi",
        "baseIlevel": 219,
-       "baseQuality": 4
+       "baseQuality": 4,
+       "derived": {
+        "source": "raid",
+        "encounter": "The Lost Explorers",
+        "encounterId": 2894,
+        "instance": "The Venomous Abyss",
+        "instanceId": 1320,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 270161,
@@ -49,7 +58,16 @@
        "source": "raid",
        "primaryStat": "intellect",
        "baseIlevel": 219,
-       "baseQuality": 4
+       "baseQuality": 4,
+       "derived": {
+        "source": "raid",
+        "encounter": "Vashnik the Malignant",
+        "encounterId": 2882,
+        "instance": "The Venomous Abyss",
+        "instanceId": 1320,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 270162,
@@ -58,7 +76,16 @@
        "source": "raid",
        "primaryStat": "intellect",
        "baseIlevel": 219,
-       "baseQuality": 4
+       "baseQuality": 4,
+       "derived": {
+        "source": "raid",
+        "encounter": "Nek'zali the Soulcoiler",
+        "encounterId": 2888,
+        "instance": "The Venomous Abyss",
+        "instanceId": 1320,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 270163,
@@ -67,7 +94,16 @@
        "source": "raid",
        "primaryStat": "strength",
        "baseIlevel": 219,
-       "baseQuality": 4
+       "baseQuality": 4,
+       "derived": {
+        "source": "raid",
+        "encounter": "Sszorak",
+        "encounterId": 2871,
+        "instance": "The Venomous Abyss",
+        "instanceId": 1320,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 270164,
@@ -76,7 +112,16 @@
        "source": "raid",
        "primaryStat": "str_agi_int",
        "baseIlevel": 219,
-       "baseQuality": 4
+       "baseQuality": 4,
+       "derived": {
+        "source": "raid",
+        "encounter": "The Lost Explorers",
+        "encounterId": 2894,
+        "instance": "The Venomous Abyss",
+        "instanceId": 1320,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 270165,
@@ -85,7 +130,16 @@
        "source": "raid",
        "primaryStat": "str_agi",
        "baseIlevel": 219,
-       "baseQuality": 4
+       "baseQuality": 4,
+       "derived": {
+        "source": "raid",
+        "encounter": "Entombed Sentinels",
+        "encounterId": 2874,
+        "instance": "The Venomous Abyss",
+        "instanceId": 1320,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 270166,
@@ -94,7 +148,16 @@
        "source": "raid",
        "primaryStat": "agility",
        "baseIlevel": 219,
-       "baseQuality": 4
+       "baseQuality": 4,
+       "derived": {
+        "source": "raid",
+        "encounter": "Vashnik the Malignant",
+        "encounterId": 2882,
+        "instance": "The Venomous Abyss",
+        "instanceId": 1320,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 270167,
@@ -104,7 +167,16 @@
        "primaryStat": null,
        "baseIlevel": 219,
        "baseQuality": 4,
-       "secondaryStat": "haste"
+       "secondaryStat": "haste",
+       "derived": {
+        "source": "raid",
+        "encounter": "Nymrissa Wavecaller",
+        "encounterId": 2849,
+        "instance": "The Tidebound Grotto",
+        "instanceId": 1317,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 270168,
@@ -114,7 +186,16 @@
        "primaryStat": null,
        "baseIlevel": 219,
        "baseQuality": 4,
-       "secondaryStat": "mastery"
+       "secondaryStat": "mastery",
+       "derived": {
+        "source": "raid",
+        "encounter": "Ula'tek",
+        "encounterId": 2895,
+        "instance": "The Venomous Abyss",
+        "instanceId": 1320,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 270169,
@@ -124,7 +205,16 @@
        "primaryStat": null,
        "baseIlevel": 219,
        "baseQuality": 4,
-       "secondaryStat": "haste"
+       "secondaryStat": "haste",
+       "derived": {
+        "source": "raid",
+        "encounter": "The Coiled Altar",
+        "encounterId": 2883,
+        "instance": "The Venomous Abyss",
+        "instanceId": 1320,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 270170,
@@ -133,7 +223,16 @@
        "source": "raid",
        "primaryStat": "intellect",
        "baseIlevel": 219,
-       "baseQuality": 4
+       "baseQuality": 4,
+       "derived": {
+        "source": "raid",
+        "encounter": "The Twin Fangs",
+        "encounterId": 2887,
+        "instance": "The Venomous Abyss",
+        "instanceId": 1320,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 270171,
@@ -143,7 +242,16 @@
        "primaryStat": null,
        "baseIlevel": 219,
        "baseQuality": 4,
-       "secondaryStat": "crit"
+       "secondaryStat": "crit",
+       "derived": {
+        "source": "raid",
+        "encounter": "The Twin Fangs",
+        "encounterId": 2887,
+        "instance": "The Venomous Abyss",
+        "instanceId": 1320,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 270173,
@@ -152,7 +260,16 @@
        "source": "raid",
        "primaryStat": "str_agi",
        "baseIlevel": 219,
-       "baseQuality": 4
+       "baseQuality": 4,
+       "derived": {
+        "source": "raid",
+        "encounter": "The Coiled Altar",
+        "encounterId": 2883,
+        "instance": "The Venomous Abyss",
+        "instanceId": 1320,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 270174,
@@ -162,7 +279,16 @@
        "primaryStat": null,
        "baseIlevel": 219,
        "baseQuality": 4,
-       "secondaryStat": "mastery"
+       "secondaryStat": "mastery",
+       "derived": {
+        "source": "raid",
+        "encounter": "Sszorak",
+        "encounterId": 2871,
+        "instance": "The Venomous Abyss",
+        "instanceId": 1320,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 270175,
@@ -172,7 +298,16 @@
        "primaryStat": null,
        "baseIlevel": 219,
        "baseQuality": 4,
-       "secondaryStat": "crit"
+       "secondaryStat": "crit",
+       "derived": {
+        "source": "raid",
+        "encounter": "Ula'tek",
+        "encounterId": 2895,
+        "instance": "The Venomous Abyss",
+        "instanceId": 1320,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 250144,
@@ -181,7 +316,16 @@
        "source": "mythicplus",
        "primaryStat": "agi_int",
        "baseIlevel": 108,
-       "baseQuality": 3
+       "baseQuality": 3,
+       "derived": {
+        "source": "mythicplus",
+        "encounter": "Emberdawn",
+        "encounterId": 2655,
+        "instance": "Windrunner Spire",
+        "instanceId": 1299,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 250214,
@@ -190,7 +334,16 @@
        "source": "mythicplus",
        "primaryStat": "agi_int",
        "baseIlevel": 108,
-       "baseQuality": 3
+       "baseQuality": 3,
+       "derived": {
+        "source": "mythicplus",
+        "encounter": "Lightwarden Ruia",
+        "encounterId": 2771,
+        "instance": "The Blinding Vale",
+        "instanceId": 1309,
+        "expansion": "Midnight",
+        "inRotation": true
+       }
       },
       {
        "id": 250215,
@@ -199,7 +352,16 @@
        "source": "mythicplus",
        "primaryStat": "agi_int",
        "baseIlevel": 108,
-       "baseQuality": 3
+       "baseQuality": 3,
+       "derived": {
+        "source": "mythicplus",
+        "encounter": "Zaen Bladesorrow",
+        "encounterId": 2680,
+        "instance": "Murder Row",
+        "instanceId": 1304,
+        "expansion": "Midnight",
+        "inRotation": true
+       }
       },
       {
        "id": 250223,
@@ -208,7 +370,16 @@
        "source": "mythicplus",
        "primaryStat": "intellect",
        "baseIlevel": 108,
-       "baseQuality": 3
+       "baseQuality": 3,
+       "derived": {
+        "source": "mythicplus",
+        "encounter": "Vordaza",
+        "encounterId": 2811,
+        "instance": "Maisara Caverns",
+        "instanceId": 1315,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 250224,
@@ -217,7 +388,16 @@
        "source": "mythicplus",
        "primaryStat": null,
        "baseIlevel": 108,
-       "baseQuality": 3
+       "baseQuality": 3,
+       "derived": {
+        "source": "mythicplus",
+        "encounter": "Charonus",
+        "encounterId": 2793,
+        "instance": "Voidscar Arena",
+        "instanceId": 1313,
+        "expansion": "Midnight",
+        "inRotation": true
+       }
       },
       {
        "id": 250225,
@@ -226,7 +406,16 @@
        "source": "mythicplus",
        "primaryStat": "agility",
        "baseIlevel": 108,
-       "baseQuality": 3
+       "baseQuality": 3,
+       "derived": {
+        "source": "mythicplus",
+        "encounter": "Taz'Rah",
+        "encounterId": 2791,
+        "instance": "Voidscar Arena",
+        "instanceId": 1313,
+        "expansion": "Midnight",
+        "inRotation": true
+       }
       },
       {
        "id": 250226,
@@ -235,7 +424,16 @@
        "source": "mythicplus",
        "primaryStat": "str_agi",
        "baseIlevel": 108,
-       "baseQuality": 3
+       "baseQuality": 3,
+       "derived": {
+        "source": "mythicplus",
+        "encounter": "Derelict Duo",
+        "encounterId": 2656,
+        "instance": "Windrunner Spire",
+        "instanceId": 1299,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 250227,
@@ -244,7 +442,16 @@
        "source": "mythicplus",
        "primaryStat": "str_agi",
        "baseIlevel": 108,
-       "baseQuality": 3
+       "baseQuality": 3,
+       "derived": {
+        "source": "mythicplus",
+        "encounter": "Commander Kroluk",
+        "encounterId": 2657,
+        "instance": "Windrunner Spire",
+        "instanceId": 1299,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 250228,
@@ -253,7 +460,16 @@
        "source": "mythicplus",
        "primaryStat": "str_agi",
        "baseIlevel": 108,
-       "baseQuality": 3
+       "baseQuality": 3,
+       "derived": {
+        "source": "mythicplus",
+        "encounter": "Xathuux the Annihilator",
+        "encounterId": 2681,
+        "instance": "Murder Row",
+        "instanceId": 1304,
+        "expansion": "Midnight",
+        "inRotation": true
+       }
       },
       {
        "id": 250229,
@@ -263,7 +479,16 @@
        "primaryStat": null,
        "baseIlevel": 108,
        "baseQuality": 3,
-       "secondaryStat": "crit"
+       "secondaryStat": "crit",
+       "derived": {
+        "source": "mythicplus",
+        "encounter": "Nalorakk",
+        "encounterId": 2778,
+        "instance": "Den of Nalorakk",
+        "instanceId": 1311,
+        "expansion": "Midnight",
+        "inRotation": true
+       }
       },
       {
        "id": 250238,
@@ -272,7 +497,16 @@
        "source": "mythicplus",
        "primaryStat": "strength",
        "baseIlevel": 108,
-       "baseQuality": 3
+       "baseQuality": 3,
+       "derived": {
+        "source": "mythicplus",
+        "encounter": "Ikuzz the Light Hunter",
+        "encounterId": 2770,
+        "instance": "The Blinding Vale",
+        "instanceId": 1309,
+        "expansion": "Midnight",
+        "inRotation": true
+       }
       },
       {
        "id": 250241,
@@ -281,7 +515,16 @@
        "source": "mythicplus",
        "primaryStat": "strength",
        "baseIlevel": 108,
-       "baseQuality": 3
+       "baseQuality": 3,
+       "derived": {
+        "source": "mythicplus",
+        "encounter": "Lothraxion",
+        "encounterId": 2815,
+        "instance": "Nexus-Point Xenas",
+        "instanceId": 1316,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 250242,
@@ -290,7 +533,16 @@
        "source": "mythicplus",
        "primaryStat": "str_agi",
        "baseIlevel": 108,
-       "baseQuality": 3
+       "baseQuality": 3,
+       "derived": {
+        "source": "mythicplus",
+        "encounter": "Gemellus",
+        "encounterId": 2660,
+        "instance": "Magisters' Terrace",
+        "instanceId": 1300,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 250243,
@@ -299,7 +551,16 @@
        "source": "mythicplus",
        "primaryStat": "str_agi",
        "baseIlevel": 108,
-       "baseQuality": 3
+       "baseQuality": 3,
+       "derived": {
+        "source": "mythicplus",
+        "encounter": "Kystia Manaheart",
+        "encounterId": 2679,
+        "instance": "Murder Row",
+        "instanceId": 1304,
+        "expansion": "Midnight",
+        "inRotation": true
+       }
       },
       {
        "id": 250244,
@@ -308,7 +569,16 @@
        "source": "mythicplus",
        "primaryStat": null,
        "baseIlevel": 108,
-       "baseQuality": 3
+       "baseQuality": 3,
+       "derived": {
+        "source": "mythicplus",
+        "encounter": "Sentinel of Winter",
+        "encounterId": 2777,
+        "instance": "Den of Nalorakk",
+        "instanceId": 1311,
+        "expansion": "Midnight",
+        "inRotation": true
+       }
       },
       {
        "id": 250245,
@@ -317,7 +587,16 @@
        "source": "mythicplus",
        "primaryStat": "str_agi",
        "baseIlevel": 108,
-       "baseQuality": 3
+       "baseQuality": 3,
+       "derived": {
+        "source": "mythicplus",
+        "encounter": "Atroxus",
+        "encounterId": 2792,
+        "instance": "Voidscar Arena",
+        "instanceId": 1313,
+        "expansion": "Midnight",
+        "inRotation": true
+       }
       },
       {
        "id": 250246,
@@ -326,7 +605,16 @@
        "source": "mythicplus",
        "primaryStat": "intellect",
        "baseIlevel": 108,
-       "baseQuality": 3
+       "baseQuality": 3,
+       "derived": {
+        "source": "mythicplus",
+        "encounter": "Arcanotron Custos",
+        "encounterId": 2659,
+        "instance": "Magisters' Terrace",
+        "instanceId": 1300,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 250248,
@@ -335,7 +623,16 @@
        "source": "mythicplus",
        "primaryStat": "intellect",
        "baseIlevel": 108,
-       "baseQuality": 3
+       "baseQuality": 3,
+       "derived": {
+        "source": "mythicplus",
+        "encounter": "The Hoardmonger",
+        "encounterId": 2776,
+        "instance": "Den of Nalorakk",
+        "instanceId": 1311,
+        "expansion": "Midnight",
+        "inRotation": true
+       }
       },
       {
        "id": 250253,
@@ -344,7 +641,16 @@
        "source": "mythicplus",
        "primaryStat": "intellect",
        "baseIlevel": 108,
-       "baseQuality": 3
+       "baseQuality": 3,
+       "derived": {
+        "source": "mythicplus",
+        "encounter": "Corewarden Nysarra",
+        "encounterId": 2814,
+        "instance": "Nexus-Point Xenas",
+        "instanceId": 1316,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 250254,
@@ -353,7 +659,16 @@
        "source": "mythicplus",
        "primaryStat": "intellect",
        "baseIlevel": 108,
-       "baseQuality": 3
+       "baseQuality": 3,
+       "derived": {
+        "source": "mythicplus",
+        "encounter": "Lightblossom Trinity",
+        "encounterId": 2769,
+        "instance": "The Blinding Vale",
+        "instanceId": 1309,
+        "expansion": "Midnight",
+        "inRotation": true
+       }
       },
       {
        "id": 250255,
@@ -362,7 +677,16 @@
        "source": "mythicplus",
        "primaryStat": "intellect",
        "baseIlevel": 108,
-       "baseQuality": 3
+       "baseQuality": 3,
+       "derived": {
+        "source": "mythicplus",
+        "encounter": "Lithiel Cinderfury",
+        "encounterId": 2682,
+        "instance": "Murder Row",
+        "instanceId": 1304,
+        "expansion": "Midnight",
+        "inRotation": true
+       }
       },
       {
        "id": 250256,
@@ -371,7 +695,16 @@
        "source": "mythicplus",
        "primaryStat": "str_agi_int",
        "baseIlevel": 108,
-       "baseQuality": 3
+       "baseQuality": 3,
+       "derived": {
+        "source": "mythicplus",
+        "encounter": "The Restless Heart",
+        "encounterId": 2658,
+        "instance": "Windrunner Spire",
+        "instanceId": 1299,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 250257,
@@ -380,7 +713,16 @@
        "source": "mythicplus",
        "primaryStat": "agi_int",
        "baseIlevel": 108,
-       "baseQuality": 3
+       "baseQuality": 3,
+       "derived": {
+        "source": "mythicplus",
+        "encounter": "Degentrius",
+        "encounterId": 2662,
+        "instance": "Magisters' Terrace",
+        "instanceId": 1300,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 250258,
@@ -390,7 +732,16 @@
        "primaryStat": null,
        "baseIlevel": 108,
        "baseQuality": 3,
-       "secondaryStat": "mastery"
+       "secondaryStat": "mastery",
+       "derived": {
+        "source": "mythicplus",
+        "encounter": "Rak'tul, Vessel of Souls",
+        "encounterId": 2812,
+        "instance": "Maisara Caverns",
+        "instanceId": 1315,
+        "expansion": "Midnight",
+        "inRotation": false
+       }
       },
       {
        "id": 250259,
@@ -399,10 +750,59 @@
        "source": "mythicplus",
        "primaryStat": "str_agi_int",
        "baseIlevel": 108,
-       "baseQuality": 3
+       "baseQuality": 3,
+       "derived": {
+        "source": "mythicplus",
+        "encounter": "Ziekket",
+        "encounterId": 2772,
+        "instance": "The Blinding Vale",
+        "instanceId": 1309,
+        "expansion": "Midnight",
+        "inRotation": true
+       }
       }
      ]
     }
+   },
+   "dungeonRotationDerived": [
+    "Kings' Rest",
+    "Temple of Sethraliss",
+    "Ruby Life Pools",
+    "The Blinding Vale",
+    "Voidscar Arena",
+    "Den of Nalorakk",
+    "Murder Row",
+    "Altar of Fangs"
+   ],
+   "dungeonRotationDerivedNote": "Derived from Blizzard's Game Data API: the Mythic Keystone leaderboards that exist right now are the dungeons the current season runs. Any 'dungeonRotation' beside this is what a human typed; the two are compared by `wowdps loot-sources` and never merged.",
+   "lootSources": {
+    "derivedAt": "2026-08-15T10:57:46+00:00",
+    "api": "Blizzard Game Data API",
+    "region": "us",
+    "locale": "en_US",
+    "namespaces": {
+     "journal": "static-us",
+     "mythicKeystone": "dynamic-us"
+    },
+    "scope": "every encounter in the journal",
+    "encountersRead": 1159,
+    "truncated": false,
+    "season": {
+     "id": 18,
+     "name": "Mythic+ Dungeons (Midnight Season 2)",
+     "startTimestamp": 1786460400000,
+     "endTimestamp": null,
+     "isCurrent": true
+    },
+    "tierSeason": {
+     "tier": "MID2",
+     "tierLabel": "Midnight Season 2",
+     "seasonId": 18,
+     "seasonName": "Mythic+ Dungeons (Midnight Season 2)",
+     "agrees": false,
+     "note": "the API calls the current season 'Mythic+ Dungeons (Midnight Season 2)' where MID2 means 'Midnight Season 2'; check that the sweep is running against the right tier"
+    },
+    "note": "Each item's 'derived' block says which encounter drops it, per journal-encounter; 'source' beside it is what a human asserted and is never overwritten. Where they disagree, the disagreement is the finding."
    }
   }
  }
