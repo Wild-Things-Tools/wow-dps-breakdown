@@ -107,6 +107,11 @@ export interface SimcMeta {
   ptr?: boolean
   beta?: boolean
   reportVersion?: string
+  /** The WoW build simc modelled — the patch these numbers reflect. */
+  wowVersion?: string
+  wowBuild?: number
+  /** The game-data hotfix date. Balance changes after it are not yet in the data. */
+  hotfixDate?: string
 }
 
 export interface TierMeta {
@@ -663,6 +668,34 @@ export interface FightTimeline {
   others: ContextPull[]
 }
 
+/** One point of the aggregate distribution: how many targets were up here, across kills. */
+export interface TargetBandPoint {
+  /** Normalised fight time, 0..1. */
+  t: number
+  /** That time in seconds at the median kill length, for labelling. */
+  second: number
+  median: number
+  /** Inter-quartile range across kills. */
+  low: number
+  high: number
+  min: number
+  max: number
+}
+
+/**
+ * How many targets are up at each point of the fight, across every kill sampled --
+ * the direct answer to "how many are normally up, and when". Built from the
+ * distribution over kills, not from one representative pull, and only from kills the
+ * event fetch read in full.
+ */
+export interface TargetBand {
+  fights: number
+  buckets: number
+  medianLengthSeconds: number
+  band: TargetBandPoint[]
+  why: string
+}
+
 export interface MeasuredFight {
   fightsSampled: number
   reports: string[]
@@ -673,6 +706,8 @@ export interface MeasuredFight {
   peakTargets?: FightSpread | null
   peakTargetShare?: FightSpread | null
   activeTimeFraction?: FightSpread | null
+  /** The aggregate distribution of concurrent targets over the fight. */
+  targetBand?: TargetBand | null
   /**
    * How much of each sampled fight the event fetch actually reached.
    *
@@ -731,6 +766,8 @@ export interface FightMeasurementRun {
   difficulty: number | null
   metric: string | null
   reportsPerEncounter: number | null
+  /** "first" (earliest kills, alike) or "top" (rankings damage order, speed kills). */
+  order?: string | null
   /** Page 1 is the world's best pulls, which are not shaped like a typical kill. */
   rankingsPage: number | null
   eventStreams: string[]
@@ -749,4 +786,54 @@ export interface FightsDataset {
   measurement: FightMeasurementRun | null
   coverage: { encounters: number; asserted: number; measured: number }
   encounters: FightEncounter[]
+}
+
+/**
+ * The talent tree, decoded from simc's own loadout string against simc's own trait
+ * table -- see `pipeline/src/wowdps/talenttree.py` for how that decode was verified
+ * offline. `tree` is a key into `TalentTreeDataset.trees`, shared by every build that
+ * plays the same spec and hero tree.
+ */
+export interface TalentTreeNodeEntry {
+  id: number
+  name: string
+  spellId: number
+}
+
+export interface TalentTreeNode {
+  id: number
+  /** simc's `talent_tree`: 1 class, 2 specialisation, 3 hero. */
+  tree: number
+  row: number
+  col: number
+  /** `trait_node_type_e`: 0 normal, 1 tiered, 2 choice. */
+  type: number
+  maxRanks: number
+  entries: TalentTreeNodeEntry[]
+}
+
+export interface TalentTreeLayout {
+  specId: number
+  subTree: number | null
+  nodes: TalentTreeNode[]
+}
+
+export interface TalentTreeBuild {
+  specId: string
+  displayName: string
+  tree: string
+  heroTalent: string | null
+  points: { class: number; spec: number; hero: number }
+  /** Set when the profile's own loadout looks unfinished; shown beside the tree. */
+  caveat: string | null
+  selected: { id: number; entry: number; rank: number }[]
+}
+
+export interface TalentTreeDataset {
+  schemaVersion: number
+  tier: string
+  note: string
+  trees: Record<string, TalentTreeLayout>
+  builds: TalentTreeBuild[]
+  notes: string[]
 }

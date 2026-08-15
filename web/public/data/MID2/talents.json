@@ -18,7 +18,7 @@
     {
      "id": "death_knight_frost_default",
      "label": "Frost Death Knight (Default)",
-     "heroTalent": "Default",
+     "heroTalent": "Deathbringer",
      "dps": 230743.5,
      "dpsError": 0.1022,
      "priorityDps": 230743.5,
@@ -49,7 +49,7 @@
     {
      "id": "death_knight_frost_default",
      "label": "Frost Death Knight (Default)",
-     "heroTalent": "Default",
+     "heroTalent": "Deathbringer",
      "dps": 742561.2,
      "dpsError": 0.108,
      "priorityDps": 212839.1,

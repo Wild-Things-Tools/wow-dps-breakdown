@@ -560,3 +560,108 @@ def test_an_aura_up_for_the_whole_pull_is_reported_rather_than_shaded():
     assert drawn["Zealous Spirit"]["permanent"] is False
     # Still published: the view names it under the chart rather than dropping it.
     assert len(drawn) == 2
+
+
+def test_the_target_band_is_the_distribution_across_kills_not_one_pull():
+    """ "How many are normally up, when" answered from every kill at once: the median
+    and the spread across kills at each point of the fight."""
+    # Six kills, all single-target with a three-target wave, the wave arriving at
+    # slightly different times so the kills disagree around it and agree elsewhere.
+    fights = [waved_fight(f"F{i}", 300.0, 60.0 + i * 4) for i in range(6)]
+    band = fightdataset._target_band(payload_of(fights)["encounters"][0])
+
+    assert band is not None
+    assert band["fights"] == 6
+    assert band["medianLengthSeconds"] == 300.0
+
+    def at(second):
+        return min(band["band"], key=lambda b: abs(b["second"] - second))
+
+    # Everyone agrees at the very start: one target, zero spread.
+    assert at(5)["median"] == 1.0 and at(5)["min"] == at(5)["max"]
+    # Deep in the wave every kill has three up.
+    assert at(120)["median"] == 3.0
+    # Around the wave's arrival the kills disagree, so the range is wide there.
+    assert at(64)["max"] - at(64)["min"] >= 1.0
+
+
+def test_the_band_leaves_out_partly_read_kills():
+    """A bounded event fetch reports the unread tail as zero; one such curve would
+    drag the band down at the times it never saw. It is excluded and counted out."""
+    good = [waved_fight(f"G{i}", 300.0, 60.0) for i in range(4)]
+    enc = payload_of(good)["encounters"][0]
+    # Force one fight to look partly read.
+    enc["fights"][0]["eventCoverage"] = 0.4
+    band = fightdataset._target_band(enc)
+    assert band["fights"] == 3  # the partial one dropped
+
+
+def test_the_band_needs_at_least_two_kills():
+    one = payload_of([waved_fight("F0", 300.0, 60.0)])["encounters"][0]
+    assert fightdataset._target_band(one) is None
+
+
+def test_a_rerun_that_changed_nothing_leaves_the_file_untouched(tmp_path):
+    """The property the whole determinism discipline rests on: a diff means
+    something moved.
+
+    The first version of the settle listed only the top-level `generatedAt`, so the
+    nested `measurement.generatedAt` still differed on every run, the comparison
+    never matched, and neither stamp settled. Two probe re-runs that read identical
+    fights each rewrote and committed the file -- observed live on 2026-08-15,
+    where the only difference between two commits was the two timestamps.
+    """
+    from wowdps.fightdataset import write_fights
+
+    first = {
+        "schemaVersion": 1,
+        "generatedAt": "2026-08-15T11:40:58+00:00",
+        "tier": "MID2",
+        "measurement": {"generatedAt": "2026-08-15T11:40:51+00:00", "reportsPerEncounter": 30},
+        "encounters": [{"encounterId": 3176, "name": "A boss"}],
+    }
+    path = write_fights(tmp_path, first)
+    before = path.read_text(encoding="utf-8")
+
+    # Same fights, a later run: both stamps move and nothing else does.
+    second = json.loads(json.dumps(first))
+    second["generatedAt"] = "2026-08-15T13:05:02+00:00"
+    second["measurement"]["generatedAt"] = "2026-08-15T13:04:58+00:00"
+    write_fights(tmp_path, second)
+
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_a_real_change_still_moves_both_stamps(tmp_path):
+    """The settle must not become a freeze: when the fights actually change, the
+    stamps are the new run's."""
+    from wowdps.fightdataset import write_fights
+
+    first = {
+        "generatedAt": "2026-08-15T11:40:58+00:00",
+        "measurement": {"generatedAt": "2026-08-15T11:40:51+00:00"},
+        "encounters": [{"encounterId": 3176, "fightsSampled": 30}],
+    }
+    write_fights(tmp_path, first)
+
+    second = {
+        "generatedAt": "2026-08-15T13:05:02+00:00",
+        "measurement": {"generatedAt": "2026-08-15T13:04:58+00:00"},
+        "encounters": [{"encounterId": 3176, "fightsSampled": 40}],
+    }
+    path = write_fights(tmp_path, second)
+    written = json.loads(path.read_text(encoding="utf-8"))
+    assert written["generatedAt"] == "2026-08-15T13:05:02+00:00"
+    assert written["measurement"]["generatedAt"] == "2026-08-15T13:04:58+00:00"
+    assert written["encounters"][0]["fightsSampled"] == 40
+
+
+def test_a_document_with_no_measurement_block_still_settles(tmp_path):
+    """A tier published from profiles alone carries `measurement: null`."""
+    from wowdps.fightdataset import write_fights
+
+    first = {"generatedAt": "2026-08-15T11:40:58+00:00", "measurement": None, "encounters": []}
+    path = write_fights(tmp_path, first)
+    before = path.read_text(encoding="utf-8")
+    write_fights(tmp_path, {**first, "generatedAt": "2026-08-15T13:05:02+00:00"})
+    assert path.read_text(encoding="utf-8") == before

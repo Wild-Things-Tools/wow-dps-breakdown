@@ -102,3 +102,25 @@ export function describeConvergence(settings: RunSettings): string {
   }
   return `adaptive sampling down to ${settings.targetError}% standard error`
 }
+
+/**
+ * A plain sentence about the game state simc modelled: which patch, which hotfix,
+ * and the standing caveat that balance changes after that date are not yet in.
+ *
+ * The date is stated rather than judged. "Is last night's class tuning in here?"
+ * is answered by comparing the hotfix date to the tuning date -- which the reader
+ * can do, and which does not go stale the way a hardcoded "the tuning is/ is not
+ * included" would.
+ */
+export function describeGameBuild(simc: {
+  wowVersion?: string
+  hotfixDate?: string
+}): string {
+  if (!simc.wowVersion) return 'The game build these numbers model was not recorded.'
+  const hotfix = simc.hotfixDate ? `, game-data hotfix ${simc.hotfixDate}` : ''
+  return (
+    `These numbers model World of Warcraft ${simc.wowVersion}${hotfix}. ` +
+    'Balance changes Blizzard applied after that date are not reflected until ' +
+    "SimulationCraft's data is regenerated and the tier is re-simulated."
+  )
+}

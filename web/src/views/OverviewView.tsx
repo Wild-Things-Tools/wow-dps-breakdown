@@ -30,6 +30,7 @@ import {
   SegmentedControl,
   Select,
 } from '../components/ui'
+import { PatchState } from '../components/PatchState'
 import {
   compactNumber,
   describeFunnelGain,
@@ -143,6 +144,8 @@ export function OverviewView({
           identify it.
         </Note>
       </Panel>
+
+      <PatchState manifest={manifest} />
     </div>
   )
 }

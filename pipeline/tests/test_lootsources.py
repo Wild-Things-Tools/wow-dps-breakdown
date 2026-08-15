@@ -626,3 +626,71 @@ def test_missing_credentials_stop_the_command_cleanly(tmp_path, monkeypatch):
     monkeypatch.delenv("BLIZZARD_CLIENT_SECRET", raising=False)
     args = argparse.Namespace(tier="MID2", pools=None, out=str(tmp_path))
     assert lootsources.cmd_loot_sources(args) == 1
+
+
+def test_in_rotation_is_left_unknown_for_a_raid_drop():
+    """Answering it False would be indistinguishable from "cannot be farmed", which
+    is how the pool reads the field -- and no raid is ever in a dungeon rotation."""
+    from wowdps.lootsources import ItemDrop, LootIndex, Rotation, RotationDungeon, merge_into_pools
+
+    index = LootIndex(encounters_read=2, encounters_offered=2)
+    index.add(
+        ItemDrop(
+            item_id=270160,
+            item_name="Raid Trinket",
+            encounter_id=1,
+            encounter="Vorasius",
+            instance_id=1300,
+            instance="The Venomous Abyss",
+            expansion="Midnight",
+            kind="raid",
+        )
+    )
+    index.add(
+        ItemDrop(
+            item_id=250215,
+            item_name="Dungeon Trinket",
+            encounter_id=2,
+            encounter="A boss",
+            instance_id=1200,
+            instance="Murder Row",
+            expansion="Midnight",
+            kind="dungeon",
+        )
+    )
+    rotation = Rotation(
+        dungeons=(
+            RotationDungeon(
+                keystone_id=1, name="Murder Row", instance_id=1200, instance="Murder Row"
+            ),
+        )
+    )
+    raw = {
+        "tiers": {
+            "MID2": {
+                "itemLevels": [],
+                "slots": {
+                    "trinket": {
+                        "baselineSource": "mythicplus",
+                        "candidateSource": "raid",
+                        "items": [
+                            {"id": 270160, "name": "Raid Trinket", "source": "raid"},
+                            {"id": 250215, "name": "Dungeon Trinket", "source": "mythicplus"},
+                        ],
+                    }
+                },
+            }
+        }
+    }
+    meta = {
+        "derivedAt": "2026-08-15T00:00:00+00:00",
+        "region": "us",
+        "locale": "en_US",
+        "namespaces": {"journal": "static-us", "mythicKeystone": "dynamic-us"},
+        "tierSeason": {"tier": "MID2", "note": "asserted"},
+    }
+    document, _ = merge_into_pools(raw, "MID2", index, rotation, meta)
+    items = document["tiers"]["MID2"]["slots"]["trinket"]["items"]
+    by_id = {item["id"]: item for item in items}
+    assert by_id[270160]["derived"]["inRotation"] is None
+    assert by_id[250215]["derived"]["inRotation"] is True

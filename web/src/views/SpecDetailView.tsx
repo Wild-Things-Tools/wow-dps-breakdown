@@ -20,21 +20,25 @@ import {
   fullBuildName,
   type BuildLike,
 } from '../components/BuildIdentity'
+import { TalentList, TalentTree } from '../components/TalentTree'
 import { EmptyState, Note, Panel, PanelHeader, Select, StatTile, cx } from '../components/ui'
 import { describeBurst, describeFunnelGain, fullNumber, percent } from '../lib/format'
 import { classColor, classWash, sequentialStep } from '../lib/palette'
-import type { ScenarioMeta, SpecDetail } from '../lib/types'
+import type { ScenarioMeta, SpecDetail, TalentTreeDataset } from '../lib/types'
 
 export function SpecDetailView({
   detail,
   scenario,
   allSpecs,
   onSelectSpec,
+  talentTrees,
 }: {
   detail: SpecDetail | null
   scenario: ScenarioMeta
   allSpecs: BuildLike[]
   onSelectSpec: (id: string) => void
+  /** Null until the tier's decoded trees have loaded, or when it carries none. */
+  talentTrees: TalentTreeDataset | null
 }) {
   const cells = detail?.scenarios[scenario.id]?.targets ?? []
   const [targets, setTargets] = useState(1)
@@ -111,6 +115,8 @@ export function SpecDetailView({
               </div>
             ) : null}
           </Panel>
+
+          <TalentsPanel detail={detail} trees={talentTrees} />
 
           <Panel>
             <PanelHeader
@@ -294,5 +300,93 @@ function AbilityBreakdown({
         Magnitude here is a one-hue ramp, not a class colour — it encodes how much, not whose.
       </Note>
     </div>
+  )
+}
+
+
+// --------------------------------------------------------------------------------
+// Talent loadout
+// --------------------------------------------------------------------------------
+
+/**
+ * The build's talents, as far as a static site can carry them without a decoder.
+ *
+ * Every spec plays a hero tree and this build's is named and iconised here; the
+ * full node-by-node tree needs the tree layout and a loadout decoder, which live in
+ * the wtt backend, not in a byte-reproducible dataset. Until that is wired in, the
+ * loadout string is exposed so it can be pasted into the in-game talent UI or a
+ * talent calculator to see the whole tree -- the string simc simulated is the same
+ * one the game imports.
+ */
+function TalentsPanel({ detail, trees }: { detail: SpecDetail; trees: TalentTreeDataset | null }) {
+  const [copied, setCopied] = useState(false)
+  const hash = detail.talentHash
+  const build = trees?.builds.find((b) => b.specId === detail.id) ?? null
+  const layout = build ? (trees?.trees[build.tree] ?? null) : null
+  const color = classColor(detail.class)
+
+  return (
+    <Panel>
+      <PanelHeader
+        title="Talents"
+        subtitle={
+          layout
+            ? 'What this build takes, decoded from the loadout string simc simulated. Taken talents are lit; the rest of the tree is shown so what the build passed over is visible too.'
+            : 'The hero tree this build plays, and the loadout string simc simulated.'
+        }
+      />
+      <div className="flex flex-wrap items-center gap-4 px-5 pb-5">
+        <span className="inline-flex items-center gap-2">
+          <HeroTreeBadge build={detail} size={22} />
+        </span>
+        {hash ? (
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <code className="min-w-0 flex-1 truncate rounded-lg border border-hairline bg-elevated px-3 py-2 font-mono text-[12px] text-ink-secondary">
+              {hash}
+            </code>
+            <button
+              type="button"
+              onClick={() => {
+                void navigator.clipboard?.writeText(hash).then(() => {
+                  setCopied(true)
+                  window.setTimeout(() => setCopied(false), 1500)
+                })
+              }}
+              className="shrink-0 rounded-lg border border-hairline bg-surface px-3 py-2 text-[13px] font-medium text-ink-secondary hover:bg-elevated hover:text-ink"
+            >
+              {copied ? 'Copied' : 'Copy loadout'}
+            </button>
+          </div>
+        ) : (
+          <span className="text-[13px] text-ink-muted">No loadout string in this profile.</span>
+        )}
+      </div>
+
+      {layout && build ? (
+        <>
+          <TalentTree layout={layout} build={build} color={color} />
+          {build.caveat ? <Note>{build.caveat}</Note> : null}
+          <details className="border-t border-hairline">
+            <summary className="cursor-pointer px-5 py-3 text-[12.5px] text-ink-tertiary hover:text-ink-secondary">
+              The same thing as a list ({build.selected.length} talents)
+            </summary>
+            <TalentList layout={layout} build={build} />
+          </details>
+          <Note>
+            Decoded from simc&rsquo;s own loadout string against simc&rsquo;s own trait
+            table, so it needs no external service and moves only when simc&rsquo;s data
+            does. Hovering a talent asks Wowhead for its spell card. Connector lines are
+            not drawn: simc ships no edge data for the tree, and a guessed edge would be a
+            claim about how the tree unlocks rather than a reading of it.
+          </Note>
+        </>
+      ) : (
+        <Note>
+          Paste the loadout into the in-game talent UI, or a talent calculator, to see the
+          full tree. The tree is not drawn here because this tier carries no decoded trees
+          yet — run <code>wowdps talent-trees</code> against a simc checkout to add them.
+        </Note>
+      )}
+    </Panel>
   )
 }

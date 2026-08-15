@@ -10,6 +10,8 @@ to over-read it.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from wowdps import fightprobe
@@ -98,6 +100,8 @@ def settings(**overrides) -> fightprobe.ProbeSettings:
         metric="dps",
         reports=1,
         rankings_page=1,
+        order="top",
+        rankings_pages=1,
         streams=("damage", "deaths", "buffs", "debuffs"),
         events_limit=10000,
         max_pages=3,
@@ -352,8 +356,157 @@ def test_the_command_writes_a_dump_a_json_file_and_a_measured_cost(tmp_path, mon
     # The cost is the difference between the two bracketing readings, not a guess.
     assert payload["cost"]["pointsSpentThisRun"] == 40.0
     assert payload["encounters"][0]["peakTargets"]["median"] == 3
-    # And the sampling bias is stated in the artifact rather than in a commit message.
-    assert "speed-kill" in payload["sampling"]
+    # And the sampling is stated in the artifact rather than in a commit message.
+    # The default order is "first", so it names the earliest kills.
+    assert payload["order"] == "first"
+    assert "earliest kills" in payload["sampling"]
 
     text = (tmp_path / "fight-probe-MID2.txt").read_text()
     assert "Lightblinded Vanguard" in text and "profile vs measurement" in text
+
+
+def test_first_kills_are_taken_by_date_across_gathered_pages():
+    """WCL sorts rankings by damage, so the earliest kills sit deep in the list. The
+    selector reads the startTime every row carries and takes the earliest, across
+    every gathered page, one fight per report."""
+    from wowdps.warcraftlogs import select_report_fights
+
+    def page(*rows):
+        return {"characterRankings": {"rankings": list(rows)}}
+
+    def row(code, fight, start):
+        return {"report": {"code": code, "fightID": fight}, "startTime": start}
+
+    # Page 1 is the highest damage (recent, geared, fast). Page 2 has the early kills.
+    p1 = page(row("SPEED1", 1, 5000), row("SPEED2", 2, 5200))
+    p2 = page(row("FIRST1", 1, 1000), row("FIRST2", 3, 1100), row("SPEED1", 9, 5000))
+
+    first = select_report_fights([p1, p2], 2, order="first")
+    assert first == [("FIRST1", 1), ("FIRST2", 3)]
+
+    top = select_report_fights([p1, p2], 2, order="top")
+    assert top == [("SPEED1", 1), ("SPEED2", 2)]
+
+
+def test_one_fight_per_report_even_across_pages():
+    from wowdps.warcraftlogs import select_report_fights
+
+    pages = [
+        {
+            "characterRankings": {
+                "rankings": [{"report": {"code": "A", "fightID": 1}, "startTime": 10}]
+            }
+        },
+        {
+            "characterRankings": {
+                "rankings": [{"report": {"code": "A", "fightID": 2}, "startTime": 5}]
+            }
+        },
+    ]
+    # Same report on two pages is one kill; the first-seen fight id is kept.
+    assert select_report_fights(pages, 5, order="first") == [("A", 1)]
+
+
+def test_a_row_without_a_timestamp_sorts_last_not_first():
+    """A missing startTime is zero, which would masquerade as the earliest kill."""
+    from wowdps.warcraftlogs import select_report_fights
+
+    pages = [
+        {
+            "characterRankings": {
+                "rankings": [
+                    {"report": {"code": "NOTS", "fightID": 1}},
+                    {"report": {"code": "REAL", "fightID": 2}, "startTime": 999},
+                ]
+            }
+        }
+    ]
+    assert select_report_fights(pages, 2, order="first") == [("REAL", 2), ("NOTS", 1)]
+
+
+# --------------------------------------------------------------------------------
+# Resuming a pass the point ceiling cut short
+# --------------------------------------------------------------------------------
+
+
+def test_a_completed_encounter_is_read_back_rather_than_refetched(tmp_path):
+    """The whole point: points reset hourly, so an interrupted pass should continue,
+    not start over. The first MID2 pass at 40 reports stopped with three bosses unread
+    at 80% of the budget -- re-fetching the six it had would have spent the next hour
+    on work already done."""
+    from wowdps.fightprobe import is_complete, load_previous
+
+    path = tmp_path / "fight-probe-MID2.json"
+    path.write_text(
+        json.dumps(
+            {
+                "encounters": [
+                    {"encounterId": 3176, "fightsSampled": 40},
+                    {"encounterId": 3177, "fightsSampled": 12},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    previous = load_previous(path)
+    assert set(previous) == {3176, 3177}
+    assert is_complete(previous[3176], 40) is True
+    assert is_complete(previous[3177], 40) is False
+
+
+def test_raising_the_sample_size_reopens_every_encounter():
+    """Somebody who raises --reports means they want a bigger sample, not a skip."""
+    from wowdps.fightprobe import is_complete
+
+    assert is_complete({"fightsSampled": 40}, 40) is True
+    assert is_complete({"fightsSampled": 40}, 60) is False
+
+
+def test_a_missing_or_corrupt_previous_payload_starts_a_fresh_pass(tmp_path):
+    """Never a hard failure: the resume is an optimisation, and losing it costs
+    points rather than correctness."""
+    from wowdps.fightprobe import load_previous
+
+    assert load_previous(tmp_path / "nothing.json") == {}
+    broken = tmp_path / "broken.json"
+    broken.write_text("{not json", encoding="utf-8")
+    assert load_previous(broken) == {}
+
+
+def test_an_encounter_with_no_id_is_ignored_rather_than_keyed_on_none(tmp_path):
+    from wowdps.fightprobe import load_previous
+
+    path = tmp_path / "p.json"
+    path.write_text(json.dumps({"encounters": [{"fightsSampled": 5}]}), encoding="utf-8")
+    assert load_previous(path) == {}
+
+
+def test_a_bigger_event_budget_reopens_an_encounter_that_has_enough_fights():
+    """The half of the sample that is not the number of kills.
+
+    The 30-kill MID2 pass had every fight it asked for and still produced no band on
+    three bosses, because a bounded event fetch stopped partway through each pull --
+    Midnight Falls was read to 17%. Raising --max-pages to fix that must not be a
+    silent no-op just because the fight count is already satisfied.
+    """
+    from wowdps.fightprobe import is_complete
+
+    collected = {"fightsSampled": 30, "eventBudget": 3 * 10000}
+    assert is_complete(collected, 30, 3 * 10000) is True
+    assert is_complete(collected, 30, 8 * 10000) is False
+    # Lowering it is not a reason to re-fetch: what is stored already covers more.
+    assert is_complete(collected, 30, 1 * 10000) is True
+
+
+def test_an_encounter_with_no_recorded_budget_is_left_alone():
+    """Treating unknown as zero would re-open a whole zone on the next run for
+    everybody holding a payload written before the budget was recorded."""
+    from wowdps.fightprobe import is_complete
+
+    assert is_complete({"fightsSampled": 30}, 30, 8 * 10000) is True
+
+
+def test_the_fight_count_still_wins_regardless_of_budget():
+    from wowdps.fightprobe import is_complete
+
+    assert is_complete({"fightsSampled": 5, "eventBudget": 99999999}, 30, 10) is False

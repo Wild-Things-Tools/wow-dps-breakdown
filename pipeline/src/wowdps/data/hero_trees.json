@@ -1,0 +1,14 @@
+{
+ "note": "Hero trees for builds simc ships unnamed, detected by wowdps hero-trees.",
+ "tiers": {
+  "MID2": {
+   "resolved": {
+    "MID2_Death_Knight_Frost": "Deathbringer",
+    "MID2_Hunter_Beast_Mastery": "Pack Leader",
+    "MID2_Hunter_Marksmanship": "Sentinel",
+    "MID2_Hunter_Survival": "Sentinel",
+    "MID2_Rogue_Subtlety": "Deathstalker"
+   }
+  }
+ }
+}

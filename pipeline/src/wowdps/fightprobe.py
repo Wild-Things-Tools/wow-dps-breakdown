@@ -60,7 +60,7 @@ from .warcraftlogs import (
     Credentials,
     WarcraftLogsClient,
     WarcraftLogsError,
-    top_report_fights,
+    select_report_fights,
 )
 
 log = logging.getLogger(__name__)
@@ -96,6 +96,12 @@ class ProbeSettings:
     metric: str
     reports: int
     rankings_page: int
+    #: How the sampled kills are chosen: "first" (earliest kills, alike and at the
+    #: intended tuning) or "top" (the rankings' own damage order, i.e. speed kills).
+    order: str
+    #: How many ranking pages to gather before choosing, so the earliest kills are in
+    #: the pool WCL sorts by damage rather than by date.
+    rankings_pages: int
     streams: tuple[str, ...]
     events_limit: int
     max_pages: int
@@ -126,13 +132,24 @@ def probe_encounter(
     are two fights' worth of evidence, and throwing them away to raise an exception
     would mean paying for them twice.
     """
-    encounter = client.encounter_rankings(
-        encounter_id,
-        difficulty=settings.difficulty,
-        metric=settings.metric,
-        page=settings.rankings_page,
-    )
-    pairs = top_report_fights(encounter, settings.reports)
+    # Gather several ranking pages so the earliest kills are actually in the pool:
+    # WCL sorts rankings by damage, so the first kills sit deep in the list, not on
+    # page one. The pages are cheap -- the per-fight event streams are the cost -- so
+    # one extra page than strictly needed is a rounding error against a probe run.
+    pages = settings.rankings_pages if settings.order == "first" else 1
+    gathered = []
+    for page in range(settings.rankings_page, settings.rankings_page + max(pages, 1)):
+        _check_budget(client, settings.point_ceiling)
+        gathered.append(
+            client.encounter_rankings(
+                encounter_id,
+                difficulty=settings.difficulty,
+                metric=settings.metric,
+                page=page,
+            )
+        )
+    encounter = gathered[0]
+    pairs = select_report_fights(gathered, settings.reports, order=settings.order)
     observation = fightextract.EncounterObservation(
         encounter_id=encounter_id,
         encounter_name=str(encounter.get("name") or encounter_id),
@@ -421,6 +438,70 @@ def _cell(value) -> str:
 # --------------------------------------------------------------------------------
 
 
+#: Exit code for "this run did what it could and there is more to fetch". Distinct
+#: from 2, which is the ceiling stopping a run mid-encounter: 3 says the *pass* is
+#: incomplete, which is the state a scheduled continuation exists to clear.
+EXIT_INCOMPLETE = 3
+
+
+def load_previous(path: Path) -> dict[int, dict]:
+    """Encounters a previous run already collected, keyed by encounter id.
+
+    The probe is bounded by Warcraft Logs points rather than by time, so a full pass
+    over a zone regularly runs out partway -- the first 40-report MID2 pass stopped at
+    80% of the hourly budget with three bosses unread. Points reset hourly, so the
+    work is not lost, only postponed; what was missing was somewhere to postpone it
+    *to*. This is that: a completed encounter is read back out of the previous payload
+    and never fetched again.
+    """
+    if not path.is_file():
+        return {}
+    try:
+        previous = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        log.warning("could not read %s; starting a fresh pass", path)
+        return {}
+    return {
+        entry["encounterId"]: entry
+        for entry in (previous.get("encounters") or [])
+        if isinstance(entry.get("encounterId"), int)
+    }
+
+
+def is_complete(entry: dict, wanted: int, event_budget: int | None = None) -> bool:
+    """Has this encounter already got the sample the settings ask for?
+
+    Two ways to be short of it, and both re-open the encounter, because both are
+    somebody asking for *more* rather than asking to skip:
+
+    - **Fewer kills than `--reports`.** Compared against the requested number rather
+      than a fixed one. An encounter with genuinely fewer kills logged than requested
+      is re-fetched every run and costs nothing after the first, because every one of
+      its queries is already in the response cache.
+    - **A smaller event budget than `--max-pages` now asks for.** This one is not
+      cosmetic. The number of kills is only half of what the target-count band needs;
+      the other half is reading each kill to the *end*, and a bounded event fetch
+      stops partway through a long pull. On the first 30-kill MID2 pass the fights
+      were all there and the coverage was not: Midnight Falls read 17% of its kills,
+      Belo'ren 46%, and neither produced a band at all. Without this check, raising
+      `--max-pages` to fix exactly that would skip every encounter for already having
+      its 30 fights -- a silent no-op, and the worst kind, because the run looks
+      successful and nothing changes.
+
+    An encounter collected before the budget was recorded reports `None`, and is left
+    alone rather than re-fetched: treating unknown as zero would re-open the whole
+    zone on the next run for everybody. Use ``--no-resume`` once to rebuild such a
+    payload; from then on the budget travels with it.
+    """
+    if int(entry.get("fightsSampled") or 0) < wanted:
+        return False
+    if event_budget is not None:
+        recorded = entry.get("eventBudget")
+        if isinstance(recorded, int) and recorded < event_budget:
+            return False
+    return True
+
+
 def cmd_fight_probe(args: argparse.Namespace) -> int:
     try:
         credentials = Credentials.from_env()
@@ -442,6 +523,8 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         metric=args.metric,
         reports=args.reports,
         rankings_page=args.page,
+        order=args.order,
+        rankings_pages=args.rankings_pages,
         streams=streams,
         events_limit=args.events_limit,
         max_pages=args.max_pages,
@@ -461,6 +544,16 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
     transcript: list[str] = []
     aborted: str | None = None
 
+    json_path = out_dir / f"fight-probe-{args.tier}.json"
+    resume_path = Path(args.resume) if args.resume else json_path
+    # How much of each fight this run is willing to read. Recorded per encounter so a
+    # later run can tell "already collected" from "already collected, but with a
+    # smaller budget than you are now asking for".
+    event_budget = settings.max_pages * settings.events_limit
+    previous = {} if args.no_resume else load_previous(resume_path)
+    if previous:
+        log.info("resuming from %s: %d encounter(s) already collected", resume_path, len(previous))
+
     with WarcraftLogsClient(credentials, cache_dir=cache_dir) as client:
         before = client.rate_limit()
         log.info(
@@ -476,8 +569,23 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
             log.error("%s", exc)
             return 1
 
+        remaining: list[int] = []
         for encounter_id in encounter_ids:
-            log.info("probing encounter %d", encounter_id)
+            done = previous.get(encounter_id)
+            if done is not None and is_complete(done, settings.reports, event_budget):
+                log.info(
+                    "encounter %d already has %d fights; skipping",
+                    encounter_id,
+                    done.get("fightsSampled"),
+                )
+                continue
+            remaining.append(encounter_id)
+
+        if previous and not remaining:
+            log.info("every encounter already carries %d fights; nothing to do", settings.reports)
+
+        for position, encounter_id in enumerate(remaining):
+            log.info("probing encounter %d (%d of %d)", encounter_id, position + 1, len(remaining))
             observation, aborted = probe_encounter(client, encounter_id, settings)
             observations.append(observation)
             transcript.extend(render(observation, profiles.get(encounter_id)))
@@ -489,6 +597,22 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         after = client.rate_limit()
         ledger = client.ledger.to_json()
 
+    # A run contributes what it managed; everything else comes back from the previous
+    # payload untouched. Ordered by the encounter list rather than by arrival so the
+    # file does not reshuffle itself between runs and make a diff meaningless.
+    fresh = {}
+    for observation in observations:
+        entry = observation.to_json()
+        entry["eventBudget"] = event_budget
+        fresh[observation.encounter_id] = entry
+    by_id = {**previous, **fresh}
+    merged = [by_id[eid] for eid in encounter_ids if eid in by_id]
+    incomplete = [
+        eid
+        for eid in encounter_ids
+        if eid not in by_id or not is_complete(by_id[eid], settings.reports, event_budget)
+    ]
+
     payload = {
         "generatedAt": datetime.now(UTC).isoformat(timespec="seconds"),
         "tier": args.tier,
@@ -496,21 +620,33 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         "metric": settings.metric,
         "reportsPerEncounter": settings.reports,
         "rankingsPage": settings.rankings_page,
+        "order": settings.order,
         "eventStreams": list(settings.streams),
         "significantDamageShare": settings.significant_share,
         "sampling": (
-            "Fights come from the top of the encounter's rankings, so they are "
-            "speed-kill shaped: shorter than a typical pull and with adds dying "
-            "faster. Use --page to sample further down."
+            "The earliest kills of the boss, taken by kill date across the gathered "
+            "ranking pages -- long kills at the intended tuning, whose timings are "
+            "alike, which is what lets an aggregate across them mean something."
+            if settings.order == "first"
+            else "The top of the encounter's rankings: speed-kill shaped, shorter "
+            "than a typical pull and with adds dying faster."
         ),
         "cost": ledger,
         "pointsBefore": before,
         "pointsAfter": after,
         "abortedBecause": aborted,
-        "encounters": [observation.to_json() for observation in observations],
+        "encounters": merged,
+        # Both published so a reader can tell "this zone has nine bosses and we have
+        # all nine" from "we have all the ones we tried". The fights view needs the
+        # difference: an encounter that was never reached and one that was probed and
+        # read nothing are different sentences.
+        "encountersRequested": len(encounter_ids),
+        "encountersCollected": sum(
+            1 for e in merged if is_complete(e, settings.reports, event_budget)
+        ),
+        "incomplete": sorted(incomplete),
     }
 
-    json_path = out_dir / f"fight-probe-{args.tier}.json"
     json_path.write_text(json.dumps(payload, indent=1) + "\n", encoding="utf-8")
 
     text = "\n".join(transcript)
@@ -535,6 +671,17 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         )
 
     _report_cost(ledger, len(observations))
+
+    if incomplete:
+        log.warning(
+            "%d of %d encounter(s) still short of %d fights: %s. Points reset hourly -- "
+            "re-run with the same --out and the collected ones are skipped.",
+            len(incomplete),
+            len(encounter_ids),
+            settings.reports,
+            ", ".join(str(eid) for eid in incomplete),
+        )
+        return EXIT_INCOMPLETE
     return 0 if not aborted else 2
 
 
@@ -596,21 +743,47 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         help="encounter id to probe (repeatable); default is every boss in the newest zone",
     )
     parser.add_argument("--tier", default="MID2", help="tier the fight profiles are read from")
+    parser.add_argument(
+        "--resume",
+        help="a previous payload to carry forward (default: the one in --out). An "
+        "encounter that already has --reports fights is skipped, so a pass the point "
+        "ceiling cut short continues where it stopped instead of starting over.",
+    )
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="ignore any previous payload and re-fetch every encounter",
+    )
     parser.add_argument("--difficulty", type=int, default=5, help="5 = Mythic, 4 = Heroic")
     parser.add_argument("--metric", default="dps", help="ranking metric used to pick logs")
     parser.add_argument(
         "--reports",
         type=int,
-        default=3,
-        help="how many distinct reports to read per encounter (default 3); each one "
-        "costs several event queries, so this is the main cost dial",
+        default=30,
+        help="how many distinct kills to read per encounter (default 30); each one "
+        "costs several event queries, so this is the main cost dial. A larger sample "
+        "is what makes the aggregate 'how many targets up when' band mean something",
+    )
+    parser.add_argument(
+        "--order",
+        choices=("first", "top"),
+        default="first",
+        help="which kills to sample: 'first' (the earliest kills, alike and at the "
+        "intended tuning -- the default) or 'top' (the rankings' damage order, i.e. "
+        "speed kills)",
+    )
+    parser.add_argument(
+        "--rankings-pages",
+        type=int,
+        default=8,
+        help="how many ranking pages to gather before choosing the first kills; WCL "
+        "sorts by damage not date, so the earliest kills sit deep in the list",
     )
     parser.add_argument(
         "--page",
         type=int,
         default=1,
-        help="rankings page to sample from; page 1 is the world's best pulls, which "
-        "are not shaped like a median guild's",
+        help="first rankings page to gather from (default 1)",
     )
     parser.add_argument(
         "--stream",

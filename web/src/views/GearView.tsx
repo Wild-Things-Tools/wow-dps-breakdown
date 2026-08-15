@@ -256,6 +256,19 @@ export function GearView({ gear }: { gear: GearDataset | null }) {
         />
         <BaselineTable specs={specs} targetCount={targetCount} items={items} />
         <Note>
+          This pool is still selected by item level rather than by where an item drops,
+          and that is wrong in two directions. It cannot tell this season’s dungeon
+          trinkets from last season’s — measured against simc’s own table, the two are
+          identical in every field it ships — so a few trinkets nobody can farm right now
+          are still anchoring a baseline here. And it misses the rotation’s dungeons from
+          older expansions entirely, whose trinkets carry item levels from a different
+          block. Both are fixed by <code>wowdps gear-pool</code>, which builds the pool
+          from Blizzard’s own drop tables — the raid’s encounters for the candidates,
+          this season’s eight dungeons for the baseline — and needs API credentials to
+          run. Until it has, read the baseline as “the expansion’s dungeon trinkets”
+          rather than “this season’s”.
+        </Note>
+        <Note>
           Standalone value is not perfectly additive — measured on Arcane Mage, a pair is
           worth about 3% more than the sum of its two parts — so two items within a few
           percent of each other at the cut could swap once paired. Hovering an item name

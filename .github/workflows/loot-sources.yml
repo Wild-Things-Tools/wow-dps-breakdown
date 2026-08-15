@@ -44,6 +44,17 @@ on:
         description: 'Report without touching the pool file'
         type: boolean
         default: false
+      rebuild_pool:
+        description: 'Also rebuild pool membership from the journal and print the diff against the curated list'
+        type: boolean
+        default: true
+      slots:
+        description: 'Which slots to rebuild, space separated. A slot with no pool yet is derived from scratch -- the journal answers for a ring the same way it does for a trinket'
+        default: 'trinket'
+      write_pool:
+        description: 'Apply that rebuild. Off by default: replacing the membership moves every number the gear sweep publishes, so it wants somebody reading the diff first'
+        type: boolean
+        default: false
 
 concurrency:
   group: loot-sources
@@ -113,15 +124,81 @@ jobs:
             exit "$status"
           fi
 
+      # `gear-pool` joins the journal against simc's *source* item tables. It needs
+      # no compiled simc -- there is no simc command that lists items, so the tables
+      # are read straight out of the checkout, and a sparse clone of one directory is
+      # the whole dependency. That is why this rides along here instead of waiting on
+      # gear.yml's twenty-minute build.
+      - name: Fetch simc item tables
+        if: steps.creds.outputs.enabled == 'true' && inputs.rebuild_pool
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://github.com/simulationcraft/simc.git simc
+          git -C simc sparse-checkout set engine/dbc/generated profiles
+
+      - name: Rebuild pool membership
+        if: steps.creds.outputs.enabled == 'true' && inputs.rebuild_pool
+        env:
+          BLIZZARD_CLIENT_ID: ${{ secrets.BLIZZARD_CLIENT_ID }}
+          BLIZZARD_CLIENT_SECRET: ${{ secrets.BLIZZARD_CLIENT_SECRET }}
+          TIER: ${{ inputs.tier }}
+          REGION: ${{ inputs.region }}
+          LOCALE: ${{ inputs.locale }}
+          EXPANSION: ${{ inputs.expansion }}
+          RATE: ${{ inputs.rate }}
+          WRITE_POOL: ${{ inputs.write_pool }}
+          SLOTS: ${{ inputs.slots || 'trinket' }}
+        run: |
+          args=()
+          if [ -n "$EXPANSION" ]; then args+=(--expansion "$EXPANSION"); fi
+          if [ "$WRITE_POOL" = "true" ]; then args+=(--write); fi
+          # One walk, several slots: every gear-pool run shares the same response
+          # cache directory, so the journal is fetched once and the second and third
+          # slots cost nothing.
+          #
+          # Exit 2 is a refusal: the build carried a warning (a truncated walk, an
+          # underived rotation, an unidentifiable raid) and writing it would produce a
+          # pool that is wrong in the direction nobody notices. Surface it, do not fail.
+          for slot in $SLOTS; do
+            echo "::group::gear-pool $slot"
+            set +e
+            wowdps -v gear-pool \
+              --tier "$TIER" \
+              --slot "$slot" \
+              --simc-source simc \
+              --region "$REGION" \
+              --locale "$LOCALE" \
+              --rate "$RATE" \
+              --out loot-sources \
+              "${args[@]}"
+            status=$?
+            set -e
+            echo "::endgroup::"
+            if [ "$status" = "2" ]; then
+              echo "::warning::the $slot pool rebuild refused to write; see the report"
+            elif [ "$status" != "0" ]; then
+              exit "$status"
+            fi
+          done
+
       - name: Summary
         if: steps.creds.outputs.enabled == 'true'
         run: |
+          shopt -s nullglob
           {
             echo '## Loot sources'
             echo
             echo '```'
             cat loot-sources/loot-sources-*.txt || echo 'no output'
             echo '```'
+            if compgen -G 'loot-sources/gear-pool-*.txt' > /dev/null; then
+              echo
+              echo '## Pool membership'
+              echo
+              echo '```'
+              cat loot-sources/gear-pool-*.txt
+              echo '```'
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Commit

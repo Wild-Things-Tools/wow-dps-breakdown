@@ -4,13 +4,14 @@ import { ErrorState, Panel, Spinner } from './components/ui'
 import {
   loadFights,
   loadGear,
+  loadTalentTrees,
   loadLogsVerification,
   loadManifest,
   loadTalents,
   loadSpecs,
   loadTierIndex,
 } from './lib/data'
-import { describeConvergence, samplingError } from './lib/format'
+import { describeConvergence, describeGameBuild, samplingError } from './lib/format'
 import type {
   FightsDataset,
   GearDataset,
@@ -19,6 +20,7 @@ import type {
   SpecDetail,
   TalentDataset,
   TierIndex,
+  TalentTreeDataset,
 } from './lib/types'
 import { BuildsView } from './views/BuildsView'
 import { FightsView } from './views/FightsView'
@@ -175,6 +177,22 @@ export default function App() {
     setFights(null)
     loadFights(tier).then((data) => {
       if (!cancelled) setFights(data)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [tier, reloadToken])
+
+  // And again for the decoded talent trees, which only the Spec detail view draws
+  // and which are ~400 KB for a tier -- so they are fetched on their own rather than
+  // riding along with the manifest every view pays for.
+  const [talentTrees, setTalentTrees] = useState<TalentTreeDataset | null>(null)
+  useEffect(() => {
+    if (!tier) return
+    let cancelled = false
+    setTalentTrees(null)
+    loadTalentTrees(tier).then((data) => {
+      if (!cancelled) setTalentTrees(data)
     })
     return () => {
       cancelled = true
@@ -402,6 +420,7 @@ export default function App() {
           scenario={scenario}
           allSpecs={manifest.specs}
           onSelectSpec={setFocus}
+          talentTrees={talentTrees}
         />
       ) : null}
 
@@ -453,6 +472,7 @@ function Footer({ manifest }: { manifest: Manifest }) {
         play; real fights add movement, mechanics and mistakes. Use this to understand the
         shape of a spec, not to predict your own parse.
       </p>
+      <p className="mt-2 text-ink-secondary">{describeGameBuild(simc)}</p>
       <p className="mt-2">
         Class, specialisation and hero-talent icons are Blizzard artwork served by Wowhead;
         this site is not affiliated with either. World of Warcraft is a trademark of

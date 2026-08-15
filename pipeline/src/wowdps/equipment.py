@@ -329,7 +329,19 @@ class SlotPool:
         # A derived answer wins outright: it comes from the journal's own loot
         # tables rather than from a name somebody typed, and it is per item, so it
         # needs neither the rotation list nor a dungeon assignment to be useful.
-        if item.derived is not None and item.derived.in_rotation is not None:
+        #
+        # Only for Mythic+ items, though. A season's rotation is a list of dungeons
+        # and says nothing whatever about a raid drop, so consulting it for one can
+        # only ever subtract. The derivation now leaves `in_rotation` as None for
+        # anything that is not a dungeon drop; this guard is the second lock, because
+        # a payload written before that fix carries False on every raid item and
+        # would empty the candidate pool without changing a single visible number
+        # other than all of them.
+        if (
+            item.source == "mythicplus"
+            and item.derived is not None
+            and item.derived.in_rotation is not None
+        ):
             return item.derived.in_rotation
 
         if not self.rotation or item.source != "mythicplus":

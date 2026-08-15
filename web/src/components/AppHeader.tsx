@@ -125,16 +125,19 @@ function Provenance({
   const label = tierIndex?.tiers.find((entry) => entry.id === tier)?.label ?? `Tier ${tier}`
   const parts = [
     label,
+    simc.wowVersion ? `WoW ${simc.wowVersion}` : null,
     simc.simcVersion ? `simc ${simc.simcVersion}` : null,
-    simc.ptr ? 'PTR data' : null,
   ].filter(Boolean)
 
   return (
     <dl
       className="hidden text-right text-[12px] leading-snug text-ink-muted sm:block"
-      title={`Generated ${formatDate(generatedAt)}${
-        simc.gitRevision ? ` from simc ${simc.gitRevision}` : ''
-      }`}
+      title={
+        `Game data: WoW ${simc.wowVersion ?? '?'}` +
+        (simc.hotfixDate ? `, hotfix ${simc.hotfixDate}` : '') +
+        `\nGenerated ${formatDate(generatedAt)}` +
+        (simc.gitRevision ? ` from simc ${simc.gitRevision}` : '')
+      }
     >
       <div>
         <dt className="sr-only">Data source</dt>

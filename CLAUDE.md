@@ -170,18 +170,30 @@ source column from any item database that reads `JournalEncounterItem` (Wowhead,
 Raidbots, a local DB2 dump). It slots into the pool file's `source` field with no
 code change. `wowdps gear-candidates` prints every other column already.
 
-<<<<<<< HEAD
-### The Mythic+ pool is a proxy for the wrong thing, in both directions
+**That dependency now exists**, and it is Blizzard's own: `wowdps loot-sources`
+reads the drop source out of the Game Data API, and `wowdps gear-pool` builds the
+pool itself from it. Nothing above changes — simc still ships no source, so do not
+go looking there — but the pool file no longer has to be believed on its own.
+
+### The Mythic+ pool was a proxy for the wrong thing, in both directions
 
 A Mythic+ season runs a **fixed rotation of eight dungeons**, and only their loot can
-be farmed. The pool rule ("rare-base trinkets at the expansion's dungeon item level")
-does not express that:
+be farmed. The old pool rule ("rare-base trinkets at the expansion's dungeon item
+level") does not express that, and both failures are measured against simc 1210-01 on
+2026-08-15:
 
-- it covers *every* dungeon of the expansion, so it can include trinkets nobody can
-  obtain this season, and
-- modern rotations mix in dungeons from **older expansions**, whose trinkets carry
-  ids and base item levels from a different block entirely — so it can also *miss*
-  obtainable ones.
+- **It over-collects.** All twenty-five Midnight dungeon trinkets are field-for-field
+  identical in simc's table — `ilevel 108, quality 3, req_level 78`, same flag words —
+  whether or not their dungeon runs this season. The three the owner flagged as last
+  season's (Emberwing Feather 250144, Soulcatcher's Charm 250223, Heart of Wind
+  250256) differ from the current ones in **nothing simc ships**. No cleverer
+  heuristic over that table can separate them, and the check is in the docstring of
+  `gearpool.py` so nobody has to redo it.
+- **It under-collects.** MID2's rotation runs three dungeons from older expansions
+  (Kings' Rest, Temple of Sethraliss, Ruby Life Pools), whose trinkets carry ids and
+  base item levels from a different block entirely. A rule keyed on this expansion's
+  numbers misses every one of them — three of eight farmable dungeons contributing
+  nothing to a pool that claims to be what the character can obtain.
 
 This matters because the M+ pool is what the baseline is built from: an unobtainable
 trinket anchoring "what the character already wears" makes every raid comparison
@@ -189,16 +201,32 @@ against it meaningless. Blast radius is narrower than the pool though — only *
 the 25** M+ trinkets ever win a baseline slot across all 26 builds, so those are the
 ones to check first.
 
-`SlotPool.rotation` and `GearItem.dungeon` exist for the fix, and `dungeonRotation`
-in `gear_pools.json` is declared but **empty**. An empty rotation filters nothing, on
-purpose: dropping every item whose dungeon is merely unrecorded would silently empty
-the pool. Fill in the dungeons and tag the items and the pool narrows with no code
-change; `SlotPool.unplaced()` reports items the rotation would exclude only because
-nobody assigned them.
+**A blacklist was tried and removed.** `SlotPool.excluded_ids` / `notInRotation` named
+last season's ids by hand. It is the wrong instrument and is gone: it answers one item
+at a time, goes stale the moment a season turns, and — decisively — cannot ever fix
+the second failure, because you cannot name your way *into* a pool. Blacklisting is
+the last resort here, not the first, and this was not the last resort. If one is ever
+reintroduced, it must be under the same discipline as everything else: the derived
+answer supersedes it, and a contradiction is a finding rather than a silent override.
+
+**`gearpool.py` is the fix**, and it derives both halves. The pool is the intersection
+of simc's item table (what an item *is*) and the journal's loot tables (where it
+*comes from*): the raid pool is the drops of this tier's raid, the Mythic+ pool the
+drops of this season's rotation dungeons. Two things are deliberately not configured:
+the raid is found by matching the tier's own boss list from `fight_profiles.json`
+against journal encounter names (`identify_tier_raid`, floor `MIN_RAID_ENCOUNTER_MATCH`
+= 0.5), and the rotation comes from `derive_rotation`. So a new tier needs its bosses
+listed — which the Fights view needs anyway — and no edit here.
+
+Three refusals in it, all deliberate: a **truncated** journal walk builds no pool at
+all (an unread dungeon and an out-of-season one are indistinguishable, and the result
+would be quietly too small with a plausible shape); an item simc never heard of is
+skipped, since it cannot be simulated; and an item the journal never placed is
+reported as `unplaced` rather than quietly kept or dropped.
 
 Do not try to derive the rotation from simc. It is not there — this is the same
 absence as item source, one level further. **It is in Blizzard's Game Data API**,
-which is what `wowdps loot-sources` now reads: `journal-expansion` splits raids from
+which is what `wowdps loot-sources` reads: `journal-expansion` splits raids from
 dungeons, `journal-encounter` carries the loot table simc's extraction reads but does
 not ship, and the season's dungeons come from `current_leaderboards` (the season
 endpoint itself lists periods, not dungeons — that is an interpretation and the output
@@ -210,12 +238,6 @@ Two id traps in that API, both of which build a table that joins to nothing:
 `items[].id` is the *journal entry* and `items[].item.id` is the item; and Mythic+
 keystone dungeon ids are challenge-mode ids sharing nothing with journal instance ids,
 so the join runs through `dungeon.key.href` rather than the sibling `id`.
-=======
-**That dependency now exists**, and it is Blizzard's own: `wowdps loot-sources`
-reads the drop source out of the Game Data API. See "Loot sources, derived rather
-than asserted" below. Nothing above changes — simc still ships no source, so do not
-go looking there — but the pool file no longer has to be believed on its own.
->>>>>>> origin/claude/loot-sources
 
 ### The item level ladder is measurable, the track names are not
 
@@ -370,6 +392,126 @@ Four things in that table cost time to establish:
 
 Locale defaults to `en_US` and that is not cosmetic: names are the join key against
 simc's English item table and against a pool file written in English.
+
+### What the first live run found
+
+Run on 2026-08-15, region `us`, full walk, every encounter in the journal. Three
+results worth keeping:
+
+- **The queries and payload shapes are right.** No field needed renaming, which had
+  been the open risk -- the documents were written against a schema mirror, not the
+  live service.
+- **The derived rotation reproduced the hand-written one exactly.** Same eight
+  dungeons, different order, including the three from older expansions. So
+  `dungeonRotation` (typed from Blizzard's announcement) and
+  `dungeonRotationDerived` (from the season's leaderboards) agree, and every one of
+  the forty trinkets' asserted `source` matched its derived one. The structural
+  inference was right about raid-versus-dungeon; it was only ever wrong about
+  *season*.
+- **It found 11 out-of-season trinkets, not 3.** The owner named Emberwing Feather,
+  Soulcatcher's Charm and Heart of Wind. The journal also places Latch's Crooked
+  Hook and Kroluk's Warbanner in Windrunner Spire, Mark of Light and Whisper of the
+  Duskwraith in Nexus-Point Xenas, Jelly Replicator, Refueling Orb and Eye of the
+  Drowning Void in Magisters' Terrace, and Vessel of Tortured Souls in Maisara
+  Caverns. A hand list would have caught three of eleven, which is the argument
+  against blacklisting stated as a number.
+
+### Which raid belongs to a tier: ask the profiles, not the boss list
+
+`identify_tier_raid` first matched the tier's bosses from `fight_profiles.json`
+against the journal. That sounds like the same question and is not, and the way it
+failed is worth keeping.
+
+Run three days before Midnight Season 2 opened, it named **The Voidspire** and
+reported the fifteen curated raid trinkets as belonging to some other raid. Both
+halves of that were the wrong way round. `fight_profiles.json` lists what Warcraft
+Logs currently has kills for, so in the week before a season turns it describes the
+raid that is **ending**. MID2's raid is *The Venomous Abyss* and *The Tidebound
+Grotto* -- The Lost Explorers, Vashnik the Malignant, Nek'zali the Soulcoiler,
+Sszorak, Ula'tek, The Twin Fangs, The Coiled Altar, Entombed Sentinels, Nymrissa
+Wavecaller -- which is exactly where the journal places ids 270160-270175. **The
+curated pool was right all along**; the derivation was asking a different tier's
+question.
+
+So the authority is now **what the tier's own simc profiles wear**: `equipped_item_ids`
+reads the gear lines out of `profiles/<tier>/*.simc`, and the raid is the instance
+that drops them. A tier, in this project, *is* the set of profiles simc ships under
+that name, so this cannot drift from the gear the sims actually run. It also needs no
+logs to exist yet, which the boss-list version implicitly did.
+
+Three things it has to get right, all tested:
+
+- **A raid can span two journal instances.** MID2's does. A single-instance answer
+  silently drops whatever the second contributes, so `TierRaid` holds a set: the
+  instance with the most equipped items, plus any other instance **in the same
+  expansion** that also dropped some.
+- **Profiles wear legacy items.** MID2's Arcane Mage equips a Legion ring
+  (`id=159459`), which places a genuine raid hit in Antorus. The same-expansion test
+  is what keeps that out, and it is reported as `legacy` rather than dropped silently.
+- **Only gear lines count.** `id=` appears in other profile options too, and reading
+  those would place items nobody wears.
+
+Two labels that are not the same thing, and the Fights view currently shows this:
+the *gear* side of MID2 is the upcoming tier, while the *fights* side is the raid
+still being logged. That is not a bug in either -- there are no logs for a raid that
+opens on Tuesday -- but it is why nothing may join the two on "tier" alone.
+
+### What the derived pool actually contains
+
+Written on 2026-08-15 by `wowdps gear-pool --write`, and it is the first pool in this
+project that nobody enumerated. Trinkets went from 40 curated items to **42 derived**
+ones, and the membership is the point rather than the count:
+
+| | before (item-level rule) | after (journal) |
+|---|---|---|
+| raid | 15, believed | 15, from The Venomous Abyss (14) + The Tidebound Grotto (1) |
+| Mythic+ | 25, of which 11 unfarmable | 27, all farmable |
+| rotation dungeons represented | **4 of 8** | **8 of 8** |
+
+The four that contributed nothing before are Altar of Fangs (never enumerated) and
+Kings' Rest, Temple of Sethraliss and Ruby Life Pools -- the older-expansion dungeons
+whose ids and base item levels the rule could not see. They bring twelve trinkets
+between them. The eleven out-of-season ones are simply absent now rather than present
+and filtered, which is the cleaner state: `in_rotation` returns True for everything in
+the pool because everything in the pool is farmable by construction.
+
+Neck (7) and finger (11) pools exist for the first time, derived the same way.
+
+### The sweep is not slot-generic, whatever equipment.py says
+
+A comment there reads "the sweep is already slot-generic: adding a pool is the whole
+of the work". That is wrong twice, and both were found by reading `gearsweep.py`
+rather than by running it:
+
+- **`BASELINE_SIZE = 2` is hard-coded** ("two sockets, two items"). Neck has one
+  socket, so the baseline step would pick two items for it.
+- **The derived pools carry no gems and no enchants**, because those are copied from
+  an item's predecessor and neck and finger had no predecessor. For trinkets that is
+  correct and measured -- bonus ids are inert and trinkets have no sockets. For rings
+  it invalidates the comparison: the enchant is worth **+1.09%** and the gem
+  **+0.44%** against **+0.09%** for a ten-item-level step, so an unenchanted pool
+  measures the wrong thing by an order of magnitude.
+
+So `gear.yml` still offers `trinket` alone, and that is honest rather than an
+oversight. Making neck and finger real needs `BASELINE_SIZE` to follow
+`len(slot.sockets)`, and the gem and enchant to be read off the tier's own profiles
+(they carry `gem_id=` and `enchant_id=` on the gear lines `equipped_item_ids` already
+parses).
+
+### `inRotation` answers for dungeons only
+
+The one real bug the live run shipped, and it is the shape to watch for. `inRotation`
+was computed as "is this item's instance in the Mythic+ rotation", which is `False`
+for a raid drop **by construction** -- no raid is ever in the dungeon rotation. The
+pool reads that field as "cannot be farmed this season", so all fifteen MID2 raid
+trinkets were excluded and **the candidate pool emptied itself**: fifteen items in the
+file, zero available to compare, and no error anywhere.
+
+Two locks now, because the committed payload already carried the bad value:
+`lootsources.py` leaves `inRotation` as `None` unless the item actually has a dungeon
+drop, and `SlotPool.in_rotation` only consults the derived answer for `mythicplus`
+items. Both are tested. The general lesson: a field whose name promises more than its
+computation delivers fails silently and in the direction nobody checks.
 
 ### Derivation never overwrites assertion
 
@@ -617,17 +759,34 @@ when its name is written out beside it, so a screen reader hears the name once.
 
 **A hero tree is icon plus written name, everywhere.** Class and spec icons are
 recognisable enough to carry a tight axis label on their own; hero-tree emblems are
-new and are not. `heroTalent === 'Default'` is simc's marker for a profile that
-names no hero-talent tree — it is not a tree, gets no invented emblem, and renders
-as a muted **"No hero tree"** pill.
+new and are not. Every spec plays a hero tree, and the site now shows the right one for all of them.
+simc names the tree in the profile for most builds (`MID2_Death_Knight_Frost_Rider`)
+but ships a spec's *default* build unnamed (`MID2_Death_Knight_Frost`), which used to
+surface as a build with no hero tree -- which cannot exist. It has one; the name just
+did not say so.
 
-It used to read "Single build", which is true only some of the time and visibly
-false the rest: MID2 Frost Death Knight ships `Default` *and* Rider of the
-Apocalypse, so the Builds view wrote "tie — the single build and Rider of the
-Apocalypse" about a spec with two builds on screen, and the pill contradicted the
-row beside it. `Default` does not mean "this spec has one build"; it means "this
-profile names no tree", which is true in both cases. Do not put the old wording
-back without a way to tell the two apart.
+`herotrees.py` + `wowdps hero-trees` resolve it: run each unnamed profile for one
+iteration and read which hero-tree-gated abilities fired (the APL branches on
+`hero_tree.<slug>`, so only the taken tree produces damage and buffs). The result is
+written per tier to `data/hero_trees.json` and read back by `profiles.discover`.
+Detected from simc, not hand-typed, so a new tier needs a re-run and not an edit; a
+spec whose signatures are missing stays unnamed and the run says which.
+
+**The resolution feeds the *display*, never the id.** `SpecProfile.name_hero` is the
+suffix simc's profile name carried (None for an unnamed build) and the id is built
+from that -- `death_knight_frost_default` stays `death_knight_frost_default`, so gear,
+fights, logs and talents keep joining on it. `hero_talent` carries the resolved tree
+(`Deathbringer`), which is what `displayName`, the `heroTalent` field and every icon
+use. The id names simc's build *slot*; `hero_talent` names the *tree* it plays; both
+are true and neither moves the joins. MID2's five unnamed builds resolve to
+Deathbringer (Frost DK), Pack Leader (BM), Sentinel (MM and Survival) and Deathstalker
+(Sub Rogue).
+
+`heroTreeIconUrl` returns a real atlas element for every one of the 39 trees, so once
+the tree is named the icon appears in every table -- the missing-icon rows were the
+unnamed builds, not a gap in the map. `heroTalent === 'Default'` therefore only
+appears now for a tier that has not been through `wowdps hero-trees` yet; the pill and
+prose still handle it as a fallback but it is no longer expected.
 
 ### Boss icons come from Warcraft Logs, and that is not laziness
 
@@ -694,6 +853,154 @@ Two builds of one spec share a class colour *and* a spec icon, because they are 
 same class and the same spec. The hero-tree emblem, its name, and `buildDash` on a
 line chart are what separate them. Never invent a second colour for the second
 build.
+
+## The talent tree, decoded from simc and nothing else
+
+`talenttree.py` + `wowdps talent-trees` + `components/TalentTree.tsx`. The obvious
+route was the one wtt-backend uses -- Blizzard's Game Data API for the layout, the
+character API for the selections. Both are wrong here: that API returns *a
+character's* talents and this project has no characters, and it would put the talent
+view behind credentials where every other number is derived from simc and
+byte-reproducible.
+
+None of it is needed. `engine/dbc/generated/trait_data.inc` carries node id, entry id,
+`row`, `col`, `name`, `max_ranks`, `node_type`, the hero sub-tree id and the spell id;
+`parse_traits_hash` in `engine/player/player.cpp` carries the loadout format. The
+feature is a join of two things already in the checkout, and CI gets them from a
+**sparse clone of one directory** -- no compiled simc.
+
+### The decode was verified offline, four ways
+
+Against MID2's 26 real hashes, with no API call:
+
+1. **Version and spec id.** Every hash reads version 2 and the correct canonical spec
+   id -- 251 Frost DK, 62 Arcane, 267 Destruction, all fifteen specs. A wrong alphabet
+   or bit order cannot produce fifteen correct ids. This check needs *no trait table*,
+   so it is pinned in `test_talenttree.py` against the committed dataset.
+2. **The stream terminates.** Every build consumes its hash to within six bits of the
+   end -- the padding to a 6-bit boundary. A desynchronised reader overruns or stops
+   early.
+3. **simc's own spec rule.** `parse_traits_hash` refuses a non-hero node whose
+   `id_spec` excludes the player's spec. Applied to the decoded selections: **zero
+   violations across all 26 builds**.
+4. **Against an independent derivation.** The SELECTION node yields one sub-tree id per
+   build, and across 26 builds those ids map one-to-one onto the hero trees
+   `herotrees.py` resolved by a completely different method (running the profile and
+   reading which abilities fired). Eighteen trees, no collisions. **This is also the
+   strongest confirmation the hero-tree detection was right.**
+
+### Three things that cost time
+
+- **`tree_index` >= 5 are not player traits.** simc's `talent_tree` enum ends the
+  player trees at `MAX = 5`; `EXPANSION = 6` holds Midnight's runeforge traits, and
+  `generate_tree_nodes` stops before them. Including them adds nodes to the stream and
+  desynchronises the decode -- subtly, because it still produces plausible talent names
+  and still terminates near the end of the string.
+- **A hero *node* can belong to two hero trees.** The SELECTION node is what names the
+  one being played; filtering hero nodes to it is what makes the point total come out
+  right. simc models this the same way with `player_sub_trees`.
+- **`id_spec` is a 4-array padded with zeros.** Keep the zeros and "no spec
+  restriction" stops being expressible as an empty tuple.
+
+### What is not drawn, and why
+
+- **Connector lines.** Blizzard's API has an `unlocks` edge list; simc has no edge
+  table at all. A guessed edge is a claim about how the tree unlocks, so the grid is
+  drawn without them. This is the one real loss against wtt-frontend's widget.
+- **Icons from us.** simc has no icon name for a spell any more than for an item
+  (checked: `spell_data_t` has no icon field). Nodes are Wowhead spell links and their
+  script paints the icon -- which is why the tree is **HTML, not SVG**: `power.js`
+  bails on anything whose `nodeName` is not `A` or `AREA`. Until it answers, and on a
+  blocked CDN, each node shows the talent's initials over a class-coloured tile.
+
+### The finding it produced immediately
+
+Twenty-four of MID2's twenty-six builds spend an identical **34 points in the
+specialisation tree** and 35 or 36 in the class tree. **Both Frost Death Knight
+profiles spend 10 class points.** Their spec and hero trees are normal and the decode
+is sound by all four checks above, so this is simc's shipped talent string, and it
+would understate the spec. Published as a per-build `caveat` in `talent-trees.json` and
+shown beside the tree -- `_THIN_CLASS_TREE` is the threshold. This module reads
+profiles; it does not write them.
+
+## Patch state: two dates, and only one of them is the cutoff
+
+`components/PatchState.tsx`, on the Overview under the ranking. It answers the
+question a reader arrives with the morning after a tuning pass -- *is yesterday's
+change in this?* -- which the header byline and the footer sentence did not.
+
+**The load-bearing figure is the data cutoff, not the publish date**, and they are
+routinely different. simc's numbers come from a game-data snapshot with its own
+hotfix date; a dataset regenerated today off a snapshot taken three days ago models
+the game as it was three days ago. MID2 today is exactly that: `hotfixDate`
+2026-08-12 against `generatedAt` 2026-08-15. Reporting only the publish date would be
+the more flattering of the two and the wrong one, so the panel computes the gap and
+says which date actually bounds the numbers.
+
+**It never claims a specific change is included.** That would need Blizzard's patch
+notes, which this repository has no source for, and being confidently wrong about it
+is worse than being silent. The panel states the build and the cutoff and leaves the
+comparison to the reader. Do not "improve" this into a tuning checklist without a
+real source behind it.
+
+Everything shown is read from the manifest -- `wowVersion`, `wowBuild`, `hotfixDate`,
+`ptr`, `simcVersion`, `gitRevision`, `gitBranch`, `buildDate`, `generatedAt`. The
+`ptr` flag matters beyond display: `wowdps talent-trees` reads it to pick between
+simc's live and PTR trait tables, because reading the wrong one decodes cleanly and
+quietly describes a different tree.
+
+## Probing across hours, rather than restarting
+
+Warcraft Logs meters by points per hour and a pass at a useful sample size does not
+fit in one: the first 40-report MID2 pass stopped at 80% of the budget with three of
+nine bosses unread. Points reset hourly, so that work was never lost -- there was
+nowhere to postpone it to.
+
+`--resume` (default: the payload already in `--out`) skips any encounter that already
+carries `--reports` fights, before a query is sent. The command exits **3** while
+anything is outstanding -- distinct from **2**, which is the ceiling stopping a run
+mid-encounter -- and `fight-probe.yml` has an hourly `schedule` whose only job is to
+clear that state. With nothing outstanding it fetches nothing and spends nothing.
+
+**The schedule only runs once the workflow is on `main`.** GitHub fires `schedule`
+triggers from the default branch alone, so a cron added on a feature branch is inert --
+measured after adding this one: seven consecutive runs were still `workflow_dispatch`
+with the `:25` window long past. Until it merges, continue an unfinished pass by
+dispatching the workflow by hand; it resumes identically, because the resume comes from
+the payload rather than from the trigger.
+
+Three things that would otherwise bite:
+
+- **Raising `--reports` re-opens every encounter**, on purpose: somebody raising it
+  wants a bigger sample, not a skip. **So does raising `--max-pages`**, and that one is
+  not cosmetic. The number of kills is only half of what the band needs; the other half
+  is reading each kill to the end. The first 30-kill pass had every fight it asked for
+  and still produced no band on three bosses, because the event fetch stopped partway
+  through each pull -- Midnight Falls at 17% coverage, Belo'ren at 46%. `eventBudget`
+  (`max_pages x events_limit`) is recorded per encounter so a later run can tell "already
+  collected" from "collected with a smaller budget than you are now asking for". An
+  encounter with no recorded budget is left alone rather than re-fetched -- treating
+  unknown as zero would re-open a whole zone for everybody -- so a payload written before
+  this needs one `--no-resume` run to pick the budget up.
+- **`inputs.*` is empty on a scheduled run**, so every input in the workflow now
+  carries the same default the dispatch form shows. A continuation has to run with the
+  settings of the pass it continues or it re-opens all of them.
+- The response cache and the partial payload both ride in one `actions/cache` keyed on
+  the tier. That is what makes the continuation *cheap* rather than merely correct --
+  a partially-read encounter costs almost nothing the second time.
+
+The payload publishes `encountersRequested`, `encountersCollected` and `incomplete`,
+so "this zone has nine bosses and we have all nine" reads differently from "we have
+all the ones we tried".
+
+**A settle that misses a nested stamp settles nothing.** `write_fights` excluded the
+top-level `generatedAt` from its "did anything change" comparison but not
+`measurement.generatedAt`, so the two documents never compared equal, the settle never
+fired, and *both* stamps were rewritten. Observed live on 2026-08-15: two probe
+re-runs that read identical fights produced two commits whose entire diff was the two
+timestamps. `_PROVENANCE_PATHS` now lists nested paths and is checked against the real
+payloads in `test_fightdataset.py`. The rule to remember is that this class of bug
+hides one level down -- the guard looks present and is inoperative.
 
 ## Charts
 
@@ -1161,6 +1468,39 @@ line is 3.5px where lines are 2px everywhere else. Where the simulation and the 
 the two lines land on identical pixels, and a 2px line under a 2px line reads as a series
 that failed to draw. Context pulls are also drawn *first*, so the two identity series sit
 on top of them.
+
+### Sample size and which kills: the band, and "first kills" not speed kills
+
+The probe used to read 6 kills of each boss off page 1 of the rankings -- the world's
+best pulls, which are speed-kill shaped. That is the wrong sample twice over: too few
+to see a distribution, and biased toward short, add-melting kills. Both are fixed.
+
+**`--order first` (the default) takes the earliest kills by date.** WCL sorts rankings
+by damage, not by date, so the first kills sit deep in the list, not on page one.
+`select_report_fights` gathers several ranking pages (`--rankings-pages`, default 8),
+reads the `startTime` every row already carries, and takes the earliest N distinct
+reports. The guilds that killed first did it near the enrage, at the intended tuning
+and before gear caught up, so their kills are long and -- the point -- *alike*, which
+is what lets an aggregate across them mean anything. `--order top` restores the old
+speed-kill sample. A row with no `startTime` sorts last, never first, so a missing
+timestamp cannot masquerade as the earliest kill.
+
+**The aggregate band is the headline, not a representative pull.** `_target_band` in
+`fightdataset.py` resamples every fully-read kill onto 60 buckets of normalised fight
+time and, at each bucket, reports the median and inter-quartile range across kills,
+plus min/max. Drawn as a shaded IQR band with the median line and a faint min/max
+envelope, in seconds at the median kill length. Where the band is tight, that many
+targets were reliably up; where it flares, the kills genuinely disagreed. Only kills
+read to >= 95% coverage are included (a partial fetch reports the tail as an empty
+room and would drag the band down at the times it never saw), and the count kept is
+published so a thin band reads as thin. `medianLengthSeconds` is meaningful precisely
+because the first-kills sample has alike timings -- one length fits them all.
+
+**Default `--reports` is 30, up from 3.** The band needs a real sample; 30 is a
+starting point, not a ceiling, and `--point-ceiling` gates the WCL cost. The per-fight
+event streams are the cost, not the ranking pages, so gathering 8 pages to find the
+first kills is a rounding error against the run. The per-pull pattern presets and the
+representative timeline stay below the band as the individual-kill detail.
 
 ### The event fetch is bounded, and it silently destroyed every mean
 
