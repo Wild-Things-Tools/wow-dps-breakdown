@@ -438,6 +438,48 @@ def _cell(value) -> str:
 # --------------------------------------------------------------------------------
 
 
+#: Exit code for "this run did what it could and there is more to fetch". Distinct
+#: from 2, which is the ceiling stopping a run mid-encounter: 3 says the *pass* is
+#: incomplete, which is the state a scheduled continuation exists to clear.
+EXIT_INCOMPLETE = 3
+
+
+def load_previous(path: Path) -> dict[int, dict]:
+    """Encounters a previous run already collected, keyed by encounter id.
+
+    The probe is bounded by Warcraft Logs points rather than by time, so a full pass
+    over a zone regularly runs out partway -- the first 40-report MID2 pass stopped at
+    80% of the hourly budget with three bosses unread. Points reset hourly, so the
+    work is not lost, only postponed; what was missing was somewhere to postpone it
+    *to*. This is that: a completed encounter is read back out of the previous payload
+    and never fetched again.
+    """
+    if not path.is_file():
+        return {}
+    try:
+        previous = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        log.warning("could not read %s; starting a fresh pass", path)
+        return {}
+    return {
+        entry["encounterId"]: entry
+        for entry in (previous.get("encounters") or [])
+        if isinstance(entry.get("encounterId"), int)
+    }
+
+
+def is_complete(entry: dict, wanted: int) -> bool:
+    """Has this encounter already got the sample the settings ask for?
+
+    Compared against the *requested* number rather than a fixed one so that raising
+    `--reports` re-opens every encounter, which is what somebody raising it means. An
+    encounter that genuinely has fewer kills logged than requested would be re-fetched
+    every run and cost nothing after the first, because every one of its queries is
+    already in the response cache.
+    """
+    return int(entry.get("fightsSampled") or 0) >= wanted
+
+
 def cmd_fight_probe(args: argparse.Namespace) -> int:
     try:
         credentials = Credentials.from_env()
@@ -480,6 +522,12 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
     transcript: list[str] = []
     aborted: str | None = None
 
+    json_path = out_dir / f"fight-probe-{args.tier}.json"
+    resume_path = Path(args.resume) if args.resume else json_path
+    previous = {} if args.no_resume else load_previous(resume_path)
+    if previous:
+        log.info("resuming from %s: %d encounter(s) already collected", resume_path, len(previous))
+
     with WarcraftLogsClient(credentials, cache_dir=cache_dir) as client:
         before = client.rate_limit()
         log.info(
@@ -495,8 +543,23 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
             log.error("%s", exc)
             return 1
 
+        remaining: list[int] = []
         for encounter_id in encounter_ids:
-            log.info("probing encounter %d", encounter_id)
+            done = previous.get(encounter_id)
+            if done is not None and is_complete(done, settings.reports):
+                log.info(
+                    "encounter %d already has %d fights; skipping",
+                    encounter_id,
+                    done.get("fightsSampled"),
+                )
+                continue
+            remaining.append(encounter_id)
+
+        if previous and not remaining:
+            log.info("every encounter already carries %d fights; nothing to do", settings.reports)
+
+        for position, encounter_id in enumerate(remaining):
+            log.info("probing encounter %d (%d of %d)", encounter_id, position + 1, len(remaining))
             observation, aborted = probe_encounter(client, encounter_id, settings)
             observations.append(observation)
             transcript.extend(render(observation, profiles.get(encounter_id)))
@@ -507,6 +570,18 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
 
         after = client.rate_limit()
         ledger = client.ledger.to_json()
+
+    # A run contributes what it managed; everything else comes back from the previous
+    # payload untouched. Ordered by the encounter list rather than by arrival so the
+    # file does not reshuffle itself between runs and make a diff meaningless.
+    fresh = {observation.encounter_id: observation.to_json() for observation in observations}
+    by_id = {**previous, **fresh}
+    merged = [by_id[eid] for eid in encounter_ids if eid in by_id]
+    incomplete = [
+        eid
+        for eid in encounter_ids
+        if eid not in by_id or not is_complete(by_id[eid], settings.reports)
+    ]
 
     payload = {
         "generatedAt": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -530,10 +605,16 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         "pointsBefore": before,
         "pointsAfter": after,
         "abortedBecause": aborted,
-        "encounters": [observation.to_json() for observation in observations],
+        "encounters": merged,
+        # Both published so a reader can tell "this zone has nine bosses and we have
+        # all nine" from "we have all the ones we tried". The fights view needs the
+        # difference: an encounter that was never reached and one that was probed and
+        # read nothing are different sentences.
+        "encountersRequested": len(encounter_ids),
+        "encountersCollected": sum(1 for e in merged if is_complete(e, settings.reports)),
+        "incomplete": sorted(incomplete),
     }
 
-    json_path = out_dir / f"fight-probe-{args.tier}.json"
     json_path.write_text(json.dumps(payload, indent=1) + "\n", encoding="utf-8")
 
     text = "\n".join(transcript)
@@ -558,6 +639,17 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         )
 
     _report_cost(ledger, len(observations))
+
+    if incomplete:
+        log.warning(
+            "%d of %d encounter(s) still short of %d fights: %s. Points reset hourly -- "
+            "re-run with the same --out and the collected ones are skipped.",
+            len(incomplete),
+            len(encounter_ids),
+            settings.reports,
+            ", ".join(str(eid) for eid in incomplete),
+        )
+        return EXIT_INCOMPLETE
     return 0 if not aborted else 2
 
 
@@ -619,6 +711,17 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         help="encounter id to probe (repeatable); default is every boss in the newest zone",
     )
     parser.add_argument("--tier", default="MID2", help="tier the fight profiles are read from")
+    parser.add_argument(
+        "--resume",
+        help="a previous payload to carry forward (default: the one in --out). An "
+        "encounter that already has --reports fights is skipped, so a pass the point "
+        "ceiling cut short continues where it stopped instead of starting over.",
+    )
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="ignore any previous payload and re-fetch every encounter",
+    )
     parser.add_argument("--difficulty", type=int, default=5, help="5 = Mythic, 4 = Heroic")
     parser.add_argument("--metric", default="dps", help="ranking metric used to pick logs")
     parser.add_argument(

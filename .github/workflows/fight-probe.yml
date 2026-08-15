@@ -14,7 +14,21 @@ name: Fight probe
 # the difference, side by side. `fight_profiles.json` stays hand-edited; nothing here
 # writes to it.
 #
-# Deliberately not a schedule:
+# Continuing across hours:
+#
+# The API meters by points per hour, and a full pass at a real sample size does not
+# fit in one hour -- the first 40-report MID2 pass stopped at 80% of the budget with
+# three of nine bosses unread. Points reset hourly, so the work is not lost, only
+# postponed. `--resume` (on by default, reading the payload in --out) skips any
+# encounter that already carries the requested number of fights, and the command exits
+# 3 while any remain. The hourly schedule below exists only to clear that state: when
+# nothing is outstanding it fetches nothing and costs nothing, because the encounter
+# list is read from the cached payload before a single query is sent.
+#
+# The response cache and the partial payload both ride in an actions/cache keyed on
+# the tier, which is what makes the continuation cheap rather than merely correct.
+#
+# Deliberately not a *nightly* schedule:
 #
 # * The dump is evidence for writing `pipeline/src/wowdps/data/fight_profiles.json`
 #   by hand. A fight profile mixes measured facts with facts the owner states from
@@ -23,11 +37,16 @@ name: Fight probe
 # * The API meters by points per hour, not requests, and event queries over a whole
 #   Mythic pull are the expensive end of it. The command measures its own cost and
 #   stops at 80% of the hour's budget; a cron that silently ate the budget every
-#   night would take the weekly rankings check down with it.
+#   night would take the weekly rankings check down with it. The hourly job here is
+#   not that: it only continues a pass somebody started, and is a no-op otherwise.
 #
 # The response cache in the artifact is worth keeping: download it, point a local
 # run at it with --cache, and the extraction can be iterated on offline for nothing.
 on:
+  # Only ever *continues* an unfinished pass. With nothing outstanding this does no
+  # work and spends no points; see the note above.
+  schedule:
+    - cron: '25 * * * *'
   workflow_dispatch:
     inputs:
       encounters:
@@ -99,22 +118,38 @@ jobs:
         if: steps.creds.outputs.enabled == 'true'
         run: pip install -e ./pipeline
 
+      # Both halves of the continuation: the partial payload says which encounters are
+      # already collected, and the response cache means the queries behind them are
+      # never paid for twice. restore-keys lets an hourly run pick up the newest
+      # previous state rather than needing an exact key match.
+      - name: Restore probe state
+        if: steps.creds.outputs.enabled == 'true'
+        uses: actions/cache@v4
+        with:
+          path: fight-probe
+          key: fight-probe-${{ inputs.tier || 'MID2' }}-${{ github.run_id }}
+          restore-keys: |
+            fight-probe-${{ inputs.tier || 'MID2' }}-
+
       - name: Probe
         if: steps.creds.outputs.enabled == 'true'
         env:
           WCL_CLIENT_ID: ${{ secrets.WCL_CLIENT_ID }}
           WCL_CLIENT_SECRET: ${{ secrets.WCL_CLIENT_SECRET }}
+          # `inputs.*` is empty on a scheduled run, so every one carries the same
+          # default the dispatch form shows. A continuation must use the *same*
+          # settings as the pass it continues, or it would re-open every encounter.
           ENCOUNTERS: ${{ inputs.encounters }}
-          TIER: ${{ inputs.tier }}
-          DIFFICULTY: ${{ inputs.difficulty }}
-          REPORTS: ${{ inputs.reports }}
-          ORDER: ${{ inputs.order }}
-          RANKINGS_PAGES: ${{ inputs.rankings_pages }}
-          PAGE: ${{ inputs.page }}
-          MAX_PAGES: ${{ inputs.max_pages }}
-          POINT_CEILING: ${{ inputs.point_ceiling }}
+          TIER: ${{ inputs.tier || 'MID2' }}
+          DIFFICULTY: ${{ inputs.difficulty || '5' }}
+          REPORTS: ${{ inputs.reports || '30' }}
+          ORDER: ${{ inputs.order || 'first' }}
+          RANKINGS_PAGES: ${{ inputs.rankings_pages || '8' }}
+          PAGE: ${{ inputs.page || '1' }}
+          MAX_PAGES: ${{ inputs.max_pages || '3' }}
+          POINT_CEILING: ${{ inputs.point_ceiling || '0.8' }}
           CHEAP: ${{ inputs.cheap }}
-          PUBLISH: ${{ inputs.publish }}
+          PUBLISH: ${{ inputs.publish || github.event_name == 'schedule' }}
         run: |
           args=()
           for id in $ENCOUNTERS; do args+=(--encounter "$id"); done
@@ -140,6 +175,8 @@ jobs:
           set -e
           if [ "$status" = "2" ]; then
             echo "::warning::the pass stopped early on the point ceiling; partial output uploaded"
+          elif [ "$status" = "3" ]; then
+            echo "::notice::encounters still outstanding; the hourly run will continue once points reset"
           elif [ "$status" != "0" ]; then
             exit "$status"
           fi
@@ -156,7 +193,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Commit the published dataset
-        if: steps.creds.outputs.enabled == 'true' && inputs.publish
+        if: steps.creds.outputs.enabled == 'true' && (inputs.publish || github.event_name == 'schedule')
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
@@ -168,7 +205,7 @@ jobs:
           git commit -m "data: refresh fight shapes for ${TIER} $(date -u +%Y-%m-%d)"
           git push
         env:
-          TIER: ${{ inputs.tier }}
+          TIER: ${{ inputs.tier || 'MID2' }}
 
       - uses: actions/upload-artifact@v4
         if: steps.creds.outputs.enabled == 'true'

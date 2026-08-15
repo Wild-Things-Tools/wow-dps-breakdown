@@ -10,6 +10,8 @@ to over-read it.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from wowdps import fightprobe
@@ -420,3 +422,60 @@ def test_a_row_without_a_timestamp_sorts_last_not_first():
         }
     ]
     assert select_report_fights(pages, 2, order="first") == [("REAL", 2), ("NOTS", 1)]
+
+
+# --------------------------------------------------------------------------------
+# Resuming a pass the point ceiling cut short
+# --------------------------------------------------------------------------------
+
+
+def test_a_completed_encounter_is_read_back_rather_than_refetched(tmp_path):
+    """The whole point: points reset hourly, so an interrupted pass should continue,
+    not start over. The first MID2 pass at 40 reports stopped with three bosses unread
+    at 80% of the budget -- re-fetching the six it had would have spent the next hour
+    on work already done."""
+    from wowdps.fightprobe import is_complete, load_previous
+
+    path = tmp_path / "fight-probe-MID2.json"
+    path.write_text(
+        json.dumps(
+            {
+                "encounters": [
+                    {"encounterId": 3176, "fightsSampled": 40},
+                    {"encounterId": 3177, "fightsSampled": 12},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    previous = load_previous(path)
+    assert set(previous) == {3176, 3177}
+    assert is_complete(previous[3176], 40) is True
+    assert is_complete(previous[3177], 40) is False
+
+
+def test_raising_the_sample_size_reopens_every_encounter():
+    """Somebody who raises --reports means they want a bigger sample, not a skip."""
+    from wowdps.fightprobe import is_complete
+
+    assert is_complete({"fightsSampled": 40}, 40) is True
+    assert is_complete({"fightsSampled": 40}, 60) is False
+
+
+def test_a_missing_or_corrupt_previous_payload_starts_a_fresh_pass(tmp_path):
+    """Never a hard failure: the resume is an optimisation, and losing it costs
+    points rather than correctness."""
+    from wowdps.fightprobe import load_previous
+
+    assert load_previous(tmp_path / "nothing.json") == {}
+    broken = tmp_path / "broken.json"
+    broken.write_text("{not json", encoding="utf-8")
+    assert load_previous(broken) == {}
+
+
+def test_an_encounter_with_no_id_is_ignored_rather_than_keyed_on_none(tmp_path):
+    from wowdps.fightprobe import load_previous
+
+    path = tmp_path / "p.json"
+    path.write_text(json.dumps({"encounters": [{"fightsSampled": 5}]}), encoding="utf-8")
+    assert load_previous(path) == {}
