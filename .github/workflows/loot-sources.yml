@@ -184,13 +184,14 @@ jobs:
       - name: Summary
         if: steps.creds.outputs.enabled == 'true'
         run: |
+          shopt -s nullglob
           {
             echo '## Loot sources'
             echo
             echo '```'
             cat loot-sources/loot-sources-*.txt || echo 'no output'
             echo '```'
-            if [ -f loot-sources/gear-pool-*.txt ]; then
+            if compgen -G 'loot-sources/gear-pool-*.txt' > /dev/null; then
               echo
               echo '## Pool membership'
               echo
