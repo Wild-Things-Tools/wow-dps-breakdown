@@ -121,7 +121,15 @@ def requests_for(profiles: list[SpecProfile], scenarios: list[Scenario]) -> Iter
 
 
 def simc_metadata(report: dict) -> dict:
-    """Version and build information, pulled from the top level of a json2 report."""
+    """Version and build information, pulled from a json2 report.
+
+    The game build is the part a reader actually needs -- it says which patch and
+    which hotfix these numbers model, so "is last night's class tuning in here?" has
+    an answer on the page instead of a guess. It is not at the top level: it lives
+    under the first actor's ``dbc`` block, per data source (``Live``/``PTR``), and it
+    is the same for every actor in a run, so the first one settles it.
+    """
+    game = _game_build(report)
     return {
         "simcVersion": report.get("version"),
         "buildDate": report.get("build_date"),
@@ -130,7 +138,27 @@ def simc_metadata(report: dict) -> dict:
         "ptr": bool(report.get("ptr_enabled")),
         "beta": bool(report.get("beta_enabled")),
         "reportVersion": report.get("report_version"),
+        # None rather than absent so a reader can tell "no game build in this report"
+        # from "this field was never captured".
+        "wowVersion": game.get("wow_version"),
+        "wowBuild": game.get("build_level"),
+        "hotfixDate": game.get("hotfix_date"),
     }
+
+
+def _game_build(report: dict) -> dict:
+    """The WoW build the run modelled: version, build number, hotfix date.
+
+    Taken from the source simc actually used -- PTR when the run enabled it, Live
+    otherwise -- rather than assuming one, because the two can differ by a patch.
+    """
+    players = (report.get("sim") or {}).get("players") or []
+    dbc = players[0].get("dbc") if players else None
+    if not isinstance(dbc, dict):
+        return {}
+    source = "PTR" if report.get("ptr_enabled") and "PTR" in dbc else "Live"
+    block = dbc.get(source) or dbc.get("Live") or {}
+    return block if isinstance(block, dict) else {}
 
 
 def modelling_caveats(report: dict) -> list[str]:

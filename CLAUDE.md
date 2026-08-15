@@ -617,17 +617,34 @@ when its name is written out beside it, so a screen reader hears the name once.
 
 **A hero tree is icon plus written name, everywhere.** Class and spec icons are
 recognisable enough to carry a tight axis label on their own; hero-tree emblems are
-new and are not. `heroTalent === 'Default'` is simc's marker for a profile that
-names no hero-talent tree — it is not a tree, gets no invented emblem, and renders
-as a muted **"No hero tree"** pill.
+new and are not. Every spec plays a hero tree, and the site now shows the right one for all of them.
+simc names the tree in the profile for most builds (`MID2_Death_Knight_Frost_Rider`)
+but ships a spec's *default* build unnamed (`MID2_Death_Knight_Frost`), which used to
+surface as a build with no hero tree -- which cannot exist. It has one; the name just
+did not say so.
 
-It used to read "Single build", which is true only some of the time and visibly
-false the rest: MID2 Frost Death Knight ships `Default` *and* Rider of the
-Apocalypse, so the Builds view wrote "tie — the single build and Rider of the
-Apocalypse" about a spec with two builds on screen, and the pill contradicted the
-row beside it. `Default` does not mean "this spec has one build"; it means "this
-profile names no tree", which is true in both cases. Do not put the old wording
-back without a way to tell the two apart.
+`herotrees.py` + `wowdps hero-trees` resolve it: run each unnamed profile for one
+iteration and read which hero-tree-gated abilities fired (the APL branches on
+`hero_tree.<slug>`, so only the taken tree produces damage and buffs). The result is
+written per tier to `data/hero_trees.json` and read back by `profiles.discover`.
+Detected from simc, not hand-typed, so a new tier needs a re-run and not an edit; a
+spec whose signatures are missing stays unnamed and the run says which.
+
+**The resolution feeds the *display*, never the id.** `SpecProfile.name_hero` is the
+suffix simc's profile name carried (None for an unnamed build) and the id is built
+from that -- `death_knight_frost_default` stays `death_knight_frost_default`, so gear,
+fights, logs and talents keep joining on it. `hero_talent` carries the resolved tree
+(`Deathbringer`), which is what `displayName`, the `heroTalent` field and every icon
+use. The id names simc's build *slot*; `hero_talent` names the *tree* it plays; both
+are true and neither moves the joins. MID2's five unnamed builds resolve to
+Deathbringer (Frost DK), Pack Leader (BM), Sentinel (MM and Survival) and Deathstalker
+(Sub Rogue).
+
+`heroTreeIconUrl` returns a real atlas element for every one of the 39 trees, so once
+the tree is named the icon appears in every table -- the missing-icon rows were the
+unnamed builds, not a gap in the map. `heroTalent === 'Default'` therefore only
+appears now for a tier that has not been through `wowdps hero-trees` yet; the pill and
+prose still handle it as a fallback but it is no longer expected.
 
 ### Boss icons come from Warcraft Logs, and that is not laziness
 

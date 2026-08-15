@@ -107,6 +107,11 @@ export interface SimcMeta {
   ptr?: boolean
   beta?: boolean
   reportVersion?: string
+  /** The WoW build simc modelled — the patch these numbers reflect. */
+  wowVersion?: string
+  wowBuild?: number
+  /** The game-data hotfix date. Balance changes after it are not yet in the data. */
+  hotfixDate?: string
 }
 
 export interface TierMeta {

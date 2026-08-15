@@ -10,7 +10,7 @@ import {
   loadSpecs,
   loadTierIndex,
 } from './lib/data'
-import { describeConvergence, samplingError } from './lib/format'
+import { describeConvergence, describeGameBuild, samplingError } from './lib/format'
 import type {
   FightsDataset,
   GearDataset,
@@ -453,6 +453,7 @@ function Footer({ manifest }: { manifest: Manifest }) {
         play; real fights add movement, mechanics and mistakes. Use this to understand the
         shape of a spec, not to predict your own parse.
       </p>
+      <p className="mt-2 text-ink-secondary">{describeGameBuild(simc)}</p>
       <p className="mt-2">
         Class, specialisation and hero-talent icons are Blizzard artwork served by Wowhead;
         this site is not affiliated with either. World of Warcraft is a trademark of

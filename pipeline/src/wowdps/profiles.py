@@ -113,13 +113,20 @@ class SpecProfile:
     tier: str
     wow_class: str  # "Death Knight"
     spec: str  # "Unholy"
-    hero_talent: str | None  # "San'layn", or None for the simc default build
+    hero_talent: str | None  # "San'layn" -- the tree the build plays, always known
     role: str  # "spell" | "attack" | "tank" | "hybrid" | ...
     talent_hash: str | None
+    #: The hero-tree slug simc's *profile name* carried, before resolution. ``None``
+    #: for a build simc ships unnamed. This -- not ``hero_talent`` -- is what the id
+    #: is built from, so resolving an unnamed build's real tree (see ``herotrees``)
+    #: fixes what is shown without renaming the file every other dataset joins on.
+    #: The id then names simc's build *slot* ("default") while ``hero_talent`` names
+    #: the tree it plays ("Deathbringer"); both are true and neither moves the joins.
+    name_hero: str | None = None
 
     @property
     def id(self) -> str:
-        return slugify(self.wow_class, self.spec, self.hero_talent or "default")
+        return slugify(self.wow_class, self.spec, self.name_hero or "default")
 
     @property
     def spec_id(self) -> str:
@@ -128,6 +135,8 @@ class SpecProfile:
 
     @property
     def hero_label(self) -> str:
+        # Every spec plays a tree; the resolved one, or the profile-name one, and
+        # only ``Default`` if a tier has not been through ``wowdps hero-trees`` yet.
         return self.hero_talent or "Default"
 
     @property
@@ -140,8 +149,14 @@ class SpecProfile:
         return self.role in {"spell", "attack", "hybrid", "dps"}
 
 
-def parse_profile(path: Path, tier: str) -> SpecProfile | None:
-    """Identify a single ``.simc`` profile. Returns None if it is not a player profile."""
+def parse_profile(
+    path: Path, tier: str, hero_overrides: dict[str, str] | None = None
+) -> SpecProfile | None:
+    """Identify a single ``.simc`` profile. Returns None if it is not a player profile.
+
+    ``hero_overrides`` maps a profile's internal name to the hero tree it actually
+    plays, for the builds simc ships without a hero suffix. See ``herotrees``.
+    """
     text = path.read_text(encoding="utf-8", errors="replace")
 
     player = _PLAYER_LINE.search(text)
@@ -164,9 +179,15 @@ def parse_profile(path: Path, tier: str) -> SpecProfile | None:
     # always rename the file: MID1_Death_Knight_Unholy.simc declares itself as
     # "MID1_Death_Knight_Unholy_Rider", and Rider is genuinely the build being simmed.
     profile_name = player.group(2).strip()
-    hero_talent = _hero_from_name(profile_name, tier, class_filename_form, spec_token)
-    if hero_talent is None:
-        hero_talent = _hero_from_name(path.stem, tier, class_filename_form, spec_token)
+    name_hero = _hero_from_name(profile_name, tier, class_filename_form, spec_token)
+    if name_hero is None:
+        name_hero = _hero_from_name(path.stem, tier, class_filename_form, spec_token)
+    # simc ships a spec's default build with no hero suffix, but it still plays a
+    # tree. The resolved name is detected from simc (`wowdps hero-trees`) and keyed
+    # on the profile's internal name. It feeds the *display*, never the id.
+    hero_talent = name_hero
+    if hero_talent is None and hero_overrides:
+        hero_talent = hero_overrides.get(profile_name) or hero_overrides.get(path.stem)
 
     return SpecProfile(
         path=path,
@@ -176,6 +197,7 @@ def parse_profile(path: Path, tier: str) -> SpecProfile | None:
         hero_talent=hero_talent,
         role=role,
         talent_hash=talents.group(1) if talents else None,
+        name_hero=name_hero,
     )
 
 
@@ -202,9 +224,12 @@ def discover(profiles_dir: Path, tier: str, dps_only: bool = True) -> list[SpecP
             f"and is tier {tier!r} correct?"
         )
 
+    from . import herotrees
+
+    hero_overrides = herotrees.load_overrides(tier)
     found: list[SpecProfile] = []
     for path in sorted(tier_dir.glob("*.simc")):
-        profile = parse_profile(path, tier)
+        profile = parse_profile(path, tier, hero_overrides)
         if profile is None:
             continue
         if dps_only and not profile.is_dps:
