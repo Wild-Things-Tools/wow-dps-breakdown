@@ -803,6 +803,60 @@ would understate the spec. Published as a per-build `caveat` in `talent-trees.js
 shown beside the tree -- `_THIN_CLASS_TREE` is the threshold. This module reads
 profiles; it does not write them.
 
+## Patch state: two dates, and only one of them is the cutoff
+
+`components/PatchState.tsx`, on the Overview under the ranking. It answers the
+question a reader arrives with the morning after a tuning pass -- *is yesterday's
+change in this?* -- which the header byline and the footer sentence did not.
+
+**The load-bearing figure is the data cutoff, not the publish date**, and they are
+routinely different. simc's numbers come from a game-data snapshot with its own
+hotfix date; a dataset regenerated today off a snapshot taken three days ago models
+the game as it was three days ago. MID2 today is exactly that: `hotfixDate`
+2026-08-12 against `generatedAt` 2026-08-15. Reporting only the publish date would be
+the more flattering of the two and the wrong one, so the panel computes the gap and
+says which date actually bounds the numbers.
+
+**It never claims a specific change is included.** That would need Blizzard's patch
+notes, which this repository has no source for, and being confidently wrong about it
+is worse than being silent. The panel states the build and the cutoff and leaves the
+comparison to the reader. Do not "improve" this into a tuning checklist without a
+real source behind it.
+
+Everything shown is read from the manifest -- `wowVersion`, `wowBuild`, `hotfixDate`,
+`ptr`, `simcVersion`, `gitRevision`, `gitBranch`, `buildDate`, `generatedAt`. The
+`ptr` flag matters beyond display: `wowdps talent-trees` reads it to pick between
+simc's live and PTR trait tables, because reading the wrong one decodes cleanly and
+quietly describes a different tree.
+
+## Probing across hours, rather than restarting
+
+Warcraft Logs meters by points per hour and a pass at a useful sample size does not
+fit in one: the first 40-report MID2 pass stopped at 80% of the budget with three of
+nine bosses unread. Points reset hourly, so that work was never lost -- there was
+nowhere to postpone it to.
+
+`--resume` (default: the payload already in `--out`) skips any encounter that already
+carries `--reports` fights, before a query is sent. The command exits **3** while
+anything is outstanding -- distinct from **2**, which is the ceiling stopping a run
+mid-encounter -- and `fight-probe.yml` has an hourly `schedule` whose only job is to
+clear that state. With nothing outstanding it fetches nothing and spends nothing.
+
+Three things that would otherwise bite:
+
+- **Raising `--reports` re-opens every encounter**, on purpose: somebody raising it
+  wants a bigger sample, not a skip.
+- **`inputs.*` is empty on a scheduled run**, so every input in the workflow now
+  carries the same default the dispatch form shows. A continuation has to run with the
+  settings of the pass it continues or it re-opens all of them.
+- The response cache and the partial payload both ride in one `actions/cache` keyed on
+  the tier. That is what makes the continuation *cheap* rather than merely correct --
+  a partially-read encounter costs almost nothing the second time.
+
+The payload publishes `encountersRequested`, `encountersCollected` and `incomplete`,
+so "this zone has nine bosses and we have all nine" reads differently from "we have
+all the ones we tried".
+
 ## Charts
 
 Read the `dataviz` skill before touching chart code. The short version of what applies

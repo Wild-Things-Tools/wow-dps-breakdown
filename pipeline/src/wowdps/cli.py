@@ -697,7 +697,21 @@ def cmd_talent_trees(args: argparse.Namespace) -> int:
         json.loads(path.read_text(encoding="utf-8")) for path in sorted(spec_dir.glob("*.json"))
     ]
 
-    traits = talenttree.parse_trait_data(Path(args.simc_source), ptr=args.ptr)
+    # simc ships two trait tables and the profiles were run against one of them. The
+    # manifest already records which, so the default follows it rather than asking --
+    # reading the live table for a PTR tier is the kind of mismatch that decodes
+    # cleanly and quietly describes the wrong tree.
+    ptr = args.ptr
+    manifest_path = root / tier / "index.json"
+    if not ptr and manifest_path.is_file():
+        recorded = (json.loads(manifest_path.read_text(encoding="utf-8")).get("simc") or {}).get(
+            "ptr"
+        )
+        if recorded:
+            logging.info("%s was simulated against simc's PTR data; reading that table", tier)
+            ptr = True
+
+    traits = talenttree.parse_trait_data(Path(args.simc_source), ptr=ptr)
     if not traits:
         logging.error("no trait data found under %s", args.simc_source)
         return 1
@@ -992,7 +1006,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--simc-source", required=True, help="simc source checkout, for the trait table"
     )
     p_talent_trees.add_argument(
-        "--ptr", action="store_true", help="read the PTR trait table instead of the live one"
+        "--ptr",
+        action="store_true",
+        help="force the PTR trait table. The default follows the tier's own manifest, "
+        "which records which data set the sims ran against.",
     )
     p_talent_trees.set_defaults(func=cmd_talent_trees)
 
