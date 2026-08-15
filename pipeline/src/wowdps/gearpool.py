@@ -53,139 +53,153 @@ there" are different sentences that must not produce the same pool.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
-from dataclasses import dataclass, field, replace
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
 
 from .equipment import DiscoveredItem, GearItem
 from .lootsources import ItemDrop, LootIndex, Rotation
 
-#: How much of a tier's boss list an instance has to account for before it is
-#: accepted as that tier's raid. A raid whose encounters match half the tier's
-#: bosses is the tier's raid with some names spelled differently; one that matches
-#: two of nine is a coincidence, and taking it would build the candidate pool out of
-#: the wrong raid entirely -- the single most damaging way this could fail, because
-#: the result would look perfectly well-formed.
-MIN_RAID_ENCOUNTER_MATCH = 0.5
+#: A companion instance needs at least this many of the tier's equipped items to
+#: count as part of the same raid. One is enough *because* the expansion test below
+#: does the real work: a tier's raid content is in one expansion, and a profile that
+#: equips a legacy item (MID2's Arcane Mage wears a Legion ring) places it in an old
+#: raid in a different expansion, where this cannot reach it.
+MIN_COMPANION_HITS = 1
 
 
 def _normalise(name: str) -> str:
-    """Fold a boss or instance name to something two sources can agree on.
-
-    Warcraft Logs and the Encounter Journal name the same boss slightly differently
-    -- ``&`` against ``and``, an epithet present in one and absent in the other --
-    so the comparison is made on letters and digits alone.
-    """
+    """Fold a name to something two sources can agree on."""
     return re.sub(r"[^a-z0-9]+", "", name.lower().replace("&", "and"))
 
 
-def _names_agree(left: str, right: str) -> bool:
-    """Do these two names refer to the same encounter?
+#: Equipment lines in a simc profile. Only real gear slots -- a profile also carries
+#: `id=` inside other options, and reading those would place items nobody wears.
+_EQUIP_LINE = re.compile(
+    r"^(?:head|neck|shoulder|back|chest|wrist|hands|waist|legs|feet|finger[12]"
+    r"|trinket[12]|main_hand|off_hand)\s*=.*?\bid=(\d+)",
+    re.MULTILINE,
+)
 
-    Containment rather than equality, because one source routinely carries an
-    epithet the other drops (``Chimaerus`` against ``Chimaerus, the Undreamt God``).
-    The four-character floor keeps a short name from matching most of the game.
+
+def equipped_item_ids(simc_dir: Path, tier: str) -> frozenset[int]:
+    """Every item id the tier's own simc profiles wear.
+
+    This is the authority for *which raid belongs to this tier*, and getting that
+    wrong is what the first version did. It keyed on the tier's boss list from
+    ``fight_profiles.json``, which sounds like the same question and is not: that list
+    is what Warcraft Logs currently has kills for, so during the week before a season
+    turns it describes the raid that is **ending**. MID2's profiles gear for The
+    Venomous Abyss and The Tidebound Grotto while the logs are still full of The
+    Voidspire, and matching bosses duly named the wrong raid and called the correct
+    pool wrong.
+
+    What a tier *is*, for this project, is the set of profiles simc ships under that
+    name. So the raid is the one that drops what those profiles wear -- derived from
+    simc, like every other number here, and immune to the season boundary.
     """
-    a, b = _normalise(left), _normalise(right)
-    if not a or not b:
-        return False
-    if a == b:
-        return True
-    return len(a) >= 4 and len(b) >= 4 and (a in b or b in a)
+    found: set[int] = set()
+    directory = simc_dir / "profiles" / tier
+    if not directory.is_dir():
+        return frozenset()
+    for path in sorted(directory.glob("*.simc")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        found.update(int(match) for match in _EQUIP_LINE.findall(text))
+    return frozenset(found)
 
 
 @dataclass(frozen=True)
-class RaidMatch:
-    """The journal instance identified as one tier's raid, and how well it fits."""
+class InstanceHit:
+    """One journal instance, and how much of the tier's gear it accounts for."""
 
     instance_id: int
     instance: str
     expansion: str | None
-    #: For each tier boss this instance did *not* account for, where the journal did
-    #: place it. Without this, "3 of 9 unmatched" is a dead end: it cannot say whether
-    #: the names have drifted, whether the tier spans two instances, or whether the
-    #: wrong raid was picked. With it the refusal is actionable.
-    elsewhere: tuple[tuple[str, str], ...] = ()
-    #: Tier boss names this instance accounted for, and the ones it did not. The
-    #: second is published rather than swallowed: a raid that matches seven of nine
-    #: is almost certainly right *and* is telling you two names have drifted.
-    matched: tuple[str, ...] = ()
-    missing: tuple[str, ...] = ()
+    hits: int
+    items: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class TierRaid:
+    """The raid instances this tier's profiles are geared from.
+
+    Plural on purpose. MID2's raid is *two* journal instances -- The Venomous Abyss
+    and The Tidebound Grotto -- and a single-instance answer silently drops whatever
+    the second one contributes.
+    """
+
+    instances: tuple[InstanceHit, ...] = ()
+    #: Instances that dropped some of the tier's gear but were excluded for being in
+    #: another expansion -- almost always a legacy item a profile still wears.
+    legacy: tuple[InstanceHit, ...] = ()
 
     @property
-    def share(self) -> float:
-        total = len(self.matched) + len(self.missing)
-        return len(self.matched) / total if total else 0.0
+    def instance_ids(self) -> frozenset[int]:
+        return frozenset(hit.instance_id for hit in self.instances)
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        return tuple(hit.instance for hit in self.instances)
 
     def to_json(self) -> dict:
         return {
-            "instanceId": self.instance_id,
-            "instance": self.instance,
-            "expansion": self.expansion,
-            "matched": list(self.matched),
-            "missing": list(self.missing),
-            "elsewhere": [{"boss": boss, "instance": where} for boss, where in self.elsewhere],
-            "share": round(self.share, 3),
+            "instances": [
+                {
+                    "instanceId": hit.instance_id,
+                    "instance": hit.instance,
+                    "expansion": hit.expansion,
+                    "equippedItems": hit.hits,
+                }
+                for hit in self.instances
+            ],
+            "legacy": [
+                {"instance": hit.instance, "expansion": hit.expansion, "equippedItems": hit.hits}
+                for hit in self.legacy
+            ],
         }
 
 
-def identify_tier_raid(index: LootIndex, encounter_names: Sequence[str]) -> RaidMatch | None:
-    """Which journal instance is the raid this tier's boss list describes?
+def identify_tier_raid(index: LootIndex, equipped: Iterable[int]) -> TierRaid | None:
+    """Which raid instances is this tier geared from?
 
-    Derived rather than configured, so that adding a tier to the project means
-    adding its bosses (which the Fights view needs anyway) and nothing else. The
-    encounters are read back out of the loot index -- an instance is known here by
-    the drops its bosses produce, which is exactly the set the pool will be built
-    from, so an instance that matched but dropped nothing could not have helped.
+    Counts, per raid-kind instance, how many of the tier's equipped items it drops.
+    The instance with the most is the raid; any other instance **in the same
+    expansion** that also dropped some of the tier's gear joins it, which is what
+    keeps a two-instance raid whole. An instance in a different expansion is reported
+    as legacy rather than joined -- that is a profile still wearing an old item, not a
+    second half of this tier's raid.
     """
-    if not encounter_names:
+    wanted = set(equipped)
+    if not wanted:
         return None
 
-    by_instance: dict[int, tuple[str, str | None, set[str]]] = {}
-    for drops in index.drops.values():
-        for drop in drops:
+    tally: dict[int, tuple[str, str | None, set[int]]] = {}
+    for item_id in wanted:
+        for drop in index.drops.get(item_id) or []:
             if drop.kind != "raid" or drop.instance_id is None:
                 continue
-            entry = by_instance.setdefault(drop.instance_id, (drop.instance, drop.expansion, set()))
-            entry[2].add(drop.encounter)
+            entry = tally.setdefault(drop.instance_id, (drop.instance, drop.expansion, set()))
+            entry[2].add(item_id)
 
-    best: RaidMatch | None = None
-    for instance_id, (instance, expansion, encounters) in by_instance.items():
-        matched = tuple(
-            name for name in encounter_names if any(_names_agree(name, e) for e in encounters)
-        )
-        missing = tuple(name for name in encounter_names if name not in matched)
-        candidate = RaidMatch(
-            instance_id=instance_id,
-            instance=instance,
-            expansion=expansion,
-            matched=matched,
-            missing=missing,
-        )
-        if best is None or candidate.share > best.share:
-            best = candidate
-
-    if best is None or best.share < MIN_RAID_ENCOUNTER_MATCH:
+    if not tally:
         return None
 
-    # Where did the journal put the bosses this instance did not account for? A raid
-    # spanning two instances, a set of names that drifted, and the wrong raid winning
-    # on a partial match all produce the same "N unmatched" line, and they need
-    # completely different responses.
-    elsewhere: list[tuple[str, str]] = []
-    for name in best.missing:
-        for drops in index.drops.values():
-            found = next(
-                (
-                    drop
-                    for drop in drops
-                    if drop.instance_id != best.instance_id and _names_agree(name, drop.encounter)
-                ),
-                None,
-            )
-            if found is not None:
-                elsewhere.append((name, found.instance or str(found.instance_id)))
-                break
-    return replace(best, elsewhere=tuple(elsewhere))
+    hits = [
+        InstanceHit(instance_id=iid, instance=name, expansion=expansion, hits=len(ids))
+        for iid, (name, expansion, ids) in tally.items()
+    ]
+    hits.sort(key=lambda hit: (-hit.hits, hit.instance))
+    best = hits[0]
+
+    kept = [best]
+    legacy = []
+    for hit in hits[1:]:
+        same_expansion = _normalise(hit.expansion or "") == _normalise(best.expansion or "")
+        if same_expansion and hit.hits >= MIN_COMPANION_HITS:
+            kept.append(hit)
+        else:
+            legacy.append(hit)
+    return TierRaid(instances=tuple(kept), legacy=tuple(legacy))
 
 
 @dataclass(frozen=True)
@@ -267,7 +281,7 @@ class PoolBuild:
     tier: str
     slot: str
     items: tuple[PoolCandidate, ...] = ()
-    raid: RaidMatch | None = None
+    raid: TierRaid | None = None
     rotation: Rotation | None = None
     #: Placed by the journal, but outside this season -- the population the old
     #: heuristic could not tell from the pool. Published because "we dropped these
@@ -326,7 +340,7 @@ def build_pool(
     index: LootIndex,
     rotation: Rotation,
     discovered: Sequence[DiscoveredItem],
-    encounter_names: Sequence[str],
+    equipped: Iterable[int],
 ) -> PoolBuild:
     """Join simc's item table against the journal to produce one slot's pool.
 
@@ -346,22 +360,16 @@ def build_pool(
             "unread; refusing to build a pool from a partial index"
         )
 
-    raid = identify_tier_raid(index, encounter_names)
+    raid = identify_tier_raid(index, equipped)
     if raid is None:
         warnings.append(
-            f"no journal raid accounted for at least {MIN_RAID_ENCOUNTER_MATCH:.0%} of "
-            f"the {len(encounter_names)} boss names for {tier}; the raid pool cannot be built"
+            f"no raid in the journal drops anything {tier}'s profiles wear, so the raid "
+            "pool cannot be built"
         )
-    elif raid.missing:
-        where = {boss: instance for boss, instance in raid.elsewhere}
-        detail = ", ".join(
-            f"{boss} (journal places it in {where[boss]})" if boss in where else f"{boss} (nowhere)"
-            for boss in raid.missing
-        )
-        warnings.append(
-            f"{raid.instance} matched {len(raid.matched)} of "
-            f"{len(raid.matched) + len(raid.missing)} {tier} bosses; unmatched: {detail}"
-        )
+    elif raid.legacy:
+        # Not a warning: a profile wearing an old item is ordinary, and the instance
+        # that drops it is reported so nobody has to wonder why it is not in the pool.
+        pass
 
     rotation_ids = rotation.instance_ids
     if not rotation_ids:
@@ -370,7 +378,7 @@ def build_pool(
             "dungeon in the game rather than this season's"
         )
 
-    raid_ids = frozenset({raid.instance_id}) if raid else frozenset()
+    raid_ids = raid.instance_ids if raid else frozenset()
 
     items: list[PoolCandidate] = []
     out_of_season: list[RejectedItem] = []
@@ -440,12 +448,13 @@ def render(build: PoolBuild, previous: Sequence[GearItem] = ()) -> list[str]:
 
     lines.append(f"{build.tier} {build.slot}: derived from Blizzard's journal")
     if build.raid:
-        lines.append(
-            f"  raid        {build.raid.instance} "
-            f"(matched {len(build.raid.matched)} of "
-            f"{len(build.raid.matched) + len(build.raid.missing)} bosses)  "
-            f"-> {len(raid_items)} item(s)"
-        )
+        where = ", ".join(f"{hit.instance} ({hit.hits} equipped)" for hit in build.raid.instances)
+        lines.append(f"  raid        {where}  -> {len(raid_items)} item(s)")
+        for hit in build.raid.legacy:
+            lines.append(
+                f"              legacy, not joined: {hit.instance} "
+                f"({hit.expansion}, {hit.hits} equipped)"
+            )
     else:
         lines.append("  raid        not identified")
     if build.rotation and build.rotation.dungeons:
@@ -537,7 +546,7 @@ def cmd_gear_pool(args) -> int:  # noqa: ANN001 -- argparse namespace, as every 
     import logging
     from pathlib import Path
 
-    from . import equipment, fightprofile
+    from . import equipment
     from .blizzard import BlizzardClient, BlizzardError, Credentials, RequestBudgetExhausted
     from .lootsources import derive_index, derive_rotation
 
@@ -576,15 +585,16 @@ def cmd_gear_pool(args) -> int:  # noqa: ANN001 -- argparse namespace, as every 
         log.error("no %s items found in %s", args.slot, args.simc_source)
         return 1
 
-    tier_profiles = fightprofile.load_profiles(args.tier)
-    encounter_names = tuple(profile.name for profile in tier_profiles.profiles.values())
-    if not encounter_names:
+    equipped = equipped_item_ids(Path(args.simc_source), args.tier)
+    if not equipped:
         log.error(
-            "tier %s has no fight profiles, so its raid cannot be identified; add its "
-            "encounters to fight_profiles.json first",
+            "no profiles found under %s/profiles/%s, so this tier's raid cannot be "
+            "identified -- it is the raid that drops what these profiles wear",
+            args.simc_source,
             args.tier,
         )
         return 1
+    log.info("%s's profiles wear %d distinct items", args.tier, len(equipped))
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -611,7 +621,7 @@ def cmd_gear_pool(args) -> int:  # noqa: ANN001 -- argparse namespace, as every 
         )
         cost = client.ledger.to_json()
 
-    build = build_pool(args.tier, args.slot, index, rotation, discovered, encounter_names)
+    build = build_pool(args.tier, args.slot, index, rotation, discovered, equipped)
     # Read back through load_pools so the comparison sees exactly what the sweep
     # sees -- but a slot seeded a moment ago is not on disk yet, and asking for it
     # would crash where the honest answer is "there was nothing here before".

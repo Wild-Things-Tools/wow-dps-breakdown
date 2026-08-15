@@ -8,8 +8,8 @@ the only test that means anything is whether the *journal* separates them.
 
 from wowdps.equipment import DiscoveredItem, GearItem
 from wowdps.gearpool import (
-    MIN_RAID_ENCOUNTER_MATCH,
     build_pool,
+    equipped_item_ids,
     identify_tier_raid,
     render,
 )
@@ -63,45 +63,105 @@ def rotation_of(*instances: tuple[int, str]) -> Rotation:
 # --------------------------------------------------------------------------------
 
 
-def test_the_raid_is_found_by_matching_the_tiers_own_boss_list():
-    """No hard-coded instance id: a new tier needs its bosses listed and nothing else."""
+def test_the_raid_is_the_one_that_drops_what_the_tiers_profiles_wear():
+    """Derived from simc, not from a boss list, and this is the case that forced it.
+
+    The first version matched the tier's bosses from fight_profiles.json against the
+    journal. That is what Warcraft Logs currently has kills for, so in the week before
+    a season turns it names the raid that is *ending* -- for MID2 it named The
+    Voidspire while the profiles were geared from The Venomous Abyss, and duly
+    reported the correct trinket pool as wrong.
+    """
     index = index_of(
-        drop(1, "A", "Imperator Averzian", 1300, "Crucible of Night", "raid"),
-        drop(2, "B", "Vorasius", 1300, "Crucible of Night", "raid"),
-        drop(3, "C", "Some Old Boss", 900, "A Previous Raid", "raid"),
+        drop(
+            270164, "Gebbo's Bottomless Bag", "The Twin Fangs", 1300, "The Venomous Abyss", "raid"
+        ),
+        drop(
+            270160,
+            "First Mate's Shellward",
+            "The Lost Explorers",
+            1300,
+            "The Venomous Abyss",
+            "raid",
+        ),
+        drop(999, "Something", "Imperator Averzian", 1400, "The Voidspire", "raid"),
     )
-    match = identify_tier_raid(index, ["Imperator Averzian", "Vorasius"])
-    assert match is not None
-    assert match.instance_id == 1300
-    assert match.share == 1.0
+    raid = identify_tier_raid(index, [270164, 270160])
+    assert raid is not None
+    assert raid.names == ("The Venomous Abyss",)
+    assert 1400 not in raid.instance_ids
 
 
-def test_names_that_differ_only_in_punctuation_or_an_epithet_still_match():
-    """Warcraft Logs and the journal do not spell a boss the same way."""
+def test_a_raid_spanning_two_instances_is_kept_whole():
+    """MID2's raid is The Venomous Abyss *and* The Tidebound Grotto. A single-instance
+    answer silently drops whatever the second one contributes."""
     index = index_of(
-        drop(1, "A", "Chimaerus, the Undreamt God", 1300, "Crucible", "raid"),
-        drop(2, "B", "Vaelgor and Ezzorak", 1300, "Crucible", "raid"),
+        drop(270160, "A", "The Lost Explorers", 1300, "The Venomous Abyss", "raid"),
+        drop(270164, "B", "The Twin Fangs", 1300, "The Venomous Abyss", "raid"),
+        drop(
+            270167,
+            "Wavecaller's Seastone",
+            "Nymrissa Wavecaller",
+            1301,
+            "The Tidebound Grotto",
+            "raid",
+        ),
     )
-    match = identify_tier_raid(index, ["Chimaerus", "Vaelgor & Ezzorak"])
-    assert match is not None
-    assert len(match.matched) == 2
+    raid = identify_tier_raid(index, [270160, 270164, 270167])
+    assert raid is not None
+    assert set(raid.names) == {"The Venomous Abyss", "The Tidebound Grotto"}
 
 
-def test_a_raid_that_matches_almost_nothing_is_refused():
-    """The most damaging failure available: a well-formed pool from the wrong raid."""
-    index = index_of(drop(1, "A", "Some Old Boss", 900, "A Previous Raid", "raid"))
-    assert identify_tier_raid(index, ["Imperator Averzian", "Vorasius", "Belo'ren"]) is None
-    assert MIN_RAID_ENCOUNTER_MATCH == 0.5
-
-
-def test_an_unmatched_boss_is_reported_rather_than_swallowed():
+def test_a_legacy_item_does_not_drag_an_old_raid_in():
+    """MID2's Arcane Mage wears a Legion ring. The instance that drops it is a raid
+    with a genuine hit, and it is not part of this tier."""
+    old = ItemDrop(
+        item_id=159459,
+        item_name="Ritual Binder's Ring",
+        encounter_id=9,
+        encounter="Some Legion Boss",
+        instance_id=900,
+        instance="Antorus",
+        expansion="Legion",
+        kind="raid",
+    )
     index = index_of(
-        drop(1, "A", "Imperator Averzian", 1300, "Crucible", "raid"),
-        drop(2, "B", "Vorasius", 1300, "Crucible", "raid"),
+        drop(270160, "A", "The Lost Explorers", 1300, "The Venomous Abyss", "raid"),
+        drop(270164, "B", "The Twin Fangs", 1300, "The Venomous Abyss", "raid"),
+        old,
     )
-    match = identify_tier_raid(index, ["Imperator Averzian", "Vorasius", "Belo'ren"])
-    assert match is not None
-    assert match.missing == ("Belo'ren",)
+    raid = identify_tier_raid(index, [270160, 270164, 159459])
+    assert raid is not None
+    assert raid.names == ("The Venomous Abyss",)
+    assert [hit.instance for hit in raid.legacy] == ["Antorus"]
+
+
+def test_no_raid_at_all_when_nothing_the_tier_wears_is_placed():
+    index = index_of(drop(1, "A", "A boss", 1200, "Murder Row", "dungeon"))
+    assert identify_tier_raid(index, [270160]) is None
+    assert identify_tier_raid(index, []) is None
+
+
+def test_equipped_item_ids_reads_gear_lines_only(tmp_path):
+    """A profile carries `id=` inside other options too; reading those would place
+    items nobody wears."""
+    directory = tmp_path / "profiles" / "MID2"
+    directory.mkdir(parents=True)
+    (directory / "MID2_Mage_Arcane.simc").write_text(
+        'mage="MID2_Mage_Arcane"\n'
+        "neck=aqirbane_reliquary,id=268265,bonus_id=13335,ilevel=344\n"
+        "trinket1=freightrunners_flask,id=250215,bonus_id=12854,ilevel=334\n"
+        "main_hand=janthrazet,id=271092,ilevel=344\n"
+        "# a comment mentioning id=111111\n"
+        "actions+=/arcane_blast,if=buff.x.up&id=222222\n",
+        encoding="utf-8",
+    )
+    found = equipped_item_ids(tmp_path, "MID2")
+    assert found == {268265, 250215, 271092}
+
+
+def test_a_tier_with_no_profiles_yields_nothing_rather_than_guessing(tmp_path):
+    assert equipped_item_ids(tmp_path, "MID9") == frozenset()
 
 
 # --------------------------------------------------------------------------------
@@ -126,7 +186,7 @@ def test_last_seasons_trinket_is_dropped_and_this_seasons_is_kept():
             item(250215, "Freightrunner's Flask"),
             item(250144, "Emberwing Feather"),
         ],
-        ["Vorasius"],
+        [270160],
     )
     assert build.usable
     assert [i.item_id for i in build.by_source("raid")] == [270160]
@@ -153,7 +213,7 @@ def test_a_rotation_dungeon_from_an_older_expansion_is_picked_up():
         index,
         rotation_of((1202, "Ruby Life Pools")),
         [item(270160, "Raid Trinket", 219, 4), item(190510, "Whispering Incarnate Icon", 40, 4)],
-        ["Vorasius"],
+        [270160],
     )
     assert [i.item_id for i in build.by_source("mythicplus")] == [190510]
     assert build.by_source("mythicplus")[0].instance == "Ruby Life Pools"
@@ -167,7 +227,7 @@ def test_an_item_the_journal_never_placed_is_reported_not_guessed():
         index,
         rotation_of((1200, "Altar of Fangs")),
         [item(270160, "Raid Trinket", 219, 4), item(12345, "Some Vanilla Trinket", 40, 2)],
-        ["Vorasius"],
+        [270160],
     )
     assert [r.item_id for r in build.unplaced] == [12345]
     assert 12345 not in {i.item_id for i in build.items}
@@ -184,7 +244,7 @@ def test_a_truncated_walk_refuses_to_build_a_pool():
         index,
         rotation_of((1200, "Altar of Fangs")),
         [item(270160, "Raid Trinket", 219, 4)],
-        ["Vorasius"],
+        [270160],
     )
     assert not build.usable
     assert any("stopped early" in w for w in build.warnings)
@@ -204,7 +264,7 @@ def test_gems_and_enchants_survive_a_rebuild():
     move every number in the comparison."""
     index = index_of(drop(1, "Ring", "Vorasius", 1300, "Crucible", "raid"))
     build = build_pool(
-        "MID2", "finger", index, rotation_of((1200, "D")), [item(1, "Ring", 219, 4)], ["Vorasius"]
+        "MID2", "finger", index, rotation_of((1200, "D")), [item(1, "Ring", 219, 4)], [1]
     )
     carried = GearItem(
         item_id=1,
@@ -235,7 +295,7 @@ def test_the_report_shows_the_diff_against_the_curated_pool():
         index,
         rotation_of((1200, "Altar of Fangs")),
         [item(270160, "Raid Trinket", 219, 4), item(250144, "Emberwing Feather")],
-        ["Vorasius"],
+        [270160],
     )
     previous = (
         GearItem(
@@ -255,42 +315,11 @@ def test_the_report_shows_the_diff_against_the_curated_pool():
     assert "Last Season's Hall" in text
 
 
-def test_the_refusal_says_where_the_unmatched_bosses_actually_are():
-    """ "3 of 9 unmatched" is a dead end on its own.
-
-    A tier spanning two instances, a set of names that drifted, and the wrong raid
-    winning on a partial match all produce that same line and need completely
-    different responses. This is the real MID2 case: the curated pool's trinkets come
-    from encounters no MID2 boss list contains.
-    """
-    index = index_of(
-        drop(1, "A", "Imperator Averzian", 1300, "The Voidspire", "raid"),
-        drop(2, "B", "Vorasius", 1300, "The Voidspire", "raid"),
-        drop(3, "C", "Chimaerus, the Undreamt God", 1301, "The Tidebound Grotto", "raid"),
-    )
-    match = identify_tier_raid(index, ["Imperator Averzian", "Vorasius", "Chimaerus"])
-    assert match is not None
-    assert match.instance == "The Voidspire"
-    assert match.missing == ("Chimaerus",)
-    assert match.elsewhere == (("Chimaerus", "The Tidebound Grotto"),)
-
-    build = build_pool(
-        "MID2",
-        "trinket",
-        index,
-        rotation_of((1200, "Murder Row")),
-        [item(1, "A", 219, 4)],
-        ["Imperator Averzian", "Vorasius", "Chimaerus"],
-    )
-    assert not build.usable
-    assert any("The Tidebound Grotto" in w for w in build.warnings)
-
-
 def test_a_slot_with_no_previous_pool_reports_everything_as_added():
     """Deriving a ring pool from scratch must not look like a diff against nothing."""
     index = index_of(drop(1, "Ring", "Vorasius", 1300, "Crucible", "raid"))
     build = build_pool(
-        "MID2", "finger", index, rotation_of((1200, "D")), [item(1, "Ring", 219, 4)], ["Vorasius"]
+        "MID2", "finger", index, rotation_of((1200, "D")), [item(1, "Ring", 219, 4)], [1]
     )
     text = "\n".join(render(build, ()))
     assert "1 item(s)" in text

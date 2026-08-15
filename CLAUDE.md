@@ -416,39 +416,45 @@ results worth keeping:
   Caverns. A hand list would have caught three of eleven, which is the argument
   against blacklisting stated as a number.
 
-### The curated raid pool is from the wrong raid
+### Which raid belongs to a tier: ask the profiles, not the boss list
 
-The finding the derivation exists to produce, and it arrived on the second run.
-`identify_tier_raid` matched MID2's boss list against the journal and named **The
-Voidspire**, accounting for 6 of the 9 (Imperator Averzian, Vorasius, Vaelgor &
-Ezzorak, Fallen-King Salhadaar, Lightblinded Vanguard, Crown of the Cosmos).
+`identify_tier_raid` first matched the tier's bosses from `fight_profiles.json`
+against the journal. That sounds like the same question and is not, and the way it
+failed is worth keeping.
 
-The fifteen trinkets the pool file calls `raid` -- ids 270160-270175 -- are **not
-from that raid**. The journal places them in *The Venomous Abyss* (fourteen) and *The
-Tidebound Grotto* (one), dropped by The Lost Explorers, Vashnik the Malignant,
-Sszorak, Ula'tek, The Twin Fangs and The Coiled Altar. Not one of those is a MID2
-boss. So the Loot view's whole candidate side -- "which raid trinket should I take"
--- has been ranking trinkets from a raid this tier does not run.
+Run three days before Midnight Season 2 opened, it named **The Voidspire** and
+reported the fifteen curated raid trinkets as belonging to some other raid. Both
+halves of that were the wrong way round. `fight_profiles.json` lists what Warcraft
+Logs currently has kills for, so in the week before a season turns it describes the
+raid that is **ending**. MID2's raid is *The Venomous Abyss* and *The Tidebound
+Grotto* -- The Lost Explorers, Vashnik the Malignant, Nek'zali the Soulcoiler,
+Sszorak, Ula'tek, The Twin Fangs, The Coiled Altar, Entombed Sentinels, Nymrissa
+Wavecaller -- which is exactly where the journal places ids 270160-270175. **The
+curated pool was right all along**; the derivation was asking a different tier's
+question.
 
-This is exactly what the structural inference could not see and was never able to
-see. The rule was "a contiguous block of fifteen epics at base item level 219", and
-that shape is equally true of any tier's raid trinkets; nothing in simc's table says
-*which* raid. The pool was believable and wrong.
+So the authority is now **what the tier's own simc profiles wear**: `equipped_item_ids`
+reads the gear lines out of `profiles/<tier>/*.simc`, and the raid is the instance
+that drops them. A tier, in this project, *is* the set of profiles simc ships under
+that name, so this cannot drift from the gear the sims actually run. It also needs no
+logs to exist yet, which the boss-list version implicitly did.
 
-**It was caught by the refusal, not by a check somebody thought to write.** Three
-bosses did not match, that produced a warning, and a build carrying warnings does not
-write. Had `build_pool` written on a 6-of-9 match, the pool would have been silently
-replaced with a plausible one and the finding lost.
+Three things it has to get right, all tested:
 
-`RaidMatch.elsewhere` now names the instance the journal *did* put each unmatched
-boss in, because "3 of 9 unmatched" is a dead end on its own -- a tier spanning two
-instances, names that drifted, and the wrong raid winning on a partial match all
-print the same line and need different responses.
+- **A raid can span two journal instances.** MID2's does. A single-instance answer
+  silently drops whatever the second contributes, so `TierRaid` holds a set: the
+  instance with the most equipped items, plus any other instance **in the same
+  expansion** that also dropped some.
+- **Profiles wear legacy items.** MID2's Arcane Mage equips a Legion ring
+  (`id=159459`), which places a genuine raid hit in Antorus. The same-expansion test
+  is what keeps that out, and it is reported as `legacy` rather than dropped silently.
+- **Only gear lines count.** `id=` appears in other profile options too, and reading
+  those would place items nobody wears.
 
-Unresolved, and a human's call: whether The Voidspire is MID2's raid and the pool
-should be rebuilt from it wholesale, and where Belo'ren, Midnight Falls and Chimaerus
-live (Chimaerus carries WCL encounter id 3306 against 3176-3183 for the rest, which
-looks like a later addition rather than a ninth boss of the same instance).
+Two labels that are not the same thing, and the Fights view currently shows this:
+the *gear* side of MID2 is the upcoming tier, while the *fights* side is the raid
+still being logged. That is not a bug in either -- there are no logs for a raid that
+opens on Tuesday -- but it is why nothing may join the two on "tier" alone.
 
 ### `inRotation` answers for dungeons only
 
