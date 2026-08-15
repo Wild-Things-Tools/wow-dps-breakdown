@@ -8,6 +8,7 @@ import type {
   SpecDetail,
   TalentDataset,
   TierIndex,
+  TalentTreeDataset,
 } from './types'
 
 const BASE = import.meta.env.BASE_URL
@@ -95,6 +96,18 @@ export async function loadFights(tier: string): Promise<FightsDataset | null> {
 export async function loadTalents(tier: string): Promise<TalentDataset | null> {
   try {
     return await fetchJson<TalentDataset>(`${tier}/talents.json`)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Talent trees are ~400 KB for a tier and only the Spec detail view draws them, so
+ * this is deliberately its own fetch rather than part of the manifest.
+ */
+export async function loadTalentTrees(tier: string): Promise<TalentTreeDataset | null> {
+  try {
+    return await fetchJson<TalentTreeDataset>(`${tier}/talent-trees.json`)
   } catch {
     return null
   }

@@ -237,6 +237,26 @@ jobs:
               print('::notice::merged', tier['id'], '--', tier['specCount'], 'specs')
           "
 
+      # The talent trees are decoded from the loadout strings the merge just wrote,
+      # against simc's own trait table -- no credentials, no external service, and no
+      # compiled simc either, so a sparse clone of one directory is the whole cost.
+      # It runs here rather than in a shard because it needs every spec file at once.
+      - name: Fetch simc trait table
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://github.com/simulationcraft/simc.git simc-src
+          git -C simc-src sparse-checkout set engine/dbc/generated
+
+      - name: Decode talent trees
+        run: |
+          for tier in $(python3 -c "
+          import json, pathlib
+          index = json.loads(pathlib.Path('web/public/data/tiers.json').read_text())
+          print(' '.join(t['id'] for t in index['tiers']))
+          "); do
+            wowdps -v talent-trees --tier "$tier" --simc-source simc-src
+          done
+
       - name: Commit
         run: |
           git config user.name 'github-actions[bot]'

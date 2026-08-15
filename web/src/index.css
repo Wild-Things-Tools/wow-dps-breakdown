@@ -210,3 +210,91 @@ body {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Talent tree nodes.
+
+   Each node is an anchor, because that is the only thing Wowhead's power.js will
+   enrich -- it bails on anything whose nodeName is not A or AREA, which is also
+   why the tree is HTML rather than SVG. The script adds an `icon*` class and a
+   background image once its lookup returns; until then (or forever, on a blocked
+   CDN) the node shows the talent's initials over a class-coloured tile, the same
+   fallback EntityIcon uses.
+
+   Taken and untaken are separated by three channels, not one: border colour,
+   opacity, and the rank badge. Colour alone would put the whole reading on a hue
+   that is already carrying class identity.
+   --------------------------------------------------------------------------- */
+.talent-node {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 7px;
+  border: 1.5px solid var(--hairline);
+  background-color: color-mix(in oklab, var(--node-color) 12%, var(--elevated));
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  text-decoration: none;
+  overflow: hidden;
+  transition: border-color 120ms ease, opacity 120ms ease;
+}
+
+/* A choice node is a different *kind* of node, so it gets a different outline
+   rather than a different colour. */
+.talent-node-choice {
+  border-radius: 3px;
+}
+
+.talent-node-taken {
+  border-color: var(--node-color);
+  opacity: 1;
+}
+
+.talent-node-idle {
+  opacity: 0.34;
+  filter: grayscale(0.65);
+}
+
+.talent-node-idle:hover,
+.talent-node-taken:hover {
+  opacity: 1;
+  filter: none;
+  border-color: var(--text-primary);
+}
+
+.talent-node-fallback {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+/* Once Wowhead's script has attached an icon, the initials would show through it.
+   The class it adds varies by icon size, so every variant is covered. */
+.talent-node[class*='icontiny'] .talent-node-fallback,
+.talent-node[class*='iconsmall'] .talent-node-fallback,
+.talent-node[class*='iconmedium'] .talent-node-fallback,
+.talent-node[class*='iconlarge'] .talent-node-fallback {
+  display: none;
+}
+
+.talent-rank {
+  position: absolute;
+  right: 1px;
+  bottom: 0;
+  border-radius: 4px;
+  background: color-mix(in oklab, var(--surface-1) 88%, transparent);
+  padding: 0 3px;
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+  color: var(--text-secondary);
+}
+
+.talent-node-taken .talent-rank {
+  color: var(--text-primary);
+}

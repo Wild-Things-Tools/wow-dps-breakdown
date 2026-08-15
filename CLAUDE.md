@@ -734,6 +734,75 @@ same class and the same spec. The hero-tree emblem, its name, and `buildDash` on
 line chart are what separate them. Never invent a second colour for the second
 build.
 
+## The talent tree, decoded from simc and nothing else
+
+`talenttree.py` + `wowdps talent-trees` + `components/TalentTree.tsx`. The obvious
+route was the one wtt-backend uses -- Blizzard's Game Data API for the layout, the
+character API for the selections. Both are wrong here: that API returns *a
+character's* talents and this project has no characters, and it would put the talent
+view behind credentials where every other number is derived from simc and
+byte-reproducible.
+
+None of it is needed. `engine/dbc/generated/trait_data.inc` carries node id, entry id,
+`row`, `col`, `name`, `max_ranks`, `node_type`, the hero sub-tree id and the spell id;
+`parse_traits_hash` in `engine/player/player.cpp` carries the loadout format. The
+feature is a join of two things already in the checkout, and CI gets them from a
+**sparse clone of one directory** -- no compiled simc.
+
+### The decode was verified offline, four ways
+
+Against MID2's 26 real hashes, with no API call:
+
+1. **Version and spec id.** Every hash reads version 2 and the correct canonical spec
+   id -- 251 Frost DK, 62 Arcane, 267 Destruction, all fifteen specs. A wrong alphabet
+   or bit order cannot produce fifteen correct ids. This check needs *no trait table*,
+   so it is pinned in `test_talenttree.py` against the committed dataset.
+2. **The stream terminates.** Every build consumes its hash to within six bits of the
+   end -- the padding to a 6-bit boundary. A desynchronised reader overruns or stops
+   early.
+3. **simc's own spec rule.** `parse_traits_hash` refuses a non-hero node whose
+   `id_spec` excludes the player's spec. Applied to the decoded selections: **zero
+   violations across all 26 builds**.
+4. **Against an independent derivation.** The SELECTION node yields one sub-tree id per
+   build, and across 26 builds those ids map one-to-one onto the hero trees
+   `herotrees.py` resolved by a completely different method (running the profile and
+   reading which abilities fired). Eighteen trees, no collisions. **This is also the
+   strongest confirmation the hero-tree detection was right.**
+
+### Three things that cost time
+
+- **`tree_index` >= 5 are not player traits.** simc's `talent_tree` enum ends the
+  player trees at `MAX = 5`; `EXPANSION = 6` holds Midnight's runeforge traits, and
+  `generate_tree_nodes` stops before them. Including them adds nodes to the stream and
+  desynchronises the decode -- subtly, because it still produces plausible talent names
+  and still terminates near the end of the string.
+- **A hero *node* can belong to two hero trees.** The SELECTION node is what names the
+  one being played; filtering hero nodes to it is what makes the point total come out
+  right. simc models this the same way with `player_sub_trees`.
+- **`id_spec` is a 4-array padded with zeros.** Keep the zeros and "no spec
+  restriction" stops being expressible as an empty tuple.
+
+### What is not drawn, and why
+
+- **Connector lines.** Blizzard's API has an `unlocks` edge list; simc has no edge
+  table at all. A guessed edge is a claim about how the tree unlocks, so the grid is
+  drawn without them. This is the one real loss against wtt-frontend's widget.
+- **Icons from us.** simc has no icon name for a spell any more than for an item
+  (checked: `spell_data_t` has no icon field). Nodes are Wowhead spell links and their
+  script paints the icon -- which is why the tree is **HTML, not SVG**: `power.js`
+  bails on anything whose `nodeName` is not `A` or `AREA`. Until it answers, and on a
+  blocked CDN, each node shows the talent's initials over a class-coloured tile.
+
+### The finding it produced immediately
+
+Twenty-four of MID2's twenty-six builds spend an identical **34 points in the
+specialisation tree** and 35 or 36 in the class tree. **Both Frost Death Knight
+profiles spend 10 class points.** Their spec and hero trees are normal and the decode
+is sound by all four checks above, so this is simc's shipped talent string, and it
+would understate the spec. Published as a per-build `caveat` in `talent-trees.json` and
+shown beside the tree -- `_THIN_CLASS_TREE` is the threshold. This module reads
+profiles; it does not write them.
+
 ## Charts
 
 Read the `dataviz` skill before touching chart code. The short version of what applies

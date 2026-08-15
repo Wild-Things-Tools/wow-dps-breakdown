@@ -787,3 +787,53 @@ export interface FightsDataset {
   coverage: { encounters: number; asserted: number; measured: number }
   encounters: FightEncounter[]
 }
+
+/**
+ * The talent tree, decoded from simc's own loadout string against simc's own trait
+ * table -- see `pipeline/src/wowdps/talenttree.py` for how that decode was verified
+ * offline. `tree` is a key into `TalentTreeDataset.trees`, shared by every build that
+ * plays the same spec and hero tree.
+ */
+export interface TalentTreeNodeEntry {
+  id: number
+  name: string
+  spellId: number
+}
+
+export interface TalentTreeNode {
+  id: number
+  /** simc's `talent_tree`: 1 class, 2 specialisation, 3 hero. */
+  tree: number
+  row: number
+  col: number
+  /** `trait_node_type_e`: 0 normal, 1 tiered, 2 choice. */
+  type: number
+  maxRanks: number
+  entries: TalentTreeNodeEntry[]
+}
+
+export interface TalentTreeLayout {
+  specId: number
+  subTree: number | null
+  nodes: TalentTreeNode[]
+}
+
+export interface TalentTreeBuild {
+  specId: string
+  displayName: string
+  tree: string
+  heroTalent: string | null
+  points: { class: number; spec: number; hero: number }
+  /** Set when the profile's own loadout looks unfinished; shown beside the tree. */
+  caveat: string | null
+  selected: { id: number; entry: number; rank: number }[]
+}
+
+export interface TalentTreeDataset {
+  schemaVersion: number
+  tier: string
+  note: string
+  trees: Record<string, TalentTreeLayout>
+  builds: TalentTreeBuild[]
+  notes: string[]
+}

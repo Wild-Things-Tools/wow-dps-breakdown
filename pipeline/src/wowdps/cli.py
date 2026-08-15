@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
@@ -670,6 +671,50 @@ def cmd_gear_pool(args: argparse.Namespace) -> int:
     return gearpool.cmd_gear_pool(args)
 
 
+def cmd_talent_trees(args: argparse.Namespace) -> int:
+    """Decode every build's loadout string and publish the tree it describes.
+
+    Offline and credential-free by design: the layout and the format both come out of
+    the simc checkout, so this runs anywhere the sims run. See talenttree.py for how
+    the decode was verified without a single API call.
+    """
+    from . import talenttree
+
+    root = Path(args.data)
+    tier = args.tier
+    if not tier or tier == "latest":
+        index = root / "tiers.json"
+        if not index.is_file():
+            logging.error("no tier index at %s -- run `wowdps build` first", index)
+            return 1
+        tier = json.loads(index.read_text(encoding="utf-8"))["current"]
+
+    spec_dir = root / tier / "specs"
+    if not spec_dir.is_dir():
+        logging.error("no spec files at %s", spec_dir)
+        return 1
+    builds = [
+        json.loads(path.read_text(encoding="utf-8")) for path in sorted(spec_dir.glob("*.json"))
+    ]
+
+    traits = talenttree.parse_trait_data(Path(args.simc_source), ptr=args.ptr)
+    if not traits:
+        logging.error("no trait data found under %s", args.simc_source)
+        return 1
+
+    document = talenttree.build_document(tier, builds, traits)
+    path = talenttree.write_talent_trees(document, root / tier)
+    logging.info(
+        "wrote %s: %d build(s) over %d tree(s)",
+        path,
+        len(document["builds"]),
+        len(document["trees"]),
+    )
+    for note in document["notes"]:
+        logging.warning("%s", note)
+    return 0
+
+
 def cmd_fight_promote(args: argparse.Namespace) -> int:
     from . import fightpromote
 
@@ -935,6 +980,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     gearpool.add_arguments(p_gear_pool)
     p_gear_pool.set_defaults(func=cmd_gear_pool)
+
+    p_talent_trees = sub.add_parser(
+        "talent-trees",
+        help="decode each build's loadout string into the talent tree it describes, "
+        "from simc's own trait table (no credentials, no external service)",
+    )
+    p_talent_trees.add_argument("--data", default="web/public/data", help="dataset directory")
+    p_talent_trees.add_argument("--tier", default="latest")
+    p_talent_trees.add_argument(
+        "--simc-source", required=True, help="simc source checkout, for the trait table"
+    )
+    p_talent_trees.add_argument(
+        "--ptr", action="store_true", help="read the PTR trait table instead of the live one"
+    )
+    p_talent_trees.set_defaults(func=cmd_talent_trees)
 
     p_fight_promote = sub.add_parser(
         "fight-promote",
