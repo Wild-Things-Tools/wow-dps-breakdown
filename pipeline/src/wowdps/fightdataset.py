@@ -1123,7 +1123,45 @@ def build_document(
 
 
 #: Fields describing *when the file was written* rather than what is in it.
-_PROVENANCE = ("generatedAt",)
+#: Wall-clock stamps that must not, on their own, make a document look changed.
+#: Nested paths matter: the first version of this listed only the top-level
+#: ``generatedAt``, so ``measurement.generatedAt`` still differed on every run, the
+#: comparison never matched, and *neither* stamp settled. The file was rewritten and
+#: committed on every probe re-run with nothing about the fights moved -- which is
+#: precisely the property the settle exists to protect.
+_PROVENANCE_PATHS: tuple[tuple[str, ...], ...] = (
+    ("generatedAt",),
+    ("measurement", "generatedAt"),
+)
+
+
+def _without_stamps(document: dict) -> dict:
+    """A copy with every provenance stamp removed, for comparison only."""
+    stripped = json.loads(json.dumps(document))
+    for path in _PROVENANCE_PATHS:
+        node = stripped
+        for key in path[:-1]:
+            node = node.get(key) if isinstance(node, dict) else None
+            if node is None:
+                break
+        if isinstance(node, dict):
+            node.pop(path[-1], None)
+    return stripped
+
+
+def _carry_stamps(document: dict, published: dict) -> dict:
+    """The new document wearing the published run's stamps."""
+    settled = json.loads(json.dumps(document))
+    for path in _PROVENANCE_PATHS:
+        source, target = published, settled
+        for key in path[:-1]:
+            source = source.get(key) if isinstance(source, dict) else None
+            target = target.get(key) if isinstance(target, dict) else None
+            if source is None or target is None:
+                break
+        if isinstance(source, dict) and isinstance(target, dict) and path[-1] in source:
+            target[path[-1]] = source[path[-1]]
+    return settled
 
 
 def write_fights(out_dir: Path, document: dict) -> Path:
@@ -1142,13 +1180,8 @@ def write_fights(out_dir: Path, document: dict) -> Path:
     except (OSError, ValueError):
         published = None
 
-    if published is not None and {k: v for k, v in published.items() if k not in _PROVENANCE} == {
-        k: v for k, v in document.items() if k not in _PROVENANCE
-    }:
-        settled = dict(document)
-        for key in _PROVENANCE:
-            if key in published:
-                settled[key] = published[key]
+    if published is not None and _without_stamps(published) == _without_stamps(document):
+        settled = _carry_stamps(document, published)
 
     path.write_text(json.dumps(settled, separators=(",", ":")) + "\n", encoding="utf-8")
     return path

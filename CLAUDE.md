@@ -993,6 +993,15 @@ The payload publishes `encountersRequested`, `encountersCollected` and `incomple
 so "this zone has nine bosses and we have all nine" reads differently from "we have
 all the ones we tried".
 
+**A settle that misses a nested stamp settles nothing.** `write_fights` excluded the
+top-level `generatedAt` from its "did anything change" comparison but not
+`measurement.generatedAt`, so the two documents never compared equal, the settle never
+fired, and *both* stamps were rewritten. Observed live on 2026-08-15: two probe
+re-runs that read identical fights produced two commits whose entire diff was the two
+timestamps. `_PROVENANCE_PATHS` now lists nested paths and is checked against the real
+payloads in `test_fightdataset.py`. The rule to remember is that this class of bug
+hides one level down -- the guard looks present and is inoperative.
+
 ## Charts
 
 Read the `dataviz` skill before touching chart code. The short version of what applies
