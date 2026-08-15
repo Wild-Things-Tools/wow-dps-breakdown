@@ -440,6 +440,19 @@ def merge_gear_shards(shard_dirs: list[Path], out_dir: Path) -> Path | None:
     documents.sort(key=lambda doc: doc.get("generatedAt", ""))
     merged = dict(documents[-1])
 
+    # What is already published joins the merge as the *oldest* document, so a slot
+    # this run did not sweep keeps the results it had. Without this a single-slot
+    # sweep silently deletes the others: `write_gear` emits an entry for every pool,
+    # so a neck run writes a trinket slot with an empty `specs` array, and a merge
+    # over shards alone would publish that as the trinket comparison. Union semantics
+    # mean an empty array removes nothing, so this only ever preserves.
+    published_path = out_dir / "gear.json"
+    if published_path.is_file():
+        try:
+            documents.insert(0, json.loads(published_path.read_text(encoding="utf-8")))
+        except ValueError:
+            log.warning("%s is not readable JSON; publishing this run alone", published_path)
+
     slots: dict[str, dict] = {}
     for document in documents:
         for slot in document.get("slots", []):

@@ -477,7 +477,38 @@ the pool because everything in the pool is farmable by construction.
 
 Neck (7) and finger (11) pools exist for the first time, derived the same way.
 
-### The sweep is not slot-generic, whatever equipment.py says
+### Making the sweep work for neck and rings
+
+Three things were wrong, and only the first was written down:
+
+- **`BASELINE_SIZE = 2` was hard-coded.** Now `baseline_size(slot)` = `len(slot.sockets)`.
+- **The candidate variant was `[baseline_items[0], item]`**, which assumes two sockets.
+  On a one-socket neck `zip(slot.sockets, items)` truncates to the first entry, so the
+  candidate is **silently never equipped** and the run measures the baseline against
+  itself -- a full set of plausible numbers, all of them the same number. It is now
+  `[*baseline_items[:-1], item]`: the candidate replaces the weakest, whatever the
+  socket count.
+- **Gems and enchants are read per spec off its own profile**, by
+  `equipment.read_adornments`, and applied to both sides of every comparison. They
+  belong to the *socket*, not to the item: a candidate nobody wears has no gem of its
+  own, and putting it in bare against an adorned baseline is not a comparison.
+  Per spec rather than per tier, because a Mage's ring gem is not a Rogue's. Verified
+  against MID2's real pool and profiles: neck carries `gem_id=240892/240906`, finger1
+  `gem_id=240906,enchant_id=7967` and finger2 `gem_id=240916,enchant_id=7967`, and
+  trinkets correctly come back bare.
+
+**A single-slot sweep used to delete the others.** `write_gear` emits an entry for
+every pool, so a neck run writes a trinket slot with an empty `specs` array, and
+`merge_gear_shards` read only the shard directories -- publishing that empty array as
+the trinket comparison. It now folds the already-published `gear.json` in as the
+oldest document, so a slot this run did not sweep keeps what it had. Union semantics
+mean an empty array removes nothing, so this only ever preserves.
+
+The Loot view gained a **Slot** selector, over the slots that actually have swept
+specs. A pool with no results is still in the dataset -- that gap is data -- but it is
+not offered as a landing page.
+
+### What was wrong with the old note here
 
 A comment there reads "the sweep is already slot-generic: adding a pool is the whole
 of the work". That is wrong twice, and both were found by reading `gearsweep.py`

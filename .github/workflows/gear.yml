@@ -31,10 +31,10 @@ on:
         description: "Tier to sweep: a name, 'latest' or 'previous'"
         default: 'latest'
       slot:
-        description: 'Equipment slot to sweep'
+        description: 'Equipment slot to sweep. Neck and finger carry the profile''s own gems and enchants on both sides of every comparison -- without them a ring sweep measures the wrong thing by an order of magnitude'
         default: 'trinket'
         type: choice
-        options: [trinket]
+        options: [trinket, neck, finger]
       targets:
         description: 'Space-separated target counts, e.g. "1" or "1 5"'
         default: '1'

@@ -54,7 +54,7 @@ import {
 } from '../components/ui'
 import { fullNumber, percent } from '../lib/format'
 import { classColor } from '../lib/palette'
-import type { GearDataset, GearItemMeta, GearSlot, GearSpecResult } from '../lib/types'
+import type { GearDataset, GearItemMeta, GearSpecResult } from '../lib/types'
 
 /** Two lines of tick text plus the icon, and the axis band beneath the plot. */
 const ROW_HEIGHT = 32
@@ -62,7 +62,15 @@ const AXIS_BAND = 44
 const TICK_WIDTH = 205
 
 export function GearView({ gear }: { gear: GearDataset | null }) {
-  const slot = gear?.slots[0] ?? null
+  // A slot with no swept spec is a pool nobody has run yet -- offering it would open
+  // on an empty comparison. The dataset carries every pool as a slot precisely so
+  // that gap is visible in the data; the view just does not make it the landing page.
+  const swept = useMemo(
+    () => (gear?.slots ?? []).filter((entry) => entry.specs.length > 0),
+    [gear],
+  )
+  const [slotId, setSlotId] = useState<string | null>(null)
+  const slot = swept.find((entry) => entry.id === slotId) ?? swept[0] ?? null
   const [levelId, setLevelId] = useState<string | null>(null)
   const [targets, setTargets] = useState<number | null>(null)
   const [itemId, setItemId] = useState<number | null>(null)
@@ -123,6 +131,19 @@ export function GearView({ gear }: { gear: GearDataset | null }) {
 
   const controls = (
     <>
+      {swept.length > 1 ? (
+        <Select
+          label="Slot"
+          value={slot.id}
+          onChange={(value) => {
+            setSlotId(value)
+            // Item levels and the picked item belong to the slot that was showing.
+            setLevelId(null)
+            setItemId(null)
+          }}
+          options={swept.map((entry) => ({ value: entry.id, label: entry.label }))}
+        />
+      ) : null}
       {targetCounts.length > 1 ? (
         <Select
           label="Targets"
@@ -833,8 +854,21 @@ function BaselineTable({
   )
 }
 
-/** Spec ids the gear dataset actually covers, in dataset order. */
+/** Spec ids the gear dataset actually covers, in dataset order.
+ *
+ * The union across slots, not the first slot's: slots are swept independently, so a
+ * spec can be covered for trinkets and not yet for rings, and reading only the first
+ * would under-report the moment a second slot exists.
+ */
 export function gearSpecIds(gear: GearDataset | null): string[] {
-  const slot: GearSlot | undefined = gear?.slots[0]
-  return (slot?.specs ?? []).map((spec) => spec.id)
+  const seen = new Set<string>()
+  const ids: string[] = []
+  for (const slot of gear?.slots ?? []) {
+    for (const spec of slot.specs) {
+      if (seen.has(spec.id)) continue
+      seen.add(spec.id)
+      ids.push(spec.id)
+    }
+  }
+  return ids
 }

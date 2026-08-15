@@ -107,7 +107,7 @@ def test_profileset_options_open_with_equals_and_continue_with_plus_equals():
 def test_a_solo_variant_leaves_every_other_socket_empty():
     # An empty partner is the neutral partner: it cannot share an on-use window with
     # the item being measured, so the value is the item's own.
-    [variant] = gearsweep._solo_variants(TRINKET, [MPLUS[0]], 334)
+    [variant] = gearsweep._solo_variants(TRINKET, [MPLUS[0]], 334, {})
     assert as_options([variant]) == [
         "profileset.solo_item_101=trinket1=,id=101,ilevel=334",
         "profileset.solo_item_101+=trinket2=",
@@ -391,3 +391,111 @@ def test_merging_no_gear_shards_is_a_no_op(tmp_path):
     out.mkdir()
     assert dataset.merge_gear_shards([empty], out) is None
     assert not (out / "gear.json").exists()
+
+
+# --------------------------------------------------------------------------------
+# Slots that are not trinkets
+# --------------------------------------------------------------------------------
+
+
+def test_the_baseline_is_one_item_per_socket():
+    """Hard-coded to two while trinkets were the only swept slot. Correct for two
+    sockets, and silently wrong for a neck, where it would pick two items for one."""
+    from wowdps.equipment import FINGER, NECK, TRINKET
+    from wowdps.gearsweep import baseline_size
+
+    assert baseline_size(TRINKET) == 2
+    assert baseline_size(FINGER) == 2
+    assert baseline_size(NECK) == 1
+
+
+def test_a_candidate_replaces_the_only_item_on_a_one_socket_slot():
+    """The candidate list was `[baseline_items[0], item]`, which assumes two sockets.
+    With one, zip() truncates to the first entry -- the candidate is silently never
+    equipped and the run measures the baseline against itself."""
+    from wowdps.equipment import NECK
+    from wowdps.gearsweep import _pair_variant
+
+    baseline, candidate = MPLUS[0], MPLUS[1]
+    kept = [baseline][:-1]
+    variant = _pair_variant("cand", NECK, [*kept, candidate], [334], {})
+    options = as_options([variant])
+    assert options == ["profileset.cand=neck=,id=102,ilevel=334"]
+
+
+def test_a_ring_carries_the_profiles_gem_and_enchant_on_both_sides():
+    """Measured at +1.55% together against +0.09% for a ten-item-level step, so a
+    comparison that drops them measures the wrong thing by an order of magnitude."""
+    from wowdps.equipment import FINGER, SlotAdornment
+    from wowdps.gearsweep import _pair_variant
+
+    adornments = {
+        "finger1": SlotAdornment(gem_ids=(240906,), enchant_id=7967),
+        "finger2": SlotAdornment(gem_ids=(240916,), enchant_id=7967),
+    }
+    variant = _pair_variant("standard", FINGER, [MPLUS[0], MPLUS[1]], [334, 334], adornments)
+    assert as_options([variant]) == [
+        "profileset.standard=finger1=,id=101,ilevel=334,gem_id=240906,enchant_id=7967",
+        "profileset.standard+=finger2=,id=102,ilevel=334,gem_id=240916,enchant_id=7967",
+    ]
+
+
+def test_a_trinket_stays_bare_because_it_has_nowhere_to_put_a_gem():
+    """Measured: passing a trinket's own bonus ids alongside an explicit item level
+    returned DPS identical to the last digit."""
+    from wowdps.equipment import TRINKET, SlotAdornment
+    from wowdps.gearsweep import _pair_variant
+
+    variant = _pair_variant(
+        "standard", TRINKET, [MPLUS[0], MPLUS[1]], [334, 334], {"trinket1": SlotAdornment()}
+    )
+    assert as_options([variant]) == [
+        "profileset.standard=trinket1=,id=101,ilevel=334",
+        "profileset.standard+=trinket2=,id=102,ilevel=334",
+    ]
+
+
+def test_sweeping_one_slot_does_not_delete_the_others(tmp_path):
+    """`write_gear` emits an entry for every pool, so a neck run writes a trinket
+    slot with an empty specs array. Merging over shards alone would publish that as
+    the trinket comparison -- deleting a sweep that costs an hour to reproduce."""
+    import json
+
+    from wowdps.dataset import merge_gear_shards
+
+    out = tmp_path / "MID2"
+    out.mkdir()
+    (out / "gear.json").write_text(
+        json.dumps(
+            {
+                "generatedAt": "2026-08-15T12:00:00+00:00",
+                "coverage": {"specs": 2, "specsAvailable": 26},
+                "slots": [
+                    {"id": "trinket", "label": "Trinket", "specs": [{"id": "a"}, {"id": "b"}]}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    shard = tmp_path / "shard-0"
+    shard.mkdir()
+    (shard / "gear.json").write_text(
+        json.dumps(
+            {
+                "generatedAt": "2026-08-15T14:00:00+00:00",
+                "coverage": {"specs": 1, "specsAvailable": 26},
+                "slots": [
+                    {"id": "trinket", "label": "Trinket", "specs": []},
+                    {"id": "neck", "label": "Neck", "specs": [{"id": "a"}]},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    merge_gear_shards([shard], out)
+    merged = json.loads((out / "gear.json").read_text(encoding="utf-8"))
+    by_slot = {slot["id"]: slot for slot in merged["slots"]}
+    assert [s["id"] for s in by_slot["trinket"]["specs"]] == ["a", "b"]
+    assert [s["id"] for s in by_slot["neck"]["specs"]] == ["a"]
