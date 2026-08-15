@@ -271,9 +271,11 @@ function Overview({
           value={`${coverage.measured} of ${coverage.encounters}`}
           caption={
             measurement
-              ? `Probed on page ${measurement.rankingsPage ?? '?'} of the ${
-                  measurement.metric ?? 'dps'
-                } rankings, ${measurement.reportsPerEncounter ?? '?'} report(s) per boss.`
+              ? `${
+                  measurement.order === 'first'
+                    ? 'The earliest kills of each boss'
+                    : `Page ${measurement.rankingsPage ?? '?'} of the ${measurement.metric ?? 'dps'} rankings`
+                }, ${measurement.reportsPerEncounter ?? '?'} kills per boss.`
               : 'No probe run has fed this file. Every measured column is empty for that reason.'
           }
         />

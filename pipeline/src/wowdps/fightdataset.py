@@ -900,7 +900,7 @@ def _timeline_block(payload: dict) -> dict | None:
     }
 
 
-def _caveats(payload: dict, rankings_page: int | None) -> list[str]:
+def _caveats(payload: dict, rankings_page: int | None, order: str | None = None) -> list[str]:
     """Everything about the measurement that limits how far it can be read."""
     notes: list[str] = []
     fights = [fight for fight in payload.get("fights") or [] if isinstance(fight, dict)]
@@ -932,7 +932,6 @@ def _caveats(payload: dict, rankings_page: int | None) -> list[str]:
             "At least one event fetch stopped at its page limit, so the tail of that "
             "fight is incomplete rather than absent."
         )
-    order = payload.get("order")
     if order == "first":
         notes.append(
             "Sampled from the earliest kills of the boss by kill date -- long kills "
@@ -978,6 +977,7 @@ def _encounter_document(
     profile: FightProfile,
     payload: dict | None,
     rankings_page: int | None,
+    order: str | None = None,
 ) -> dict:
     facts = _fact_entries(profile)
     measured = MeasuredEncounter(payload) if payload and payload.get("fights") else None
@@ -1001,7 +1001,7 @@ def _encounter_document(
             "auras": payload.get("auras") or [],
             "phases": payload.get("phases") or [],
             "truncated": any(fight.get("truncated") for fight in measured.fights),
-            "caveats": _caveats(payload, rankings_page),
+            "caveats": _caveats(payload, rankings_page, order),
             # The distribution of concurrent targets over the fight, across every
             # fully-read kill: the direct answer to "how many are normally up, when".
             "targetBand": _target_band(payload),
@@ -1061,18 +1061,21 @@ def build_document(
     by_encounter: dict[int, dict] = {}
     measurement: dict | None = None
     rankings_page: int | None = None
+    order: str | None = None
 
     if probe:
         for entry in probe.get("encounters") or []:
             if isinstance(entry, dict) and isinstance(entry.get("encounterId"), int):
                 by_encounter[entry["encounterId"]] = entry
         rankings_page = probe.get("rankingsPage")
+        order = probe.get("order")
         measurement = {
             "generatedAt": probe.get("generatedAt"),
             "difficulty": probe.get("difficulty"),
             "metric": probe.get("metric"),
             "reportsPerEncounter": probe.get("reportsPerEncounter"),
             "rankingsPage": rankings_page,
+            "order": order,
             "eventStreams": probe.get("eventStreams") or [],
             "significantDamageShare": probe.get("significantDamageShare"),
             "samplingBias": probe.get("sampling"),
@@ -1093,7 +1096,7 @@ def build_document(
             )
 
     encounters = [
-        _encounter_document(profile, by_encounter.get(encounter_id), rankings_page)
+        _encounter_document(profile, by_encounter.get(encounter_id), rankings_page, order)
         for encounter_id, profile in sorted(known.items())
     ]
 

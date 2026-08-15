@@ -766,6 +766,8 @@ export interface FightMeasurementRun {
   difficulty: number | null
   metric: string | null
   reportsPerEncounter: number | null
+  /** "first" (earliest kills, alike) or "top" (rankings damage order, speed kills). */
+  order?: string | null
   /** Page 1 is the world's best pulls, which are not shaped like a typical kill. */
   rankingsPage: number | null
   eventStreams: string[]
