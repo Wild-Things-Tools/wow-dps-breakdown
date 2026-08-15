@@ -256,12 +256,17 @@ export function GearView({ gear }: { gear: GearDataset | null }) {
         />
         <BaselineTable specs={specs} targetCount={targetCount} items={items} />
         <Note>
-          The Mythic+ pool is every trinket at the dungeon item level, which is the whole
-          expansion’s dungeons — not just the eight this season runs. A season-1 trinket
-          from a dungeon no longer in the rotation cannot be farmed now, so it should not
-          anchor a baseline; a few are still shown here until the rotation is filtered in.
-          The fix is automatic once Blizzard credentials let <code>wowdps loot-sources</code>
-          read the drop table, or a complete out-of-season list is asserted by hand.
+          This pool is still selected by item level rather than by where an item drops,
+          and that is wrong in two directions. It cannot tell this season’s dungeon
+          trinkets from last season’s — measured against simc’s own table, the two are
+          identical in every field it ships — so a few trinkets nobody can farm right now
+          are still anchoring a baseline here. And it misses the rotation’s dungeons from
+          older expansions entirely, whose trinkets carry item levels from a different
+          block. Both are fixed by <code>wowdps gear-pool</code>, which builds the pool
+          from Blizzard’s own drop tables — the raid’s encounters for the candidates,
+          this season’s eight dungeons for the baseline — and needs API credentials to
+          run. Until it has, read the baseline as “the expansion’s dungeon trinkets”
+          rather than “this season’s”.
         </Note>
         <Note>
           Standalone value is not perfectly additive — measured on Arcane Mage, a pair is

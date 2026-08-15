@@ -31,7 +31,7 @@
     "trinket": {
      "baselineSource": "mythicplus",
      "candidateSource": "raid",
-     "note": "Raid pool: the contiguous block of epic trinkets at base item level 219 (ids 270160-270175). Mythic+ pool: the rare-base trinkets at base item level 108. Both readings are structural inference from simc's item table, which carries no drop source; correct a row here rather than in code.",
+     "note": "Structural inference from simc's item table, which carries no drop source: the raid pool is the contiguous block of epic trinkets at base item level 219 (ids 270160-270175), the Mythic+ pool the rare-base trinkets at base item level 108. Both readings are known to be wrong in two directions -- they cannot tell this season's dungeon trinkets from last season's (measured: the two are field-for-field identical in simc), and they miss the rotation's older-expansion dungeons entirely. Run `wowdps gear-pool` to replace this list with one derived from Blizzard's journal; see gearpool.py.",
      "items": [
       {
        "id": 270160,
@@ -401,13 +401,7 @@
        "baseIlevel": 108,
        "baseQuality": 3
       }
-     ],
-     "notInRotation": [
-      250144,
-      250223,
-      250256
-     ],
-     "notInRotationNote": "Trinkets from Midnight dungeons that are NOT in the Season 2 Mythic+ rotation, so they cannot be farmed this season and must not anchor a baseline. This list is hand-asserted and incomplete: simc carries no drop source and the item pages are unreachable from CI, so only the ones the owner flagged (Emberwing Feather, Soulcatcher's Charm, Heart of Wind) are here. `wowdps loot-sources` derives the complete set from Blizzard's journal once credentials are set, superseding this."
+     ]
     }
    }
   }

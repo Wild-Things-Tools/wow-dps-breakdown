@@ -664,6 +664,12 @@ def cmd_loot_sources(args: argparse.Namespace) -> int:
     return lootsources.cmd_loot_sources(args)
 
 
+def cmd_gear_pool(args: argparse.Namespace) -> int:
+    from . import gearpool
+
+    return gearpool.cmd_gear_pool(args)
+
+
 def cmd_fight_promote(args: argparse.Namespace) -> int:
     from . import fightpromote
 
@@ -918,6 +924,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     lootsources.add_arguments(p_loot_sources)
     p_loot_sources.set_defaults(func=cmd_loot_sources)
+
+    p_gear_pool = sub.add_parser(
+        "gear-pool",
+        help="rebuild a slot's item pool from Blizzard's journal joined against simc's "
+        "item table, so pool membership is this season's rather than inferred "
+        "(needs credentials)",
+    )
+    from . import gearpool
+
+    gearpool.add_arguments(p_gear_pool)
+    p_gear_pool.set_defaults(func=cmd_gear_pool)
 
     p_fight_promote = sub.add_parser(
         "fight-promote",

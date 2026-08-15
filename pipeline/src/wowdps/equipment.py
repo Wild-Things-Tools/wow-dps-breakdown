@@ -302,13 +302,6 @@ class SlotPool:
     #: The dungeons this season actually runs, when declared. Empty means "not
     #: stated", and then nothing is filtered -- see ``in_rotation``.
     rotation: tuple[str, ...] = ()
-    #: Item ids a person has stated are NOT obtainable this season -- the lever for
-    #: a rotation nobody can derive yet (fictional PTR items have no drop source in
-    #: simc, and Wowhead/Blizzard cannot be reached from CI without credentials). It
-    #: is the coarse hand fallback under the same discipline as ``rotation``: the
-    #: Blizzard-derived ``inRotation`` supersedes it outright, and an id here whose
-    #: derived answer says otherwise is a finding, not a silent override.
-    excluded_ids: frozenset[int] = frozenset()
     note: str = ""
 
     def in_rotation(self, item: GearItem) -> bool:
@@ -338,12 +331,6 @@ class SlotPool:
         # needs neither the rotation list nor a dungeon assignment to be useful.
         if item.derived is not None and item.derived.in_rotation is not None:
             return item.derived.in_rotation
-
-        # A hand exclusion is a coarse but honest lever where the rotation cannot be
-        # derived: "this trinket is last season's, drop it". Only for the source the
-        # rotation applies to, so it cannot accidentally cull a raid drop.
-        if item.source == "mythicplus" and item.item_id in self.excluded_ids:
-            return False
 
         if not self.rotation or item.source != "mythicplus":
             return True
@@ -476,7 +463,6 @@ def load_pools(tier: str, path: Path | None = None) -> GearPools:
             baseline_source=slot_entry["baselineSource"],
             candidate_source=slot_entry["candidateSource"],
             rotation=tuple(entry.get("dungeonRotation") or ()),
-            excluded_ids=frozenset(int(i) for i in (slot_entry.get("notInRotation") or [])),
             note=slot_entry.get("note", ""),
         )
 

@@ -170,29 +170,30 @@ source column from any item database that reads `JournalEncounterItem` (Wowhead,
 Raidbots, a local DB2 dump). It slots into the pool file's `source` field with no
 code change. `wowdps gear-candidates` prints every other column already.
 
-<<<<<<< HEAD
-### The Mythic+ pool is a proxy for the wrong thing, in both directions
+**That dependency now exists**, and it is Blizzard's own: `wowdps loot-sources`
+reads the drop source out of the Game Data API, and `wowdps gear-pool` builds the
+pool itself from it. Nothing above changes — simc still ships no source, so do not
+go looking there — but the pool file no longer has to be believed on its own.
 
-**A hand lever exists for what cannot be derived.** For fictional PTR items simc
-carries no drop source and Wowhead/Blizzard are unreachable from CI, so the
-rotation cannot be derived without credentials. `SlotPool.excluded_ids`
-(`notInRotation` in `gear_pools.json`) is the coarse fallback: name last season's
-trinket ids and they stop anchoring a baseline. It is under the same discipline as
-everything else here -- the Blizzard-derived `inRotation` supersedes it outright,
-and an id it contradicts is a finding, not a silent override. MID2 is seeded with
-the three the owner flagged (Emberwing Feather, Soulcatcher's Charm, Heart of Wind)
-and is knowingly incomplete; the committed `gear.json` still shows them because the
-sweep has not been re-run, and the Loot view says so.
+### The Mythic+ pool was a proxy for the wrong thing, in both directions
 
 A Mythic+ season runs a **fixed rotation of eight dungeons**, and only their loot can
-be farmed. The pool rule ("rare-base trinkets at the expansion's dungeon item level")
-does not express that:
+be farmed. The old pool rule ("rare-base trinkets at the expansion's dungeon item
+level") does not express that, and both failures are measured against simc 1210-01 on
+2026-08-15:
 
-- it covers *every* dungeon of the expansion, so it can include trinkets nobody can
-  obtain this season, and
-- modern rotations mix in dungeons from **older expansions**, whose trinkets carry
-  ids and base item levels from a different block entirely — so it can also *miss*
-  obtainable ones.
+- **It over-collects.** All twenty-five Midnight dungeon trinkets are field-for-field
+  identical in simc's table — `ilevel 108, quality 3, req_level 78`, same flag words —
+  whether or not their dungeon runs this season. The three the owner flagged as last
+  season's (Emberwing Feather 250144, Soulcatcher's Charm 250223, Heart of Wind
+  250256) differ from the current ones in **nothing simc ships**. No cleverer
+  heuristic over that table can separate them, and the check is in the docstring of
+  `gearpool.py` so nobody has to redo it.
+- **It under-collects.** MID2's rotation runs three dungeons from older expansions
+  (Kings' Rest, Temple of Sethraliss, Ruby Life Pools), whose trinkets carry ids and
+  base item levels from a different block entirely. A rule keyed on this expansion's
+  numbers misses every one of them — three of eight farmable dungeons contributing
+  nothing to a pool that claims to be what the character can obtain.
 
 This matters because the M+ pool is what the baseline is built from: an unobtainable
 trinket anchoring "what the character already wears" makes every raid comparison
@@ -200,16 +201,32 @@ against it meaningless. Blast radius is narrower than the pool though — only *
 the 25** M+ trinkets ever win a baseline slot across all 26 builds, so those are the
 ones to check first.
 
-`SlotPool.rotation` and `GearItem.dungeon` exist for the fix, and `dungeonRotation`
-in `gear_pools.json` is declared but **empty**. An empty rotation filters nothing, on
-purpose: dropping every item whose dungeon is merely unrecorded would silently empty
-the pool. Fill in the dungeons and tag the items and the pool narrows with no code
-change; `SlotPool.unplaced()` reports items the rotation would exclude only because
-nobody assigned them.
+**A blacklist was tried and removed.** `SlotPool.excluded_ids` / `notInRotation` named
+last season's ids by hand. It is the wrong instrument and is gone: it answers one item
+at a time, goes stale the moment a season turns, and — decisively — cannot ever fix
+the second failure, because you cannot name your way *into* a pool. Blacklisting is
+the last resort here, not the first, and this was not the last resort. If one is ever
+reintroduced, it must be under the same discipline as everything else: the derived
+answer supersedes it, and a contradiction is a finding rather than a silent override.
+
+**`gearpool.py` is the fix**, and it derives both halves. The pool is the intersection
+of simc's item table (what an item *is*) and the journal's loot tables (where it
+*comes from*): the raid pool is the drops of this tier's raid, the Mythic+ pool the
+drops of this season's rotation dungeons. Two things are deliberately not configured:
+the raid is found by matching the tier's own boss list from `fight_profiles.json`
+against journal encounter names (`identify_tier_raid`, floor `MIN_RAID_ENCOUNTER_MATCH`
+= 0.5), and the rotation comes from `derive_rotation`. So a new tier needs its bosses
+listed — which the Fights view needs anyway — and no edit here.
+
+Three refusals in it, all deliberate: a **truncated** journal walk builds no pool at
+all (an unread dungeon and an out-of-season one are indistinguishable, and the result
+would be quietly too small with a plausible shape); an item simc never heard of is
+skipped, since it cannot be simulated; and an item the journal never placed is
+reported as `unplaced` rather than quietly kept or dropped.
 
 Do not try to derive the rotation from simc. It is not there — this is the same
 absence as item source, one level further. **It is in Blizzard's Game Data API**,
-which is what `wowdps loot-sources` now reads: `journal-expansion` splits raids from
+which is what `wowdps loot-sources` reads: `journal-expansion` splits raids from
 dungeons, `journal-encounter` carries the loot table simc's extraction reads but does
 not ship, and the season's dungeons come from `current_leaderboards` (the season
 endpoint itself lists periods, not dungeons — that is an interpretation and the output
@@ -221,12 +238,6 @@ Two id traps in that API, both of which build a table that joins to nothing:
 `items[].id` is the *journal entry* and `items[].item.id` is the item; and Mythic+
 keystone dungeon ids are challenge-mode ids sharing nothing with journal instance ids,
 so the join runs through `dungeon.key.href` rather than the sibling `id`.
-=======
-**That dependency now exists**, and it is Blizzard's own: `wowdps loot-sources`
-reads the drop source out of the Game Data API. See "Loot sources, derived rather
-than asserted" below. Nothing above changes — simc still ships no source, so do not
-go looking there — but the pool file no longer has to be believed on its own.
->>>>>>> origin/claude/loot-sources
 
 ### The item level ladder is measurable, the track names are not
 
