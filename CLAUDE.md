@@ -416,6 +416,40 @@ results worth keeping:
   Caverns. A hand list would have caught three of eleven, which is the argument
   against blacklisting stated as a number.
 
+### The curated raid pool is from the wrong raid
+
+The finding the derivation exists to produce, and it arrived on the second run.
+`identify_tier_raid` matched MID2's boss list against the journal and named **The
+Voidspire**, accounting for 6 of the 9 (Imperator Averzian, Vorasius, Vaelgor &
+Ezzorak, Fallen-King Salhadaar, Lightblinded Vanguard, Crown of the Cosmos).
+
+The fifteen trinkets the pool file calls `raid` -- ids 270160-270175 -- are **not
+from that raid**. The journal places them in *The Venomous Abyss* (fourteen) and *The
+Tidebound Grotto* (one), dropped by The Lost Explorers, Vashnik the Malignant,
+Sszorak, Ula'tek, The Twin Fangs and The Coiled Altar. Not one of those is a MID2
+boss. So the Loot view's whole candidate side -- "which raid trinket should I take"
+-- has been ranking trinkets from a raid this tier does not run.
+
+This is exactly what the structural inference could not see and was never able to
+see. The rule was "a contiguous block of fifteen epics at base item level 219", and
+that shape is equally true of any tier's raid trinkets; nothing in simc's table says
+*which* raid. The pool was believable and wrong.
+
+**It was caught by the refusal, not by a check somebody thought to write.** Three
+bosses did not match, that produced a warning, and a build carrying warnings does not
+write. Had `build_pool` written on a 6-of-9 match, the pool would have been silently
+replaced with a plausible one and the finding lost.
+
+`RaidMatch.elsewhere` now names the instance the journal *did* put each unmatched
+boss in, because "3 of 9 unmatched" is a dead end on its own -- a tier spanning two
+instances, names that drifted, and the wrong raid winning on a partial match all
+print the same line and need different responses.
+
+Unresolved, and a human's call: whether The Voidspire is MID2's raid and the pool
+should be rebuilt from it wholesale, and where Belo'ren, Midnight Falls and Chimaerus
+live (Chimaerus carries WCL encounter id 3306 against 3176-3183 for the rest, which
+looks like a later addition rather than a ninth boss of the same instance).
+
 ### `inRotation` answers for dungeons only
 
 The one real bug the live run shipped, and it is the shape to watch for. `inRotation`

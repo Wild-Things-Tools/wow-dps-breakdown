@@ -253,3 +253,44 @@ def test_the_report_shows_the_diff_against_the_curated_pool():
     assert "1 added, 1 removed" in text
     assert "Emberwing Feather" in text
     assert "Last Season's Hall" in text
+
+
+def test_the_refusal_says_where_the_unmatched_bosses_actually_are():
+    """ "3 of 9 unmatched" is a dead end on its own.
+
+    A tier spanning two instances, a set of names that drifted, and the wrong raid
+    winning on a partial match all produce that same line and need completely
+    different responses. This is the real MID2 case: the curated pool's trinkets come
+    from encounters no MID2 boss list contains.
+    """
+    index = index_of(
+        drop(1, "A", "Imperator Averzian", 1300, "The Voidspire", "raid"),
+        drop(2, "B", "Vorasius", 1300, "The Voidspire", "raid"),
+        drop(3, "C", "Chimaerus, the Undreamt God", 1301, "The Tidebound Grotto", "raid"),
+    )
+    match = identify_tier_raid(index, ["Imperator Averzian", "Vorasius", "Chimaerus"])
+    assert match is not None
+    assert match.instance == "The Voidspire"
+    assert match.missing == ("Chimaerus",)
+    assert match.elsewhere == (("Chimaerus", "The Tidebound Grotto"),)
+
+    build = build_pool(
+        "MID2",
+        "trinket",
+        index,
+        rotation_of((1200, "Murder Row")),
+        [item(1, "A", 219, 4)],
+        ["Imperator Averzian", "Vorasius", "Chimaerus"],
+    )
+    assert not build.usable
+    assert any("The Tidebound Grotto" in w for w in build.warnings)
+
+
+def test_a_slot_with_no_previous_pool_reports_everything_as_added():
+    """Deriving a ring pool from scratch must not look like a diff against nothing."""
+    index = index_of(drop(1, "Ring", "Vorasius", 1300, "Crucible", "raid"))
+    build = build_pool(
+        "MID2", "finger", index, rotation_of((1200, "D")), [item(1, "Ring", 219, 4)], ["Vorasius"]
+    )
+    text = "\n".join(render(build, ()))
+    assert "1 item(s)" in text

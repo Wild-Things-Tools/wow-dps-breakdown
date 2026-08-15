@@ -54,7 +54,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .equipment import DiscoveredItem, GearItem
 from .lootsources import ItemDrop, LootIndex, Rotation
@@ -100,6 +100,11 @@ class RaidMatch:
     instance_id: int
     instance: str
     expansion: str | None
+    #: For each tier boss this instance did *not* account for, where the journal did
+    #: place it. Without this, "3 of 9 unmatched" is a dead end: it cannot say whether
+    #: the names have drifted, whether the tier spans two instances, or whether the
+    #: wrong raid was picked. With it the refusal is actionable.
+    elsewhere: tuple[tuple[str, str], ...] = ()
     #: Tier boss names this instance accounted for, and the ones it did not. The
     #: second is published rather than swallowed: a raid that matches seven of nine
     #: is almost certainly right *and* is telling you two names have drifted.
@@ -118,6 +123,7 @@ class RaidMatch:
             "expansion": self.expansion,
             "matched": list(self.matched),
             "missing": list(self.missing),
+            "elsewhere": [{"boss": boss, "instance": where} for boss, where in self.elsewhere],
             "share": round(self.share, 3),
         }
 
@@ -160,7 +166,26 @@ def identify_tier_raid(index: LootIndex, encounter_names: Sequence[str]) -> Raid
 
     if best is None or best.share < MIN_RAID_ENCOUNTER_MATCH:
         return None
-    return best
+
+    # Where did the journal put the bosses this instance did not account for? A raid
+    # spanning two instances, a set of names that drifted, and the wrong raid winning
+    # on a partial match all produce the same "N unmatched" line, and they need
+    # completely different responses.
+    elsewhere: list[tuple[str, str]] = []
+    for name in best.missing:
+        for drops in index.drops.values():
+            found = next(
+                (
+                    drop
+                    for drop in drops
+                    if drop.instance_id != best.instance_id and _names_agree(name, drop.encounter)
+                ),
+                None,
+            )
+            if found is not None:
+                elsewhere.append((name, found.instance or str(found.instance_id)))
+                break
+    return replace(best, elsewhere=tuple(elsewhere))
 
 
 @dataclass(frozen=True)
@@ -328,10 +353,14 @@ def build_pool(
             f"the {len(encounter_names)} boss names for {tier}; the raid pool cannot be built"
         )
     elif raid.missing:
+        where = {boss: instance for boss, instance in raid.elsewhere}
+        detail = ", ".join(
+            f"{boss} (journal places it in {where[boss]})" if boss in where else f"{boss} (nowhere)"
+            for boss in raid.missing
+        )
         warnings.append(
             f"{raid.instance} matched {len(raid.matched)} of "
-            f"{len(raid.matched) + len(raid.missing)} {tier} bosses; unmatched: "
-            + ", ".join(raid.missing)
+            f"{len(raid.matched) + len(raid.missing)} {tier} bosses; unmatched: {detail}"
         )
 
     rotation_ids = rotation.instance_ids
@@ -583,7 +612,11 @@ def cmd_gear_pool(args) -> int:  # noqa: ANN001 -- argparse namespace, as every 
         cost = client.ledger.to_json()
 
     build = build_pool(args.tier, args.slot, index, rotation, discovered, encounter_names)
-    previous = equipment.load_pools(args.tier, pool_path).slots[args.slot].items
+    # Read back through load_pools so the comparison sees exactly what the sweep
+    # sees -- but a slot seeded a moment ago is not on disk yet, and asking for it
+    # would crash where the honest answer is "there was nothing here before".
+    loaded = equipment.load_pools(args.tier, pool_path).slots
+    previous = loaded[args.slot].items if args.slot in loaded else ()
 
     transcript = render(build, previous)
     transcript.append("")
