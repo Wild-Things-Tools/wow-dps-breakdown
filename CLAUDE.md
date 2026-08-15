@@ -456,6 +456,48 @@ the *gear* side of MID2 is the upcoming tier, while the *fights* side is the rai
 still being logged. That is not a bug in either -- there are no logs for a raid that
 opens on Tuesday -- but it is why nothing may join the two on "tier" alone.
 
+### What the derived pool actually contains
+
+Written on 2026-08-15 by `wowdps gear-pool --write`, and it is the first pool in this
+project that nobody enumerated. Trinkets went from 40 curated items to **42 derived**
+ones, and the membership is the point rather than the count:
+
+| | before (item-level rule) | after (journal) |
+|---|---|---|
+| raid | 15, believed | 15, from The Venomous Abyss (14) + The Tidebound Grotto (1) |
+| Mythic+ | 25, of which 11 unfarmable | 27, all farmable |
+| rotation dungeons represented | **4 of 8** | **8 of 8** |
+
+The four that contributed nothing before are Altar of Fangs (never enumerated) and
+Kings' Rest, Temple of Sethraliss and Ruby Life Pools -- the older-expansion dungeons
+whose ids and base item levels the rule could not see. They bring twelve trinkets
+between them. The eleven out-of-season ones are simply absent now rather than present
+and filtered, which is the cleaner state: `in_rotation` returns True for everything in
+the pool because everything in the pool is farmable by construction.
+
+Neck (7) and finger (11) pools exist for the first time, derived the same way.
+
+### The sweep is not slot-generic, whatever equipment.py says
+
+A comment there reads "the sweep is already slot-generic: adding a pool is the whole
+of the work". That is wrong twice, and both were found by reading `gearsweep.py`
+rather than by running it:
+
+- **`BASELINE_SIZE = 2` is hard-coded** ("two sockets, two items"). Neck has one
+  socket, so the baseline step would pick two items for it.
+- **The derived pools carry no gems and no enchants**, because those are copied from
+  an item's predecessor and neck and finger had no predecessor. For trinkets that is
+  correct and measured -- bonus ids are inert and trinkets have no sockets. For rings
+  it invalidates the comparison: the enchant is worth **+1.09%** and the gem
+  **+0.44%** against **+0.09%** for a ten-item-level step, so an unenchanted pool
+  measures the wrong thing by an order of magnitude.
+
+So `gear.yml` still offers `trinket` alone, and that is honest rather than an
+oversight. Making neck and finger real needs `BASELINE_SIZE` to follow
+`len(slot.sockets)`, and the gem and enchant to be read off the tier's own profiles
+(they carry `gem_id=` and `enchant_id=` on the gear lines `equipped_item_ids` already
+parses).
+
 ### `inRotation` answers for dungeons only
 
 The one real bug the live run shipped, and it is the shape to watch for. `inRotation`
