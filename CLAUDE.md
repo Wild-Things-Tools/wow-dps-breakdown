@@ -393,6 +393,44 @@ Four things in that table cost time to establish:
 Locale defaults to `en_US` and that is not cosmetic: names are the join key against
 simc's English item table and against a pool file written in English.
 
+### What the first live run found
+
+Run on 2026-08-15, region `us`, full walk, every encounter in the journal. Three
+results worth keeping:
+
+- **The queries and payload shapes are right.** No field needed renaming, which had
+  been the open risk -- the documents were written against a schema mirror, not the
+  live service.
+- **The derived rotation reproduced the hand-written one exactly.** Same eight
+  dungeons, different order, including the three from older expansions. So
+  `dungeonRotation` (typed from Blizzard's announcement) and
+  `dungeonRotationDerived` (from the season's leaderboards) agree, and every one of
+  the forty trinkets' asserted `source` matched its derived one. The structural
+  inference was right about raid-versus-dungeon; it was only ever wrong about
+  *season*.
+- **It found 11 out-of-season trinkets, not 3.** The owner named Emberwing Feather,
+  Soulcatcher's Charm and Heart of Wind. The journal also places Latch's Crooked
+  Hook and Kroluk's Warbanner in Windrunner Spire, Mark of Light and Whisper of the
+  Duskwraith in Nexus-Point Xenas, Jelly Replicator, Refueling Orb and Eye of the
+  Drowning Void in Magisters' Terrace, and Vessel of Tortured Souls in Maisara
+  Caverns. A hand list would have caught three of eleven, which is the argument
+  against blacklisting stated as a number.
+
+### `inRotation` answers for dungeons only
+
+The one real bug the live run shipped, and it is the shape to watch for. `inRotation`
+was computed as "is this item's instance in the Mythic+ rotation", which is `False`
+for a raid drop **by construction** -- no raid is ever in the dungeon rotation. The
+pool reads that field as "cannot be farmed this season", so all fifteen MID2 raid
+trinkets were excluded and **the candidate pool emptied itself**: fifteen items in the
+file, zero available to compare, and no error anywhere.
+
+Two locks now, because the committed payload already carried the bad value:
+`lootsources.py` leaves `inRotation` as `None` unless the item actually has a dungeon
+drop, and `SlotPool.in_rotation` only consults the derived answer for `mythicplus`
+items. Both are tested. The general lesson: a field whose name promises more than its
+computation delivers fails silently and in the direction nobody checks.
+
 ### Derivation never overwrites assertion
 
 Same discipline as `fight_profiles.json`. Each item gains a `derived` block beside

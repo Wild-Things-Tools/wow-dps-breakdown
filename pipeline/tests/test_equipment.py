@@ -409,3 +409,81 @@ def test_two_gems_are_written_the_way_simc_writes_them():
         gem_ids=(240892, 240906),
     )
     assert neck.simc_item("neck", 344).endswith("ilevel=344,gem_id=240892/240906")
+
+
+def test_a_derived_rotation_answer_never_culls_a_raid_drop():
+    """The bug the first live derivation shipped, and the reason for two locks.
+
+    `inRotation` is computed from the Mythic+ dungeon list, so it comes back False
+    for a raid item by construction -- no raid is ever in the dungeon rotation. Read
+    as "cannot be farmed this season", that emptied MID2's entire raid candidate
+    pool: fifteen trinkets in the file, zero available to compare.
+    """
+    from wowdps.equipment import TRINKET, DerivedSource, GearItem, ItemLevel, SlotPool
+
+    def derived(in_rotation):
+        return DerivedSource(
+            source="raid",
+            encounter="Vorasius",
+            encounter_id=1,
+            instance="The Venomous Abyss",
+            instance_id=1300,
+            expansion="Midnight",
+            in_rotation=in_rotation,
+        )
+
+    raid_item = GearItem(
+        item_id=270160,
+        name="First Mate's Shellward",
+        slug="first_mate_s_shellward",
+        primary_stat=None,
+        secondary_stat=None,
+        source="raid",
+        base_ilevel=219,
+        base_quality=4,
+        derived=derived(False),
+    )
+    pool = SlotPool(
+        tier="MID2",
+        slot=TRINKET,
+        items=(raid_item,),
+        item_levels=(ItemLevel("heroic", "H", 334, ""),),
+        baseline_source="mythicplus",
+        candidate_source="raid",
+        rotation=("Altar of Fangs",),
+    )
+    assert pool.in_rotation(raid_item) is True
+
+
+def test_a_derived_rotation_answer_still_culls_a_dungeon_drop():
+    """The guard must not disarm the thing the derivation exists to do."""
+    from wowdps.equipment import TRINKET, DerivedSource, GearItem, ItemLevel, SlotPool
+
+    stale = GearItem(
+        item_id=250144,
+        name="Emberwing Feather",
+        slug="emberwing_feather",
+        primary_stat=None,
+        secondary_stat=None,
+        source="mythicplus",
+        base_ilevel=108,
+        base_quality=3,
+        derived=DerivedSource(
+            source="mythicplus",
+            encounter="A boss",
+            encounter_id=2,
+            instance="Windrunner Spire",
+            instance_id=1400,
+            expansion="Midnight",
+            in_rotation=False,
+        ),
+    )
+    pool = SlotPool(
+        tier="MID2",
+        slot=TRINKET,
+        items=(stale,),
+        item_levels=(ItemLevel("heroic", "H", 334, ""),),
+        baseline_source="mythicplus",
+        candidate_source="raid",
+    )
+    assert pool.in_rotation(stale) is False

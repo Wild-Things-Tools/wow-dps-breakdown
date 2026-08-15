@@ -598,11 +598,17 @@ def merge_into_pools(
                     }
                 )
 
-            in_rotation = (
-                any(drop.instance_id in rotation_instances for drop in drops)
-                if rotation_instances
-                else None
-            )
+            # The rotation is a statement about *dungeons*, so it can only answer for
+            # a dungeon drop. Computing it for a raid item yields False by
+            # construction -- no raid is ever in the Mythic+ rotation -- and that
+            # False is indistinguishable from "cannot be farmed this season", which
+            # is how the pool reads it. Measured the hard way on the first live run:
+            # every one of MID2's fifteen raid trinkets came back `inRotation: false`
+            # and the candidate pool emptied itself. `None` is the honest answer, and
+            # the field already means "unknown".
+            in_rotation = None
+            if rotation_instances and any(drop.kind == "dungeon" for drop in drops):
+                in_rotation = any(drop.instance_id in rotation_instances for drop in drops)
             item["derived"] = {
                 "source": derived_pool,
                 "encounter": primary.encounter,
