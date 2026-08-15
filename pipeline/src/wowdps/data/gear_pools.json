@@ -401,7 +401,13 @@
        "baseIlevel": 108,
        "baseQuality": 3
       }
-     ]
+     ],
+     "notInRotation": [
+      250144,
+      250223,
+      250256
+     ],
+     "notInRotationNote": "Trinkets from Midnight dungeons that are NOT in the Season 2 Mythic+ rotation, so they cannot be farmed this season and must not anchor a baseline. This list is hand-asserted and incomplete: simc carries no drop source and the item pages are unreachable from CI, so only the ones the owner flagged (Emberwing Feather, Soulcatcher's Charm, Heart of Wind) are here. `wowdps loot-sources` derives the complete set from Blizzard's journal once credentials are set, superseding this."
     }
    }
   }

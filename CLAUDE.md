@@ -173,6 +173,17 @@ code change. `wowdps gear-candidates` prints every other column already.
 <<<<<<< HEAD
 ### The Mythic+ pool is a proxy for the wrong thing, in both directions
 
+**A hand lever exists for what cannot be derived.** For fictional PTR items simc
+carries no drop source and Wowhead/Blizzard are unreachable from CI, so the
+rotation cannot be derived without credentials. `SlotPool.excluded_ids`
+(`notInRotation` in `gear_pools.json`) is the coarse fallback: name last season's
+trinket ids and they stop anchoring a baseline. It is under the same discipline as
+everything else here -- the Blizzard-derived `inRotation` supersedes it outright,
+and an id it contradicts is a finding, not a silent override. MID2 is seeded with
+the three the owner flagged (Emberwing Feather, Soulcatcher's Charm, Heart of Wind)
+and is knowingly incomplete; the committed `gear.json` still shows them because the
+sweep has not been re-run, and the Loot view says so.
+
 A Mythic+ season runs a **fixed rotation of eight dungeons**, and only their loot can
 be farmed. The pool rule ("rare-base trinkets at the expansion's dungeon item level")
 does not express that:

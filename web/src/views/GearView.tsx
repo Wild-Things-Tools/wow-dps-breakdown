@@ -256,6 +256,14 @@ export function GearView({ gear }: { gear: GearDataset | null }) {
         />
         <BaselineTable specs={specs} targetCount={targetCount} items={items} />
         <Note>
+          The Mythic+ pool is every trinket at the dungeon item level, which is the whole
+          expansion’s dungeons — not just the eight this season runs. A season-1 trinket
+          from a dungeon no longer in the rotation cannot be farmed now, so it should not
+          anchor a baseline; a few are still shown here until the rotation is filtered in.
+          The fix is automatic once Blizzard credentials let <code>wowdps loot-sources</code>
+          read the drop table, or a complete out-of-season list is asserted by hand.
+        </Note>
+        <Note>
           Standalone value is not perfectly additive — measured on Arcane Mage, a pair is
           worth about 3% more than the sum of its two parts — so two items within a few
           percent of each other at the cut could swap once paired. Hovering an item name
