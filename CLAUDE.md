@@ -488,6 +488,14 @@ Three things were wrong, and only the first was written down:
   itself -- a full set of plausible numbers, all of them the same number. It is now
   `[*baseline_items[:-1], item]`: the candidate replaces the weakest, whatever the
   socket count.
+- **A progress log line was the last two-socket assumption**, and it cost a whole CI
+  run: every variant builder was correct for a neck and every spec still failed with
+  `list index out of range`, from `log.info(... baseline_items[0], baseline_items[1])`.
+  Because `sweep_spec` catches per spec, it printed as `FAILED 1T` and read like a
+  modelling problem. `test_a_one_socket_sweep_runs_end_to_end` now drives `_sweep_one`
+  with a stubbed `_run` -- no simc, but every line between picking a baseline and
+  returning a result is executed, logging included. Verified to reproduce the original
+  `IndexError` when the fix is reverted.
 - **Gems and enchants are read per spec off its own profile**, by
   `equipment.read_adornments`, and applied to both sides of every comparison. They
   belong to the *socket*, not to the item: a candidate nobody wears has no gem of its

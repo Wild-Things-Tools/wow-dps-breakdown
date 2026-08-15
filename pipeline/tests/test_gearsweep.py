@@ -499,3 +499,71 @@ def test_sweeping_one_slot_does_not_delete_the_others(tmp_path):
     by_slot = {slot["id"]: slot for slot in merged["slots"]}
     assert [s["id"] for s in by_slot["trinket"]["specs"]] == ["a", "b"]
     assert [s["id"] for s in by_slot["neck"]["specs"]] == ["a"]
+
+
+def test_a_one_socket_sweep_runs_end_to_end(monkeypatch, tmp_path):
+    """The seam the unit tests did not cover, and where it actually broke.
+
+    Every variant builder was correct for a neck, and the run still failed on every
+    spec with "list index out of range" -- from a *progress log line* that read
+    `baseline_items[0] + baseline_items[1]`. So the sweep is exercised here with a
+    stubbed runner: no simc, but every line between picking a baseline and returning
+    a result gets executed, logging included.
+    """
+    from wowdps.equipment import NECK, SlotPool
+    from wowdps.gearsweep import VariantResult, _sweep_one
+
+    pool = SlotPool(
+        tier="MID2",
+        slot=NECK,
+        items=(*MPLUS, *RAID),
+        item_levels=(HEROIC,),
+        baseline_source="mythicplus",
+        candidate_source="raid",
+    )
+
+    # Distinct DPS per variant so a candidate that was never equipped would show up as
+    # a gain of exactly zero rather than hiding in the noise.
+    def fake_run(simc, profile, targets, settings, variants, timeout):
+        out = {}
+        for index, variant in enumerate(variants):
+            out[variant.key] = VariantResult(
+                key=variant.key, dps=100_000 + index * 1_000, dps_error=0.05, iterations=1000
+            )
+        return out
+
+    monkeypatch.setattr(gearsweep, "_run", fake_run)
+
+    profile_path = tmp_path / "MID2_Mage_Arcane.simc"
+    profile_path.write_text(
+        "neck=aqirbane,id=268265,ilevel=344,gem_id=240892/240906\n", encoding="utf-8"
+    )
+    profile = SpecProfile(
+        path=profile_path,
+        tier="MID2",
+        wow_class="Mage",
+        spec="Arcane",
+        hero_talent="Sunfury",
+        role="spell",
+        talent_hash=None,
+        name_hero="Sunfury",
+    )
+
+    result = _sweep_one(
+        simc=Path("simc"),
+        profile=profile,
+        pool=pool,
+        settings=SimSettings(target_error=0, max_iterations=1000),
+        targets=1,
+        primary="intellect",
+        baseline_pool=list(MPLUS),
+        candidates=list(RAID),
+        baseline_level=HEROIC,
+        timeout=600,
+    )
+
+    # One socket, one baseline item -- not two.
+    assert len(result.baseline) == 1
+    # And the candidates were actually measured, each against that baseline.
+    assert len(result.candidates) == len(RAID)
+    assert all(entry.gain != 0 for entry in result.candidates)

@@ -488,10 +488,13 @@ def _sweep_one(
     results.sort(key=lambda entry: -entry.gain)
 
     log.info(
-        "  %2dT  baseline %s + %s = %.0f dps  |  %d pool, %d candidates  (%.0fs)",
+        "  %2dT  baseline %s = %.0f dps  |  %d pool, %d candidates  (%.0fs)",
         targets,
-        baseline_items[0].slug,
-        baseline_items[1].slug,
+        # One name per socket. This read `baseline_items[0] + baseline_items[1]`,
+        # which is the last thing in the sweep that assumed two of them -- and it is a
+        # progress line, so a correct one-socket run died in its own logging with
+        # "list index out of range" and looked like a modelling failure.
+        " + ".join(item.slug for item in baseline_items),
         baseline.dps,
         len(entries),
         len(results),
