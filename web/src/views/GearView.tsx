@@ -69,8 +69,16 @@ export function GearView({ gear }: { gear: GearDataset | null }) {
     () => (gear?.slots ?? []).filter((entry) => entry.specs.length > 0),
     [gear],
   )
+  // Slots arrive in id order, which is alphabetical and would open the view on
+  // rings. The landing slot is the richest comparison instead -- most items in the
+  // pool -- which is a property of the data rather than a name hard-coded here, and
+  // picks the trinket sweep for as long as it is the largest.
+  const richest = useMemo(
+    () => [...swept].sort((a, b) => b.items.length - a.items.length)[0] ?? null,
+    [swept],
+  )
   const [slotId, setSlotId] = useState<string | null>(null)
-  const slot = swept.find((entry) => entry.id === slotId) ?? swept[0] ?? null
+  const slot = swept.find((entry) => entry.id === slotId) ?? richest
   const [levelId, setLevelId] = useState<string | null>(null)
   const [targets, setTargets] = useState<number | null>(null)
   const [itemId, setItemId] = useState<number | null>(null)

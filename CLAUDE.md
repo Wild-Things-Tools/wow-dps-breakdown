@@ -514,7 +514,11 @@ mean an empty array removes nothing, so this only ever preserves.
 
 The Loot view gained a **Slot** selector, over the slots that actually have swept
 specs. A pool with no results is still in the dataset -- that gap is data -- but it is
-not offered as a landing page.
+not offered as a landing page. The slot it *opens* on is the one with the
+most items rather than the first, because slots arrive in id order and alphabetical
+puts rings ahead of trinkets -- which would land every reader on the smallest
+comparison. "Richest pool" is a property of the data, so it needs no name hard-coded
+in the view and follows whichever sweep is largest.
 
 ### What was wrong with the old note here
 
