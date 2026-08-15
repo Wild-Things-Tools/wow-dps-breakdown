@@ -526,9 +526,20 @@ def cmd_gear_pool(args) -> int:  # noqa: ANN001 -- argparse namespace, as every 
     if tier_entry is None:
         log.error("no gear pools defined for tier %s in %s", args.tier, pool_path)
         return 1
-    if args.slot not in (tier_entry.get("slots") or {}):
-        log.error("tier %s has no %s slot in %s", args.tier, args.slot, pool_path)
-        return 1
+    # A slot with no entry yet is seeded rather than refused. The whole point of
+    # deriving the pool is that nobody has to enumerate one by hand first -- the
+    # journal knows what drops in this tier's raid and this season's dungeons, and
+    # that is the same answer for a ring as for a trinket. The comparison's shape
+    # (baseline from what is farmable, candidates from the raid) is a property of the
+    # question, not of the slot, so it carries over.
+    slots = tier_entry.setdefault("slots", {})
+    if args.slot not in slots:
+        log.info("tier %s has no %s pool yet; deriving one", args.tier, args.slot)
+        slots[args.slot] = {
+            "baselineSource": "mythicplus",
+            "candidateSource": "raid",
+            "items": [],
+        }
 
     slot = equipment.SLOTS_BY_ID[args.slot]
     discovered = equipment.discover_items(Path(args.simc_source), slot.inventory_type)
