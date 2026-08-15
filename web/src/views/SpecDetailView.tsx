@@ -112,6 +112,8 @@ export function SpecDetailView({
             ) : null}
           </Panel>
 
+          <TalentsPanel detail={detail} />
+
           <Panel>
             <PanelHeader
               title="What the damage is made of"
@@ -294,5 +296,64 @@ function AbilityBreakdown({
         Magnitude here is a one-hue ramp, not a class colour — it encodes how much, not whose.
       </Note>
     </div>
+  )
+}
+
+
+// --------------------------------------------------------------------------------
+// Talent loadout
+// --------------------------------------------------------------------------------
+
+/**
+ * The build's talents, as far as a static site can carry them without a decoder.
+ *
+ * Every spec plays a hero tree and this build's is named and iconised here; the
+ * full node-by-node tree needs the tree layout and a loadout decoder, which live in
+ * the wtt backend, not in a byte-reproducible dataset. Until that is wired in, the
+ * loadout string is exposed so it can be pasted into the in-game talent UI or a
+ * talent calculator to see the whole tree -- the string simc simulated is the same
+ * one the game imports.
+ */
+function TalentsPanel({ detail }: { detail: SpecDetail }) {
+  const [copied, setCopied] = useState(false)
+  const hash = detail.talentHash
+  return (
+    <Panel>
+      <PanelHeader
+        title="Talents"
+        subtitle="The hero tree this build plays, and the loadout string simc simulated."
+      />
+      <div className="flex flex-wrap items-center gap-4 px-5 pb-5">
+        <span className="inline-flex items-center gap-2">
+          <HeroTreeBadge build={detail} size={22} />
+        </span>
+        {hash ? (
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <code className="min-w-0 flex-1 truncate rounded-lg border border-hairline bg-elevated px-3 py-2 font-mono text-[12px] text-ink-secondary">
+              {hash}
+            </code>
+            <button
+              type="button"
+              onClick={() => {
+                void navigator.clipboard?.writeText(hash).then(() => {
+                  setCopied(true)
+                  window.setTimeout(() => setCopied(false), 1500)
+                })
+              }}
+              className="shrink-0 rounded-lg border border-hairline bg-surface px-3 py-2 text-[13px] font-medium text-ink-secondary hover:bg-elevated hover:text-ink"
+            >
+              {copied ? 'Copied' : 'Copy loadout'}
+            </button>
+          </div>
+        ) : (
+          <span className="text-[13px] text-ink-muted">No loadout string in this profile.</span>
+        )}
+      </div>
+      <Note>
+        Paste the loadout into the in-game talent UI, or a talent calculator, to see the
+        full tree. An interactive tree on this page is planned — it needs the tree layout
+        and a loadout decoder that this static dataset does not yet carry.
+      </Note>
+    </Panel>
   )
 }
