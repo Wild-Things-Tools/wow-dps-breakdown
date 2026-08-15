@@ -134,7 +134,7 @@ jobs:
         run: |
           git clone --depth 1 --filter=blob:none --sparse \
             https://github.com/simulationcraft/simc.git simc
-          git -C simc sparse-checkout set engine/dbc/generated
+          git -C simc sparse-checkout set engine/dbc/generated profiles
 
       - name: Rebuild pool membership
         if: steps.creds.outputs.enabled == 'true' && inputs.rebuild_pool
