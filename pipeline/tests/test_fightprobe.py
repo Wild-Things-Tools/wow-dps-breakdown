@@ -479,3 +479,34 @@ def test_an_encounter_with_no_id_is_ignored_rather_than_keyed_on_none(tmp_path):
     path = tmp_path / "p.json"
     path.write_text(json.dumps({"encounters": [{"fightsSampled": 5}]}), encoding="utf-8")
     assert load_previous(path) == {}
+
+
+def test_a_bigger_event_budget_reopens_an_encounter_that_has_enough_fights():
+    """The half of the sample that is not the number of kills.
+
+    The 30-kill MID2 pass had every fight it asked for and still produced no band on
+    three bosses, because a bounded event fetch stopped partway through each pull --
+    Midnight Falls was read to 17%. Raising --max-pages to fix that must not be a
+    silent no-op just because the fight count is already satisfied.
+    """
+    from wowdps.fightprobe import is_complete
+
+    collected = {"fightsSampled": 30, "eventBudget": 3 * 10000}
+    assert is_complete(collected, 30, 3 * 10000) is True
+    assert is_complete(collected, 30, 8 * 10000) is False
+    # Lowering it is not a reason to re-fetch: what is stored already covers more.
+    assert is_complete(collected, 30, 1 * 10000) is True
+
+
+def test_an_encounter_with_no_recorded_budget_is_left_alone():
+    """Treating unknown as zero would re-open a whole zone on the next run for
+    everybody holding a payload written before the budget was recorded."""
+    from wowdps.fightprobe import is_complete
+
+    assert is_complete({"fightsSampled": 30}, 30, 8 * 10000) is True
+
+
+def test_the_fight_count_still_wins_regardless_of_budget():
+    from wowdps.fightprobe import is_complete
+
+    assert is_complete({"fightsSampled": 5, "eventBudget": 99999999}, 30, 10) is False

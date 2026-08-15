@@ -852,7 +852,16 @@ the payload rather than from the trigger.
 Three things that would otherwise bite:
 
 - **Raising `--reports` re-opens every encounter**, on purpose: somebody raising it
-  wants a bigger sample, not a skip.
+  wants a bigger sample, not a skip. **So does raising `--max-pages`**, and that one is
+  not cosmetic. The number of kills is only half of what the band needs; the other half
+  is reading each kill to the end. The first 30-kill pass had every fight it asked for
+  and still produced no band on three bosses, because the event fetch stopped partway
+  through each pull -- Midnight Falls at 17% coverage, Belo'ren at 46%. `eventBudget`
+  (`max_pages x events_limit`) is recorded per encounter so a later run can tell "already
+  collected" from "collected with a smaller budget than you are now asking for". An
+  encounter with no recorded budget is left alone rather than re-fetched -- treating
+  unknown as zero would re-open a whole zone for everybody -- so a payload written before
+  this needs one `--no-resume` run to pick the budget up.
 - **`inputs.*` is empty on a scheduled run**, so every input in the workflow now
   carries the same default the dispatch form shows. A continuation has to run with the
   settings of the pass it continues or it re-opens all of them.

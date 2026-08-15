@@ -468,16 +468,38 @@ def load_previous(path: Path) -> dict[int, dict]:
     }
 
 
-def is_complete(entry: dict, wanted: int) -> bool:
+def is_complete(entry: dict, wanted: int, event_budget: int | None = None) -> bool:
     """Has this encounter already got the sample the settings ask for?
 
-    Compared against the *requested* number rather than a fixed one so that raising
-    `--reports` re-opens every encounter, which is what somebody raising it means. An
-    encounter that genuinely has fewer kills logged than requested would be re-fetched
-    every run and cost nothing after the first, because every one of its queries is
-    already in the response cache.
+    Two ways to be short of it, and both re-open the encounter, because both are
+    somebody asking for *more* rather than asking to skip:
+
+    - **Fewer kills than `--reports`.** Compared against the requested number rather
+      than a fixed one. An encounter with genuinely fewer kills logged than requested
+      is re-fetched every run and costs nothing after the first, because every one of
+      its queries is already in the response cache.
+    - **A smaller event budget than `--max-pages` now asks for.** This one is not
+      cosmetic. The number of kills is only half of what the target-count band needs;
+      the other half is reading each kill to the *end*, and a bounded event fetch
+      stops partway through a long pull. On the first 30-kill MID2 pass the fights
+      were all there and the coverage was not: Midnight Falls read 17% of its kills,
+      Belo'ren 46%, and neither produced a band at all. Without this check, raising
+      `--max-pages` to fix exactly that would skip every encounter for already having
+      its 30 fights -- a silent no-op, and the worst kind, because the run looks
+      successful and nothing changes.
+
+    An encounter collected before the budget was recorded reports `None`, and is left
+    alone rather than re-fetched: treating unknown as zero would re-open the whole
+    zone on the next run for everybody. Use ``--no-resume`` once to rebuild such a
+    payload; from then on the budget travels with it.
     """
-    return int(entry.get("fightsSampled") or 0) >= wanted
+    if int(entry.get("fightsSampled") or 0) < wanted:
+        return False
+    if event_budget is not None:
+        recorded = entry.get("eventBudget")
+        if isinstance(recorded, int) and recorded < event_budget:
+            return False
+    return True
 
 
 def cmd_fight_probe(args: argparse.Namespace) -> int:
@@ -524,6 +546,10 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
 
     json_path = out_dir / f"fight-probe-{args.tier}.json"
     resume_path = Path(args.resume) if args.resume else json_path
+    # How much of each fight this run is willing to read. Recorded per encounter so a
+    # later run can tell "already collected" from "already collected, but with a
+    # smaller budget than you are now asking for".
+    event_budget = settings.max_pages * settings.events_limit
     previous = {} if args.no_resume else load_previous(resume_path)
     if previous:
         log.info("resuming from %s: %d encounter(s) already collected", resume_path, len(previous))
@@ -546,7 +572,7 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         remaining: list[int] = []
         for encounter_id in encounter_ids:
             done = previous.get(encounter_id)
-            if done is not None and is_complete(done, settings.reports):
+            if done is not None and is_complete(done, settings.reports, event_budget):
                 log.info(
                     "encounter %d already has %d fights; skipping",
                     encounter_id,
@@ -574,13 +600,17 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
     # A run contributes what it managed; everything else comes back from the previous
     # payload untouched. Ordered by the encounter list rather than by arrival so the
     # file does not reshuffle itself between runs and make a diff meaningless.
-    fresh = {observation.encounter_id: observation.to_json() for observation in observations}
+    fresh = {}
+    for observation in observations:
+        entry = observation.to_json()
+        entry["eventBudget"] = event_budget
+        fresh[observation.encounter_id] = entry
     by_id = {**previous, **fresh}
     merged = [by_id[eid] for eid in encounter_ids if eid in by_id]
     incomplete = [
         eid
         for eid in encounter_ids
-        if eid not in by_id or not is_complete(by_id[eid], settings.reports)
+        if eid not in by_id or not is_complete(by_id[eid], settings.reports, event_budget)
     ]
 
     payload = {
@@ -611,7 +641,9 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         # difference: an encounter that was never reached and one that was probed and
         # read nothing are different sentences.
         "encountersRequested": len(encounter_ids),
-        "encountersCollected": sum(1 for e in merged if is_complete(e, settings.reports)),
+        "encountersCollected": sum(
+            1 for e in merged if is_complete(e, settings.reports, event_budget)
+        ),
         "incomplete": sorted(incomplete),
     }
 

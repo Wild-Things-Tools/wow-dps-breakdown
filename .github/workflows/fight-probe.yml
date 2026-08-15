@@ -78,8 +78,12 @@ on:
         description: 'Rankings page to sample from; 1 is the world best, which is not a typical pull'
         default: '1'
       max_pages:
-        description: 'Event pages per stream per fight'
+        description: 'Event pages per stream per fight. This is what decides whether a kill is read to the end -- a band needs whole fights, not just many of them. Raising it re-opens encounters whose stored budget was smaller'
         default: '3'
+      no_resume:
+        description: 'Ignore the collected payload and re-read every encounter. Needed once for a payload written before the event budget was recorded'
+        type: boolean
+        default: false
       point_ceiling:
         description: 'Abort once this fraction of the hourly point budget is spent'
         default: '0.8'
@@ -156,11 +160,13 @@ jobs:
           MAX_PAGES: ${{ inputs.max_pages || '3' }}
           POINT_CEILING: ${{ inputs.point_ceiling || '0.8' }}
           CHEAP: ${{ inputs.cheap }}
+          NO_RESUME: ${{ inputs.no_resume }}
           PUBLISH: ${{ inputs.publish || github.event_name == 'schedule' }}
         run: |
           args=()
           for id in $ENCOUNTERS; do args+=(--encounter "$id"); done
           if [ "$CHEAP" = "true" ]; then args+=(--no-damage-events); fi
+          if [ "$NO_RESUME" = "true" ]; then args+=(--no-resume); fi
           # --publish writes the dataset from the same payload the artifact carries,
           # so the committed file and the evidence for it come out of one pass.
           if [ "$PUBLISH" = "true" ]; then args+=(--publish web/public/data); fi
