@@ -515,3 +515,135 @@ def test_the_fight_count_still_wins_regardless_of_budget():
     from wowdps.fightprobe import is_complete
 
     assert is_complete({"fightsSampled": 5, "eventBudget": 99999999}, 30, 10) is False
+
+
+class _ReportSearchClient:
+    """A client that answers the report-search queries and nothing else."""
+
+    def __init__(self, pages, kills, limit=100):
+        self._pages = pages
+        self._kills = kills
+        self._limit = limit
+        self.ledger = type("L", (), {"limit_per_hour": None, "last_reading": None})()
+        self.kills_asked = []
+
+    def encounter_zone(self, encounter_id):
+        return {"id": 7, "name": "The Voidspire", "frozen": False}
+
+    def reports_in_window(self, zone_id, start_ms, end_ms, page=1, limit=100):
+        self.window = (start_ms, end_ms)
+        rows = self._pages[page - 1] if page <= len(self._pages) else []
+        return {"data": rows}
+
+    def report_kills(self, code, encounter_id):
+        self.kills_asked.append(code)
+        return self._kills.get(code, [])
+
+
+def _settings(**over):
+    from wowdps.fightprobe import ProbeSettings
+
+    base = dict(
+        encounter_ids=(42,),
+        difficulty=5,
+        metric="dps",
+        reports=2,
+        rankings_page=1,
+        order="public",
+        rankings_pages=1,
+        streams=("damage",),
+        events_limit=10,
+        max_pages=1,
+        point_ceiling=0.8,
+        significant_share=0.01,
+        report_limit=2,
+        report_pages=5,
+    )
+    base.update(over)
+    return ProbeSettings(**base)
+
+
+def test_the_report_search_finds_a_kill_the_rankings_never_carried():
+    """The whole point of the route: a public log Warcraft Logs did not rank.
+
+    The anchor is the earliest *ranked* kill. A kill before it is one the ranking
+    route could not have returned at any window width.
+    """
+    from wowdps.fightprobe import _public_first_kills
+
+    anchor = 10_000_000.0
+    kill = lambda start: [  # noqa: E731
+        {"id": 3, "encounterID": 42, "kill": True, "startTime": start, "endTime": start + 200}
+    ]
+    client = _ReportSearchClient(
+        pages=[[{"code": "EARLY"}, {"code": "LATE"}], [{"code": "EARLIER"}]],
+        kills={
+            "EARLY": kill(anchor - 5_000),
+            "LATE": kill(anchor + 9_000),
+            "EARLIER": kill(anchor - 90_000),
+        },
+    )
+
+    pairs, outcome = _public_first_kills(client, 42, anchor, _settings())
+
+    assert [code for code, _, _ in pairs] == ["EARLIER", "EARLY"]
+    assert outcome.beat_anchor == 2
+    assert outcome.reports_seen == 3
+    assert "2 earlier than the best-parse sample" in outcome.summary(anchor)
+
+
+def test_paging_stops_on_a_short_page_rather_than_on_an_unverified_field():
+    """`ReportPagination` could not be introspected, so `has_more_pages` is not trusted."""
+    from wowdps.fightprobe import _public_first_kills
+
+    client = _ReportSearchClient(pages=[[{"code": "A"}]], kills={})
+    _, outcome = _public_first_kills(client, 42, 10_000.0, _settings())
+
+    # One page returned fewer rows than the limit of 2, so no second page was asked for.
+    assert outcome.pages_read == 1
+
+
+def test_without_a_ranked_timestamp_there_is_nothing_to_anchor_on():
+    """Reported and refused, rather than searching from the epoch for every boss."""
+    from wowdps.fightprobe import _public_first_kills
+
+    client = _ReportSearchClient(pages=[], kills={})
+    pairs, outcome = _public_first_kills(client, 42, 0.0, _settings())
+
+    assert pairs == []
+    assert outcome.reports_seen == 0
+
+
+def test_the_window_is_anchored_on_the_earliest_ranked_kill():
+    from wowdps.fightprobe import _public_first_kills
+    from wowdps.firstkills import DAY_MS
+
+    anchor = 100.0 * DAY_MS
+    client = _ReportSearchClient(pages=[], kills={})
+    _public_first_kills(client, 42, anchor, _settings(lookback_days=10, forward_days=14))
+
+    assert client.window == (90 * DAY_MS, 114 * DAY_MS)
+
+
+def test_switching_order_re_opens_an_encounter_rather_than_counting_it_done():
+    """A different --order is a different sample, not more of the same one.
+
+    Without this the resume silently defeats the switch: everything collected at
+    `first` counts as done, the report search never runs, and the pass reports
+    success having changed nothing. That is how the max_pages default went inert,
+    and it cost a whole afternoon of hourly runs to notice.
+    """
+    from wowdps.fightprobe import is_complete
+
+    entry = {"fightsSampled": 30, "eventBudget": 200_000, "order": "first"}
+
+    assert is_complete(entry, 30, 200_000, "first") is True
+    assert is_complete(entry, 30, 200_000, "public") is False
+
+
+def test_an_entry_from_before_the_order_was_recorded_is_left_alone():
+    """Unknown is not 'wrong order' -- the same rule the event budget follows."""
+    from wowdps.fightprobe import is_complete
+
+    entry = {"fightsSampled": 30, "eventBudget": 200_000}
+    assert is_complete(entry, 30, 200_000, "public") is True

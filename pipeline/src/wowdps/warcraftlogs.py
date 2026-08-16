@@ -79,6 +79,64 @@ query Zones {
 }
 """
 
+# The route to "who killed this first" that does not go through rankings at all.
+# Verified against the live schema on 2026-08-16: `reportData.reports` takes a
+# zoneID and a startTime/endTime window and is not restricted to ranked parses, so
+# a public log Warcraft Logs never ranked is still in it.
+#
+# `ReportPagination` is the declared return type and the server refuses to
+# introspect it, so only `data` is requested -- the Laravel-style envelope these
+# APIs use -- and paging stops on a short page rather than on a `has_more_pages`
+# field whose name is unverified. `firstkills.reports_from_payload` reads the
+# envelope defensively for the same reason.
+REPORTS_QUERY = """
+query Reports($zoneId: Int!, $startTime: Float!, $endTime: Float!, $limit: Int!, $page: Int!) {
+  rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
+  reportData {
+    reports(zoneID: $zoneId, startTime: $startTime, endTime: $endTime, limit: $limit, page: $page) {
+      data { code startTime endTime }
+    }
+  }
+}
+"""
+
+# One report's kills of one encounter. `killType: Kills` is the server-side filter;
+# `kill` is requested anyway so the extraction can re-check it, because a filter
+# that silently stopped filtering would put wipes into a sample of first *kills*.
+REPORT_KILLS_QUERY = """
+query ReportKills($code: String!, $encounterId: Int!) {
+  rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
+  reportData {
+    report(code: $code) {
+      code
+      fights(encounterID: $encounterId, killType: Kills) {
+        id
+        encounterID
+        kill
+        startTime
+        endTime
+      }
+    }
+  }
+}
+"""
+
+# The zone a boss belongs to, which `reports` needs and the probe does not otherwise
+# know. `Encounter.zone` is a non-null field, so this cannot come back empty for a
+# real encounter id.
+ENCOUNTER_ZONE_QUERY = """
+query EncounterZone($encounterId: Int!) {
+  rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
+  worldData {
+    encounter(id: $encounterId) {
+      id
+      name
+      zone { id name frozen }
+    }
+  }
+}
+"""
+
 RATE_LIMIT_QUERY = """
 query RateLimit {
   rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
@@ -443,6 +501,53 @@ class WarcraftLogsClient:
         if isinstance(table, str):
             table = json.loads(table)
         return table if isinstance(table, dict) else None
+
+    def encounter_zone(self, encounter_id: int) -> dict:
+        """The zone one encounter belongs to. `reports` is keyed on zone, not boss."""
+        data = self.query(
+            ENCOUNTER_ZONE_QUERY,
+            {"encounterId": encounter_id},
+            label=f"encounter-zone:{encounter_id}",
+        )
+        encounter = ((data.get("worldData") or {}).get("encounter")) or {}
+        return encounter.get("zone") or {}
+
+    def reports_in_window(
+        self, zone_id: int, start_ms: int, end_ms: int, page: int = 1, limit: int = 100
+    ) -> object:
+        """One page of logs uploaded for a zone in a time window.
+
+        Returns the raw pagination payload rather than a list: its envelope could not
+        be introspected, so reading it is `firstkills.reports_from_payload`'s job and
+        an unexpected shape has to be visible there rather than swallowed here.
+        """
+        data = self.query(
+            REPORTS_QUERY,
+            {
+                "zoneId": zone_id,
+                # Warcraft Logs takes these as seconds-with-millis floats in some
+                # places and plain epoch ms in others. Everything else in this module
+                # works in epoch ms, which is what report and fight timestamps are, so
+                # that is what goes out.
+                "startTime": float(start_ms),
+                "endTime": float(end_ms),
+                "limit": limit,
+                "page": page,
+            },
+            label=f"reports:{zone_id}:{page}",
+        )
+        return ((data.get("reportData") or {}).get("reports")) or {}
+
+    def report_kills(self, code: str, encounter_id: int) -> list[dict]:
+        """One report's kills of one encounter."""
+        data = self.query(
+            REPORT_KILLS_QUERY,
+            {"code": code, "encounterId": encounter_id},
+            label=f"report-kills:{code}",
+        )
+        report = ((data.get("reportData") or {}).get("report")) or {}
+        fights = report.get("fights")
+        return fights if isinstance(fights, list) else []
 
     def zones(self) -> list[dict]:
         data = self.query(ZONE_QUERY, label="zones")

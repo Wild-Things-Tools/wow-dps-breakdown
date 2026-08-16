@@ -69,8 +69,17 @@ on:
         description: 'Distinct kills to read per encounter (the main cost dial). Larger is what makes the aggregate band meaningful'
         default: '30'
       order:
-        description: "Which kills: 'first' (earliest, alike, intended tuning) or 'top' (speed kills)"
-        default: 'first'
+        description: "Which kills. 'public' searches the logs uploaded for the zone in a time window (reportData.reports) — not restricted to ranked parses, so it can see a public kill the rankings never carried. 'first' takes the earliest among the ranking pages gathered, which are sorted by damage. 'top' is the rankings' damage order, i.e. speed kills"
+        default: 'public'
+      lookback_days:
+        description: "--order public: how far back from the earliest ranked kill the report search reaches. Nothing in the schema says when a raid opened, so the ranked sample anchors the window"
+        default: '10'
+      forward_days:
+        description: '--order public: how far forward from that anchor'
+        default: '14'
+      report_pages:
+        description: '--order public: pages of the report search to read, at 100 reports each'
+        default: '20'
       rankings_pages:
         description: 'Ranking pages to gather before choosing the first kills. This is the window "first" is measured inside: Warcraft Logs sorts rankings by damage, so a slow first-night kill sits deep in the list and a narrow window silently returns later kills instead. Pages are cheap next to the per-fight event streams'
         # 40, not 8. The pages are a rounding error against a pass, and the failure a
@@ -167,7 +176,10 @@ jobs:
           TIER: ${{ inputs.tier || 'MID2' }}
           DIFFICULTY: ${{ inputs.difficulty || '5' }}
           REPORTS: ${{ inputs.reports || '30' }}
-          ORDER: ${{ inputs.order || 'first' }}
+          ORDER: ${{ inputs.order || 'public' }}
+          LOOKBACK_DAYS: ${{ inputs.lookback_days || '10' }}
+          FORWARD_DAYS: ${{ inputs.forward_days || '14' }}
+          REPORT_PAGES: ${{ inputs.report_pages || '20' }}
           RANKINGS_PAGES: ${{ inputs.rankings_pages || '40' }}
           PAGE: ${{ inputs.page || '1' }}
           MAX_PAGES: ${{ inputs.max_pages || '20' }}
@@ -191,6 +203,9 @@ jobs:
             --difficulty "$DIFFICULTY" \
             --reports "$REPORTS" \
             --order "$ORDER" \
+            --lookback-days "$LOOKBACK_DAYS" \
+            --forward-days "$FORWARD_DAYS" \
+            --report-pages "$REPORT_PAGES" \
             --rankings-pages "$RANKINGS_PAGES" \
             --page "$PAGE" \
             --max-pages "$MAX_PAGES" \

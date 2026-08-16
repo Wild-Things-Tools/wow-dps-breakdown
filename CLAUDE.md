@@ -1977,6 +1977,44 @@ Still unverified:
   produced them yet, so `fights.json` has no `promotions` key at all and the view
   says so rather than showing an empty panel.
 
+### `--order public`: kills chosen by date, off the report search
+
+Built on the introspection below. `firstkills.py` (pure) + `_public_first_kills` in
+`fightprobe.py`. `--order public` is now the workflow default; `first` and `top`
+still exist and mean what they always did.
+
+The route is `reportData.reports(zoneID, startTime, endTime, limit, page)` for the
+logs, then `Report.fights(encounterID, killType: Kills)` per report, then the
+earliest N by `startTime`. Nothing downstream changes -- `ReportFight` already
+carries everything `_probe_fight` reads.
+
+Five things it is built around, and the first two are because the pagination
+envelope is the one part of the route the server would **not** introspect:
+
+- **Nothing assumes an order.** Every kill found is sorted locally by its own start
+  time, so it does not matter whether reports come back oldest- or newest-first.
+- **Paging stops on a short page**, not on a `has_more_pages` field whose name is
+  unverified. `reports_from_payload` reads a `data` list or a bare list and returns
+  nothing for anything else -- zero reports is visible in the output, an exception
+  in the middle of a nine-boss pass is not.
+- **`kill` is re-checked** even though `killType: Kills` is passed. A filter that
+  silently stopped filtering would put a wipe into a sample of first kills, and a
+  first-night wipe is precisely the row that would win the sort.
+- **The window is anchored on the earliest *ranked* kill**, because nothing in the
+  schema says when a raid opened (`Zone.partitions` has names, no dates). The search
+  runs from `--lookback-days` before it. That makes the question concrete and
+  checkable -- *is there a public kill earlier than the earliest ranked one?* -- and
+  `SearchOutcome.beat_anchor` publishes the answer. A zone where it comes back zero
+  is a real finding about that zone, not a failure, and the run says so.
+- **A different `--order` re-opens an encounter.** `is_complete` compares the
+  recorded order, because a sample chosen one way is not more of a sample chosen the
+  other. Without it the resume defeats the switch entirely: everything collected at
+  `first` counts as done, the new route never runs, and the pass reports success
+  having changed nothing. That is exactly how the `max_pages` default went inert,
+  so it is worth stating as a rule: **any setting that changes *which* data is
+  collected has to participate in the completeness test**, or the continuation
+  quietly keeps the old answer.
+
 ### The schema can be asked, and it was — two routes to "first kill" exist
 
 `wclschema.py` + `wowdps wcl-schema` + `wcl-schema.yml`. Verified against the live
