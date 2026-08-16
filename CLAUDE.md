@@ -1739,6 +1739,28 @@ were up at the end -- holding flat exactly the fall the curve should show. The c
 kept is published so a thin band reads as thin. `medianLengthSeconds` is meaningful precisely
 because the first-kills sample has alike timings -- one length fits them all.
 
+**"First kills" is bounded by the ranking window, and that bound was invisible.**
+`select_report_fights` sorts by kill date, but only over the rows it was handed,
+and Warcraft Logs sorts rankings **by damage**. A guild that killed the boss on the
+first night with a slow, scrappy pull ranks low and sits deep in that list, so a
+narrow gather returns *the earliest of the best parses* -- a sample that is
+truthfully "the earliest kills we saw" and systematically later than the one asked
+for. Nothing in the payload said when the sampled kills happened, so there was no
+way to notice.
+
+Two changes, and the first matters more than the second. `FightObservation` now
+carries `started_at` from the ranking row, `EncounterObservation.killed_between`
+pools it, and `killedBetween` (first, last, spanDays) is published per encounter
+and printed in the caveat and on the Fights view. **Widening the window is the
+lever; publishing the dates is what makes the lever's effect checkable.**
+`--rankings-pages` defaults to 40 rather than 8 -- ranking pages are a rounding
+error against the per-fight event streams, which are the real cost.
+
+One bound no setting reaches: `characterRankings` contains **ranked parses only**.
+A kill logged privately, or one Warcraft Logs declined to rank, is not in that list
+at any depth. That is their rule, not a limit of this project, and it is worth
+stating when somebody asks why a specific early kill is missing.
+
 **Default `--reports` is 30, up from 3.** The band needs a real sample; 30 is a
 starting point, not a ceiling, and `--point-ceiling` gates the WCL cost. The per-fight
 event streams are the cost, not the ranking pages, so gathering 8 pages to find the

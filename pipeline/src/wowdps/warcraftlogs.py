@@ -526,8 +526,10 @@ def _entry_start(entry: dict) -> float:
 
 def select_report_fights(
     encounters: list[dict], limit: int, order: str = "first"
-) -> list[tuple[str, int]]:
-    """``(report code, fight id)`` for the kills to probe, one fight per report.
+) -> list[tuple[str, int, float]]:
+    """``(report code, fight id, kill start in epoch ms)`` for the kills to probe.
+
+    One fight per report.
 
     One per report on purpose: two parses from the same pull describe the same
     fight, so a sample of five entries could be a sample of one kill.
@@ -545,6 +547,20 @@ def select_report_fights(
       rankings by damage and not by date, so this reads the ``startTime`` every row
       already carries and sorts on it; the gather just has to be wide enough to
       contain the early kills, which is why the probe hands several pages in.
+
+    **The width of that gather is the whole constraint, and it is easy to
+    misread.** "First" here means *the earliest kills among the pages handed in*,
+    and those pages are the highest-damage parses. A guild that killed the boss on
+    the first night with a slow, scrappy pull ranks low and can sit far past the
+    window, so a narrow gather returns "the earliest of the best" rather than the
+    first kills -- a plausible sample, systematically later than the one asked for,
+    and invisible in the output unless the dates are published. `killed_between`
+    on the observation is what makes it visible; widening ``--rankings-pages`` is
+    what fixes it, and ranking pages are cheap next to the per-fight event streams.
+
+    One thing no setting can reach: ``characterRankings`` contains *ranked* parses
+    only. A kill logged privately, or one Warcraft Logs declined to rank, is not in
+    this list at any depth. That is their rule, not a bound of this project.
     """
     seen: set[str] = set()
     rows: list[tuple[float, str, int]] = []
@@ -561,10 +577,10 @@ def select_report_fights(
         # A zero (no timestamp) sorts to the front and would masquerade as the
         # earliest kill, so those go last rather than first.
         rows.sort(key=lambda row: (row[0] == 0.0, row[0]))
-    return [(code, fight_id) for _, code, fight_id in rows[:limit]]
+    return [(code, fight_id, started) for started, code, fight_id in rows[:limit]]
 
 
-def top_report_fights(encounter: dict, limit: int) -> list[tuple[str, int]]:
+def top_report_fights(encounter: dict, limit: int) -> list[tuple[str, int, float]]:
     """Back-compat single-page helper: the highest parses, one fight per report."""
     return select_report_fights([encounter], limit, order="top")
 

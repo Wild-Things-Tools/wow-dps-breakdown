@@ -159,10 +159,10 @@ def probe_encounter(
         log.warning("encounter %d: rankings carried no report codes", encounter_id)
         return observation, None
 
-    for code, fight_id in pairs:
+    for code, fight_id, started_at in pairs:
         try:
             _check_budget(client, settings.point_ceiling)
-            fight = _probe_fight(client, code, fight_id, encounter_id, settings)
+            fight = _probe_fight(client, code, fight_id, encounter_id, settings, started_at)
         except PointBudgetExhausted as exc:
             return observation, str(exc)
         except WarcraftLogsError as exc:
@@ -189,6 +189,7 @@ def _probe_fight(
     fight_id: int,
     encounter_id: int,
     settings: ProbeSettings,
+    started_at: float = 0.0,
 ) -> fightextract.FightObservation | None:
     report = client.fight_structure(code, encounter_id, settings.difficulty)
     fights = report.get("fights") or []
@@ -256,6 +257,7 @@ def _probe_fight(
         truncated=truncated,
         friendly_ids=friendly_ids,
         significant_share=settings.significant_share,
+        started_at=started_at,
     )
 
 

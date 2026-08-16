@@ -970,3 +970,66 @@ def test_an_ownership_cycle_that_never_reaches_a_player_is_not_friendly():
         {"id": 51, "type": "Pet", "petOwner": 50},
     ]
     assert friendly_source_ids(actors) == frozenset({1})
+
+
+def test_the_kill_dates_of_the_sample_are_published():
+    """ "The earliest kills" is a claim about dates, so the dates have to be in the output.
+
+    `--order first` sorts by kill time *within the ranking pages gathered*, and
+    Warcraft Logs sorts those by damage. A slow first-night kill therefore sits deep
+    in the list and a narrow gather returns later kills while still being, truthfully,
+    the earliest ones seen. Nothing in the payload used to say when they happened, so
+    the gap was unnoticeable.
+    """
+    from wowdps.fightextract import EncounterObservation
+
+    observation = EncounterObservation(encounter_id=1, encounter_name="Boss", difficulty=5)
+    observation.fights = [
+        _stub_fight(started_at=1_700_000_000_000),
+        _stub_fight(started_at=1_700_432_000_000),
+    ]
+
+    span = observation.killed_between
+    assert span == (1_700_000_000_000, 1_700_432_000_000)
+
+    published = observation.to_json()["killedBetween"]
+    assert published["first"].startswith("2023-11-14")
+    assert published["spanDays"] == 5.0
+
+
+def test_no_kill_dates_publishes_null_rather_than_an_epoch_zero_span():
+    """A row with no timestamp is unknown, not 1970."""
+    from wowdps.fightextract import EncounterObservation
+
+    observation = EncounterObservation(encounter_id=1, encounter_name="Boss", difficulty=5)
+    observation.fights = [_stub_fight(started_at=0.0)]
+
+    assert observation.killed_between is None
+    assert observation.to_json()["killedBetween"] is None
+
+
+def _stub_fight(started_at: float):
+    """A FightObservation with only the fields these two cases read."""
+    from wowdps.fightextract import FightObservation, TargetCountTimeline
+
+    empty = TargetCountTimeline(steps=(), duration=1.0, observed=1.0)
+    return FightObservation(
+        report_code="abc",
+        fight_id=1,
+        encounter_id=1,
+        encounter_name="Boss",
+        difficulty=5,
+        kill=True,
+        duration=1.0,
+        raid_size=20,
+        players=20,
+        timeline=empty,
+        significant_timeline=empty,
+        enemies=(),
+        adds=(),
+        phases=(),
+        auras=(),
+        damage_by_target=(),
+        active_time_fraction=None,
+        started_at=started_at,
+    )

@@ -721,6 +721,15 @@ export interface MeasuredFight {
    * reason not to trust a whole-fight claim from that run.
    */
   eventCoverage?: FightSpread | null
+  /**
+   * When the sampled kills happened. `--order first` takes the earliest kills
+   * *among the ranking pages gathered*, and Warcraft Logs sorts those by damage —
+   * so a slow first-night kill can sit past the window and never be seen, while
+   * the sample is still truthfully "the earliest ones we saw". These dates are
+   * what let a reader tell the two apart. Absent on payloads written before the
+   * kill time was carried through.
+   */
+  killedBetween?: { first: string; last: string; spanDays: number } | null
   adds?: MeasuredAdd[]
   auras?: MeasuredAura[]
   phases?: MeasuredPhase[]

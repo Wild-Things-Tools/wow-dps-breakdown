@@ -72,8 +72,12 @@ on:
         description: "Which kills: 'first' (earliest, alike, intended tuning) or 'top' (speed kills)"
         default: 'first'
       rankings_pages:
-        description: 'Ranking pages to gather before choosing the first kills'
-        default: '8'
+        description: 'Ranking pages to gather before choosing the first kills. This is the window "first" is measured inside: Warcraft Logs sorts rankings by damage, so a slow first-night kill sits deep in the list and a narrow window silently returns later kills instead. Pages are cheap next to the per-fight event streams'
+        # 40, not 8. The pages are a rounding error against a pass, and the failure a
+        # narrow window produces is invisible: the sample is still truthfully "the
+        # earliest kills we gathered", just gathered from the top parses. The kill
+        # dates are published now, so this can be checked rather than believed.
+        default: '40'
       page:
         description: 'Rankings page to sample from; 1 is the world best, which is not a typical pull'
         default: '1'
@@ -164,7 +168,7 @@ jobs:
           DIFFICULTY: ${{ inputs.difficulty || '5' }}
           REPORTS: ${{ inputs.reports || '30' }}
           ORDER: ${{ inputs.order || 'first' }}
-          RANKINGS_PAGES: ${{ inputs.rankings_pages || '8' }}
+          RANKINGS_PAGES: ${{ inputs.rankings_pages || '40' }}
           PAGE: ${{ inputs.page || '1' }}
           MAX_PAGES: ${{ inputs.max_pages || '20' }}
           POINT_CEILING: ${{ inputs.point_ceiling || '0.8' }}

@@ -382,10 +382,13 @@ def test_first_kills_are_taken_by_date_across_gathered_pages():
     p2 = page(row("FIRST1", 1, 1000), row("FIRST2", 3, 1100), row("SPEED1", 9, 5000))
 
     first = select_report_fights([p1, p2], 2, order="first")
-    assert first == [("FIRST1", 1), ("FIRST2", 3)]
+    assert [(code, fight) for code, fight, _ in first] == [("FIRST1", 1), ("FIRST2", 3)]
+    # The kill time travels with the route: without it, nothing downstream can say
+    # whether "the earliest kills we gathered" were early in absolute terms.
+    assert [start for _, _, start in first] == [1000, 1100]
 
     top = select_report_fights([p1, p2], 2, order="top")
-    assert top == [("SPEED1", 1), ("SPEED2", 2)]
+    assert [(code, fight) for code, fight, _ in top] == [("SPEED1", 1), ("SPEED2", 2)]
 
 
 def test_one_fight_per_report_even_across_pages():
@@ -404,7 +407,8 @@ def test_one_fight_per_report_even_across_pages():
         },
     ]
     # Same report on two pages is one kill; the first-seen fight id is kept.
-    assert select_report_fights(pages, 5, order="first") == [("A", 1)]
+    selected = select_report_fights(pages, 5, order="first")
+    assert [(code, fight) for code, fight, _ in selected] == [("A", 1)]
 
 
 def test_a_row_without_a_timestamp_sorts_last_not_first():
@@ -421,7 +425,8 @@ def test_a_row_without_a_timestamp_sorts_last_not_first():
             }
         }
     ]
-    assert select_report_fights(pages, 2, order="first") == [("REAL", 2), ("NOTS", 1)]
+    selected = select_report_fights(pages, 2, order="first")
+    assert [(code, fight) for code, fight, _ in selected] == [("REAL", 2), ("NOTS", 1)]
 
 
 # --------------------------------------------------------------------------------

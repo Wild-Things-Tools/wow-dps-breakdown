@@ -89,6 +89,11 @@ def ranking_entry(code: str, fight_id: int, amount: float = 100.0) -> dict:
     return {"amount": amount, "report": {"code": code, "fightID": fight_id, "startTime": 1}}
 
 
+def routes(selected) -> list[tuple[str, int]]:
+    """Drop the kill timestamp, which these cases are not about."""
+    return [(code, fight_id) for code, fight_id, _ in selected]
+
+
 def test_ranking_entries_carry_the_route_to_the_actual_log():
     """This is what makes a fight probe cheap: no report search is needed, because
     every ranking already names the report and fight it came from."""
@@ -96,7 +101,7 @@ def test_ranking_entries_carry_the_route_to_the_actual_log():
         "id": 3180,
         "characterRankings": {"rankings": [ranking_entry("aaa", 4), ranking_entry("bbb", 7)]},
     }
-    assert top_report_fights(encounter, 5) == [("aaa", 4), ("bbb", 7)]
+    assert routes(top_report_fights(encounter, 5)) == [("aaa", 4), ("bbb", 7)]
 
 
 def test_two_parses_from_one_pull_are_one_fight_not_two():
@@ -107,7 +112,7 @@ def test_two_parses_from_one_pull_are_one_fight_not_two():
             "rankings": [ranking_entry("aaa", 4), ranking_entry("aaa", 4), ranking_entry("bbb", 2)]
         }
     }
-    assert top_report_fights(encounter, 5) == [("aaa", 4), ("bbb", 2)]
+    assert routes(top_report_fights(encounter, 5)) == [("aaa", 4), ("bbb", 2)]
 
 
 def test_the_report_limit_is_the_cost_dial_and_is_respected():
@@ -119,7 +124,7 @@ def test_rankings_returned_as_a_json_string_are_still_read():
     """``characterRankings`` is an untyped JSON scalar in the schema, and the site
     has been seen to return it both ways."""
     encounter = {"characterRankings": json.dumps({"rankings": [ranking_entry("aaa", 1)]})}
-    assert top_report_fights(encounter, 5) == [("aaa", 1)]
+    assert routes(top_report_fights(encounter, 5)) == [("aaa", 1)]
 
 
 def test_entries_without_a_report_are_skipped_rather_than_crashing():
@@ -128,7 +133,7 @@ def test_entries_without_a_report_are_skipped_rather_than_crashing():
             "rankings": [{"amount": 1}, {"report": {"code": "aaa"}}, ranking_entry("bbb", 3)]
         }
     }
-    assert top_report_fights(encounter, 5) == [("bbb", 3)]
+    assert routes(top_report_fights(encounter, 5)) == [("bbb", 3)]
 
 
 # --------------------------------------------------------------------------------

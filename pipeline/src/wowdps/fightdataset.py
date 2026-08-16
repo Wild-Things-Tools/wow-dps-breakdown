@@ -952,10 +952,27 @@ def _caveats(payload: dict, rankings_page: int | None, order: str | None = None)
             "fight is incomplete rather than absent."
         )
     if order == "first":
-        notes.append(
-            "Sampled from the earliest kills of the boss by kill date -- long kills "
-            "at the intended tuning, whose timings are alike."
-        )
+        span = payload.get("killedBetween")
+        if isinstance(span, dict) and span.get("first"):
+            # The dates, not just the claim. "Earliest kills" is only as true as the
+            # ranking window is wide: the selector sorts by date within the pages it
+            # gathered, and those are sorted by damage, so a slow first-night kill
+            # can sit past the window entirely. A reader who can see the dates can
+            # judge that; one who is only told "the earliest kills" cannot.
+            notes.append(
+                f"Sampled from the earliest kills by kill date, {span['first'][:10]} to "
+                f"{span['last'][:10]} ({span.get('spanDays')} days) -- long kills at the "
+                f"intended tuning, whose timings are alike. Earliest here means earliest "
+                f"among the ranking pages gathered, which Warcraft Logs sorts by damage, "
+                f"so a slow early kill can fall outside the window: widen it with "
+                f"--rankings-pages."
+            )
+        else:
+            notes.append(
+                "Sampled from the earliest kills of the boss by kill date -- long kills "
+                "at the intended tuning, whose timings are alike. No kill dates were "
+                "recorded, so how early they really were cannot be checked."
+            )
     elif rankings_page == 1:
         notes.append(
             "Sampled from page 1 of the rankings: the world's best pulls, which are "
@@ -1016,6 +1033,12 @@ def _encounter_document(
             # How much of each sampled fight the events actually covered. Every
             # count in this block is averaged over that, not over the fight.
             "eventCoverage": payload.get("eventCoverage"),
+            # When the sampled kills actually happened. `--order first` promises the
+            # earliest kills and delivers the earliest *among the ranking pages
+            # gathered*, which are sorted by damage -- so a slow first-night kill can
+            # sit past the window and never be seen. Publishing the span is what
+            # turns that from an assumption into something a reader can check.
+            "killedBetween": payload.get("killedBetween"),
             "adds": payload.get("adds") or [],
             "auras": payload.get("auras") or [],
             "phases": payload.get("phases") or [],
