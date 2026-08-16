@@ -116,7 +116,7 @@ class ProbeSettings:
     forward_days: float = 14.0
     #: `--order public` only: pages of the report search to read, at `limit` each.
     #: The bound that keeps a zone's opening week from being an unbounded walk.
-    report_pages: int = 20
+    report_pages: int = 5
     report_limit: int = 100
 
 
@@ -250,32 +250,46 @@ def _public_first_kills(
     rows: list[firstkills.KillRow] = []
     seen_codes: set[str] = set()
 
-    for page in range(1, settings.report_pages + 1):
-        _check_budget(client, settings.point_ceiling)
-        payload = client.reports_in_window(
-            zone_id, start_ms, end_ms, page=page, limit=settings.report_limit
-        )
-        reports = firstkills.reports_from_payload(payload)
-        outcome.pages_read = page
-        if not reports:
-            break
-        for report in reports:
-            code = str(report["code"])
-            if code in seen_codes:
-                continue
-            seen_codes.add(code)
-            outcome.reports_seen += 1
+    # The ceiling is caught here rather than allowed out. `probe_encounter` already
+    # treats a budget abort as "return what was read and say why" -- two fights read
+    # before the points ran out are two fights' worth of evidence, and re-raising
+    # would throw away the whole pass and pay for it again next hour. Letting it
+    # escape from this function is exactly what happened on the first `--order
+    # public` run: 2880 of 3600 points spent, and the traceback lost all nine
+    # encounters instead of publishing eight of them.
+    try:
+        for page in range(1, settings.report_pages + 1):
             _check_budget(client, settings.point_ceiling)
-            try:
-                fights = client.report_kills(code, encounter_id)
-            except WarcraftLogsError as exc:
-                log.debug("  report %s: %s", code, exc)
-                continue
-            rows.extend(firstkills.kills_from_report(code, fights, encounter_id))
-        if len(reports) < settings.report_limit:
-            break
-    else:
+            payload = client.reports_in_window(
+                zone_id, start_ms, end_ms, page=page, limit=settings.report_limit
+            )
+            reports = firstkills.reports_from_payload(payload)
+            outcome.pages_read = page
+            if not reports:
+                break
+            for report in reports:
+                code = str(report["code"])
+                if code in seen_codes:
+                    continue
+                seen_codes.add(code)
+                outcome.reports_seen += 1
+                _check_budget(client, settings.point_ceiling)
+                try:
+                    fights = client.report_kills(code)
+                except WarcraftLogsError as exc:
+                    log.debug("  report %s: %s", code, exc)
+                    continue
+                rows.extend(firstkills.kills_from_report(code, fights, encounter_id))
+            if len(reports) < settings.report_limit:
+                break
+        else:
+            outcome.truncated = True
+    except PointBudgetExhausted as exc:
+        # Partial by construction, and the caller is told so: the sample is the
+        # earliest of what was reached, not the earliest that exists.
         outcome.truncated = True
+        outcome.aborted = str(exc)
+        log.warning("  report search stopped on the point ceiling: %s", exc)
 
     outcome.kills_found = len(rows)
     outcome.beat_anchor = sum(1 for row in rows if row.started_at < anchor_ms)
@@ -917,9 +931,11 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--report-pages",
         type=int,
-        default=20,
+        default=5,
         help="--order public: pages of the report search to read, at --report-limit "
-        "each. The bound that keeps a zone's opening week from being an unbounded walk",
+        "each. The bound that keeps a zone's opening week from being an unbounded "
+        "walk -- and this search is the first thing in the project to move the point "
+        "counter at all, so it is a real bound rather than a formality",
     )
     parser.add_argument("--report-limit", type=int, default=100)
     parser.add_argument(

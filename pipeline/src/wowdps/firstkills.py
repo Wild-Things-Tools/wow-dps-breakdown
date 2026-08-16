@@ -151,6 +151,10 @@ class SearchOutcome:
     kills_found: int = 0
     beat_anchor: int = 0
     truncated: bool = False
+    #: Set when the point ceiling stopped the search. The sample is then the
+    #: earliest of what was *reached*, not the earliest that exists, and the two
+    #: must not be reported as the same thing.
+    aborted: str | None = None
 
     def summary(self, anchor_ms: float) -> str:
         base = (
@@ -159,6 +163,10 @@ class SearchOutcome:
         )
         if not anchor_ms:
             return base
+        if self.aborted:
+            base = f"{base}, STOPPED EARLY ({self.aborted})"
         if self.beat_anchor:
             return f"{base}; {self.beat_anchor} earlier than the best-parse sample"
+        if self.aborted:
+            return f"{base}; none earlier so far, but the search did not finish"
         return f"{base}; none earlier than the best-parse sample"

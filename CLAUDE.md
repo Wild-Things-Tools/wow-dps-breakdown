@@ -1977,6 +1977,31 @@ Still unverified:
   produced them yet, so `fights.json` has no `promotions` key at all and the view
   says so rather than showing an empty panel.
 
+### The report search is the first thing here that actually costs points
+
+Every earlier measurement in this file says `pointsSpentThisHour` did not move and
+records the cost as UNMEASURED. The first `--order public` run moved it to **2880
+of 3600** and hit the 80% ceiling. So the counter does work, the rankings route
+really is close to free, and this one is not.
+
+Two causes, both fixed, and the first was the expensive one:
+
+- **The kills query was filtered by encounter**, so a zone's report list was walked
+  nine times with nine different variable sets and nine cache misses. It is
+  unfiltered now: `Report.fights(killType: Kills)` per report, encounter filtering
+  in `firstkills.kills_from_report` where it already happened anyway. Identical
+  variables mean the response cache answers bosses two through nine for nothing --
+  a 9x reduction from one line.
+- **`report_pages` defaulted to 20**, i.e. up to 2000 reports per zone. Now 5.
+
+And one bug of the same afternoon's family: **`PointBudgetExhausted` escaped
+`_public_first_kills`** and took the whole pass down, losing eight encounters that
+had already been read. `probe_encounter` has always treated a budget abort as
+"return what was read and say why"; the new code path simply sat outside that
+guard. `SearchOutcome.aborted` now carries it, and a stopped search reports "none
+earlier **so far**, but the search did not finish" rather than the flat "none
+earlier" that would read as a finding about the zone.
+
 ### `--order public`: kills chosen by date, off the report search
 
 Built on the introspection below. `firstkills.py` (pure) + `_public_first_kills` in

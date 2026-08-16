@@ -78,8 +78,8 @@ on:
         description: '--order public: how far forward from that anchor'
         default: '14'
       report_pages:
-        description: '--order public: pages of the report search to read, at 100 reports each'
-        default: '20'
+        description: '--order public: pages of the report search to read, at 100 reports each. Measured: this search is the first thing in the project to move the point counter at all, so keep it small until a full pass has been costed'
+        default: '5'
       rankings_pages:
         description: 'Ranking pages to gather before choosing the first kills. This is the window "first" is measured inside: Warcraft Logs sorts rankings by damage, so a slow first-night kill sits deep in the list and a narrow window silently returns later kills instead. Pages are cheap next to the per-fight event streams'
         # 40, not 8. The pages are a rounding error against a pass, and the failure a
@@ -179,7 +179,7 @@ jobs:
           ORDER: ${{ inputs.order || 'public' }}
           LOOKBACK_DAYS: ${{ inputs.lookback_days || '10' }}
           FORWARD_DAYS: ${{ inputs.forward_days || '14' }}
-          REPORT_PAGES: ${{ inputs.report_pages || '20' }}
+          REPORT_PAGES: ${{ inputs.report_pages || '5' }}
           RANKINGS_PAGES: ${{ inputs.rankings_pages || '40' }}
           PAGE: ${{ inputs.page || '1' }}
           MAX_PAGES: ${{ inputs.max_pages || '20' }}

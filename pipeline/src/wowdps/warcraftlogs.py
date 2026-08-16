@@ -103,13 +103,20 @@ query Reports($zoneId: Int!, $startTime: Float!, $endTime: Float!, $limit: Int!,
 # One report's kills of one encounter. `killType: Kills` is the server-side filter;
 # `kill` is requested anyway so the extraction can re-check it, because a filter
 # that silently stopped filtering would put wipes into a sample of first *kills*.
+# Deliberately *not* filtered by encounter. A zone's report list is the same for
+# every boss in it, so filtering server-side would ask the same question nine times
+# with nine different variable sets and nine cache misses -- measured at 2880 of
+# 3600 points before the ceiling stopped the first run. Unfiltered, the query and
+# its variables are identical across every encounter, the response cache serves the
+# second through ninth for nothing, and `firstkills.kills_from_report` does the
+# encounter filter locally, which it had to do anyway.
 REPORT_KILLS_QUERY = """
-query ReportKills($code: String!, $encounterId: Int!) {
+query ReportKills($code: String!) {
   rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
   reportData {
     report(code: $code) {
       code
-      fights(encounterID: $encounterId, killType: Kills) {
+      fights(killType: Kills) {
         id
         encounterID
         kill
@@ -538,11 +545,16 @@ class WarcraftLogsClient:
         )
         return ((data.get("reportData") or {}).get("reports")) or {}
 
-    def report_kills(self, code: str, encounter_id: int) -> list[dict]:
-        """One report's kills of one encounter."""
+    def report_kills(self, code: str) -> list[dict]:
+        """Every kill in one report, for any encounter.
+
+        One request per report for a whole zone rather than one per report *per
+        boss*: the caller filters by encounter, and the identical variables mean the
+        cache answers every boss after the first.
+        """
         data = self.query(
             REPORT_KILLS_QUERY,
-            {"code": code, "encounterId": encounter_id},
+            {"code": code},
             label=f"report-kills:{code}",
         )
         report = ((data.get("reportData") or {}).get("report")) or {}

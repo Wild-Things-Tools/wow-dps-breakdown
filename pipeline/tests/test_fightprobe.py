@@ -535,7 +535,9 @@ class _ReportSearchClient:
         rows = self._pages[page - 1] if page <= len(self._pages) else []
         return {"data": rows}
 
-    def report_kills(self, code, encounter_id):
+    def report_kills(self, code):
+        # Unfiltered by encounter, exactly as the real client now asks: one request
+        # per report for a whole zone rather than one per report per boss.
         self.kills_asked.append(code)
         return self._kills.get(code, [])
 
@@ -647,3 +649,54 @@ def test_an_entry_from_before_the_order_was_recorded_is_left_alone():
 
     entry = {"fightsSampled": 30, "eventBudget": 200_000}
     assert is_complete(entry, 30, 200_000, "public") is True
+
+
+def test_the_point_ceiling_returns_what_was_found_instead_of_losing_the_pass():
+    """A budget abort inside the report search must not escape.
+
+    It did on the first live run: 2880 of 3600 points spent, the exception
+    propagated out of probe_encounter, and the traceback threw away all nine
+    encounters instead of publishing the eight that were already read. The module's
+    own rule is that partial evidence comes back and says it is partial.
+    """
+    from wowdps.fightprobe import PointBudgetExhausted, _public_first_kills
+
+    anchor = 10_000_000.0
+
+    class _Ceiling(_ReportSearchClient):
+        def report_kills(self, code):
+            if code == "SECOND":
+                raise PointBudgetExhausted("2880 of 3600 points spent this hour")
+            return super().report_kills(code)
+
+    client = _Ceiling(
+        pages=[[{"code": "FIRST"}, {"code": "SECOND"}]],
+        kills={
+            "FIRST": [
+                {
+                    "id": 1,
+                    "encounterID": 42,
+                    "kill": True,
+                    "startTime": anchor - 1_000,
+                    "endTime": anchor,
+                }
+            ]
+        },
+    )
+
+    pairs, outcome = _public_first_kills(client, 42, anchor, _settings())
+
+    # What was reached still comes back.
+    assert [code for code, _, _ in pairs] == ["FIRST"]
+    assert outcome.aborted is not None
+    assert outcome.truncated is True
+    # And the summary refuses to call a partial search a complete answer.
+    assert "did not finish" not in outcome.summary(anchor)
+    assert "STOPPED EARLY" in outcome.summary(anchor)
+
+
+def test_a_stopped_search_that_found_nothing_earlier_does_not_claim_there_is_nothing():
+    from wowdps.firstkills import SearchOutcome
+
+    outcome = SearchOutcome(reports_seen=5, pages_read=1, kills_found=2, aborted="ceiling")
+    assert "none earlier so far, but the search did not finish" in outcome.summary(1_000.0)
