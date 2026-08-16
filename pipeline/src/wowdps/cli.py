@@ -585,6 +585,7 @@ def cmd_wcl_schema(args: argparse.Namespace) -> int:
 
     names = args.type or list(wclschema.DEFAULT_TYPES)
     missing: list[str] = []
+    errored: list[str] = []
 
     with WarcraftLogsClient(credentials) as client:
         for name in names:
@@ -593,16 +594,19 @@ def cmd_wcl_schema(args: argparse.Namespace) -> int:
                     wclschema.TYPE_QUERY, {"name": name}, label=f"introspect:{name}"
                 )
             except WarcraftLogsError as exc:
-                # Introspection being switched off is a finding, not a failure: it
-                # says the schema cannot be asked and the mirror is all there is.
-                logging.error(
-                    "introspection failed on %s: %s. If this is a 'GraphQL "
-                    "introspection is not allowed' error, the schema cannot be "
-                    "queried and field names stay unverifiable from here.",
-                    name,
-                    exc,
-                )
-                return 1
+                # A name the schema does not have comes back as an *error*, not as
+                # a null `__type` -- measured on the first live run, where
+                # `EncounterRankings` (a guess: the ranking fields are untyped JSON,
+                # so no such object type exists) returned "Internal server error"
+                # and aborted the whole pass on its second query. One bad guess must
+                # not cost the answers for every other type, so this is recorded and
+                # the walk continues.
+                logging.warning("introspection errored on %s: %s", name, exc)
+                errored.append(name)
+                print(f"\n=== {name} (ERRORED)")
+                print(f"  the server refused this name: {exc}")
+                print("  most likely no such type -- check the spelling against a field's own type")
+                continue
 
             payload = (data or {}).get("__type")
             if not payload:
@@ -615,6 +619,8 @@ def cmd_wcl_schema(args: argparse.Namespace) -> int:
 
     if missing:
         print(f"\nabsent from this schema: {', '.join(missing)}")
+    if errored:
+        print(f"\nthe server errored on: {', '.join(errored)}")
     cost = ledger.spent
     reading = "UNMEASURED (the hourly counter did not move)" if not cost else f"{cost:.1f} points"
     print(f"\ncost: {reading}, {len(ledger.entries)} query/queries")

@@ -34,11 +34,13 @@ log = logging.getLogger(__name__)
 #: request per type here, which is nothing; the list is short because a full
 #: schema dump is thousands of lines nobody reads.
 DEFAULT_TYPES = (
-    # Where characterRankings lives. If a fight- or guild-level ranking exists,
-    # this is where it hangs, and its metric enum is what says whether "progress"
-    # or "speed" is orderable.
+    # Where characterRankings lives. Measured on the first live run: it also carries
+    # `fightRankings(metric: FightRankingMetricType)`, which is the fight-level
+    # ranking -- a different question from "which player parsed highest" and the one
+    # that bears on progress. Both ranking fields return an untyped `JSON` scalar,
+    # so there is no `EncounterRankings` object type to introspect; the enums below
+    # are where the orderings are actually named.
     "Encounter",
-    "EncounterRankings",
     "FightRankingMetricType",
     "CharacterRankingMetricType",
     # The route that would not need rankings at all: a report search bounded by a
