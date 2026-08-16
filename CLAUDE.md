@@ -1977,6 +1977,51 @@ Still unverified:
   produced them yet, so `fights.json` has no `promotions` key at all and the view
   says so rather than showing an empty panel.
 
+### The schema can be asked, and it was — two routes to "first kill" exist
+
+`wclschema.py` + `wowdps wcl-schema` + `wcl-schema.yml`. Verified against the live
+service on 2026-08-16, so the entries below are **read from the server**, not from
+the third-party mirror everything else here was written against. Introspection is
+**enabled**; that was the open risk and it is settled.
+
+The question was whether "the first public kill" can be asked directly, rather than
+approximated by sorting a window of damage-ranked parses by date. It can, two ways:
+
+| Route | What it gives | Restricted to ranked parses |
+|---|---|---|
+| `Encounter.fightRankings(metric: progress\|speed)` | fight-level ranking -- the progress race, per guild | yes |
+| `ReportData.reports(zoneID:, startTime:, endTime:, limit:, page:)` | every log uploaded in a time window | **no** |
+
+`FightRankingMetricType` = `default, execution, feats, score, speed, progress`.
+`CharacterRankingMetricType` is the long list of dps/hps variants plus
+`playerspeed` -- no date ordering anywhere in it, which is why the current probe
+has to sort client-side.
+
+**The reports route is the one that answers the owner's question.** It goes nowhere
+near rankings, so a public log Warcraft Logs never ranked is still in it, and it is
+natively bounded by time rather than by damage. The shape of a first-kill query is
+`reports(zoneID, startTime=<zone opening>, limit=100, page=N)` then
+`Report.fights(encounterID:, killType: Kills)` per report, taking the earliest
+`ReportFight.startTime`. `ReportFight` carries `kill`, `startTime`, `endTime`,
+`size`, `friendlyPlayers` and `phaseTransitions` -- everything `_probe_fight`
+already reads -- so the extraction downstream does not change at all. Only the
+*selection* does.
+
+Two other levers nobody has used: both ranking fields take `filter: String` (WCL's
+filter expression language) and `partition: Int`, and `Zone.partitions` is a real
+list with `id`, `name`, `compactName`, `default`. A partition is a tuning phase, so
+it is probably the honest way to say "the raid as it was at release" -- which is
+what "first kills" is a proxy for.
+
+Two traps, both measured:
+
+- **An unknown type name returns `Internal server error`, not a null `__type`.**
+  `EncounterRankings` was a guess -- the ranking fields return an untyped `JSON`
+  scalar, so no such object type exists -- and it aborted the whole first pass on
+  its second query. Errors are recorded per type and the walk continues now.
+- **`ReportPagination` is not introspectable either** despite being the declared
+  return type of `reports`. Read the fields off `Report` instead.
+
 **Previously not verified: a single real API call.** Credentials are Actions secrets. The GraphQL
 documents were written against a third-party mirror of the v2 schema
 (`ToppleTheNun/mchammer`, which carries `phases`/`archiveStatus`, so it is recent) because
