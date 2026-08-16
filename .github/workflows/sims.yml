@@ -221,6 +221,21 @@ jobs:
       - name: Install pipeline
         run: pip install -e ./pipeline
 
+      # Must run before the merge: it overwrites the manifest, so afterwards the
+      # "previously published" revision is this run's own and the comparison is empty.
+      - name: Remember the published simc revision
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_ENV"
+          import json, pathlib
+          try:
+              index = json.loads(pathlib.Path('web/public/data/tiers.json').read_text())
+              manifest = pathlib.Path(f"web/public/data/{index['current']}/index.json")
+              revision = (json.loads(manifest.read_text()).get('simc') or {}).get('gitRevision')
+          except Exception:
+              revision = None
+          print(f"PREVIOUS_SIMC={revision or ''}")
+          EOF
+
       - name: Merge shards
         run: |
           shopt -s nullglob
@@ -255,6 +270,24 @@ jobs:
           print(' '.join(t['id'] for t in index['tiers']))
           "); do
             wowdps -v talent-trees --tier "$tier" --simc-source simc-src
+          done
+
+      # simc's own history, for "when did the engine last change and what moved".
+      # Metadata only -- no working tree, no blobs -- so it is seconds, and it runs
+      # here rather than in the build job because the sim jobs get a compiled binary
+      # with no .git at all. The depth has to cover the gap since the last published
+      # run; 400 is comfortably more than a night of simc's traffic.
+      - name: Summarise simc changes
+        run: |
+          git clone --filter=blob:none --no-checkout --depth 400 \
+            https://github.com/simulationcraft/simc.git simc-history
+          for tier in $(python3 -c "
+          import json, pathlib
+          index = json.loads(pathlib.Path('web/public/data/tiers.json').read_text())
+          print(' '.join(t['id'] for t in index['tiers']))
+          "); do
+            wowdps -v simc-changes --tier "$tier" --simc-source simc-history \
+              --since "$PREVIOUS_SIMC"
           done
 
       - name: Commit

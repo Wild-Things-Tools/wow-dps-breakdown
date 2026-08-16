@@ -124,6 +124,92 @@ export function PatchState({ manifest }: { manifest: Manifest }) {
         the change&rsquo;s date against the cutoff — and if it is newer, the run that picks it up is
         the one after SimulationCraft regenerates its data.
       </p>
+      <SimcChangeLog simc={simc} />
     </Panel>
+  )
+}
+
+/**
+ * What moved in SimulationCraft since the last published run.
+ *
+ * The workflows clone simc `--depth 1` with no branch, so every run builds its
+ * default branch at HEAD — "always newest" is the answer, but only reassuring if you
+ * can see *which* newest. `revisionDate` is when that revision was committed, which
+ * is the honest "last update"; the build date beside it moves every night whether
+ * simc changed or not.
+ *
+ * simc ships no changelog file, so this is grouped commit subjects and nothing more.
+ * It says which parts of the game were touched, never what the change did — reading
+ * a buff or a nerf out of a subject line is a claim this cannot support.
+ */
+function SimcChangeLog({ simc }: { simc: Manifest['simc'] }) {
+  const changes = simc.changes
+  if (!changes) return null
+
+  const compare =
+    changes.since && simc.gitRevision
+      ? `https://github.com/simulationcraft/simc/compare/${changes.since}...${simc.gitRevision}`
+      : null
+
+  return (
+    <div className="border-t border-hairline px-5 py-3">
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[12.5px]">
+        <span className="text-ink-tertiary">SimulationCraft last changed</span>
+        <span className="font-medium text-ink-primary">
+          {changes.revisionDate ? changes.revisionDate.slice(0, 10) : 'not recorded'}
+        </span>
+        {typeof changes.commits === 'number' ? (
+          <span className="text-ink-tertiary">
+            — {changes.commits} commit{changes.commits === 1 ? '' : 's'} since the previous run
+            {changes.generatedFiles
+              ? `, plus ${changes.generatedFiles} automated data update${changes.generatedFiles === 1 ? '' : 's'}`
+              : null}
+          </span>
+        ) : (
+          <span className="text-ink-tertiary">— {changes.why}</span>
+        )}
+        {compare ? (
+          <a
+            className="text-ink-secondary underline decoration-dotted underline-offset-2 hover:text-ink"
+            href={compare}
+            target="_blank"
+            rel="noreferrer"
+          >
+            see the diff
+          </a>
+        ) : null}
+      </div>
+
+      {changes.byTag?.length ? (
+        <ul className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+          {changes.byTag.map((entry) => (
+            <li key={entry.tag} className="text-[12px] text-ink-tertiary">
+              <span className="text-ink-secondary">{entry.tag}</span>{' '}
+              <span className="tabular-nums">{entry.commits}</span>
+            </li>
+          ))}
+          {changes.otherTags ? (
+            <li className="text-[12px] text-ink-muted">+{changes.otherTags} more</li>
+          ) : null}
+        </ul>
+      ) : null}
+
+      {changes.recent?.length ? (
+        <details className="mt-2">
+          <summary className="cursor-pointer text-[12px] text-ink-tertiary hover:text-ink-secondary">
+            The commit subjects
+          </summary>
+          <ul className="mt-1.5 space-y-1">
+            {changes.recent.map((entry) => (
+              <li key={entry.revision} className="text-[12px] leading-relaxed text-ink-tertiary">
+                <span className="tabular-nums text-ink-muted">{entry.date}</span>{' '}
+                {entry.tag ? <span className="text-ink-secondary">[{entry.tag}]</span> : null}{' '}
+                {entry.subject}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+    </div>
   )
 }

@@ -966,6 +966,47 @@ would understate the spec. Published as a per-build `caveat` in `talent-trees.js
 shown beside the tree -- `_THIN_CLASS_TREE` is the threshold. This module reads
 profiles; it does not write them.
 
+## Which simc, and what moved in it
+
+`simcchanges.py` + `wowdps simc-changes`, shown at the foot of the patch panel.
+
+**We always build the newest simc.** Every workflow does `git clone --depth 1
+https://github.com/simulationcraft/simc.git` with **no branch**, so it is simc's
+default branch at HEAD, and the build cache is keyed on the sha so a new commit
+forces a rebuild. That is the answer to "are we current" -- but it is only reassuring
+if a reader can see *which* newest and when it was written.
+
+**`buildDate` is not when simc changed.** It is when CI compiled the binary, and it
+moves every night whether simc moved or not. `changes.revisionDate` is the revision's
+own commit date, which is the honest figure.
+
+**simc ships no changelog.** Checked -- there is no `CHANGELOG`, `NEWS` or release
+notes file in the repository. The commit subjects are the only source, and they turn
+out to be unusually disciplined: nearly every one carries a `[Tag]` prefix naming the
+class, spec or subsystem (`[Death Knight]`, `[gear]`, `[live] Game data update`), which
+is what makes a grouped summary possible instead of a wall of text. Measured over a
+60-commit window: 53 real commits across 25 tags, plus 9 automated `Update Generated
+Files` dumps.
+
+Those dumps are **counted, not listed** -- they are a third of the stream and say
+nothing anybody can act on, but omitting them entirely would make a busy night read
+as a quiet one.
+
+Nothing here interprets a change. "Seven commits touched Hunter" is a fact; "Hunter
+was buffed" is a reading of a diff this does not do. Same rule as the patch panel's
+refusal to claim a specific tuning change is included.
+
+Two things that would otherwise bite:
+
+- **The previous revision must be captured before the merge**, which overwrites the
+  manifest. Read afterwards, "previously published" is this run's own revision and
+  the comparison is always empty. `sims.yml` stashes it in `$GITHUB_ENV` in a step
+  that runs before `wowdps merge`.
+- **A `--depth 1` clone cannot see back to the published revision**, and that is not
+  the same as "nothing changed". `describe` says which of the two it is; the summary
+  step therefore clones `--filter=blob:none --no-checkout --depth 400`, which is
+  metadata only and takes seconds.
+
 ## Spec coverage: a missing spec looks exactly like a bad one
 
 `profiles.spec_coverage` + `components/SpecCoverage.tsx`, on the Overview above the
