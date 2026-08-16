@@ -477,7 +477,50 @@ the pool because everything in the pool is farmable by construction.
 
 Neck (7) and finger (11) pools exist for the first time, derived the same way.
 
-### The sweep is not slot-generic, whatever equipment.py says
+### Making the sweep work for neck and rings
+
+Three things were wrong, and only the first was written down:
+
+- **`BASELINE_SIZE = 2` was hard-coded.** Now `baseline_size(slot)` = `len(slot.sockets)`.
+- **The candidate variant was `[baseline_items[0], item]`**, which assumes two sockets.
+  On a one-socket neck `zip(slot.sockets, items)` truncates to the first entry, so the
+  candidate is **silently never equipped** and the run measures the baseline against
+  itself -- a full set of plausible numbers, all of them the same number. It is now
+  `[*baseline_items[:-1], item]`: the candidate replaces the weakest, whatever the
+  socket count.
+- **A progress log line was the last two-socket assumption**, and it cost a whole CI
+  run: every variant builder was correct for a neck and every spec still failed with
+  `list index out of range`, from `log.info(... baseline_items[0], baseline_items[1])`.
+  Because `sweep_spec` catches per spec, it printed as `FAILED 1T` and read like a
+  modelling problem. `test_a_one_socket_sweep_runs_end_to_end` now drives `_sweep_one`
+  with a stubbed `_run` -- no simc, but every line between picking a baseline and
+  returning a result is executed, logging included. Verified to reproduce the original
+  `IndexError` when the fix is reverted.
+- **Gems and enchants are read per spec off its own profile**, by
+  `equipment.read_adornments`, and applied to both sides of every comparison. They
+  belong to the *socket*, not to the item: a candidate nobody wears has no gem of its
+  own, and putting it in bare against an adorned baseline is not a comparison.
+  Per spec rather than per tier, because a Mage's ring gem is not a Rogue's. Verified
+  against MID2's real pool and profiles: neck carries `gem_id=240892/240906`, finger1
+  `gem_id=240906,enchant_id=7967` and finger2 `gem_id=240916,enchant_id=7967`, and
+  trinkets correctly come back bare.
+
+**A single-slot sweep used to delete the others.** `write_gear` emits an entry for
+every pool, so a neck run writes a trinket slot with an empty `specs` array, and
+`merge_gear_shards` read only the shard directories -- publishing that empty array as
+the trinket comparison. It now folds the already-published `gear.json` in as the
+oldest document, so a slot this run did not sweep keeps what it had. Union semantics
+mean an empty array removes nothing, so this only ever preserves.
+
+The Loot view gained a **Slot** selector, over the slots that actually have swept
+specs. A pool with no results is still in the dataset -- that gap is data -- but it is
+not offered as a landing page. The slot it *opens* on is the one with the
+most items rather than the first, because slots arrive in id order and alphabetical
+puts rings ahead of trinkets -- which would land every reader on the smallest
+comparison. "Richest pool" is a property of the data, so it needs no name hard-coded
+in the view and follows whichever sweep is largest.
+
+### What was wrong with the old note here
 
 A comment there reads "the sweep is already slot-generic: adding a pool is the whole
 of the work". That is wrong twice, and both were found by reading `gearsweep.py`
@@ -922,6 +965,75 @@ is sound by all four checks above, so this is simc's shipped talent string, and 
 would understate the spec. Published as a per-build `caveat` in `talent-trees.json` and
 shown beside the tree -- `_THIN_CLASS_TREE` is the threshold. This module reads
 profiles; it does not write them.
+
+## Which simc, and what moved in it
+
+`simcchanges.py` + `wowdps simc-changes`, shown at the foot of the patch panel.
+
+**We always build the newest simc.** Every workflow does `git clone --depth 1
+https://github.com/simulationcraft/simc.git` with **no branch**, so it is simc's
+default branch at HEAD, and the build cache is keyed on the sha so a new commit
+forces a rebuild. That is the answer to "are we current" -- but it is only reassuring
+if a reader can see *which* newest and when it was written.
+
+**`buildDate` is not when simc changed.** It is when CI compiled the binary, and it
+moves every night whether simc moved or not. `changes.revisionDate` is the revision's
+own commit date, which is the honest figure.
+
+**simc ships no changelog.** Checked -- there is no `CHANGELOG`, `NEWS` or release
+notes file in the repository. The commit subjects are the only source, and they turn
+out to be unusually disciplined: nearly every one carries a `[Tag]` prefix naming the
+class, spec or subsystem (`[Death Knight]`, `[gear]`, `[live] Game data update`), which
+is what makes a grouped summary possible instead of a wall of text. Measured over a
+60-commit window: 53 real commits across 25 tags, plus 9 automated `Update Generated
+Files` dumps.
+
+Those dumps are **counted, not listed** -- they are a third of the stream and say
+nothing anybody can act on, but omitting them entirely would make a busy night read
+as a quiet one.
+
+Nothing here interprets a change. "Seven commits touched Hunter" is a fact; "Hunter
+was buffed" is a reading of a diff this does not do. Same rule as the patch panel's
+refusal to claim a specific tuning change is included.
+
+Two things that would otherwise bite:
+
+- **The previous revision must be captured before the merge**, which overwrites the
+  manifest. Read afterwards, "previously published" is this run's own revision and
+  the comparison is always empty. `sims.yml` stashes it in `$GITHUB_ENV` in a step
+  that runs before `wowdps merge`.
+- **A `--depth 1` clone cannot see back to the published revision**, and that is not
+  the same as "nothing changed". `describe` says which of the two it is; the summary
+  step therefore clones `--filter=blob:none --no-checkout --depth 400`, which is
+  metadata only and takes seconds.
+
+## Spec coverage: a missing spec looks exactly like a bad one
+
+`profiles.spec_coverage` + `components/SpecCoverage.tsx`, on the Overview above the
+patch panel. simc ships its tier profiles as they are written, so early in a season
+the set is incomplete -- and a ranking can only draw what it has, so "no profile" and
+"ranks last" are indistinguishable on it. The second is a conclusion somebody acts on.
+
+Measured on 2026-08-15: **MID2 ships 15 of 26 damage specs**, against MID1's 26. Six
+whole classes are absent -- Demon Hunter (Devourer, Havoc), Druid (Balance, Feral),
+Evoker (Devastation), Monk (Windwalker), Paladin (Retribution), Rogue (Outlaw),
+Warlock (Demonology), Warrior (Arms, Fury). Note *31* profile files but *26* damage
+builds and only *15* distinct specs: files include tanks and healers, and several
+specs ship two hero-tree builds.
+
+**The reference list is derived, never written down.** "All damage specs" is the union
+of what simc has shipped for *any* tier in the checkout. A hard-coded table would need
+editing whenever Blizzard adds a spec -- Midnight adds Devourer -- and would go stale
+in exactly the patch where the question matters most. The cost is that a spec that has
+never been profiled in any tier cannot be reported missing, because nothing here knows
+it exists; that is the right direction to fail, since it under-claims rather than
+inventing a spec list.
+
+`spec_coverage` is safe to call from a shard: it reads what simc *ships*, which is the
+whole profiles directory, and has nothing to do with which slice a run simulated. So
+every shard computes the same answer and `merge_shards` keeping the newest manifest
+keeps a correct one. Do not confuse it with `manifest.specs`, which is what this run
+*simulated* -- the two differ when a spec fails.
 
 ## Patch state: two dates, and only one of them is the cutoff
 

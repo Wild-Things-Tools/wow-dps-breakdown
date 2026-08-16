@@ -31,6 +31,7 @@ import {
   Select,
 } from '../components/ui'
 import { PatchState } from '../components/PatchState'
+import { SpecCoverage } from '../components/SpecCoverage'
 import {
   compactNumber,
   describeFunnelGain,
@@ -144,6 +145,8 @@ export function OverviewView({
           identify it.
         </Note>
       </Panel>
+
+      <SpecCoverage manifest={manifest} />
 
       <PatchState manifest={manifest} />
     </div>

@@ -66,7 +66,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from importlib import resources
 from pathlib import Path
 
@@ -510,6 +510,66 @@ def primary_stat(profile_path: Path) -> str:
             f"stat cannot be read from the profile"
         )
     return max(found)[1]
+
+
+@dataclass(frozen=True)
+class SlotAdornment:
+    """The gems and enchant a profile puts on one socket.
+
+    These are properties of *how the slot is worn*, not of the item in it, which is
+    why they live here rather than on ``GearItem``: a candidate nobody wears yet has
+    no gem of its own, and putting it in unadorned against an adorned baseline is not
+    a comparison. Measured on Arcane Mage, MID2, one target, 1000 deterministic
+    iterations, one ring: the enchant is worth **+1.09%** and the gem **+0.44%**
+    (together +1.55%, they add) against **+0.09%** for the whole ten-item-level step
+    from 334 to 344. A ring sweep that carries item level and drops these measures the
+    wrong thing by an order of magnitude, and every candidate "wins" by the enchant.
+
+    Trinkets have neither and correctly come back empty -- that is measured too:
+    passing a trinket's own bonus ids alongside an explicit item level returned DPS
+    identical to the last digit.
+    """
+
+    gem_ids: tuple[int, ...] = ()
+    enchant_id: int | None = None
+
+    @property
+    def is_bare(self) -> bool:
+        return not self.gem_ids and self.enchant_id is None
+
+
+def _gear_line(socket: str) -> re.Pattern[str]:
+    return re.compile(rf"^{re.escape(socket)}\s*=(?P<rest>.*)$", re.MULTILINE)
+
+
+def read_adornments(profile_path: Path, slot: EquipmentSlot) -> dict[str, SlotAdornment]:
+    """What this profile gems and enchants each of a slot's sockets with.
+
+    Per socket rather than per slot, because a profile may gem one ring and not the
+    other, and the comparison only has to be internally consistent: whatever the
+    baseline wears in a socket, the candidate replacing it wears too.
+    """
+    text = profile_path.read_text(encoding="utf-8", errors="replace")
+    found: dict[str, SlotAdornment] = {}
+    for socket in slot.sockets:
+        match = _gear_line(socket).search(text)
+        if not match:
+            continue
+        rest = match.group("rest")
+        gems = re.search(r"\bgem_id=([\d/]+)", rest)
+        enchant = re.search(r"\benchant_id=(\d+)", rest)
+        found[socket] = SlotAdornment(
+            gem_ids=tuple(int(g) for g in gems.group(1).split("/") if g) if gems else (),
+            enchant_id=int(enchant.group(1)) if enchant else None,
+        )
+    return found
+
+
+def adorn(item: GearItem, adornment: SlotAdornment | None) -> GearItem:
+    """The item as this profile would wear it in that socket."""
+    if adornment is None or adornment.is_bare:
+        return item
+    return replace(item, gem_ids=adornment.gem_ids, enchant_id=adornment.enchant_id)
 
 
 # --------------------------------------------------------------------------------

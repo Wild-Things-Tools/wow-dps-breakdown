@@ -487,3 +487,57 @@ def test_a_derived_rotation_answer_still_culls_a_dungeon_drop():
         candidate_source="raid",
     )
     assert pool.in_rotation(stale) is False
+
+
+def test_read_adornments_takes_gems_and_enchants_off_the_profile(tmp_path):
+    """Gems and enchants are how a *slot* is worn, not properties of the item, so a
+    candidate nobody wears yet has none of its own and must borrow the profile's."""
+    from wowdps.equipment import FINGER, NECK, TRINKET, read_adornments
+
+    profile = tmp_path / "MID2_Mage_Arcane.simc"
+    profile.write_text(
+        'mage="MID2_Mage_Arcane"\n'
+        "neck=aqirbane_reliquary,id=268265,ilevel=344,gem_id=240892/240906\n"
+        "finger1=ring_one,id=159459,ilevel=334,gem_id=240906,enchant_id=7967\n"
+        "finger2=ring_two,id=268270,ilevel=334,gem_id=240916,enchant_id=7967\n"
+        "trinket1=flask,id=250215,ilevel=334\n"
+        "trinket2=bag,id=270164,ilevel=334\n",
+        encoding="utf-8",
+    )
+
+    neck = read_adornments(profile, NECK)
+    assert neck["neck"].gem_ids == (240892, 240906)
+    assert neck["neck"].enchant_id is None
+
+    finger = read_adornments(profile, FINGER)
+    assert finger["finger1"].gem_ids == (240906,)
+    assert finger["finger1"].enchant_id == 7967
+    assert finger["finger2"].gem_ids == (240916,)
+
+    # Trinkets have nowhere to put a gem, and correctly come back bare.
+    assert all(a.is_bare for a in read_adornments(profile, TRINKET).values())
+
+
+def test_adorn_leaves_an_item_alone_when_the_profile_wears_nothing():
+    from wowdps.equipment import (  # noqa: F401
+        TRINKET,
+        GearItem,
+        SlotAdornment,
+        adorn,
+        read_adornments,
+    )
+
+    item = GearItem(
+        item_id=1,
+        name="T",
+        slug="t",
+        primary_stat=None,
+        secondary_stat=None,
+        source="raid",
+        base_ilevel=219,
+        base_quality=4,
+    )
+    assert adorn(item, None) is item
+    assert adorn(item, SlotAdornment()) is item
+    adorned = adorn(item, SlotAdornment(gem_ids=(1,), enchant_id=2))
+    assert adorned.gem_ids == (1,) and adorned.enchant_id == 2

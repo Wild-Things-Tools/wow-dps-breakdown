@@ -261,8 +261,13 @@ def cmd_build(args: argparse.Namespace) -> int:
         logging.error("every spec failed; not writing a manifest")
         return 1
 
+    # Safe from a shard: `spec_coverage` reads what simc *ships* for the tier, which
+    # is the whole profiles directory and has nothing to do with which slice this run
+    # simulated. Every shard therefore computes the same answer, and the merge keeping
+    # the newest manifest keeps a correct one.
+    coverage = profiles.spec_coverage(profiles_dir, tier)
     manifest = dataset.write_manifest(
-        out_dir, results, selected_scenarios, tier, simc_meta, settings
+        out_dir, results, selected_scenarios, tier, simc_meta, settings, coverage
     )
     dataset.write_tier_index(out_root)
     failed = sum(len(r.errors) for r in results)
@@ -671,6 +676,54 @@ def cmd_gear_pool(args: argparse.Namespace) -> int:
     return gearpool.cmd_gear_pool(args)
 
 
+def cmd_simc_changes(args: argparse.Namespace) -> int:
+    """Record when simc last changed, and what moved, into the tier's manifest.
+
+    Separate from `build` because it needs simc's *git history*, which the sim jobs
+    do not have -- they get a compiled binary and a profiles directory, no `.git`.
+    A metadata-only clone is seconds, so this runs beside the merge instead.
+    """
+    from . import simcchanges
+
+    root = Path(args.data)
+    tier = args.tier
+    if not tier or tier == "latest":
+        index = root / "tiers.json"
+        if not index.is_file():
+            logging.error("no tier index at %s", index)
+            return 1
+        tier = json.loads(index.read_text(encoding="utf-8"))["current"]
+
+    path = root / tier / "index.json"
+    if not path.is_file():
+        logging.error("no manifest at %s", path)
+        return 1
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+
+    simc = manifest.get("simc") or {}
+    # What this run built, against what the *published* manifest was built from. The
+    # published one is read before it is overwritten, so ordering matters: this must
+    # run after `merge` has written the new manifest but the revision it compares to
+    # comes from --since, which the workflow reads beforehand.
+    block = simcchanges.describe(Path(args.simc_source), args.since or None)
+
+    if simc.get("changes") == block:
+        logging.info("%s already carries this simc change summary; nothing written", path)
+        return 0
+
+    simc["changes"] = block
+    manifest["simc"] = simc
+    path.write_text(json.dumps(manifest, separators=(",", ":")) + "\n", encoding="utf-8")
+    logging.info(
+        "wrote %s: simc revision dated %s, %s commit(s) since %s",
+        path,
+        block.get("revisionDate"),
+        block.get("commits", "an unknown number of"),
+        args.since or "(nothing published)",
+    )
+    return 0
+
+
 def cmd_talent_trees(args: argparse.Namespace) -> int:
     """Decode every build's loadout string and publish the tree it describes.
 
@@ -1012,6 +1065,20 @@ def build_parser() -> argparse.ArgumentParser:
         "which records which data set the sims ran against.",
     )
     p_talent_trees.set_defaults(func=cmd_talent_trees)
+
+    p_simc_changes = sub.add_parser(
+        "simc-changes",
+        help="record when simc last changed and what moved, from its git history",
+    )
+    p_simc_changes.add_argument("--data", default="web/public/data")
+    p_simc_changes.add_argument("--tier", default="latest")
+    p_simc_changes.add_argument(
+        "--simc-source", required=True, help="a simc checkout with history (not --depth 1)"
+    )
+    p_simc_changes.add_argument(
+        "--since", help="the previously published simc revision to compare against"
+    )
+    p_simc_changes.set_defaults(func=cmd_simc_changes)
 
     p_fight_promote = sub.add_parser(
         "fight-promote",

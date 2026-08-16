@@ -112,6 +112,7 @@ export interface SimcMeta {
   wowBuild?: number
   /** The game-data hotfix date. Balance changes after it are not yet in the data. */
   hotfixDate?: string
+  changes?: SimcChanges
 }
 
 export interface TierMeta {
@@ -159,6 +160,8 @@ export interface Manifest {
   settings: RunSettings
   scenarios: ScenarioMeta[]
   specs: SpecSummary[]
+  /** Absent on datasets built before spec coverage was published. */
+  coverage?: SpecCoverage
 }
 
 export interface LogsComparison {
@@ -836,4 +839,41 @@ export interface TalentTreeDataset {
   trees: Record<string, TalentTreeLayout>
   builds: TalentTreeBuild[]
   notes: string[]
+}
+
+/**
+ * Which of the game's damage specs this tier ships a profile for. The reference
+ * list is derived from the other tiers simc ships, not written down -- see
+ * `profiles.spec_coverage`. Absent on a dataset built before this existed.
+ */
+export interface SpecCoverage {
+  /** Damage specs this tier has a profile for. */
+  damageSpecs: number
+  /** Damage specs simc has shipped for *some* tier, which is the reference. */
+  damageSpecsKnown: number
+  missing: { class: string; spec: string }[]
+  /** The tiers the reference list was drawn from. */
+  comparedWith: string[]
+}
+
+/**
+ * What moved in SimulationCraft between the previously published run and this one,
+ * derived from its git history — simc ships no changelog file. Absent on datasets
+ * built before this existed; `commits` absent when the checkout could not see back
+ * far enough, which is not the same as "nothing changed".
+ */
+export interface SimcChanges {
+  /** When the revision was committed — not when CI compiled it. */
+  revisionDate: string | null
+  /** The revision compared against, or null when nothing was published before. */
+  since: string | null
+  /** Present only when the comparison could actually be made. */
+  commits?: number
+  /** simc's own automated data dumps, counted rather than listed. */
+  generatedFiles?: number
+  byTag?: { tag: string; commits: number }[]
+  otherTags?: number
+  recent?: { revision: string; date: string; subject: string; tag?: string; pullRequest?: number }[]
+  /** Why there is no comparison, when there is none. */
+  why?: string
 }

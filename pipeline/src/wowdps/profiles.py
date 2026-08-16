@@ -215,6 +215,40 @@ def _hero_from_name(name: str, tier: str, class_filename_form: str, spec_token: 
     return _prettify(rest) if rest else None
 
 
+def spec_coverage(profiles_dir: Path, tier: str) -> dict:
+    """Which damage specs this tier ships a profile for, and which it does not yet.
+
+    The question a reader asks the week a season opens: *is my spec missing, or is it
+    just bad?* Those look identical on a ranking that only draws what it has.
+
+    The reference list -- what "all specs" means -- is **derived from the other tiers
+    simc ships**, not written down here. A hard-coded table of the game's damage specs
+    would need editing whenever Blizzard adds one (Midnight adds Devourer) and would
+    silently go stale in exactly the patch where this matters most. What simc shipped
+    for a previous tier and has not yet shipped for this one is the honest reading of
+    "not there yet", and it needs no maintenance.
+
+    Consequence worth knowing: a spec that has *never* had a profile in any shipped
+    tier cannot appear as missing, because nothing here knows it exists. That is the
+    right failure -- it under-claims rather than inventing a spec list.
+    """
+    covered: set[tuple[str, str]] = set()
+    known: set[tuple[str, str]] = set()
+    for candidate in available_tiers(profiles_dir):
+        specs = {(p.wow_class, p.spec) for p in discover(profiles_dir, candidate, dps_only=True)}
+        known |= specs
+        if candidate == tier:
+            covered = specs
+
+    missing = sorted(known - covered)
+    return {
+        "damageSpecs": len(covered),
+        "damageSpecsKnown": len(known),
+        "missing": [{"class": wow_class, "spec": spec} for wow_class, spec in missing],
+        "comparedWith": sorted(t for t in available_tiers(profiles_dir) if t != tier),
+    }
+
+
 def discover(profiles_dir: Path, tier: str, dps_only: bool = True) -> list[SpecProfile]:
     """Find and identify every profile of a tier, sorted by class then spec then build."""
     tier_dir = profiles_dir / tier

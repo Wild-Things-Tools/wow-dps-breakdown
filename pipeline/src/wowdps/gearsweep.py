@@ -71,14 +71,29 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import simc_runner
-from .equipment import EquipmentSlot, GearItem, ItemLevel, SlotPool, primary_stat
+from .equipment import (
+    EquipmentSlot,
+    GearItem,
+    ItemLevel,
+    SlotAdornment,
+    SlotPool,
+    adorn,
+    primary_stat,
+    read_adornments,
+)
 from .profiles import SpecProfile
 from .scenarios import PATCHWERK, SimSettings
 
 log = logging.getLogger(__name__)
 
-#: How many baseline items make up the "Standard" set. Two sockets, two items.
-BASELINE_SIZE = 2
+
+#: How many baseline items make up the "Standard" set: one per socket. This was
+#: hard-coded to 2 while trinkets were the only swept slot, which is correct for two
+#: sockets and silently wrong for a neck, where it would have picked two items for
+#: one socket.
+def baseline_size(slot: EquipmentSlot) -> int:
+    return len(slot.sockets)
+
 
 #: How many runners-up to publish beside the chosen baseline, so a near-tie at the
 #: cut is visible. Standalone value is not perfectly additive; see the module docstring.
@@ -282,26 +297,38 @@ def _candidate_key(item: GearItem, level: ItemLevel) -> str:
     return f"cand_{item.slug}_{level.id}"
 
 
-def _solo_variants(slot: EquipmentSlot, items: list[GearItem], ilevel: int) -> list[Variant]:
+def _solo_variants(
+    slot: EquipmentSlot,
+    items: list[GearItem],
+    ilevel: int,
+    adornments: dict[str, SlotAdornment],
+) -> list[Variant]:
     """One variant per item, alone in the first socket, every other socket empty."""
     empties = tuple((socket, None, None) for socket in slot.sockets[1:])
+    first = slot.sockets[0]
     return [
         Variant(
             key=_probe_key(item),
-            equipped=Equipped(sockets=((slot.sockets[0], item, ilevel), *empties)),
+            equipped=Equipped(
+                sockets=((first, adorn(item, adornments.get(first)), ilevel), *empties)
+            ),
         )
         for item in items
     ]
 
 
 def _pair_variant(
-    key: str, slot: EquipmentSlot, items: list[GearItem], ilevels: list[int]
+    key: str,
+    slot: EquipmentSlot,
+    items: list[GearItem],
+    ilevels: list[int],
+    adornments: dict[str, SlotAdornment],
 ) -> Variant:
     return Variant(
         key=key,
         equipped=Equipped(
             sockets=tuple(
-                (socket, item, ilevel)
+                (socket, adorn(item, adornments.get(socket)), ilevel)
                 for socket, item, ilevel in zip(slot.sockets, items, ilevels, strict=False)
             )
         ),
@@ -325,10 +352,10 @@ def sweep_spec(
     candidates = pool.candidates(primary)
     baseline_level = pool.baseline_ilevel()
 
-    if len(baseline_pool) < BASELINE_SIZE:
+    if len(baseline_pool) < baseline_size(pool.slot):
         result.errors.append(
             f"only {len(baseline_pool)} eligible {pool.baseline_source} items for a "
-            f"{primary} spec; need {BASELINE_SIZE} to form a baseline"
+            f"{primary} spec; need {baseline_size(pool.slot)} to form a baseline"
         )
         return result
 
@@ -370,9 +397,15 @@ def _sweep_one(
 ) -> TargetResult:
     slot = pool.slot
 
+    # How *this* profile wears the slot. Read per spec rather than fixed per tier,
+    # because a Mage's ring gem is not a Rogue's, and both sides of every comparison
+    # below wear the same one -- against an unenchanted baseline every candidate
+    # would "win" by the enchant.
+    adornments = read_adornments(profile.path, slot)
+
     # Step 1: every baseline-pool item alone, plus the both-sockets-empty reference.
     started = time.monotonic()
-    solo = _solo_variants(slot, baseline_pool, baseline_level.ilevel)
+    solo = _solo_variants(slot, baseline_pool, baseline_level.ilevel, adornments)
     empty = Variant(
         key=_EMPTY_KEY,
         equipped=Equipped(sockets=tuple((socket, None, None) for socket in slot.sockets)),
@@ -398,12 +431,12 @@ def _sweep_one(
             )
         )
     entries.sort(key=lambda entry: -entry.standalone_gain)
-    if len(entries) < BASELINE_SIZE:
+    if len(entries) < baseline_size(slot):
         raise RuntimeError(
             f"only {len(entries)} of {len(baseline_pool)} pool items returned a result"
         )
 
-    chosen = entries[:BASELINE_SIZE]
+    chosen = entries[: baseline_size(slot)]
     for entry in chosen:
         entry.chosen = True
     baseline_items = [entry.item for entry in chosen]
@@ -412,16 +445,18 @@ def _sweep_one(
     # under identical conditions. The candidate always replaces the *second* socket,
     # which holds the weaker of the two baseline items.
     ilevels = [baseline_level.ilevel] * len(baseline_items)
-    variants = [_pair_variant(_BASELINE_KEY, slot, baseline_items, ilevels)]
-    replaced = baseline_items[1]
+    variants = [_pair_variant(_BASELINE_KEY, slot, baseline_items, ilevels, adornments)]
+    replaced = baseline_items[-1]
+    kept = baseline_items[:-1]
     for item in candidates:
         for level in pool.item_levels:
             variants.append(
                 _pair_variant(
                     _candidate_key(item, level),
                     slot,
-                    [baseline_items[0], item],
-                    [baseline_level.ilevel, level.ilevel],
+                    [*kept, item],
+                    [*([baseline_level.ilevel] * len(kept)), level.ilevel],
+                    adornments,
                 )
             )
     step_two = _run(simc, profile, targets, settings, variants, timeout)
@@ -453,10 +488,13 @@ def _sweep_one(
     results.sort(key=lambda entry: -entry.gain)
 
     log.info(
-        "  %2dT  baseline %s + %s = %.0f dps  |  %d pool, %d candidates  (%.0fs)",
+        "  %2dT  baseline %s = %.0f dps  |  %d pool, %d candidates  (%.0fs)",
         targets,
-        baseline_items[0].slug,
-        baseline_items[1].slug,
+        # One name per socket. This read `baseline_items[0] + baseline_items[1]`,
+        # which is the last thing in the sweep that assumed two of them -- and it is a
+        # progress line, so a correct one-socket run died in its own logging with
+        # "list index out of range" and looked like a modelling failure.
+        " + ".join(item.slug for item in baseline_items),
         baseline.dps,
         len(entries),
         len(results),
@@ -470,6 +508,6 @@ def _sweep_one(
         baseline_ilevel=baseline_level.ilevel,
         baseline_dps=baseline.dps,
         baseline_dps_error=baseline.dps_error,
-        pool=entries[: BASELINE_SIZE + RUNNERS_UP],
+        pool=entries[: baseline_size(slot) + RUNNERS_UP],
         candidates=results,
     )
