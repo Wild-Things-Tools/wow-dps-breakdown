@@ -1602,10 +1602,20 @@ timestamp cannot masquerade as the earliest kill.
 time and, at each bucket, reports the median and inter-quartile range across kills,
 plus min/max. Drawn as a shaded IQR band with the median line and a faint min/max
 envelope, in seconds at the median kill length. Where the band is tight, that many
-targets were reliably up; where it flares, the kills genuinely disagreed. Only kills
-read to >= 95% coverage are included (a partial fetch reports the tail as an empty
-room and would drag the band down at the times it never saw), and the count kept is
-published so a thin band reads as thin. `medianLengthSeconds` is meaningful precisely
+targets were reliably up; where it flares, the kills genuinely disagreed. Only kills whose
+event fetch **ran to the end** are included, and the test is the probe's own
+`truncated` flag rather than a coverage ratio -- a distinction got wrong twice.
+`eventCoverage` is the *span of observed events* over the fight length, so a
+completely read kill whose first damage lands at 0.4s scores about 0.995 and never
+1.0: "fully read" cannot be written as a ratio at all. And low coverage is not always
+a gap -- a raid that stops damaging an add halfway through leaves a genuine flat tail,
+which is the encounter rather than missing data, and dropping it would discard a real
+observation. What a truncated fetch does is also worse than the old comment claimed:
+it does not report the tail as zero, because `_resample` carries the last known value
+forward. It *freezes* the target count at the cut point, and since the end of a kill
+is where adds die off, a partial read systematically **overstates** how many targets
+were up at the end -- holding flat exactly the fall the curve should show. The count
+kept is published so a thin band reads as thin. `medianLengthSeconds` is meaningful precisely
 because the first-kills sample has alike timings -- one length fits them all.
 
 **Default `--reports` is 30, up from 3.** The band needs a real sample; 30 is a

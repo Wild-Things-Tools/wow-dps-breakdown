@@ -586,14 +586,42 @@ def test_the_target_band_is_the_distribution_across_kills_not_one_pull():
 
 
 def test_the_band_leaves_out_partly_read_kills():
-    """A bounded event fetch reports the unread tail as zero; one such curve would
-    drag the band down at the times it never saw. It is excluded and counted out."""
+    """A partial read does not report the unread tail as zero -- `_resample` carries
+    the last known value forward, so it freezes the target count at the cut point and
+    asserts it for the rest of the fight. Since the end of a kill is where adds die
+    off, that *overstates* how many were up at the end."""
     good = [waved_fight(f"G{i}", 300.0, 60.0) for i in range(4)]
     enc = payload_of(good)["encounters"][0]
     # Force one fight to look partly read.
-    enc["fights"][0]["eventCoverage"] = 0.4
+    enc["fights"][0]["truncated"] = True
     band = fightdataset._target_band(enc)
-    assert band["fights"] == 3  # the partial one dropped
+    assert band["fights"] == 3  # the truncated one dropped
+
+
+def test_nearly_read_is_still_not_read():
+    """The rule this replaced admitted anything over 95%, beside a docstring that
+    already claimed only fully-read fights. A twentieth of a five-minute kill is
+    fifteen seconds of held-flat target count at the moment the fight empties out."""
+    good = [waved_fight(f"G{i}", 300.0, 60.0) for i in range(4)]
+    enc = payload_of(good)["encounters"][0]
+    enc["fights"][0]["truncated"] = True
+    enc["fights"][0]["eventCoverage"] = 0.95
+    enc["fights"][1]["truncated"] = True
+    enc["fights"][1]["eventCoverage"] = 0.98
+    band = fightdataset._target_band(enc)
+    assert band["fights"] == 2, "95% and 98% reads are still cut-short reads"
+
+
+def test_a_complete_fetch_is_kept_even_when_its_coverage_is_low():
+    """Coverage is not completeness. A raid that stops damaging an add halfway
+    through leaves a genuine flat tail -- that is the encounter, not missing data,
+    and dropping it would throw away a real observation."""
+    good = [waved_fight(f"G{i}", 300.0, 60.0) for i in range(3)]
+    enc = payload_of(good)["encounters"][0]
+    for fight in enc["fights"]:
+        fight["truncated"] = False
+        fight["eventCoverage"] = 0.4
+    assert fightdataset._target_band(enc)["fights"] == 3
 
 
 def test_the_band_needs_at_least_two_kills():

@@ -781,7 +781,26 @@ _BAND_BUCKETS = 60
 #: A fight read to less than this fraction is left out of the band: a partial fetch
 #: reports the tail as an empty room, and one such curve drags the whole distribution
 #: down at the times it never read. The band says how many it kept.
-_MIN_BAND_COVERAGE = 0.95
+#: A kill enters the band only if its event fetch ran to the end of the fight.
+#:
+#: The test is the probe's own ``truncated`` flag -- set when a stream hit its page
+#: limit -- and not a coverage ratio. Two reasons, and the second is why this was
+#: wrong twice before:
+#:
+#: 1. ``eventCoverage`` is the *span of observed events* over the fight length, so a
+#:    completely read kill whose first damage lands at 0.4s and whose last lands a
+#:    second before the kill scores about 0.995, never 1.0. A "fully read" threshold
+#:    expressed as a ratio therefore cannot be written down correctly.
+#: 2. Low coverage is not always a gap. A raid that stops damaging an add halfway
+#:    through leaves a genuine flat tail, and that is the encounter, not missing data.
+#:    Excluding it would throw away a real observation.
+#:
+#: What a truncated fetch does is worse than reporting zeros: ``_resample`` carries
+#: the last known value forward, so it *freezes* the target count at the cut point and
+#: asserts it for the rest of the fight. The end of a kill is where adds die off, so a
+#: partial read systematically **overstates** how many targets were up at the end --
+#: holding flat exactly the fall the curve should show.
+_BAND_NEEDS_COMPLETE_FETCH = True
 
 
 def _percentile_at(values: list[float], fraction: float) -> float:
@@ -808,9 +827,10 @@ def _target_band(payload: dict) -> dict | None:
     kills, plus the full min/max. A wide band at some moment means the kills genuinely
     disagreed there; a tight one means that many targets were reliably up.
 
-    Only fully-read fights are included, because a bounded event fetch reports the
-    unread tail as zero and would drag the band down at exactly the times it never
-    saw. The count kept is published so a thin band is visible as thin.
+    Only kills whose event fetch ran to the end are included -- see
+    ``_BAND_NEEDS_COMPLETE_FETCH`` above for why that is the probe's ``truncated`` flag and
+    not a coverage ratio. The count kept is published so a thin band is visible as
+    thin.
 
     Normalised time is turned back into seconds for the reader by the median kill
     length, which is meaningful precisely because the user asked for kills whose
@@ -819,8 +839,7 @@ def _target_band(payload: dict) -> dict | None:
     fights = [
         fight
         for fight in payload.get("fights") or []
-        if isinstance(fight, dict)
-        and float(fight.get("eventCoverage") or 0.0) >= _MIN_BAND_COVERAGE
+        if isinstance(fight, dict) and not fight.get("truncated")
     ]
     if len(fights) < 2:
         return None
