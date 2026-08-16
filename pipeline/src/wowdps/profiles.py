@@ -231,6 +231,23 @@ def spec_coverage(profiles_dir: Path, tier: str) -> dict:
     Consequence worth knowing: a spec that has *never* had a profile in any shipped
     tier cannot appear as missing, because nothing here knows it exists. That is the
     right failure -- it under-claims rather than inventing a spec list.
+
+    **Shipping a profile and producing a result are different things**, and on an old
+    tier they diverge badly. Measured on MID1 the day it was first published: simc
+    ships a profile for all 26 damage specs, so the count below reads 26 of 26 and
+    the panel says "complete" -- while 16 of its 41 profiles no longer load (their
+    stored talent hashes reference nodes current spell data does not offer the spec),
+    and the published dataset contains **no Mage, no Hunter, no Warrior, no Havoc,
+    no Retribution and no Elemental Shaman at all**. A reader then sees a complete
+    coverage claim over a ranking with no Mages in it, and the only reading available
+    is "Mages rank nowhere" -- precisely the conclusion this panel exists to prevent,
+    now stated with more confidence than before it existed.
+
+    So ``shipped`` is emitted too, and the *broken* set -- shipped for this tier, no
+    build in the dataset -- is worked out where the whole run is known. It cannot be
+    computed here: this function is called from a shard, which simulated one slice,
+    and subtracting a slice would report every other shard's specs as broken. See
+    ``dataset.apply_simulated_coverage``.
     """
     covered: set[tuple[str, str]] = set()
     known: set[tuple[str, str]] = set()
@@ -245,6 +262,10 @@ def spec_coverage(profiles_dir: Path, tier: str) -> dict:
         "damageSpecs": len(covered),
         "damageSpecsKnown": len(known),
         "missing": [{"class": wow_class, "spec": spec} for wow_class, spec in missing],
+        # What simc ships for *this* tier, which is what a completed run should have
+        # produced. Shard-safe for the same reason the counts above are: it describes
+        # the profiles directory, not this run's slice.
+        "shipped": [{"class": wow_class, "spec": spec} for wow_class, spec in sorted(covered)],
         "comparedWith": sorted(t for t in available_tiers(profiles_dir) if t != tier),
     }
 

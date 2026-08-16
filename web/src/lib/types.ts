@@ -851,9 +851,23 @@ export interface SpecCoverage {
   damageSpecs: number
   /** Damage specs simc has shipped for *some* tier, which is the reference. */
   damageSpecsKnown: number
+  /** Shipped by no tier-N profile at all: simc has not written one yet. */
   missing: { class: string; spec: string }[]
   /** The tiers the reference list was drawn from. */
   comparedWith: string[]
+  /** What this tier ships a profile for, which is what a complete run produces. */
+  shipped?: { class: string; spec: string }[]
+  /**
+   * Shipped by simc for this tier and yet absent from the dataset -- the profile
+   * no longer loads. Distinct from `missing`, and on an old tier it is the larger
+   * number: MID1 ships all 26 damage specs and 16 of its 41 profiles fail on
+   * current simc, so ten specs are broken where none are missing. Both are absent
+   * from the ranking and only one of them is simc's authors not having got to it
+   * yet. Undefined on a dataset built before the split existed.
+   */
+  broken?: { class: string; spec: string }[]
+  /** Specs this tier ships *and* produced results for. */
+  simulated?: number
 }
 
 /**

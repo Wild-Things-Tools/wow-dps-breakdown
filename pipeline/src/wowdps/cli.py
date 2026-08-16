@@ -270,6 +270,13 @@ def cmd_build(args: argparse.Namespace) -> int:
     manifest = dataset.write_manifest(
         out_dir, results, selected_scenarios, tier, simc_meta, settings, coverage
     )
+    # An unsharded run is the whole run, so the third coverage state -- shipped by
+    # simc and produced nothing -- can be settled here. A sharded run gets it in
+    # `merge_shards` instead, where the union of the slices is known.
+    if not getattr(args, "shard", None):
+        document = json.loads(manifest.read_text(encoding="utf-8"))
+        dataset.apply_simulated_coverage(document)
+        manifest.write_text(json.dumps(document, separators=(",", ":")) + "\n", encoding="utf-8")
     dataset.write_tier_index(out_root)
     failed = sum(len(r.errors) for r in results)
     logging.info("wrote %s (%d specs, %d failed cells)", manifest, len(results), failed)

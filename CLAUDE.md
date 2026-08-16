@@ -1029,6 +1029,42 @@ never been profiled in any tier cannot be reported missing, because nothing here
 it exists; that is the right direction to fail, since it under-claims rather than
 inventing a spec list.
 
+### Three coverage states, because two published a wrong claim
+
+The panel used to answer "does simc ship a profile for this spec". On the day MID1
+was first published that read **26 of 26 -- complete** over a dataset containing no
+Mage, no Hunter, no Warrior, no Havoc, no Retribution and no Elemental Shaman,
+because 16 of MID1's 41 profiles no longer load. A reader then has exactly one
+reading available for the absent classes, and it is the wrong one -- the same "a
+missing spec looks exactly like a bad one" failure this panel exists to prevent,
+now stated with more confidence than before it existed.
+
+Measured on 2026-08-16, both tiers, from simc's own profiles directory:
+
+| | simulated | broken | missing |
+|---|---|---|---|
+| MID1 | 15 of 26 | **11** | 0 |
+| MID2 | 15 of 26 | 0 | **11** |
+
+Both seasons are equally thin and for opposite reasons, which the old two-state
+panel actively hid: it called MID1 complete. Only four specs are absent from both
+(Havoc, Retribution, Arms, Fury), and **eight specs have a working build in both
+seasons** -- that eight is the real size of any season-over-season comparison, and
+it is smaller than either tier's spec count suggests.
+
+`spec_coverage` cannot compute `broken` itself, and that is not an oversight: it is
+called from a shard, which simulated one slice, so subtracting that slice would
+report every other shard's specs as broken. It emits `shipped` -- what simc ships
+for *this* tier, which is shard-safe for the same reason the counts are -- and
+`dataset.apply_simulated_coverage` settles the split where the whole run is known
+(`merge_shards`, or `cmd_build` when unsharded). Same correction shape as
+`medianDpsError`: a number describing a fraction of the run, presented as
+describing all of it.
+
+A manifest with no `shipped` is left alone rather than guessed at. Without knowing
+what the tier shipped, "broken" and "missing" cannot be told apart, and inventing
+the split would be the same error in the other direction.
+
 `spec_coverage` is safe to call from a shard: it reads what simc *ships*, which is the
 whole profiles directory, and has nothing to do with which slice a run simulated. So
 every shard computes the same answer and `merge_shards` keeping the newest manifest

@@ -369,6 +369,52 @@ def _tier_sort_key(tier: str) -> tuple[str, int]:
     return (match.group(1), int(match.group(2))) if match else (tier, 0)
 
 
+def apply_simulated_coverage(manifest: dict) -> dict:
+    """Split "simc ships no profile" from "the profile no longer loads".
+
+    ``profiles.spec_coverage`` answers what simc *ships* for a tier, which is the
+    only question a single shard can answer -- it simulated one slice, so
+    subtracting that slice would report every other shard's specs as broken. Here
+    the whole run is on hand, so the third state can be worked out.
+
+    It is not a nicety. Measured on MID1 the day it was first published: simc ships
+    a profile for all 26 damage specs, so the panel read **26 of 26** and said the
+    coverage was complete -- over a dataset containing no Mage, no Hunter, no
+    Warrior, no Havoc, no Retribution and no Elemental Shaman, because 16 of MID1's
+    41 profiles no longer load. A reader then has exactly one reading available for
+    the missing classes, and it is the wrong one. That is the same "a missing spec
+    looks exactly like a bad one" failure the coverage panel was built to prevent,
+    one level deeper and stated with more confidence than before it existed.
+
+    Three states, and they are three different sentences on the site:
+
+    ``simulated``  simc ships it and it produced results
+    ``broken``     simc ships a profile and this run got nothing out of it
+    ``missing``    simc ships no profile for it at all
+
+    Mutates and returns ``manifest``. A manifest whose coverage predates ``shipped``
+    is left alone rather than guessed at: without knowing what the tier shipped,
+    "broken" and "missing" cannot be told apart, and inventing the split would be
+    the same error in the other direction.
+    """
+    coverage = dict(manifest.get("coverage") or {})
+    shipped = coverage.get("shipped")
+    if not shipped:
+        return manifest
+
+    simulated = {(spec.get("class"), spec.get("spec")) for spec in manifest.get("specs", [])}
+    broken = sorted(
+        (entry["class"], entry["spec"])
+        for entry in shipped
+        if (entry.get("class"), entry.get("spec")) not in simulated
+    )
+
+    coverage["simulated"] = len(shipped) - len(broken)
+    coverage["broken"] = [{"class": wow_class, "spec": spec} for wow_class, spec in broken]
+    manifest["coverage"] = coverage
+    return manifest
+
+
 def merge_shards(shard_dirs: list[Path], out_dir: Path) -> None:
     """Combine per-shard output directories into one dataset.
 
@@ -417,6 +463,11 @@ def merge_shards(shard_dirs: list[Path], out_dir: Path) -> None:
     settings = dict(merged.get("settings") or {})
     settings["medianDpsError"] = _median_dps_error_of_files(out_specs)
     merged["settings"] = settings
+
+    # Same class of correction as the line above, and for the same reason: a shard
+    # cannot know what the whole run produced. Which specs simc shipped a profile
+    # for and got nothing out of is only answerable here.
+    apply_simulated_coverage(merged)
 
     (out_dir / "index.json").write_text(
         json.dumps(merged, separators=(",", ":")) + "\n", encoding="utf-8"

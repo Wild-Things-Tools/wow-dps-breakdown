@@ -188,3 +188,36 @@ def test_a_tier_that_ships_everything_reports_nothing_missing(tmp_path):
     coverage = spec_coverage(tmp_path, "MID2")
     assert coverage["missing"] == []
     assert coverage["damageSpecs"] == coverage["damageSpecsKnown"] == 1
+
+
+def test_coverage_publishes_what_the_tier_ships_so_broken_can_be_told_from_missing(tmp_path):
+    """``shipped`` is what makes the third coverage state computable later.
+
+    Without it, "simc ships no profile" and "the profile no longer loads" collapse
+    into one number, and an old tier reports as fully covered while its dataset is
+    missing whole classes.
+    """
+    from wowdps.profiles import spec_coverage
+
+    for tier, specs in (("MID1", ("arcane", "fury")), ("MID2", ("arcane",))):
+        directory = tmp_path / tier
+        directory.mkdir()
+        for spec in specs:
+            token = "mage" if spec == "arcane" else "warrior"
+            (directory / f"{tier}_{spec}.simc").write_text(
+                f'{token}="{tier}_{spec}"\nspec={spec}\nlevel=80\nrole=attack\n',
+                encoding="utf-8",
+            )
+
+    coverage = spec_coverage(tmp_path, "MID1")
+
+    assert coverage["shipped"] == [
+        {"class": "Mage", "spec": "Arcane"},
+        {"class": "Warrior", "spec": "Fury"},
+    ]
+    assert len(coverage["shipped"]) == coverage["damageSpecs"]
+    # Disjoint by construction: a spec cannot be both shipped for this tier and
+    # absent from it.
+    shipped = {(e["class"], e["spec"]) for e in coverage["shipped"]}
+    absent = {(e["class"], e["spec"]) for e in coverage["missing"]}
+    assert not shipped & absent
