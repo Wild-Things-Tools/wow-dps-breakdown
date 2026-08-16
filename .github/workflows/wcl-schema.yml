@@ -1,0 +1,83 @@
+name: WCL schema
+
+# What Warcraft Logs actually offers, asked rather than guessed.
+#
+# Every GraphQL document in this project was written against a third-party mirror of
+# the v2 schema, because warcraftlogs.com/v2-api-docs is 403 without a browser
+# session. That has been treated as acceptable because the first live run of each
+# query doubles as a schema check -- fine for a query we already decided to write,
+# and a bad way to answer an open question.
+#
+# The open question here: the probe samples "first kills" by sorting a window of
+# `characterRankings` by date, and that list is sorted by *damage* and contains
+# ranked parses only. A guild that killed the boss on the first night with a slow
+# pull ranks low and can fall outside the window entirely. Anything natively ordered
+# by time -- a report search with a date range, a fight ranking with a progress or
+# speed metric -- answers it directly instead of approximating it.
+#
+# Read-only, commits nothing, costs a handful of introspection queries. Output goes
+# to the run summary. Introspection being switched off is itself the answer, and the
+# command says which it got.
+on:
+  workflow_dispatch:
+    inputs:
+      types:
+        description: 'Space-separated GraphQL type names, or empty for the ones bearing on how kills can be ordered'
+        default: ''
+
+concurrency:
+  group: wcl-schema
+
+permissions:
+  contents: read
+
+jobs:
+  introspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check credentials
+        id: creds
+        env:
+          WCL_CLIENT_ID: ${{ secrets.WCL_CLIENT_ID }}
+        run: |
+          if [ -z "$WCL_CLIENT_ID" ]; then
+            echo "::notice::WCL_CLIENT_ID is not set — skipping."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.creds.outputs.enabled == 'true'
+        with:
+          python-version: '3.12'
+
+      - name: Install pipeline
+        if: steps.creds.outputs.enabled == 'true'
+        run: pip install -e ./pipeline
+
+      - name: Introspect
+        if: steps.creds.outputs.enabled == 'true'
+        env:
+          WCL_CLIENT_ID: ${{ secrets.WCL_CLIENT_ID }}
+          WCL_CLIENT_SECRET: ${{ secrets.WCL_CLIENT_SECRET }}
+          TYPES: ${{ inputs.types }}
+        run: |
+          args=()
+          for t in $TYPES; do args+=(--type "$t"); done
+          wowdps -v wcl-schema "${args[@]}" | tee schema.txt
+
+      - name: Summary
+        if: steps.creds.outputs.enabled == 'true'
+        run: |
+          {
+            echo '## Warcraft Logs schema'
+            echo
+            echo 'Lines marked `*` bear on ordering by time or progress.'
+            echo
+            echo '```'
+            cat schema.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

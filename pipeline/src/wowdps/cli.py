@@ -560,6 +560,67 @@ def cmd_fight_zones(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_wcl_schema(args: argparse.Namespace) -> int:
+    """Introspect the Warcraft Logs schema and print what it offers.
+
+    Written for one open question -- is there a route to the *first* kill that does
+    not go through a damage-sorted ranking -- but it is general. Everything in this
+    project that talks to Warcraft Logs was written against a third-party schema
+    mirror, so "does this field exist" has always been answered by trying it. This
+    asks instead, which is the same discipline the loot pools and the boss lists
+    already follow.
+
+    Fields, arguments and enum values whose names bear on ordering by time or
+    progress are marked with ``*``, because that is the half of the output somebody
+    running this is looking for.
+    """
+    from . import wclschema
+    from .warcraftlogs import Credentials, WarcraftLogsClient, WarcraftLogsError
+
+    try:
+        credentials = Credentials.from_env()
+    except WarcraftLogsError as exc:
+        logging.error("%s", exc)
+        return 1
+
+    names = args.type or list(wclschema.DEFAULT_TYPES)
+    missing: list[str] = []
+
+    with WarcraftLogsClient(credentials) as client:
+        for name in names:
+            try:
+                data = client.query(
+                    wclschema.TYPE_QUERY, {"name": name}, label=f"introspect:{name}"
+                )
+            except WarcraftLogsError as exc:
+                # Introspection being switched off is a finding, not a failure: it
+                # says the schema cannot be asked and the mirror is all there is.
+                logging.error(
+                    "introspection failed on %s: %s. If this is a 'GraphQL "
+                    "introspection is not allowed' error, the schema cannot be "
+                    "queried and field names stay unverifiable from here.",
+                    name,
+                    exc,
+                )
+                return 1
+
+            payload = (data or {}).get("__type")
+            if not payload:
+                missing.append(name)
+            print(f"\n=== {name} ({(payload or {}).get('kind', 'ABSENT')})")
+            for line in wclschema.describe_type(payload):
+                print(line)
+
+        ledger = client.ledger
+
+    if missing:
+        print(f"\nabsent from this schema: {', '.join(missing)}")
+    cost = ledger.spent
+    reading = "UNMEASURED (the hourly counter did not move)" if not cost else f"{cost:.1f} points"
+    print(f"\ncost: {reading}, {len(ledger.entries)} query/queries")
+    return 0
+
+
 def cmd_fights(args: argparse.Namespace) -> int:
     """Publish ``<tier>/fights.json``: what each boss is asserted and measured to be.
 
@@ -1092,6 +1153,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_fight_zones.add_argument("--difficulty", type=int, default=5)
     p_fight_zones.add_argument("--write", action="store_true", help="apply --seed/--move to disk")
     p_fight_zones.set_defaults(func=cmd_fight_zones)
+
+    p_wcl_schema = sub.add_parser(
+        "wcl-schema",
+        help="introspect the Warcraft Logs schema: which fields and orderings exist "
+        "(needs credentials)",
+    )
+    p_wcl_schema.add_argument(
+        "--type",
+        action="append",
+        help="type to introspect; repeatable. Defaults to the ones bearing on how "
+        "kills can be ordered",
+    )
+    p_wcl_schema.set_defaults(func=cmd_wcl_schema)
 
     p_fight_probe = sub.add_parser(
         "fight-probe",
