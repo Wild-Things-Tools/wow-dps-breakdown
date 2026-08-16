@@ -1130,6 +1130,15 @@ Three things that would otherwise bite:
   encounter with no recorded budget is left alone rather than re-fetched -- treating
   unknown as zero would re-open a whole zone for everybody -- so a payload written before
   this needs one `--no-resume` run to pick the budget up.
+- **A continuation with a *smaller* event budget is silently inert, not merely
+  useless.** `max_pages` was the one input whose default did not match what a real
+  pass runs at: the form said 3 while the Option C dispatch passed 20. `is_complete`
+  re-opens an encounter only when its recorded budget is *smaller* than the one now
+  asked for, so at 3 every encounter already read at 12 or 20 pages counts as done,
+  the hourly run fetches nothing, exits 0, and the pass never finishes. Measured on
+  2026-08-16: the 20-page dispatch left 8 of 9 encounters outstanding and every
+  hourly continuation after it was a no-op. The defaults are the settings the
+  schedule actually runs at -- treat them as configuration, not as form hints.
 - **`inputs.*` is empty on a scheduled run**, so every input in the workflow now
   carries the same default the dispatch form shows. A continuation has to run with the
   settings of the pass it continues or it re-opens all of them.
