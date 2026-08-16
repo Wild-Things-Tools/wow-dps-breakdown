@@ -116,6 +116,7 @@ query ReportKills($code: String!) {
   reportData {
     report(code: $code) {
       code
+      startTime
       fights(killType: Kills) {
         id
         encounterID
@@ -545,12 +546,18 @@ class WarcraftLogsClient:
         )
         return ((data.get("reportData") or {}).get("reports")) or {}
 
-    def report_kills(self, code: str) -> list[dict]:
-        """Every kill in one report, for any encounter.
+    def report_kills(self, code: str) -> tuple[float, list[dict]]:
+        """``(report start in epoch ms, every kill in the report)``.
 
         One request per report for a whole zone rather than one per report *per
         boss*: the caller filters by encounter, and the identical variables mean the
         cache answers every boss after the first.
+
+        **The report's own start time is not optional context, it is the time base.**
+        ``ReportFight.startTime`` is milliseconds *since the report began*, not an
+        epoch timestamp, so a fight time used on its own is a number near zero and
+        compares as older than everything. Returning the two together is what stops
+        them being used apart.
         """
         data = self.query(
             REPORT_KILLS_QUERY,
@@ -559,7 +566,11 @@ class WarcraftLogsClient:
         )
         report = ((data.get("reportData") or {}).get("report")) or {}
         fights = report.get("fights")
-        return fights if isinstance(fights, list) else []
+        start = report.get("startTime")
+        return (
+            float(start) if isinstance(start, (int, float)) else 0.0,
+            fights if isinstance(fights, list) else [],
+        )
 
     def zones(self) -> list[dict]:
         data = self.query(ZONE_QUERY, label="zones")

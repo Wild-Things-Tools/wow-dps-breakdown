@@ -520,9 +520,10 @@ def test_the_fight_count_still_wins_regardless_of_budget():
 class _ReportSearchClient:
     """A client that answers the report-search queries and nothing else."""
 
-    def __init__(self, pages, kills, limit=100):
+    def __init__(self, pages, kills, limit=100, starts=None):
         self._pages = pages
         self._kills = kills
+        self._starts = starts or {}
         self._limit = limit
         self.ledger = type("L", (), {"limit_per_hour": None, "last_reading": None})()
         self.kills_asked = []
@@ -537,9 +538,11 @@ class _ReportSearchClient:
 
     def report_kills(self, code):
         # Unfiltered by encounter, exactly as the real client now asks: one request
-        # per report for a whole zone rather than one per report per boss.
+        # per report for a whole zone rather than one per report per boss. Returns
+        # the report's own start time with the fights, because ReportFight.startTime
+        # is relative to it.
         self.kills_asked.append(code)
-        return self._kills.get(code, [])
+        return self._starts.get(code, 0.0), self._kills.get(code, [])
 
 
 def _settings(**over):
@@ -573,16 +576,24 @@ def test_the_report_search_finds_a_kill_the_rankings_never_carried():
     """
     from wowdps.fightprobe import _public_first_kills
 
-    anchor = 10_000_000.0
-    kill = lambda start: [  # noqa: E731
-        {"id": 3, "encounterID": 42, "kill": True, "startTime": start, "endTime": start + 200}
-    ]
+    # A real anchor, because kill times are epoch and are now compared as such.
+    anchor = 1_700_000_000_000.0
+    # ReportFight.startTime is relative to the report, so each report carries a base
+    # and the fight sits at a small offset inside it -- the real shape of the data.
+    base = 3_600_000.0
+
+    def kill(offset):
+        return [
+            {"id": 3, "encounterID": 42, "kill": True, "startTime": offset, "endTime": offset + 200}
+        ]
+
     client = _ReportSearchClient(
         pages=[[{"code": "EARLY"}, {"code": "LATE"}], [{"code": "EARLIER"}]],
-        kills={
-            "EARLY": kill(anchor - 5_000),
-            "LATE": kill(anchor + 9_000),
-            "EARLIER": kill(anchor - 90_000),
+        kills={"EARLY": kill(base), "LATE": kill(base), "EARLIER": kill(base)},
+        starts={
+            "EARLY": anchor - 5_000 - base,
+            "LATE": anchor + 9_000 - base,
+            "EARLIER": anchor - 90_000 - base,
         },
     )
 
@@ -599,7 +610,7 @@ def test_paging_stops_on_a_short_page_rather_than_on_an_unverified_field():
     from wowdps.fightprobe import _public_first_kills
 
     client = _ReportSearchClient(pages=[[{"code": "A"}]], kills={})
-    _, outcome = _public_first_kills(client, 42, 10_000.0, _settings())
+    _, outcome = _public_first_kills(client, 42, 1_700_000_000_000.0, _settings())
 
     # One page returned fewer rows than the limit of 2, so no second page was asked for.
     assert outcome.pages_read == 1
@@ -661,7 +672,7 @@ def test_the_point_ceiling_returns_what_was_found_instead_of_losing_the_pass():
     """
     from wowdps.fightprobe import PointBudgetExhausted, _public_first_kills
 
-    anchor = 10_000_000.0
+    anchor = 1_700_000_000_000.0
 
     class _Ceiling(_ReportSearchClient):
         def report_kills(self, code):
@@ -672,16 +683,9 @@ def test_the_point_ceiling_returns_what_was_found_instead_of_losing_the_pass():
     client = _Ceiling(
         pages=[[{"code": "FIRST"}, {"code": "SECOND"}]],
         kills={
-            "FIRST": [
-                {
-                    "id": 1,
-                    "encounterID": 42,
-                    "kill": True,
-                    "startTime": anchor - 1_000,
-                    "endTime": anchor,
-                }
-            ]
+            "FIRST": [{"id": 1, "encounterID": 42, "kill": True, "startTime": 0, "endTime": 1_000}]
         },
+        starts={"FIRST": anchor - 1_000},
     )
 
     pairs, outcome = _public_first_kills(client, 42, anchor, _settings())

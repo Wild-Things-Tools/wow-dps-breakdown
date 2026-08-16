@@ -28,6 +28,38 @@ def test_the_envelope_is_read_defensively_because_it_could_not_be_introspected()
     assert firstkills.reports_from_payload({"data": [{"startTime": 1}]}) == []
 
 
+EPOCH_BASE = 1_700_000_000_000
+
+
+def test_fight_times_are_relative_to_the_report_and_must_be_rebased():
+    """The bug that made the first live run report 100% of kills as "earliest".
+
+    `ReportFight.startTime` counts milliseconds from the report's own start, not
+    from the epoch. Used as-is it is a number near zero, which sorts before every
+    real date -- so the search returned everything and looked like a spectacular
+    finding. 89 of 89 and 102 of 102 was the tell.
+    """
+    fights = [
+        {"id": 1, "encounterID": 42, "kill": True, "startTime": 7_200_000, "endTime": 7_400_000}
+    ]
+
+    rows = firstkills.kills_from_report("abc", fights, 42, report_start_ms=EPOCH_BASE)
+
+    assert rows[0].started_at == EPOCH_BASE + 7_200_000
+    # The duration is a difference, so it is unaffected by the base.
+    assert rows[0].duration_ms == 200_000
+
+
+def test_a_kill_with_no_report_base_is_dropped_rather_than_sorted_first():
+    """A row whose time base is unknown cannot be ranked against rows whose base is.
+
+    Keeping it would put it at the head of a "who killed it first" list every time,
+    which is precisely the wrong answer to be confident about.
+    """
+    fights = [{"id": 1, "encounterID": 42, "kill": True, "startTime": 5_000, "endTime": 6_000}]
+    assert firstkills.kills_from_report("abc", fights, 42, report_start_ms=0.0) == []
+
+
 def test_a_wipe_never_enters_a_sample_of_first_kills():
     """`killType: Kills` is the server's filter; this is the check that it worked.
 
@@ -38,7 +70,7 @@ def test_a_wipe_never_enters_a_sample_of_first_kills():
         {"id": 1, "encounterID": 42, "kill": False, "startTime": 100, "endTime": 200},
         {"id": 2, "encounterID": 42, "kill": True, "startTime": 300, "endTime": 500},
     ]
-    rows = firstkills.kills_from_report("abc", fights, 42)
+    rows = firstkills.kills_from_report("abc", fights, 42, EPOCH_BASE)
     assert [row.fight_id for row in rows] == [2]
     assert rows[0].duration_ms == 200
 
@@ -48,12 +80,13 @@ def test_another_encounter_in_the_same_report_is_not_this_boss():
         {"id": 1, "encounterID": 99, "kill": True, "startTime": 100, "endTime": 200},
         {"id": 2, "encounterID": 42, "kill": True, "startTime": 300, "endTime": 400},
     ]
-    assert [row.fight_id for row in firstkills.kills_from_report("abc", fights, 42)] == [2]
+    rows = firstkills.kills_from_report("abc", fights, 42, EPOCH_BASE)
+    assert [row.fight_id for row in rows] == [2]
 
 
 def test_a_fight_with_no_start_time_is_skipped_rather_than_sorted_as_epoch_zero():
     fights = [{"id": 1, "encounterID": 42, "kill": True, "endTime": 200}]
-    assert firstkills.kills_from_report("abc", fights, 42) == []
+    assert firstkills.kills_from_report("abc", fights, 42, EPOCH_BASE) == []
 
 
 def test_selection_sorts_locally_so_the_server_order_does_not_matter():

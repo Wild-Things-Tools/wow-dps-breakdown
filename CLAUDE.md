@@ -1992,6 +1992,27 @@ Still unverified:
   produced them yet, so `fights.json` has no `promotions` key at all and the view
   says so rather than showing an empty panel.
 
+### `ReportFight.startTime` is relative to the report, and 100% was the tell
+
+The first `--order public` run that got far enough to measure anything reported
+**89 of 89** kills on one boss and **102 of 102** on another as earlier than the
+ranked sample. That is not a finding, it is a unit error: `ReportFight.startTime`
+counts milliseconds from the *report's* start, not from the epoch. Used as-is
+every kill is a number near zero, which sorts before every real date, so a "which
+kills are earliest" search returns everything and reads as a spectacular result.
+
+`report_kills` therefore returns `(report start, fights)` as a pair -- the base is
+not context, it is the time base, and returning them together is what stops them
+being used apart. `kills_from_report` adds it, and refuses any kill that still
+lands before the year 2000: a row whose time base is unknown cannot be ranked
+against rows whose base is known, and keeping it would put it at the head of a
+"who killed it first" list every time.
+
+The general lesson is the one worth keeping: **a unanimous answer to a question
+about a distribution is a bug report.** "Did the rankings hide earlier kills"
+cannot honestly come back 100% yes on every boss, and noticing that was faster
+than reading the code.
+
 ### The report search is the first thing here that actually costs points
 
 Every earlier measurement in this file says `pointsSpentThisHour` did not move and

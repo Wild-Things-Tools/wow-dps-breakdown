@@ -73,8 +73,26 @@ def reports_from_payload(payload: object) -> list[dict]:
     return [row for row in rows if isinstance(row, dict) and row.get("code")]
 
 
-def kills_from_report(code: str, fights: object, encounter_id: int) -> list[KillRow]:
-    """Kills of one encounter out of a report's ``fights`` list.
+#: Epoch milliseconds for 2000-01-01. A kill time below this is not a date, it is
+#: a report-relative offset that never got its base added -- the exact bug the
+#: `report_start_ms` argument exists to prevent, and the one that made the first
+#: live run report 100% of kills as "earlier than the ranked sample".
+_IMPLAUSIBLE_BEFORE_MS = 946_684_800_000
+
+
+def kills_from_report(
+    code: str, fights: object, encounter_id: int, report_start_ms: float = 0.0
+) -> list[KillRow]:
+    """Kills of one encounter out of a report's ``fights`` list, in epoch time.
+
+    ``ReportFight.startTime`` is milliseconds **since the report began**, not an
+    epoch timestamp, so ``report_start_ms`` is added to every one. Getting this
+    wrong has dramatic effects and is very hard to spot: every kill comes out as a
+    number near zero, which compares as older than any real date, so a "which kills
+    are earliest" search returns *everything* and reads as a spectacular finding.
+    The first live run reported 89 of 89 and 102 of 102 kills as earlier than the
+    ranked sample. **100% is the tell** -- a real answer to "did the rankings hide
+    anything" is never unanimous.
 
     ``killType: Kills`` is passed to the query, but ``kill`` is re-checked here: a
     filter that silently stopped filtering would otherwise put wipes into a sample
@@ -93,11 +111,23 @@ def kills_from_report(code: str, fights: object, encounter_id: int) -> list[Kill
         end = fight.get("endTime")
         if not isinstance(start, (int, float)):
             continue
+        absolute = report_start_ms + float(start)
+        if absolute < _IMPLAUSIBLE_BEFORE_MS:
+            # Loud rather than silently early, and dropped rather than kept: a row
+            # whose time base is unknown cannot be ranked against rows whose is.
+            log.warning(
+                "report %s fight %s: kill time %.0f is before the year 2000, so the "
+                "report start is missing -- skipping rather than sorting it first",
+                code,
+                fight.get("id"),
+                absolute,
+            )
+            continue
         rows.append(
             KillRow(
                 report_code=code,
                 fight_id=int(fight.get("id") or 0),
-                started_at=float(start),
+                started_at=absolute,
                 duration_ms=float(end) - float(start) if isinstance(end, (int, float)) else 0.0,
             )
         )

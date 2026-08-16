@@ -275,11 +275,11 @@ def _public_first_kills(
                 outcome.reports_seen += 1
                 _check_budget(client, settings.point_ceiling)
                 try:
-                    fights = client.report_kills(code)
+                    report_start, fights = client.report_kills(code)
                 except WarcraftLogsError as exc:
                     log.debug("  report %s: %s", code, exc)
                     continue
-                rows.extend(firstkills.kills_from_report(code, fights, encounter_id))
+                rows.extend(firstkills.kills_from_report(code, fights, encounter_id, report_start))
             if len(reports) < settings.report_limit:
                 break
         else:
