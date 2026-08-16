@@ -348,6 +348,51 @@ export function BuildChip({
  * name, so the text is what has to carry it, and the table twin below every
  * chart carries it again.
  */
+/**
+ * The hero tree on a category-axis tick: emblem, then name.
+ *
+ * CLAUDE.md's rule is that a hero tree is icon *plus* written name everywhere --
+ * class and spec icons are recognisable enough to carry a label on their own,
+ * hero-tree emblems are not. The tick used to write only the name, which made it
+ * the one place on the site that broke that rule. An SVG `<image>` is fine here:
+ * the URL is ours, so unlike a Wowhead lookup it needs nothing from a script that
+ * cannot see inside an SVG.
+ */
+function HeroTreeTick({
+  x,
+  y,
+  heroTalent,
+  size,
+}: {
+  x: number
+  y: number
+  heroTalent: string
+  size: number
+}) {
+  const url = heroTreeIconUrl(heroTalent)
+  const textX = url ? x + size + 4 : x
+  return (
+    <g>
+      {url ? (
+        <image
+          href={url}
+          x={x}
+          y={y + 11 - size + 1}
+          width={size}
+          height={size}
+          // Decorative: the name is written out immediately beside it, so a
+          // screen reader must hear it once rather than twice.
+          aria-hidden="true"
+          preserveAspectRatio="xMidYMid slice"
+        />
+      ) : null}
+      <text x={textX} y={y} dy={11} fill="var(--text-muted)" fontSize={10.5}>
+        {heroTalent}
+      </text>
+    </g>
+  )
+}
+
 export function makeBuildTick(
   builds: Map<string, BuildLike>,
   { width, iconSize = 15 }: { width: number; iconSize?: number },
@@ -417,9 +462,12 @@ export function makeBuildTick(
           {build ? buildName(build) : label}
         </text>
         {build && build.heroTalent !== NO_HERO_TREE ? (
-          <text x={left + gap} y={y} dy={11} fill="var(--text-muted)" fontSize={10.5}>
-            {build.heroTalent}
-          </text>
+          <HeroTreeTick
+            x={left + gap}
+            y={y}
+            heroTalent={build.heroTalent}
+            size={iconSize - 4}
+          />
         ) : null}
       </g>
     )
