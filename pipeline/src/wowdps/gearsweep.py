@@ -64,6 +64,7 @@ simply a little wider. It is not widened further on top of that.
 
 from __future__ import annotations
 
+import itertools
 import logging
 import math
 import time
@@ -179,6 +180,10 @@ class PoolEntry:
     dps_error: float
     #: DPS this item adds over wearing nothing in either socket.
     standalone_gain: float
+    #: Best DPS any full combination containing this item reached, when the
+    #: baseline was picked exhaustively. 0 when it was picked additively, in which
+    #: case ``standalone_gain`` is the ranking figure.
+    best_combination_dps: float = 0.0
     chosen: bool = False
 
     def to_json(self) -> dict:
@@ -188,6 +193,7 @@ class PoolEntry:
             "dps": round(self.dps, 1),
             "dpsError": round(self.dps_error, 4),
             "standaloneGain": round(self.standalone_gain, 1),
+            "bestCombinationDps": round(self.best_combination_dps, 1) or None,
             "chosen": self.chosen,
         }
 
@@ -297,6 +303,43 @@ def _candidate_key(item: GearItem, level: ItemLevel) -> str:
     return f"cand_{item.slug}_{level.id}"
 
 
+#: Above this many combinations the exhaustive baseline is not worth its runtime
+#: and the additive approximation is used instead, with the dataset saying which.
+#: Sized from the measured ~11 CPU-seconds a caster's variant costs: 120 variants
+#: is about 22 CPU-minutes per spec per target count, which fits a dispatched run.
+#: It covers neck (7 items, 7 combinations) and finger (11 items, 55) comfortably
+#: and deliberately excludes trinkets (27 Mythic+ items, 351 combinations, ~28
+#: CPU-hours across the tier) -- that one stays additive until somebody decides to
+#: pay for it.
+MAX_BASELINE_COMBINATIONS = 120
+
+
+def _combination_variants(
+    slot: EquipmentSlot,
+    items: list[GearItem],
+    ilevel: int,
+    adornments: dict[str, SlotAdornment],
+) -> dict[str, tuple[GearItem, ...]]:
+    """Every way of filling the slot's sockets from ``items``, keyed by variant id.
+
+    This is the difference between *the best pair* and *the two best items*, and
+    they are not the same thing. Standalone value was measured to be additive to
+    within about 3% on trinkets, which is close enough to rank a clear winner and
+    not close enough to trust at the cut: two items that individually rank third
+    and fourth can beat the top two together if the top two overlap -- two haste
+    procs competing for the same global cooldowns, two on-use effects that cannot
+    both be pressed. Filling the sockets and running that is the only way to see it.
+    """
+    chosen: dict[str, tuple[GearItem, ...]] = {}
+    for combo in itertools.combinations(items, len(slot.sockets)):
+        chosen[_combo_key(combo)] = combo
+    return chosen
+
+
+def _combo_key(combo: tuple[GearItem, ...]) -> str:
+    return "combo__" + "__".join(str(item.item_id) for item in combo)
+
+
 def _solo_variants(
     slot: EquipmentSlot,
     items: list[GearItem],
@@ -403,14 +446,47 @@ def _sweep_one(
     # would "win" by the enchant.
     adornments = read_adornments(profile.path, slot)
 
-    # Step 1: every baseline-pool item alone, plus the both-sockets-empty reference.
+    # Step 1: find what the character actually wears out of the farmable pool.
+    #
+    # Two ways to do that, and the first is the honest one. *Exhaustive*: fill the
+    # sockets every possible way and run each -- the answer is then the best
+    # combination, measured. *Additive*: run every item alone and take the top few,
+    # which assumes an item's value does not depend on what sits beside it. That
+    # assumption was measured on trinkets and holds to about 3%, which ranks a clear
+    # winner correctly and is not good enough at the cut, where two items that
+    # individually place third and fourth can beat the top two together.
     started = time.monotonic()
-    solo = _solo_variants(slot, baseline_pool, baseline_level.ilevel, adornments)
+    combos = _combination_variants(slot, baseline_pool, baseline_level.ilevel, adornments)
+    exhaustive = len(combos) <= MAX_BASELINE_COMBINATIONS
+
     empty = Variant(
         key=_EMPTY_KEY,
         equipped=Equipped(sockets=tuple((socket, None, None) for socket in slot.sockets)),
     )
-    step_one = _run(simc, profile, targets, settings, [empty, *solo], timeout)
+    # The solo run happens either way: it is what the exhaustive path is measured
+    # against for display, and the per-item standalone number is what makes a close
+    # call at the cut visible to a reader.
+    solo = _solo_variants(slot, baseline_pool, baseline_level.ilevel, adornments)
+    variants = [empty, *solo]
+    if exhaustive:
+        variants += [
+            _pair_variant(
+                key,
+                slot,
+                list(items),
+                [baseline_level.ilevel] * len(items),
+                adornments,
+            )
+            for key, items in combos.items()
+        ]
+    log.info(
+        "  %s baseline: %d pool item(s), %d combination(s), %s",
+        slot.id,
+        len(baseline_pool),
+        len(combos),
+        "exhaustive" if exhaustive else f"additive (over {MAX_BASELINE_COMBINATIONS})",
+    )
+    step_one = _run(simc, profile, targets, settings, variants, timeout)
 
     if _EMPTY_KEY not in step_one:
         raise RuntimeError("simc returned no result for the empty-slot reference")
@@ -436,10 +512,36 @@ def _sweep_one(
             f"only {len(entries)} of {len(baseline_pool)} pool items returned a result"
         )
 
-    chosen = entries[: baseline_size(slot)]
-    for entry in chosen:
-        entry.chosen = True
-    baseline_items = [entry.item for entry in chosen]
+    by_id = {entry.item.item_id: entry for entry in entries}
+    best_combo: tuple[GearItem, ...] | None = None
+    best_combo_dps = 0.0
+    if exhaustive:
+        for key, items in combos.items():
+            measured = step_one.get(key)
+            if measured and measured.dps > best_combo_dps:
+                best_combo_dps = measured.dps
+                best_combo = items
+        # A per-item figure that survives the change of method: the best the pool
+        # can do *with this item in it*. Ranking runners-up by standalone value
+        # would contradict the baseline the run just picked.
+        for key, items in combos.items():
+            measured = step_one.get(key)
+            if not measured:
+                continue
+            for item in items:
+                entry = by_id.get(item.item_id)
+                if entry and measured.dps > entry.best_combination_dps:
+                    entry.best_combination_dps = measured.dps
+        entries.sort(key=lambda entry: -entry.best_combination_dps)
+
+    if best_combo is not None:
+        baseline_items = list(best_combo)
+    else:
+        baseline_items = [entry.item for entry in entries[: baseline_size(slot)]]
+
+    kept_ids = {item.item_id for item in baseline_items}
+    for entry in entries:
+        entry.chosen = entry.item.item_id in kept_ids
 
     # Step 2 and 3 share one run so the baseline and every candidate are measured
     # under identical conditions. The candidate always replaces the *second* socket,

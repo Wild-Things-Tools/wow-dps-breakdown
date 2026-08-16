@@ -567,3 +567,57 @@ def test_a_one_socket_sweep_runs_end_to_end(monkeypatch, tmp_path):
     # And the candidates were actually measured, each against that baseline.
     assert len(result.candidates) == len(RAID)
     assert all(entry.gain != 0 for entry in result.candidates)
+
+
+def test_the_baseline_is_the_best_combination_not_the_best_items():
+    """Two items that individually place third and fourth can beat the top two.
+
+    Standalone value is additive to about 3% -- close enough to rank a clear
+    winner, not close enough to trust at the cut, where two items overlap (two
+    procs competing for the same global cooldowns, two on-use effects that cannot
+    both be pressed). This is the case that separates the two methods, and the old
+    top-two-standalone rule gets it wrong.
+    """
+    from wowdps.equipment import EquipmentSlot
+    from wowdps.gearsweep import _combination_variants, _combo_key
+
+    slot = EquipmentSlot(
+        id="finger", label="Ring", sockets=("finger1", "finger2"), inventory_type=11
+    )
+    items = [gear(1, "mythicplus"), gear(2, "mythicplus"), gear(3, "mythicplus")]
+
+    combos = _combination_variants(slot, items, 334, {})
+
+    # Every pair, and only pairs -- one per way of filling the two sockets.
+    assert len(combos) == 3
+    assert set(combos) == {
+        _combo_key((items[0], items[1])),
+        _combo_key((items[0], items[2])),
+        _combo_key((items[1], items[2])),
+    }
+
+
+def test_a_one_socket_slot_yields_one_combination_per_item():
+    """For a neck, "the best combination" and "the best item" are the same question."""
+    from wowdps.equipment import EquipmentSlot
+    from wowdps.gearsweep import _combination_variants
+
+    slot = EquipmentSlot(id="neck", label="Neck", sockets=("neck",), inventory_type=2)
+    items = [gear(i, "mythicplus") for i in (1, 2, 3)]
+
+    assert len(_combination_variants(slot, items, 334, {})) == 3
+
+
+def test_the_exhaustive_baseline_is_bounded_by_a_stated_ceiling():
+    """Trinkets are deliberately outside it, and the number says why.
+
+    27 Mythic+ trinkets is 351 pairs, about 28 CPU-hours across the tier at the
+    measured ~11 CPU-seconds a variant. Neck (7 -> 7) and finger (11 -> 55) fit.
+    """
+    from math import comb
+
+    from wowdps.gearsweep import MAX_BASELINE_COMBINATIONS
+
+    assert comb(7, 1) <= MAX_BASELINE_COMBINATIONS
+    assert comb(11, 2) <= MAX_BASELINE_COMBINATIONS
+    assert comb(27, 2) > MAX_BASELINE_COMBINATIONS

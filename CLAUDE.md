@@ -318,6 +318,35 @@ Also measured, same run:
   why the "Standard" baseline is itself a profileset. This is the single easiest way
   to get a wrong-by-0.1% answer here.
 
+### The baseline is the best *combination*, where that is affordable
+
+The owner's objection, and it is correct: picking the two best items measured
+*alone* is not the same question as picking the best pair. The additive
+approximation was measured on trinkets and holds to about 3% -- close enough to
+rank a clear winner, and not close enough at the cut, where two items that
+individually place third and fourth beat the top two together because the top two
+overlap (two procs competing for the same global cooldowns, two on-use effects
+that cannot both be pressed).
+
+So step 1 now fills the sockets **every possible way** and runs each, and the
+baseline is the combination that actually won. `MAX_BASELINE_COMBINATIONS` (120)
+is the ceiling, from the measured ~11 CPU-seconds a caster's variant costs:
+
+| slot | Mythic+ pool | combinations | method |
+|---|---|---|---|
+| neck | 7 | 7 | exhaustive |
+| finger | 11 | 55 | exhaustive |
+| trinket | 27 | **351** | additive -- about 28 CPU-hours across the tier |
+
+Trinkets stay additive until somebody decides to pay for that, and the dataset
+says which method produced each baseline rather than leaving it to be assumed.
+
+The solo run still happens either way, because a reader needs to see a close call
+at the cut. What changes is the *ranking* of the runners-up: under the exhaustive
+method an item is ranked by the best full combination containing it, not by its
+standalone value, since ranking by standalone would contradict the baseline the
+run just picked.
+
 ### Standalone trinket value is additive to about 3%
 
 Arcane Mage, one target, both sockets empty = 159,026 DPS. Freightrunner's Flask
