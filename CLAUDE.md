@@ -1421,8 +1421,23 @@ Four things in it that are deliberate:
 - **`locate` finds the mis-filing without anybody asserting the right answer.** The
   ids in the file are Warcraft Logs ids, so the service can say which raid they came
   from; a tier whose bosses all sit in a **frozen** zone is a tier describing a season
-  that has ended. That is the check to run first on any tier, and it needs no
-  knowledge of what the tier *should* contain.
+  that has ended. It needs no knowledge of what the tier *should* contain.
+
+  **But the frozen test is silent during exactly the gap it was built for, measured
+  on 2026-08-16.** The first live run puts MID2's nine encounters in zone
+  `VS / DR / MQD` -- and reports it **not frozen**, as the newest of three unfrozen
+  zones. Warcraft Logs freezes a zone when the *next* one opens, so in the days
+  before a season turns the outgoing raid is still the currently-ranked one and the
+  flag says nothing. No Season 2 raid zone exists in the list yet at all, which is
+  consistent with it opening on the Tuesday.
+
+  So the check is necessary and not sufficient: a frozen hit is proof of a
+  mis-filing, an unfrozen one is **not** proof of correct filing. The gear-side
+  derivation (`identify_tier_raid`, from what the tier's own simc profiles wear) is
+  what settles it in the gap, because profiles ship before kills exist. Sequencing
+  that follows: **do not move a tier's encounters while its raid has no zone.** Once
+  Season 2's zone appears, `VS / DR / MQD` freezes, `locate` flags MID2's filed ids
+  by itself, and the move carries its own evidence.
 - **The zone → tier join does not exist and is not invented.** `MID2` is a directory
   in simc's profiles and means nothing to Warcraft Logs. `suggest_current_zone` offers
   the newest unfrozen zone *with its reasoning printed* and refuses to apply it;
