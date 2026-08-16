@@ -1,0 +1,130 @@
+name: Fight zones
+
+# Which bosses belong to which season, read out of Warcraft Logs rather than typed.
+#
+# `fight_profiles.json` is keyed by tier and every encounter under a tier carries a
+# Warcraft Logs encounter id, and both halves used to be hand-written. That shipped a
+# real error: the nine encounters filed under MID2 are the bosses of the raid Warcraft
+# Logs had kills for when the file was written, which in the week before a season turns
+# is the raid that is *ending*. It is the same trap `gearpool.identify_tier_raid` fell
+# into, one API further out.
+#
+# `worldData.zones` is one document -- every raid, its encounters, their ids and whether
+# it is still being ranked. So this is by far the cheapest query in the project and it is
+# the one that keeps a whole season's fight data from being labelled wrongly.
+#
+# `workflow_dispatch` only, and read-only unless a seed or a move is named:
+#
+# * The answer changes when a season turns, which is a few times a year.
+# * It commits, and what it commits is which bosses a season *has*. Every other view
+#   joins on that, so a run wants somebody reading its output.
+# * The zone -> tier join does not exist in any payload. `MID2` is a directory in simc's
+#   profiles and means nothing to Warcraft Logs, so the command *suggests* a zone from
+#   ordering and the `frozen` flag and refuses to apply it. Naming `seed_zone` is a
+#   person's decision.
+#
+# Run it with nothing set first: that prints the zone list and says which zone each
+# tier's filed encounters actually came from, which is the evidence for the move.
+on:
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: 'Tier that seed_zone is written into'
+        default: 'MID2'
+      show:
+        description: 'How many of the newest zones to print'
+        default: '8'
+      verbose_zones:
+        description: 'Print every encounter of every zone shown'
+        type: boolean
+        default: true
+      move_from:
+        description: 'Re-file this tier''s encounters, with their facts, under move_to (empty to skip)'
+        default: ''
+      move_to:
+        description: 'Where move_from''s encounters land'
+        default: ''
+      seed_zone:
+        description: 'Warcraft Logs zone id whose encounters are added to tier (empty to skip)'
+        default: ''
+      write:
+        description: 'Apply the move/seed and commit. Off by default: this relabels a whole season'
+        type: boolean
+        default: false
+
+concurrency:
+  group: fight-zones
+
+permissions:
+  contents: write
+
+jobs:
+  zones:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check credentials
+        id: creds
+        env:
+          WCL_CLIENT_ID: ${{ secrets.WCL_CLIENT_ID }}
+        run: |
+          if [ -z "$WCL_CLIENT_ID" ]; then
+            echo "::notice::WCL_CLIENT_ID is not set — skipping. Add WCL_CLIENT_ID and WCL_CLIENT_SECRET as repository secrets; a client is free at https://www.warcraftlogs.com/api/clients/"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.creds.outputs.enabled == 'true'
+        with:
+          python-version: '3.12'
+
+      - name: Install pipeline
+        if: steps.creds.outputs.enabled == 'true'
+        run: pip install -e ./pipeline
+
+      - name: Read the zone list
+        if: steps.creds.outputs.enabled == 'true'
+        env:
+          WCL_CLIENT_ID: ${{ secrets.WCL_CLIENT_ID }}
+          WCL_CLIENT_SECRET: ${{ secrets.WCL_CLIENT_SECRET }}
+          TIER: ${{ inputs.tier }}
+          SHOW: ${{ inputs.show }}
+          VERBOSE: ${{ inputs.verbose_zones }}
+          MOVE_FROM: ${{ inputs.move_from }}
+          MOVE_TO: ${{ inputs.move_to }}
+          SEED_ZONE: ${{ inputs.seed_zone }}
+          WRITE: ${{ inputs.write }}
+        run: |
+          args=()
+          if [ "$VERBOSE" = "true" ]; then args+=(--verbose-zones); fi
+          if [ -n "$MOVE_FROM" ] && [ -n "$MOVE_TO" ]; then args+=(--move "$MOVE_FROM" "$MOVE_TO"); fi
+          if [ -n "$SEED_ZONE" ]; then args+=(--seed "$SEED_ZONE"); fi
+          if [ "$WRITE" = "true" ]; then args+=(--write); fi
+          wowdps -v fight-zones --tier "$TIER" --show "$SHOW" "${args[@]}" | tee zones.txt
+
+      - name: Summary
+        if: steps.creds.outputs.enabled == 'true'
+        run: |
+          {
+            echo '## Fight zones'
+            echo
+            echo '```'
+            cat zones.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit
+        if: steps.creds.outputs.enabled == 'true' && inputs.write
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add pipeline/src/wowdps/data/fight_profiles.json
+          if git diff --staged --quiet; then
+            echo "no change: the profile file already matches"
+            exit 0
+          fi
+          git commit -m "data: re-file fight profiles from Warcraft Logs zones $(date -u +%Y-%m-%d)"
+          git push

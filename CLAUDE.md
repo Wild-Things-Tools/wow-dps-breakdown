@@ -1274,7 +1274,7 @@ Two things nearly threw it away, both fixed, both worth not reintroducing:
   This is the same bug as the `targetError` one below, in a different disguise: a number
   describing a fraction of the run, presented as describing all of it.
 
-## The tier axis## The tier axis
+## The tier axis
 
 - Datasets are namespaced: `web/public/data/<tier>/index.json` and `<tier>/specs/*.json`,
   with `tiers.json` at the root naming which tiers exist and which is current. There is no
@@ -1330,6 +1330,71 @@ Two things nearly threw it away, both fixed, both worth not reintroducing:
   read "Midnight Season 2" and two words for one axis reads as two axes. The header
   hides its switcher when only one tier exists; the Fights view instead states the
   season as a label, because there it is the subject rather than context.
+
+### The season switch is built; what was missing is a second season
+
+Worth knowing before building anything for it: `tiers.json`, the header's `Season`
+select and `FightsView`'s own `Season` control are **complete and wired to one piece
+of state**. The switcher does not appear because `write_tier_index` found one tier
+directory, and the header hides a control with nothing to switch to. So "add a season
+switch" is not the work -- **publishing a second dataset is**, and that is one
+`workflow_dispatch` of `sims.yml` with `tiers: latest previous`.
+
+What that run costs and what it buys is measured, not guessed: 15 of MID1's 41 damage
+profiles no longer load, so the old season publishes as roughly two thirds of a tier.
+That is the right failure shape rather than a reason not to run it -- `spec_coverage`
+already names every spec simc has shipped for *any* tier, so the missing eleven read
+as "no profile", not as "ranks last". Do not turn the *schedule* back on; the cadence
+argument in the cron comment is unchanged.
+
+### The nine bosses filed under MID2 are last season's raid
+
+The same error `identify_tier_raid` made on the Blizzard side, one API further out,
+and it is worth stating as a rule: **any boss list written down during the week a
+season turns describes the raid that is ending.** Warcraft Logs only has kills for a
+raid that has been open, so "the newest zone with rankings" and "the tier simc ships
+profiles for" name different raids for as long as the gap lasts -- which is exactly
+when somebody sits down to write the list.
+
+Concretely, MID2 in `fight_profiles.json` carries Imperator Averzian, Vorasius,
+Vaelgor & Ezzorak, Fallen-King Salhadaar, Lightblinded Vanguard, Crown of the Cosmos,
+Belo'ren, Midnight Falls and Chimaerus. Blizzard's journal places those in The
+Voidspire. MID2's *gear* side -- derived from what its own simc profiles wear -- is
+The Venomous Abyss plus The Tidebound Grotto, whose bosses are The Lost Explorers,
+Vashnik the Malignant, Nek'zali the Soulcoiler, Sszorak, Ula'tek, The Twin Fangs, The
+Coiled Altar, Entombed Sentinels and Nymrissa Wavecaller. Three independent lines
+agree and none of them is the fight profile file.
+
+`fightzones.py` + `wowdps fight-zones` + `fight-zones.yml` are the repair, and the
+shape is the one that worked for the loot pools: stop typing the list.
+`worldData.zones` is **one document** carrying every raid, its encounters, their ids
+and a `frozen` flag, so a season's boss list is a fetch rather than an edit and the
+encounter ids come from the service that will be asked about them.
+
+Four things in it that are deliberate:
+
+- **`locate` finds the mis-filing without anybody asserting the right answer.** The
+  ids in the file are Warcraft Logs ids, so the service can say which raid they came
+  from; a tier whose bosses all sit in a **frozen** zone is a tier describing a season
+  that has ended. That is the check to run first on any tier, and it needs no
+  knowledge of what the tier *should* contain.
+- **The zone → tier join does not exist and is not invented.** `MID2` is a directory
+  in simc's profiles and means nothing to Warcraft Logs. `suggest_current_zone` offers
+  the newest unfrozen zone *with its reasoning printed* and refuses to apply it;
+  `--seed`/`--move` take the decision from a person. A wrong guess here silently
+  relabels a whole season, which is the failure being repaired.
+- **`move_tier` carries the facts across.** The owner's hand facts are about the
+  fight, and the fight did not change -- only the label on it was wrong. A destination
+  that already holds an encounter keeps its own copy and the source's is left behind
+  and counted, so a move can never overwrite an assertion.
+- **Seeding never deletes.** An encounter the tier has and the zone does not is kept
+  and reported: it may be a boss the zone list has not caught up with, and dropping it
+  would take its hand facts with it. Re-running is therefore free, which is what a
+  scheduled run would need.
+
+One consequence to expect and not mistake for a bug: once the nine move to MID1, MID2
+has no fight profiles until its raid opens, so the Fights view's empty state is the
+**correct** reading of a season whose first kills have not happened yet.
 
 ## The logs cross-check: what 192 comparisons are actually for
 

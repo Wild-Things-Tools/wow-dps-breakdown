@@ -13,6 +13,7 @@ from . import (
     equipment,
     fightdataset,
     fightprofile,
+    fightzones,
     gearsweep,
     profiles,
     scenarios,
@@ -449,6 +450,106 @@ def cmd_fight_profiles(args: argparse.Namespace) -> int:
             print(f"        {option}")
         for missing in plan.unrepresented:
             print(f"  not modelled: {missing}")
+    return 0
+
+
+def cmd_fight_zones(args: argparse.Namespace) -> int:
+    """Read Warcraft Logs' zone list and say which season each boss list belongs to.
+
+    The cheapest query in the project -- one document, no per-fight events -- and
+    the one that keeps a whole season's fight data from being filed under the wrong
+    label. It answers two questions a checkout cannot answer offline: which raids
+    Warcraft Logs is currently ranking, and which raid the encounter ids already in
+    ``fight_profiles.json`` actually came from.
+
+    Read-only unless ``--seed`` or ``--move`` is passed, and both of those name what
+    they are doing rather than inferring it. The suggestion this prints is an
+    inference over zone order and the ``frozen`` flag; the writes are a person's
+    decision.
+    """
+    from .warcraftlogs import Credentials, WarcraftLogsClient, WarcraftLogsError
+
+    path = Path(args.profiles_file) if args.profiles_file else fightzones._data_file()
+    raw = json.loads(path.read_text(encoding="utf-8"))
+
+    try:
+        credentials = Credentials.from_env()
+    except WarcraftLogsError as exc:
+        logging.error("%s", exc)
+        return 1
+
+    with WarcraftLogsClient(credentials) as client:
+        zones = fightzones.parse_zones(client.zones())
+        ledger = client.ledger
+
+    if not zones:
+        logging.error("Warcraft Logs returned no zones")
+        return 1
+
+    live = [zone for zone in zones if not zone.frozen]
+    print(f"{len(zones)} zone(s), {len(live)} still being ranked\n")
+    for zone in zones[-args.show :]:
+        state = "frozen" if zone.frozen else "live"
+        print(f"  [{zone.zone_id}] {zone.name} -- {state}, {len(zone.encounters)} encounter(s)")
+        if args.verbose_zones:
+            for encounter in zone.encounters:
+                print(f"        {encounter.encounter_id:>6}  {encounter.name}")
+
+    suggestion = fightzones.suggest_current_zone(zones)
+    print(f"\ncurrent season looks like: {suggestion.reason}")
+
+    print("\nwhere each tier's filed encounters actually live:")
+    for tier, entry in sorted((raw.get("tiers") or {}).items()):
+        ids = [
+            int(item["encounterId"])
+            for item in entry.get("encounters") or []
+            if item.get("encounterId") is not None
+        ]
+        placement = fightzones.locate(tier, ids, zones)
+        print(f"  {tier}: {len(ids)} encounter(s) -> {placement.zone_names}")
+        for zone, hits in placement.zones:
+            if zone.frozen:
+                print(
+                    f"    ! {zone.name} is frozen -- {hits} of {tier}'s bosses belong to a "
+                    "season that has ended"
+                )
+        if placement.unplaced:
+            print(f"    ? not in any zone: {sorted(placement.unplaced)}")
+
+    if args.move:
+        source, destination = args.move
+        moved = fightzones.move_tier(raw, source, destination)
+        print(f"\nmoved {moved} encounter(s) from {source} to {destination}")
+
+    if args.seed:
+        zone = next((entry for entry in zones if entry.zone_id == args.seed), None)
+        if zone is None:
+            logging.error("no zone %d in the list above", args.seed)
+            return 1
+        result = fightzones.seed_tier(raw, args.tier, zone, difficulty=args.difficulty)
+        print(f"\nseeded {args.tier} from {zone.name}:")
+        for encounter in result.added:
+            print(f"  + {encounter.encounter_id:>6}  {encounter.name}")
+        if result.kept:
+            print(f"  = {len(result.kept)} already filed, left untouched")
+        if result.absent:
+            print(
+                f"  ? {len(result.absent)} filed under {args.tier} but not in "
+                f"the zone: {result.absent}"
+            )
+
+    if args.write and (args.seed or args.move):
+        written = fightzones.write_profiles(raw, path)
+        print(f"\nwrote {written}")
+    elif args.seed or args.move:
+        print("\nnothing written -- pass --write to apply")
+
+    cost = ledger.spent
+    # A zero delta is reported as unmeasured rather than as a number: the counter
+    # not moving is the absence of a measurement, and printing "0 points" invites
+    # the conclusion that the API is free. Same rule as the probe's ledger.
+    reading = "UNMEASURED (the hourly counter did not move)" if not cost else f"{cost:.1f} points"
+    print(f"\ncost: {reading}, {len(ledger.entries)} query/queries")
     return 0
 
 
@@ -958,6 +1059,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_fights.add_argument("--profiles-file", help="alternative fight profile file")
     p_fights.set_defaults(func=cmd_fights)
+
+    p_fight_zones = sub.add_parser(
+        "fight-zones",
+        help="list Warcraft Logs' raid zones and say which season each boss list "
+        "belongs to (needs credentials)",
+    )
+    p_fight_zones.add_argument("--tier", default="MID2", help="tier to seed with --seed")
+    p_fight_zones.add_argument("--profiles-file", help="alternative fight profile file")
+    p_fight_zones.add_argument(
+        "--show", type=int, default=8, help="how many of the newest zones to print"
+    )
+    p_fight_zones.add_argument(
+        "--verbose-zones", action="store_true", help="print every encounter of every zone shown"
+    )
+    p_fight_zones.add_argument(
+        "--seed", type=int, metavar="ZONE_ID", help="add that zone's encounters to --tier"
+    )
+    p_fight_zones.add_argument(
+        "--move",
+        nargs=2,
+        metavar=("FROM", "TO"),
+        help="re-file a tier's encounters, with their facts, under another tier name",
+    )
+    p_fight_zones.add_argument("--difficulty", type=int, default=5)
+    p_fight_zones.add_argument("--write", action="store_true", help="apply --seed/--move to disk")
+    p_fight_zones.set_defaults(func=cmd_fight_zones)
 
     p_fight_probe = sub.add_parser(
         "fight-probe",
