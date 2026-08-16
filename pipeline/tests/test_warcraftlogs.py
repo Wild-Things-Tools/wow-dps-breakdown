@@ -168,3 +168,42 @@ def test_cache_hits_are_counted_apart_from_paid_queries():
     ledger.record("b", reading(10.0), cached=True)
     payload = ledger.to_json()
     assert payload["queries"] == 1 and payload["cacheHits"] == 1
+
+
+def test_the_boss_list_comes_from_the_tier_and_a_tier_with_none_is_a_refusal(
+    tmp_path, monkeypatch, caplog
+):
+    """A season whose raid has not opened yet must not borrow the last one's bosses.
+
+    The published MID2 comparison is what the old fallback ("the newest zone
+    Warcraft Logs is ranking") cost: 192 rows of Season 2 sim output against Season
+    1 kills, under a Season 2 heading. It is the failure shape this project keeps
+    running into -- a full set of plausible numbers answering a question nobody
+    asked -- so the fallback is gone and the empty case is an error rather than a
+    quiet substitution.
+    """
+    import argparse
+    import json as _json
+
+    from wowdps import warcraftlogs
+
+    root = tmp_path / "data"
+    (root / "MID9").mkdir(parents=True)
+    (root / "tiers.json").write_text(_json.dumps({"current": "MID9", "tiers": []}))
+    (root / "MID9" / "index.json").write_text(_json.dumps({"specs": []}))
+
+    monkeypatch.setenv("WCL_CLIENT_ID", "id")
+    monkeypatch.setenv("WCL_CLIENT_SECRET", "secret")
+
+    args = argparse.Namespace(
+        data=str(root), tier="MID9", encounter=None, difficulty=5, metric="dps"
+    )
+
+    with caplog.at_level("ERROR"):
+        assert warcraftlogs.cmd_verify(args) == 1
+
+    message = caplog.text
+    assert "no fight profiles for tier MID9" in message
+    # The way out is named, and so is the reason there is no fallback.
+    assert "fight-zones" in message
+    assert "previous" in message

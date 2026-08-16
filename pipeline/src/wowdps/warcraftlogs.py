@@ -34,7 +34,7 @@ from pathlib import Path
 
 import httpx
 
-from . import logsanalysis
+from . import fightprofile, logsanalysis
 
 log = logging.getLogger(__name__)
 
@@ -659,17 +659,43 @@ def cmd_verify(args: argparse.Namespace) -> int:
     # compare" are different statements, and the second is the useful one.
     thin = 0
 
-    with WarcraftLogsClient(credentials) as client:
+    # Which bosses this tier's numbers are compared against comes from the tier's
+    # own fight profiles, not from "the newest zone Warcraft Logs is ranking".
+    #
+    # Those two are the same raid for most of a season and different raids for the
+    # week either side of a turn, which is precisely when somebody runs this. The
+    # published MID2 comparison is what that costs: 192 rows of Season 2 sim output
+    # against Season 1 kills, under a Season 2 heading, with nothing in the file
+    # saying so. `fight_profiles.json` is the one registry of which bosses a season
+    # has -- the Fights view already reads it -- so this reads it too and the two
+    # views can no longer disagree about what a season is.
+    #
+    # A tier with no fight profiles is a refusal rather than a fallback. Falling
+    # back to the newest live zone is exactly the bug: a raid that has not opened
+    # yet has no kills, and comparing against another season's raid instead
+    # produces a full set of plausible numbers that answer a question nobody asked.
+    if not encounter_ids:
+        tier_profiles = fightprofile.load_profiles(tier)
+        encounter_ids = sorted(tier_profiles.profiles)
         if not encounter_ids:
-            zones = client.zones()
-            live = [z for z in zones if not z.get("frozen")]
-            if not live:
-                log.error("no unfrozen zone found; pass --encounter explicitly")
-                return 1
-            newest = live[-1]
-            encounter_ids = [e["id"] for e in newest.get("encounters", [])]
-            log.info("using zone %s (%d encounters)", newest.get("name"), len(encounter_ids))
+            log.error(
+                "no fight profiles for tier %s, so there is no boss list to compare "
+                "against. Seed one with `wowdps fight-zones --tier %s --seed <zone> "
+                "--write`, or pass --encounter to name the bosses explicitly. Not "
+                "falling back to the newest ranked zone: before a season opens that "
+                "is the *previous* season's raid.",
+                tier,
+                tier,
+            )
+            return 1
+        log.info(
+            "comparing against %s's %d fight profile(s): %s",
+            tier,
+            len(encounter_ids),
+            ", ".join(profile.name for _, profile in sorted(tier_profiles.profiles.items())),
+        )
 
+    with WarcraftLogsClient(credentials) as client:
         # One request per spec per encounter. Specs sharing a class/spec pair but
         # differing only in hero talent resolve to the same Warcraft Logs query, so
         # results are cached per (class, spec, encounter).

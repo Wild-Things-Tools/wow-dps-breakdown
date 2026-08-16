@@ -1421,6 +1421,17 @@ tops the meters on a specific boss**, and the biggest single factor in the sim/l
 is which boss, not which spec. That is also the strongest argument the repository has
 for the per-boss scenarios on the Fights view.
 
+**The 192 rows are Season 1 kills under a Season 2 heading.** `cmd_verify` used to
+pick its bosses as "the newest zone Warcraft Logs is ranking", which is the same
+raid as the tier's for most of a season and a different one for the week either
+side of a turn -- precisely when somebody runs it. So the published MID2 file
+compares Season 2 sim output against The Voidspire, with nothing in it saying so.
+The boss list now comes from the tier's own `fight_profiles.json`, the one registry
+of which bosses a season has, so the Fights view and this cannot disagree about
+what a season is. A tier with no fight profiles is a **refusal**, not a fallback:
+a raid that has not opened has no kills, and substituting another season's raid
+produces a full set of plausible numbers answering a question nobody asked.
+
 Things not to redo:
 
 - **`vsField` is the ratio divided by the median ratio on the same boss**, not a
