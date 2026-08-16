@@ -55,6 +55,12 @@ function Row({
 
 export function PatchState({ manifest }: { manifest: Manifest }) {
   const simc = manifest.simc
+  // "12.1.0.69273" is one patch and one build of it, and the difference is the whole
+  // question a reader asks after a tuning pass.
+  const version = simc.wowVersion ?? null
+  const parts = version ? version.split('.') : []
+  const patch = parts.length >= 4 ? parts.slice(0, 3).join('.') : version
+  const build = parts.length >= 4 ? parts[3] : (simc.wowBuild ? String(simc.wowBuild) : null)
   const now = new Date()
   const cutoffAge = daysBetween(simc.hotfixDate, now)
   const publishedAge = daysBetween(manifest.generatedAt, now)
@@ -75,12 +81,18 @@ export function PatchState({ manifest }: { manifest: Manifest }) {
       />
       <dl className="grid gap-4 px-5 pb-4 sm:grid-cols-2 lg:grid-cols-4">
         <Row
-          label="Game build"
-          value={simc.wowVersion ?? 'not recorded'}
+          label="Patch"
+          value={patch ?? 'not recorded'}
           detail={
-            simc.ptr
-              ? 'Read from the PTR data set, which is what a tier simc ships before release is built from.'
-              : 'Read from the live data set.'
+            // The confusion this splits: 12.1.0.69273 and 12.1.0.69299 look like two
+            // patches and are two *builds* of one. Balance hotfixes arrive as a new
+            // build without touching the patch number, so a reader comparing "the
+            // patch" against a tuning post is comparing the wrong half.
+            build
+              ? `Build ${build}${simc.ptr ? ', from the PTR data set' : ', from the live data set'}. A balance hotfix arrives as a new build, not a new patch — so the build is the part that moves between runs.`
+              : simc.ptr
+                ? 'Read from the PTR data set.'
+                : 'Read from the live data set.'
           }
         />
         <Row
