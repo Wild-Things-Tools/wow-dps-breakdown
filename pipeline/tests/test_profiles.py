@@ -143,3 +143,48 @@ def test_every_class_token_parses(tmp_path, token):
 
 def test_slugify_handles_apostrophes():
     assert slugify("Death Knight", "Unholy", "San'layn") == "death_knight_unholy_san_layn"
+
+
+def test_spec_coverage_derives_the_reference_list_from_the_other_tiers(tmp_path):
+    """ "All specs" is what simc shipped elsewhere, not a table written down here.
+
+    A hard-coded list of the game's damage specs would need editing whenever Blizzard
+    adds one -- Midnight adds Devourer -- and would go stale in exactly the patch
+    where the question matters most.
+    """
+    from wowdps.profiles import spec_coverage
+
+    old = tmp_path / "MID1"
+    new = tmp_path / "MID2"
+    old.mkdir()
+    new.mkdir()
+
+    def profile(directory, name, token, spec):
+        (directory / f"{name}.simc").write_text(
+            f'{token}="{name}"\nspec={spec}\nlevel=80\nrole=attack\n', encoding="utf-8"
+        )
+
+    profile(old, "MID1_Mage_Arcane", "mage", "arcane")
+    profile(old, "MID1_Warrior_Fury", "warrior", "fury")
+    profile(new, "MID2_Mage_Arcane", "mage", "arcane")
+
+    coverage = spec_coverage(tmp_path, "MID2")
+    assert coverage["damageSpecs"] == 1
+    assert coverage["damageSpecsKnown"] == 2
+    assert coverage["missing"] == [{"class": "Warrior", "spec": "Fury"}]
+    assert coverage["comparedWith"] == ["MID1"]
+
+
+def test_a_tier_that_ships_everything_reports_nothing_missing(tmp_path):
+    from wowdps.profiles import spec_coverage
+
+    for tier in ("MID1", "MID2"):
+        directory = tmp_path / tier
+        directory.mkdir()
+        (directory / f"{tier}_Mage_Arcane.simc").write_text(
+            f'mage="{tier}_Mage_Arcane"\nspec=arcane\nlevel=80\nrole=attack\n', encoding="utf-8"
+        )
+
+    coverage = spec_coverage(tmp_path, "MID2")
+    assert coverage["missing"] == []
+    assert coverage["damageSpecs"] == coverage["damageSpecsKnown"] == 1

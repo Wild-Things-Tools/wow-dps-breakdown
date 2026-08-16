@@ -966,6 +966,34 @@ would understate the spec. Published as a per-build `caveat` in `talent-trees.js
 shown beside the tree -- `_THIN_CLASS_TREE` is the threshold. This module reads
 profiles; it does not write them.
 
+## Spec coverage: a missing spec looks exactly like a bad one
+
+`profiles.spec_coverage` + `components/SpecCoverage.tsx`, on the Overview above the
+patch panel. simc ships its tier profiles as they are written, so early in a season
+the set is incomplete -- and a ranking can only draw what it has, so "no profile" and
+"ranks last" are indistinguishable on it. The second is a conclusion somebody acts on.
+
+Measured on 2026-08-15: **MID2 ships 15 of 26 damage specs**, against MID1's 26. Six
+whole classes are absent -- Demon Hunter (Devourer, Havoc), Druid (Balance, Feral),
+Evoker (Devastation), Monk (Windwalker), Paladin (Retribution), Rogue (Outlaw),
+Warlock (Demonology), Warrior (Arms, Fury). Note *31* profile files but *26* damage
+builds and only *15* distinct specs: files include tanks and healers, and several
+specs ship two hero-tree builds.
+
+**The reference list is derived, never written down.** "All damage specs" is the union
+of what simc has shipped for *any* tier in the checkout. A hard-coded table would need
+editing whenever Blizzard adds a spec -- Midnight adds Devourer -- and would go stale
+in exactly the patch where the question matters most. The cost is that a spec that has
+never been profiled in any tier cannot be reported missing, because nothing here knows
+it exists; that is the right direction to fail, since it under-claims rather than
+inventing a spec list.
+
+`spec_coverage` is safe to call from a shard: it reads what simc *ships*, which is the
+whole profiles directory, and has nothing to do with which slice a run simulated. So
+every shard computes the same answer and `merge_shards` keeping the newest manifest
+keeps a correct one. Do not confuse it with `manifest.specs`, which is what this run
+*simulated* -- the two differ when a spec fails.
+
 ## Patch state: two dates, and only one of them is the cutoff
 
 `components/PatchState.tsx`, on the Overview under the ranking. It answers the

@@ -205,6 +205,7 @@ def write_manifest(
     tier: str,
     simc_meta: dict,
     settings: SimSettings,
+    coverage: dict | None = None,
 ) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
@@ -239,6 +240,9 @@ def write_manifest(
             for s in scenarios
         ],
         "specs": [r.summary() for r in results],
+        # Which of the game's damage specs this tier ships a profile for. Absent on a
+        # shard, which knows only its own slice; the merge carries the whole-run value.
+        **({"coverage": coverage} if coverage else {}),
     }
     path = out_dir / "index.json"
     path.write_text(

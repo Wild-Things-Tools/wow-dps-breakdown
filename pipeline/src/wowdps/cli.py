@@ -261,8 +261,13 @@ def cmd_build(args: argparse.Namespace) -> int:
         logging.error("every spec failed; not writing a manifest")
         return 1
 
+    # Safe from a shard: `spec_coverage` reads what simc *ships* for the tier, which
+    # is the whole profiles directory and has nothing to do with which slice this run
+    # simulated. Every shard therefore computes the same answer, and the merge keeping
+    # the newest manifest keeps a correct one.
+    coverage = profiles.spec_coverage(profiles_dir, tier)
     manifest = dataset.write_manifest(
-        out_dir, results, selected_scenarios, tier, simc_meta, settings
+        out_dir, results, selected_scenarios, tier, simc_meta, settings, coverage
     )
     dataset.write_tier_index(out_root)
     failed = sum(len(r.errors) for r in results)

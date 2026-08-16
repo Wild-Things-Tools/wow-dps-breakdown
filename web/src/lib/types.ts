@@ -159,6 +159,8 @@ export interface Manifest {
   settings: RunSettings
   scenarios: ScenarioMeta[]
   specs: SpecSummary[]
+  /** Absent on datasets built before spec coverage was published. */
+  coverage?: SpecCoverage
 }
 
 export interface LogsComparison {
@@ -836,4 +838,19 @@ export interface TalentTreeDataset {
   trees: Record<string, TalentTreeLayout>
   builds: TalentTreeBuild[]
   notes: string[]
+}
+
+/**
+ * Which of the game's damage specs this tier ships a profile for. The reference
+ * list is derived from the other tiers simc ships, not written down -- see
+ * `profiles.spec_coverage`. Absent on a dataset built before this existed.
+ */
+export interface SpecCoverage {
+  /** Damage specs this tier has a profile for. */
+  damageSpecs: number
+  /** Damage specs simc has shipped for *some* tier, which is the reference. */
+  damageSpecsKnown: number
+  missing: { class: string; spec: string }[]
+  /** The tiers the reference list was drawn from. */
+  comparedWith: string[]
 }
