@@ -900,3 +900,52 @@ export interface SimcChanges {
   /** Why there is no comparison, when there is none. */
   why?: string
 }
+
+/**
+ * Every class and spec in the game, for the Spec detail picker.
+ *
+ * Derived from simc — see `specindex.py`. The picker draws the whole game rather
+ * than the tier's build list, so a spec's absence from the rankings reads as
+ * absence rather than as a bad result. That is the coverage panel's argument, one
+ * step closer to the reader.
+ */
+export interface SpecIndex {
+  tier: string
+  classes: SpecIndexClass[]
+  heroTrees: SpecIndexHeroTree[]
+  note: string
+}
+
+export interface SpecIndexClass {
+  class: string
+  token: string | null
+  specs: SpecIndexSpec[]
+}
+
+export interface SpecIndexSpec {
+  specId: number
+  name: string
+  class: string
+  /**
+   * `damage` | `tank` | `healer` | `unknown`. Unknown is a real state, not a gap:
+   * role comes from a profile's `role=` line, and simc ships no healing profiles
+   * at all, so a healer is honestly "simc does not simulate this" rather than
+   * asserted to be a healer by a table this project would have to maintain.
+   */
+  role: string
+  /** simc ships a profile for this spec in this tier. */
+  profiled: boolean
+  /** …in any tier. The difference is "not this season" versus "never". */
+  profiledEver: boolean
+  /** Dataset build ids this tier publishes for the spec. */
+  builds: string[]
+  subTrees: number[]
+}
+
+export interface SpecIndexHeroTree {
+  subTree: number
+  class: string
+  specIds: number[]
+  /** null when no build in any tier plays it — simc ships no tree names. */
+  name: string | null
+}

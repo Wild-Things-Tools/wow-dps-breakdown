@@ -6,6 +6,7 @@ import type {
   LogsVerification,
   Manifest,
   SpecDetail,
+  SpecIndex,
   TalentDataset,
   TierIndex,
   TalentTreeDataset,
@@ -93,6 +94,20 @@ export async function loadFights(tier: string): Promise<FightsDataset | null> {
  * sweep and the fight shapes: the file exists once `wowdps talents` has been run,
  * and the view explains its own absence rather than the app failing to load.
  */
+/**
+ * Every class and spec in the game, for the Spec detail picker. Small (~10 KB) and
+ * only that view needs it, so it is its own fetch. A tier built before
+ * `wowdps spec-index` existed has no such file, and the picker falls back to the
+ * builds the manifest carries.
+ */
+export async function loadSpecIndex(tier: string): Promise<SpecIndex | null> {
+  try {
+    return await fetchJson<SpecIndex>(`${tier}/spec-index.json`)
+  } catch {
+    return null
+  }
+}
+
 export async function loadTalents(tier: string): Promise<TalentDataset | null> {
   try {
     return await fetchJson<TalentDataset>(`${tier}/talents.json`)

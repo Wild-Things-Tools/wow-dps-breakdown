@@ -926,6 +926,62 @@ same class and the same spec. The hero-tree emblem, its name, and `buildDash` on
 line chart are what separate them. Never invent a second colour for the second
 build.
 
+## The spec picker draws the whole game, and the shape is the data
+
+`specindex.py` + `wowdps spec-index` + `components/ClassSpecPicker.tsx`.
+
+The picker shows all thirteen classes and all forty specs, not the tier's build
+list, for the same reason the coverage panel exists: a spec that is absent has to
+*read* as absent rather than as a bad result. Four sources, one question each:
+
+| What | From |
+|---|---|
+| class -> its specs, in the game's order | `sc_spec_list.inc` |
+| spec name -> canonical spec id | `sc_specialization_data.inc` |
+| role, and whether this tier ships a profile | `profiles/<tier>/*.simc`, the `role=` line |
+| which hero trees a spec can play | `trait_data.inc`, the hero nodes' `sub_tree` + `id_spec` |
+
+Measured on 2026-08-16: 13 classes, 40 specs, **26 damage, 6 tank, 8 unknown**,
+41 hero trees. Midnight's new Demon Hunter spec (Devourer, 1480) is in it without
+an edit, which is the argument against a hand-written table stated as a fact.
+
+### Geometry that is not decoration
+
+Each hero tree is available to **exactly two specs** of its class, and each spec to
+exactly two trees, so a class's specs and trees form a cycle. The picker therefore
+puts specs on a polygon's vertices -- a triangle for three, a square for Druid's
+four -- and each tree on the **edge between the two specs that share it**. Verified
+against the trait table: Warrior's Arms=[60,62], Fury=[60,61], Protection=[61,62]
+closes exactly. Any other layout would hide the one structural fact a reader needs
+when choosing between builds.
+
+`vertices()` takes the count rather than branching on 3 and 4, so a class gaining a
+spec needs no edit.
+
+### The two things simc does not carry, and how each is handled
+
+- **Role.** There is no role column in `sc_specialization_data.inc` and no role
+  table under `generated/` (checked). It comes from a profile's `role=` line, so a
+  spec no tier has ever shipped is `unknown` -- and since simc ships **no healing
+  profiles at all**, every healer lands there. The picker greys it and says "simc
+  ships no profile for this spec in any season" rather than claiming it is a
+  healer, which is a fact this project cannot derive. Tanks *are* named, because
+  simc profiles them.
+- **Hero tree names.** The SELECTION rows that identify a tree carry the literal
+  string `"0"` where a name would be, and `TraitSubTree` is not shipped -- the same
+  absence as item source and the Mythic+ rotation. The name comes from a join:
+  a build's decoded loadout gives the sub-tree id, and the build already knows its
+  tree name from `herotrees`. **18 of 41 trees are named for MID2**, and that is
+  exactly the set some build plays -- so an unnamed node is always one that could
+  not have been selected anyway.
+
+### Four states, all derived
+
+`selectable` (profile this tier and builds in the dataset), `absent` (profiled in
+another tier, not this one -- lightly dimmed, expected back), `never` (no profile
+in any tier), and `tank`. The two dim levels carry the distinction that matters:
+"not this season" and "never simulated" are different sentences.
+
 ## The talent tree, decoded from simc and nothing else
 
 `talenttree.py` + `wowdps talent-trees` + `components/TalentTree.tsx`. The obvious

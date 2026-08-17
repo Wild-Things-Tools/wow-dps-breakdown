@@ -627,6 +627,56 @@ def cmd_wcl_schema(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_spec_index(args: argparse.Namespace) -> int:
+    """Publish ``<tier>/spec-index.json``: every class and spec in the game.
+
+    The Spec detail picker draws the whole game rather than the tier's build list,
+    so a spec's absence reads as absence. Everything in it is derived -- see
+    ``specindex`` for which file answers which question, and for the one thing simc
+    does not carry at all, which is what a hero tree is called.
+    """
+    from . import specindex
+
+    simc_dir = Path(args.simc_source)
+    out_root = Path(args.out)
+    tier = _resolve_tier(simc_dir / "profiles", args.tier)
+
+    manifest_path = out_root / tier / "index.json"
+    manifest = (
+        json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else None
+    )
+    if manifest is None:
+        logging.warning("no manifest at %s; the picker will show no builds", manifest_path)
+
+    talents_path = out_root / tier / "talent-trees.json"
+    tree_names: dict[int, str] = {}
+    if talents_path.is_file():
+        tree_names = specindex.tree_names_from_talents(
+            json.loads(talents_path.read_text(encoding="utf-8"))
+        )
+    else:
+        logging.warning(
+            "no %s, so no hero tree can be named -- run `wowdps talent-trees` first",
+            talents_path,
+        )
+
+    ptr = bool((manifest or {}).get("simc", {}).get("ptr"))
+    document = specindex.build_index(simc_dir, tier, manifest, tree_names, ptr=ptr)
+    path = specindex.write_spec_index(out_root / tier, document)
+
+    specs = [spec for entry in document["classes"] for spec in entry["specs"]]
+    roles: dict[str, int] = {}
+    for spec in specs:
+        roles[spec["role"]] = roles.get(spec["role"], 0) + 1
+    named = sum(1 for tree in document["heroTrees"] if tree["name"])
+    print(
+        f"wrote {path}: {len(document['classes'])} classes, {len(specs)} specs "
+        f"({', '.join(f'{count} {role}' for role, count in sorted(roles.items()))}), "
+        f"{len(document['heroTrees'])} hero trees of which {named} are named"
+    )
+    return 0
+
+
 def cmd_fights(args: argparse.Namespace) -> int:
     """Publish ``<tier>/fights.json``: what each boss is asserted and measured to be.
 
@@ -1133,6 +1183,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_fights.add_argument("--profiles-file", help="alternative fight profile file")
     p_fights.set_defaults(func=cmd_fights)
+
+    p_spec_index = sub.add_parser(
+        "spec-index",
+        help="publish <tier>/spec-index.json: every class and spec in the game, for "
+        "the Spec detail picker",
+    )
+    p_spec_index.add_argument("--tier", default="latest")
+    p_spec_index.add_argument(
+        "--simc-source", default="simc", help="a simc checkout (profiles + dbc/generated)"
+    )
+    p_spec_index.add_argument("--out", default="web/public/data")
+    p_spec_index.set_defaults(func=cmd_spec_index)
 
     p_fight_zones = sub.add_parser(
         "fight-zones",
