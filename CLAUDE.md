@@ -1533,6 +1533,31 @@ Four things in it that are deliberate:
   came out of treating the list as complete, one after the other -- first the
   ordering, then the membership -- so the rule is worth stating plainly: this list
   answers "what is currently ranked", not "what exists".
+- **A PTR encounter id is its live id with a `5` in front, and that is the
+  provenance signal.** Scanning ids 44-75 on 2026-08-17 turned up pairs:
+
+  ```
+  [46] VS / DR / MQD          live      3176 Imperator Averzian ...
+  [48] VS / DR / MQD (Beta)   frozen   53176 Imperator Averzian ...
+  [53] The Venomous Abyss     frozen    3470 Nek'zali ... 3379 Nymrissa (9 bosses)
+  [54] The Venomous Abyss     live     53470 Nek'zali ...          (8 bosses)
+  ```
+
+  Two independent zone pairs, same rule. So a measurement taken against 53470
+  **cannot be mistaken for** one taken against 3470 -- the id carries the PTR-ness,
+  and no separate flag is needed to stop PTR data masquerading as progress data.
+  That is worth more than the `ptr` field this was going to grow.
+
+  What the *name* does not tell you: zones 51, 56 and 49 are suffixed `(PTR)` or
+  `(Beta)`, and **zone 54 is not** -- it is plain "The Venomous Abyss", live, and
+  unlisted. Name-based PTR detection would miss exactly the zone in use. The
+  derivable signal is absence from `worldData.zones`; that a zone is *PTR* is an
+  assertion, and on 2026-08-17 it is the owner's.
+
+  Consequence for MID2: it is seeded from zone 54, so it carries the eight PTR
+  encounters. **Nymrissa Wavecaller is not among them** -- the PTR zone genuinely
+  has eight bosses where the frozen zone 53 has nine -- so there is nothing to seed
+  for her yet, and zone 57 ("The Tidebound Grotto", frozen) has **zero** encounters.
 - **The report search needs no zone list at all.** `reportData.reports(zoneID:)`
   takes an id directly, so `--order public` can read a PTR zone that `zones` never
   returns. That is the route to a season's logs before the season has a listed zone.
