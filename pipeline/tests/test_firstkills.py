@@ -139,3 +139,22 @@ def test_the_outcome_says_whether_the_rankings_were_hiding_anything():
 
     outcome.beat_anchor = 6
     assert "6 earlier" in outcome.summary(1_000.0)
+
+
+def test_no_anchor_searches_the_whole_zone_rather_than_refusing():
+    """The PTR case, which is the one this route exists for.
+
+    A PTR zone has no ranked parses at all, so there is nothing to anchor on --
+    and refusing there left zone 54's eight Season 2 bosses with no measurements
+    while their reports were sitting in the API. Such a zone has only existed for
+    weeks, so its whole report list is small and searching from zero is cheap.
+    """
+    start, end = firstkills.search_window(0.0, 10, 14, now_ms=1_700_000_000_000)
+    assert start == 0
+    assert end == 1_700_000_000_000
+
+
+def test_an_unanchored_search_does_not_claim_anything_about_earlier_kills():
+    """`beat_anchor` is meaningless with no anchor, and the summary says so."""
+    outcome = firstkills.SearchOutcome(reports_seen=40, pages_read=2, kills_found=30)
+    assert "whole zone was searched" in outcome.summary(0.0)

@@ -2403,6 +2403,13 @@ envelope is the one part of the route the server would **not** introspect:
 - **`kill` is re-checked** even though `killType: Kills` is passed. A filter that
   silently stopped filtering would put a wipe into a sample of first kills, and a
   first-night wipe is precisely the row that would win the sort.
+- **No anchor means the whole zone, which is the case this route exists for.** A
+  PTR zone has no ranked parses, so there is nothing to anchor on -- and the first
+  run against zone 54 refused on exactly that, leaving the eight Season 2 bosses
+  unmeasured while their reports sat in the API. Such a zone has existed for weeks,
+  so its entire report list is small and searching from zero is both correct and
+  cheap. `beat_anchor` is then meaningless and the summary says so instead of
+  reporting a zero.
 - **The window is anchored on the earliest *ranked* kill**, because nothing in the
   schema says when a raid opened (`Zone.partitions` has names, no dates). The search
   runs from `--lookback-days` before it. That makes the question concrete and

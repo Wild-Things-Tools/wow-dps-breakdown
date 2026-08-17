@@ -149,7 +149,9 @@ def earliest_kills(rows: list[KillRow], limit: int) -> list[KillRow]:
     return ordered[:limit]
 
 
-def search_window(anchor_ms: float, lookback_days: float, forward_days: float) -> tuple[int, int]:
+def search_window(
+    anchor_ms: float, lookback_days: float, forward_days: float, now_ms: float | None = None
+) -> tuple[int, int]:
     """The ``[startTime, endTime]`` to search, in epoch milliseconds.
 
     ``anchor_ms`` is the earliest kill already known -- from the ranking sample, or
@@ -157,10 +159,22 @@ def search_window(anchor_ms: float, lookback_days: float, forward_days: float) -
     whole point is to find kills the rankings could not show, and forward far enough
     to fill the sample once the early ones are in hand.
 
-    A zero or negative start is clamped to zero: Warcraft Logs treats 0 as "from the
+    **An anchor of zero means the whole of time**, and that is the case this route
+    exists for rather than a failure of it. A PTR zone has no ranked parses at all,
+    so there is nothing to anchor on -- and it is also a zone that has existed for
+    weeks, so its entire report list is small and searching it from the beginning is
+    both correct and cheap. Refusing here is what the first run against zone 54 did,
+    and it left the eight Season 2 bosses with no measurements while the reports were
+    sitting there.
+
+    A negative start is clamped to zero: Warcraft Logs reads 0 as "from the
     beginning", and a negative timestamp is not a smaller number to it, it is
     nonsense.
     """
+    if not anchor_ms:
+        import time
+
+        return 0, int(now_ms if now_ms is not None else time.time() * 1000)
     start = max(0.0, anchor_ms - lookback_days * DAY_MS)
     end = anchor_ms + forward_days * DAY_MS
     return int(start), int(end)
@@ -192,7 +206,7 @@ class SearchOutcome:
             f"{self.kills_found} kill(s)"
         )
         if not anchor_ms:
-            return base
+            return f"{base}; no ranked kill to compare against, so the whole zone was searched"
         if self.aborted:
             base = f"{base}, STOPPED EARLY ({self.aborted})"
         if self.beat_anchor:

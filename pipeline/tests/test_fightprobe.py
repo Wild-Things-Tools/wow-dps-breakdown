@@ -724,3 +724,35 @@ def test_a_stopped_search_that_found_nothing_earlier_does_not_claim_there_is_not
 
     outcome = SearchOutcome(reports_seen=5, pages_read=1, kills_found=2, aborted="ceiling")
     assert "none earlier so far, but the search did not finish" in outcome.summary(1_000.0)
+
+
+def test_the_boss_list_comes_from_the_tier_not_the_newest_ranked_zone():
+    """Probing "the newest unfrozen zone" filed another raid's kills under MID2.
+
+    That shipped on 2026-08-17: the probe read The Voidspire's nine encounters and
+    published them under MID2, whose raid is The Venomous Abyss, leaving 17
+    encounters in a file that should hold eight. Same fault cmd_verify had, in a
+    second place.
+    """
+    from wowdps.fightprobe import _tier_encounters
+    from wowdps.fightprofile import FightProfile, TierProfiles
+
+    profiles = TierProfiles(
+        tier="MID2",
+        note="",
+        profiles={
+            53470: FightProfile(tier="MID2", encounter_id=53470, name="Nek'zali", difficulty=5),
+            53420: FightProfile(tier="MID2", encounter_id=53420, name="Sszorak", difficulty=5),
+        },
+    )
+    assert _tier_encounters(profiles) == [53420, 53470]
+
+
+def test_a_tier_with_no_fight_profiles_refuses_rather_than_borrowing_a_raid():
+    """A full set of real measurements filed under the wrong season is worse than none."""
+    from wowdps.fightprobe import _tier_encounters
+    from wowdps.fightprofile import TierProfiles
+    from wowdps.warcraftlogs import WarcraftLogsError
+
+    with pytest.raises(WarcraftLogsError, match="no fight profiles"):
+        _tier_encounters(TierProfiles(tier="MID9", note="", profiles={}))

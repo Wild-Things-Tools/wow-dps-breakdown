@@ -232,11 +232,14 @@ def _public_first_kills(
     """
     outcome = firstkills.SearchOutcome()
     if not anchor_ms:
-        log.warning(
-            "  no ranked kill carried a timestamp, so there is nothing to anchor a "
-            "report search on; using the ranked sample"
+        # Not a failure: a PTR zone has no ranked parses at all, which is precisely
+        # why the report search exists. The window becomes the whole of time, which
+        # is cheap because such a zone has only existed for weeks. Refusing here is
+        # what left zone 54's eight bosses unmeasured while their reports sat there.
+        log.info(
+            "  no ranked kill to anchor on -- searching the zone from the beginning, "
+            "which is the case this route is for"
         )
-        return [], outcome
 
     zone = client.encounter_zone(encounter_id)
     zone_id = zone.get("id")
@@ -697,7 +700,7 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         )
 
         try:
-            encounter_ids = settings.encounter_ids or _current_zone_encounters(client)
+            encounter_ids = list(settings.encounter_ids) or _tier_encounters(profiles)
         except WarcraftLogsError as exc:
             log.error("%s", exc)
             return 1
@@ -862,14 +865,32 @@ def _report_cost(ledger: dict, encounters: int) -> None:
     )
 
 
-def _current_zone_encounters(client: WarcraftLogsClient) -> list[int]:
-    """Every encounter in the newest unfrozen zone -- the same choice ``verify`` makes."""
-    live = [zone for zone in client.zones() if not zone.get("frozen")]
-    if not live:
-        raise WarcraftLogsError("no unfrozen zone found; pass --encounter explicitly")
-    newest = live[-1]
-    log.info("using zone %s", newest.get("name"))
-    return [e["id"] for e in newest.get("encounters", []) if isinstance(e.get("id"), int)]
+def _tier_encounters(profiles: fightprofile.TierProfiles) -> list[int]:
+    """The bosses this tier has, from its own fight profiles.
+
+    **Not "the newest unfrozen zone", which is what this used to do.** That is the
+    tier's raid for most of a season and a different raid for the week either side
+    of a turn -- and it shipped exactly that: a run on 2026-08-17 probed The
+    Voidspire's nine encounters and published them under MID2, whose raid is The
+    Venomous Abyss, leaving 17 encounters in a file that should hold eight. It is
+    the same fault `cmd_verify` had, in a second place, and the reason to fix it
+    the same way: `fight_profiles.json` is the one registry of which bosses a
+    season has, so the probe, the logs cross-check and the Fights view cannot
+    disagree about what a season is.
+
+    A tier with no fight profiles raises rather than falling back. Falling back was
+    the bug; probing another season's raid produces a full set of real measurements
+    filed under the wrong name, which is worse than probing nothing.
+    """
+    found = sorted(profiles.profiles)
+    if not found:
+        raise WarcraftLogsError(
+            f"no fight profiles for tier {profiles.tier}, so there is no boss list to "
+            f"probe. Seed one with `wowdps fight-zones --tier {profiles.tier} --seed "
+            f"<zone> --write`, or pass --encounter. Not falling back to the newest "
+            f"ranked zone: before a season opens that is the previous season's raid."
+        )
+    return found
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
@@ -877,7 +898,8 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         "--encounter",
         type=int,
         action="append",
-        help="encounter id to probe (repeatable); default is every boss in the newest zone",
+        help="encounter id to probe (repeatable); default is every boss the tier's "
+        "fight profiles list",
     )
     parser.add_argument("--tier", default="MID2", help="tier the fight profiles are read from")
     parser.add_argument(
