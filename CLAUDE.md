@@ -394,6 +394,63 @@ leaves a dataset that is smaller *and* honest about being smaller. The view prin
 "covers N of M builds in the tier" from that field -- never from the array length,
 which would be the same number with none of the meaning.
 
+## Tier sets and Power Infusion, as differences rather than levels
+
+`buffsweep.py` + `wowdps buffs` -> `<tier>/buffs.json`, merged by
+`dataset.merge_buff_shards`, drawn by `views/BuffsView.tsx`.
+
+Both are profileset sweeps against the spec's *own* profile, so both are exact
+differences: two profilesets with identical options return bit-identical DPS, and
+the base actor is deliberately not the reference because it runs a different
+iteration count and lands ~0.09% away. Same rule as the gear sweep.
+
+`item_set_bonus.inc` carries every set. **MID2 ships 13, one per class, all sharing
+the option token `midnight_season_2`**, so the class join is needed only for the
+set's name.
+
+Three decisions the numbers rest on:
+
+- **The set-less variant is an override**, `set_bonus=..._2pc=0` passed explicitly.
+  A spec whose shipped profile already wears the set would otherwise have it in the
+  baseline and every gain would come out near zero.
+- **The four-piece is reported over the two-piece.** Nobody chooses between four
+  pieces and none; they choose whether the third and fourth are worth their slots.
+- **Power Infusion is a usage pattern, not a count.**
+  `external_buffs.power_infusion` takes a list of *times*. One cast at the pull
+  would flatter a spec whose own cooldowns line up there, so the default is on
+  cooldown from the pull -- (0, 120, 240) for a 300s fight -- and the seconds are
+  published beside the number.
+
+Set and Power Infusion run as **two invocations**. Combined, Power Infusion would
+be measured on whichever set state the shipped profile carries, answering neither
+question.
+
+### What the first sweep found
+
+MID2, one target, 3000 deterministic iterations, all 26 builds, no errors.
+
+**Power Infusion spans 1.80% to 5.17%** -- Subtlety Rogue at the bottom, Elemental
+Shaman at the top, a factor of 2.9. That range is the answer to "who should the
+Priest press it on", and it is wide enough for the question to have one.
+
+**Tier sets span 5.96% to 23.19%** in total, and the split is the interesting half:
+
+```
+Arcane Mage (Sunfury)            2pc 14.76%   4pc  8.43%    front-loaded
+Elemental Shaman (Stormbringer)  2pc  5.24%   4pc 15.27%    back-loaded
+Subtlety Rogue (Deathstalker)    2pc  4.72%   4pc 15.51%    back-loaded
+Beast Mastery Hunter             2pc  1.65%   4pc  4.31%    small either way
+```
+
+Two builds land within 0.11 points of the same total by opposite routes. A single
+"the set is worth X%" would hide that completely, which is what the two-column
+split is for: back-loaded means the third and fourth pieces are the ones worth
+chasing, front-loaded means two is most of it.
+
+Absolute and relative are both published. A percentage alone hides that 1% on a
+600k build is worth more raid damage than 2% on a 300k one, which is the decision
+a raid leader is actually making.
+
 ## Loot sources, derived rather than asserted
 
 `blizzard.py` (the client), `lootsources.py` (derivation, merge, `wowdps
