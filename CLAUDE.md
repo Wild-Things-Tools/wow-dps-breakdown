@@ -1523,6 +1523,19 @@ Four things in it that are deliberate:
   that follows: **do not move a tier's encounters while its raid has no zone.** Once
   Season 2's zone appears, `VS / DR / MQD` freezes, `locate` flags MID2's filed ids
   by itself, and the move carries its own evidence.
+- **`worldData.zones` is not an enumeration of every zone.** Measured on
+  2026-08-17: it returns 42 zones topping out at id 50, and zone **54** -- Season
+  2's PTR zone, which `warcraftlogs.com/zone/reports?zone=54` serves -- is not in
+  it. `zones` takes an `expansion_id` argument, which is the likelier cause than
+  PTR-specific hiding, but either way "not in the list" must mean *ask directly*
+  and never *does not exist*. `worldData.zone(id:)` reaches any zone and carries
+  the same `encounters`, so `--seed <id>` falls back to it. Two wrong conclusions
+  came out of treating the list as complete, one after the other -- first the
+  ordering, then the membership -- so the rule is worth stating plainly: this list
+  answers "what is currently ranked", not "what exists".
+- **The report search needs no zone list at all.** `reportData.reports(zoneID:)`
+  takes an id directly, so `--order public` can read a PTR zone that `zones` never
+  returns. That is the route to a season's logs before the season has a listed zone.
 - **The zone list arrives newest-first, and this code had it backwards.** The
   original note called the array order "load-bearing" and read the last entry as
   the newest zone. Measured on 2026-08-16 by asking for the last four: Highmaul,

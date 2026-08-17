@@ -534,8 +534,23 @@ def cmd_fight_zones(args: argparse.Namespace) -> int:
     if args.seed:
         zone = next((entry for entry in zones if entry.zone_id == args.seed), None)
         if zone is None:
-            logging.error("no zone %d in the list above", args.seed)
+            # The list is not an enumeration. Zone 54 -- Season 2's PTR zone -- is
+            # real and is not in it, so "not in the list" must mean "ask directly"
+            # rather than "does not exist"; concluding the latter is exactly the
+            # mistake this branch was making.
+            logging.info("zone %d is not in the list; asking for it directly", args.seed)
+            with WarcraftLogsClient(credentials) as client:
+                fetched = client.zone(args.seed)
+            zone = next(iter(fightzones.parse_zones([fetched] if fetched else [])), None)
+        if zone is None:
+            logging.error("Warcraft Logs has no zone %d", args.seed)
             return 1
+        print(
+            f"\nzone {zone.zone_id}: {zone.name} -- "
+            f"{'frozen' if zone.frozen else 'live'}, {len(zone.encounters)} encounter(s)"
+        )
+        for encounter in zone.encounters:
+            print(f"    {encounter.encounter_id:>6}  {encounter.name}")
         result = fightzones.seed_tier(raw, args.tier, zone, difficulty=args.difficulty)
         print(f"\nseeded {args.tier} from {zone.name}:")
         for encounter in result.added:

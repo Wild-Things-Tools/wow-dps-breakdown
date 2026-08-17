@@ -66,6 +66,28 @@ query SpecRankings(
 }
 """
 
+# One zone by id, which the zone *list* cannot always reach. Measured on
+# 2026-08-17: `worldData.zones` returns 42 zones topping out at id 50, and zone 54
+# -- the Season 2 PTR zone, which warcraftlogs.com/zone/reports?zone=54 serves --
+# is not among them. So the list is not an enumeration of every zone, and anything
+# that treats it as one silently concludes a zone does not exist. `zones` also
+# takes an `expansion_id`, which is the likelier explanation than PTR-specific
+# hiding, but either way the direct lookup is the answer rather than a guess about
+# the filter.
+ZONE_BY_ID_QUERY = """
+query ZoneById($zoneId: Int!) {
+  rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
+  worldData {
+    zone(id: $zoneId) {
+      id
+      name
+      frozen
+      encounters { id name }
+    }
+  }
+}
+"""
+
 ZONE_QUERY = """
 query Zones {
   worldData {
@@ -571,6 +593,11 @@ class WarcraftLogsClient:
             float(start) if isinstance(start, (int, float)) else 0.0,
             fights if isinstance(fights, list) else [],
         )
+
+    def zone(self, zone_id: int) -> dict | None:
+        """One zone by id, including zones the list does not return."""
+        data = self.query(ZONE_BY_ID_QUERY, {"zoneId": zone_id}, label=f"zone:{zone_id}")
+        return (data.get("worldData") or {}).get("zone")
 
     def zones(self) -> list[dict]:
         data = self.query(ZONE_QUERY, label="zones")
