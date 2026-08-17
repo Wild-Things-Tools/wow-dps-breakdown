@@ -677,6 +677,55 @@ def cmd_spec_index(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_buffs(args: argparse.Namespace) -> int:
+    """Sweep tier set bonuses and Power Infusion, per spec.
+
+    The two questions a spreadsheet usually answers and nobody can check: what a
+    class's tier set is worth, split into its two- and four-piece halves, and what
+    an outside Power Infusion is worth on each spec. Both are profileset sweeps
+    against the spec's own profile, so both come out as differences with the run's
+    own precision attached.
+    """
+    from . import buffsweep
+
+    profiles_dir = Path(args.profiles)
+    tier = _resolve_tier(profiles_dir, args.tier)
+    simc = simc_runner.find_simc(args.simc)
+    settings = SimSettings(
+        target_error=args.target_error, max_iterations=args.max_iterations, threads=args.threads
+    )
+
+    sets = buffsweep.sets_for_tier(buffsweep.parse_tier_sets(Path(args.simc_source)), tier)
+    if not sets:
+        logging.warning("simc ships no set bonuses labelled %s; only Power Infusion will run", tier)
+
+    found = profiles.discover(profiles_dir, tier, dps_only=True)
+    selected = _select(found, args.wow_class, args.spec, args.limit, _parse_shard(args.shard))
+    results: list[buffsweep.BuffResult] = []
+    for index, profile in enumerate(selected, start=1):
+        tier_set = buffsweep.class_id_of(profile, sets)
+        logging.info(
+            "[%d/%d] %s (%s)",
+            index,
+            len(selected),
+            profile.display_name,
+            tier_set.name if tier_set else "no tier set",
+        )
+        result = buffsweep.sweep_spec(
+            simc, profile, tier_set, settings, targets=args.targets, timeout=args.timeout
+        )
+        for message in result.errors or ():
+            logging.warning("  %s", message)
+        results.append(result)
+        # Written per spec, like the gear sweep: an interrupted run leaves a smaller
+        # dataset rather than none.
+        buffsweep.write_buffs(Path(args.out) / tier, tier, results, settings)
+
+    path = Path(args.out) / tier / "buffs.json"
+    print(f"wrote {path}: {len(results)} spec(s)")
+    return 0
+
+
 def cmd_fights(args: argparse.Namespace) -> int:
     """Publish ``<tier>/fights.json``: what each boss is asserted and measured to be.
 
@@ -1196,6 +1245,28 @@ def build_parser() -> argparse.ArgumentParser:
         "reports success while doing it",
     )
     p_fights.set_defaults(func=cmd_fights)
+
+    p_buffs = sub.add_parser(
+        "buffs",
+        help="what the tier set and an outside Power Infusion are worth, per spec",
+    )
+    p_buffs.add_argument("--tier", default="latest")
+    p_buffs.add_argument("--simc", help="path to the simc binary")
+    p_buffs.add_argument("--profiles", default="simc/profiles")
+    p_buffs.add_argument(
+        "--simc-source", default="simc", help="a simc checkout, for engine/dbc/generated"
+    )
+    p_buffs.add_argument("--out", default=str(DEFAULT_OUT))
+    p_buffs.add_argument("--targets", type=int, default=1)
+    p_buffs.add_argument("--target-error", type=float, default=0.0)
+    p_buffs.add_argument("--max-iterations", type=int, default=3000)
+    p_buffs.add_argument("--threads", type=int, default=0)
+    p_buffs.add_argument("--timeout", type=int, default=1800)
+    p_buffs.add_argument("--class", dest="wow_class", action="append")
+    p_buffs.add_argument("--spec", action="append")
+    p_buffs.add_argument("--limit", type=int)
+    p_buffs.add_argument("--shard")
+    p_buffs.set_defaults(func=cmd_buffs)
 
     p_spec_index = sub.add_parser(
         "spec-index",
