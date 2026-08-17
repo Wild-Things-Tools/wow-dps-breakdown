@@ -21,6 +21,7 @@ import {
   type BuildLike,
 } from '../components/BuildIdentity'
 import { ClassSpecPicker } from '../components/ClassSpecPicker'
+import { GameLink } from '../components/GameLink'
 import { TalentList, TalentTree } from '../components/TalentTree'
 import { EmptyState, Note, Panel, PanelHeader, Select, StatTile, cx } from '../components/ui'
 import { describeBurst, describeFunnelGain, fullNumber, percent } from '../lib/format'
@@ -342,7 +343,22 @@ function AbilityBreakdown({
           <li key={`${ability.id ?? ability.name}`} className="grid grid-cols-[1fr_auto] gap-3">
             <div className="min-w-0">
               <div className="flex items-baseline justify-between gap-3">
-                <span className="truncate text-[13px] text-ink">{ability.name}</span>
+                {/* A spell link, so Wowhead's script paints the icon and the hover
+                    card. This is the payoff of GameLink already taking `kind`:
+                    simc gives every ability row its spell id, and there is no icon
+                    name anywhere in simc's data to put in the dataset instead. An
+                    ability with no id -- simc merges some rows by name -- stays
+                    plain text rather than becoming a link to nothing. */}
+                {ability.id ? (
+                  <GameLink
+                    kind="spell"
+                    id={ability.id}
+                    name={ability.name}
+                    className="truncate text-[13px]"
+                  />
+                ) : (
+                  <span className="truncate text-[13px] text-ink">{ability.name}</span>
+                )}
                 <span className="tnum shrink-0 text-[12.5px] text-ink-secondary">
                   {percent(ability.share)}
                 </span>

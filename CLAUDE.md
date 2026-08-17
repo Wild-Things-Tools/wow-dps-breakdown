@@ -1404,6 +1404,12 @@ time to establish, all read out of the shipped script or measured in a browser o
 - It enriches `document.links` and bails on anything whose `nodeName` is not `A` or
   `AREA`. An SVG `<a>` is in neither, so **Recharts axis labels can never carry a
   Wowhead tooltip**. Any chart naming items needs a table beside it that does.
+- **Ability and aura names are spell links, so they carry icons.** The ability
+  breakdown and the Fights view's aura table both already had simc's spell id per
+  row, and `GameLink` already took `kind`, so this was one substitution each --
+  which is what the note below predicted. A row with no id stays plain text rather
+  than linking to nothing: simc merges some stat entries by name and those have no
+  single spell behind them.
 - **simc has no icon data.** `dbc_item_data_t` (`engine/dbc/item_data.hpp`) has no
   icon field, and neither does anything in `generated/`. For *items* the icon name
   exists only in Wowhead's tooltip JSON, so putting one in the dataset would import an

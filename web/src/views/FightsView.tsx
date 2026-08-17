@@ -44,6 +44,7 @@ import {
   YAxis,
 } from 'recharts'
 import { AXIS_LINE, AXIS_TICK, CURSOR_LINE, GRID, TooltipCard } from '../components/chart'
+import { GameLink } from '../components/GameLink'
 import { EntityIcon } from '../components/BuildIdentity'
 import {
   Dot,
@@ -1694,7 +1695,18 @@ function MeasurementPanel({ measured }: { measured: MeasuredFight }) {
           title="Auras on enemies"
           columns={['Ability', 'Starts', 'Lasts', 'Carried by', 'Seen in']}
           rows={measured.auras.map((aura) => [
-            `${aura.ability} (${aura.abilityId})`,
+            // A spell link: Wowhead's script paints the icon and the hover card, so
+            // "Avenging Wrath" stops being a bare string somebody has to look up to
+            // find out whether it is the boss's ability or a Paladin's. The id is
+            // printed beside it because that is what the profile facts join on.
+            aura.abilityId ? (
+              <>
+                <GameLink kind="spell" id={aura.abilityId} name={aura.ability} />{' '}
+                <Muted>({aura.abilityId})</Muted>
+              </>
+            ) : (
+              aura.ability
+            ),
             spreadText(aura.start, 1, 's'),
             <>
               {spreadText(aura.duration, 1, 's')}
