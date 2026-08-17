@@ -71,11 +71,23 @@ class Zone:
 def parse_zones(payload: list[dict]) -> list[Zone]:
     """Normalise ``worldData.zones``, preserving the order the service returned.
 
-    That order is load-bearing: Warcraft Logs lists zones oldest first, and it is
-    the only thing in the payload that says which of two unfrozen zones is the
-    newer. A zone with no encounters is kept rather than dropped -- an announced
-    raid whose encounters are not populated yet is a real state on the days either
-    side of a season turn, and it is the state a reader most needs to see.
+    Order is preserved but **nothing downstream depends on it**, which is a
+    correction. This docstring used to say Warcraft Logs lists zones oldest first
+    and that the order was the only thing distinguishing two unfrozen zones. Both
+    halves were wrong. Measured on 2026-08-16: asking for the last four zones
+    returned Highmaul, Siege of Orgrimmar, Throne of Thunder and Challenge Modes --
+    Warlords- and Pandaria-era content, ids 6, 5, 4, 3. The list is **newest
+    first**, so taking the last entry as "current" picked the oldest zone in the
+    game.
+
+    What actually orders zones is the zone id: Warcraft Logs allocates them in
+    ascending order as content ships, so the highest id is the newest zone. That is
+    a property of the data rather than of the array, so it cannot be inverted by a
+    change to the response.
+
+    A zone with no encounters is kept rather than dropped -- an announced raid whose
+    encounters are not populated yet is a real state on the days either side of a
+    season turn, and the state a reader most needs to see.
     """
     zones: list[Zone] = []
     for raw in payload or []:
@@ -164,13 +176,19 @@ def suggest_current_zone(zones: list[Zone]) -> Suggestion:
     live = [zone for zone in zones if not zone.frozen]
     if not live:
         return Suggestion(None, "every zone Warcraft Logs lists is frozen")
-    newest = live[-1]
+    # By id, not by position. The array is newest-first, which this code originally
+    # assumed to be oldest-first and so nominated the oldest zone in the game.
+    # Warcraft Logs allocates zone ids in ascending order as content ships, so the
+    # highest id is the newest zone whichever way the list happens to arrive.
+    ranked = sorted(live, key=lambda zone: zone.zone_id, reverse=True)
+    newest = ranked[0]
     if len(live) == 1:
         return Suggestion(newest, f"the only zone not frozen is {newest.name}")
-    others = ", ".join(zone.name for zone in live[:-1])
+    others = ", ".join(f"{zone.name} (id {zone.zone_id})" for zone in ranked[1:])
     return Suggestion(
         newest,
-        f"the newest of {len(live)} unfrozen zones is {newest.name}; the others are {others}",
+        f"the highest-numbered of {len(live)} unfrozen zones is {newest.name} "
+        f"(id {newest.zone_id}); the others are {others}",
     )
 
 

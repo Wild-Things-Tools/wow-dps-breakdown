@@ -495,7 +495,10 @@ def cmd_fight_zones(args: argparse.Namespace) -> int:
 
     live = [zone for zone in zones if not zone.frozen]
     print(f"{len(zones)} zone(s), {len(live)} still being ranked\n")
-    for zone in zones[-args.show :]:
+    # Highest id first: the list arrives newest-first, but sorting by id says so
+    # explicitly rather than relying on it -- and `--show N` should mean "the N
+    # newest", which taking a slice of the tail did not.
+    for zone in sorted(zones, key=lambda entry: entry.zone_id, reverse=True)[: args.show]:
         state = "frozen" if zone.frozen else "live"
         print(f"  [{zone.zone_id}] {zone.name} -- {state}, {len(zone.encounters)} encounter(s)")
         if args.verbose_zones:

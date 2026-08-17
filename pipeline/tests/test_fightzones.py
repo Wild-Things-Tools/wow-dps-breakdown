@@ -89,12 +89,27 @@ def test_locate_spans_two_zones_rather_than_picking_one() -> None:
     assert [hits for _, hits in placement.zones] == [2, 1]
 
 
-def test_suggestion_is_the_newest_live_zone_and_states_its_reasoning() -> None:
-    zones = fightzones.parse_zones(zone_payload())
-    suggestion = fightzones.suggest_current_zone(zones)
-    assert suggestion.zone is not None
-    assert suggestion.zone.name == "The Venomous Abyss"
-    assert "not frozen" in suggestion.reason
+def test_the_newest_zone_is_the_highest_id_not_the_last_in_the_list() -> None:
+    """The list arrives newest-first, which this code originally had backwards.
+
+    Measured on 2026-08-16: asking for the last four zones returned Highmaul, Siege
+    of Orgrimmar, Throne of Thunder and Challenge Modes -- ids 6, 5, 4, 3, all
+    Warlords- and Pandaria-era. Taking the last entry as "current" nominated the
+    oldest zone in the game. Zone ids ascend as content ships, so the id is the
+    ordering and the array position is not.
+    """
+    # A second unfrozen zone with a *lower* id, which the old rule would have
+    # picked whenever it happened to sit last in the array.
+    payload = zone_payload() + [
+        {"id": 40, "name": "Mythic+ Season 1", "frozen": False, "encounters": []}
+    ]
+    zones = fightzones.parse_zones(payload)
+    # Reversed on the way in: the answer must not depend on which order it arrives.
+    for ordering in (zones, list(reversed(zones))):
+        suggestion = fightzones.suggest_current_zone(ordering)
+        assert suggestion.zone is not None
+        assert suggestion.zone.name == "The Venomous Abyss"
+        assert "id 42" in suggestion.reason
 
 
 def test_no_live_zone_suggests_nothing_rather_than_the_newest_frozen_one() -> None:

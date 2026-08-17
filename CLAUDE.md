@@ -1523,6 +1523,16 @@ Four things in it that are deliberate:
   that follows: **do not move a tier's encounters while its raid has no zone.** Once
   Season 2's zone appears, `VS / DR / MQD` freezes, `locate` flags MID2's filed ids
   by itself, and the move carries its own evidence.
+- **The zone list arrives newest-first, and this code had it backwards.** The
+  original note called the array order "load-bearing" and read the last entry as
+  the newest zone. Measured on 2026-08-16 by asking for the last four: Highmaul,
+  Siege of Orgrimmar, Throne of Thunder, Challenge Modes -- ids 6, 5, 4, 3, all
+  Warlords- and Pandaria-era. So "current season" was nominating the oldest zone in
+  the game. The fix does not flip the assumption, it removes it: Warcraft Logs
+  allocates **zone ids in ascending order as content ships**, so the newest zone is
+  the highest id whichever way the list arrives, and the test drives it both ways.
+  Same lesson as `ReportFight.startTime` and the report search -- an ordering that
+  is only ever inferred from position is an ordering waiting to invert.
 - **The zone → tier join does not exist and is not invented.** `MID2` is a directory
   in simc's profiles and means nothing to Warcraft Logs. `suggest_current_zone` offers
   the newest unfrozen zone *with its reasoning printed* and refuses to apply it;
