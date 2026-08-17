@@ -81,7 +81,11 @@ _IMPLAUSIBLE_BEFORE_MS = 946_684_800_000
 
 
 def kills_from_report(
-    code: str, fights: object, encounter_id: int, report_start_ms: float = 0.0
+    code: str,
+    fights: object,
+    encounter_id: int,
+    report_start_ms: float = 0.0,
+    difficulty: int | None = None,
 ) -> list[KillRow]:
     """Kills of one encounter out of a report's ``fights`` list, in epoch time.
 
@@ -93,6 +97,15 @@ def kills_from_report(
     The first live run reported 89 of 89 and 102 of 102 kills as earlier than the
     ranked sample. **100% is the tell** -- a real answer to "did the rankings hide
     anything" is never unanimous.
+
+    ``difficulty`` must match what the probe will ask for afterwards. The search is
+    unfiltered by difficulty on purpose -- one query per report serves every boss --
+    so the filter belongs here, and leaving it out is not harmless: the first run
+    against Season 2's PTR zone found 54 kills of one boss and sampled none of them,
+    because every one was at a difficulty other than the Mythic the probe then
+    requested, and `fight_structure` answered "fight 7 not in the report's fights"
+    fifty-four times. None means "any", which is right for a zone nobody has pushed
+    to Mythic yet.
 
     ``killType: Kills`` is passed to the query, but ``kill`` is re-checked here: a
     filter that silently stopped filtering would otherwise put wipes into a sample
@@ -106,6 +119,8 @@ def kills_from_report(
         if not isinstance(fight, dict):
             continue
         if fight.get("encounterID") != encounter_id or not fight.get("kill"):
+            continue
+        if difficulty is not None and fight.get("difficulty") != difficulty:
             continue
         start = fight.get("startTime")
         end = fight.get("endTime")

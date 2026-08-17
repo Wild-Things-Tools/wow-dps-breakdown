@@ -2400,6 +2400,15 @@ envelope is the one part of the route the server would **not** introspect:
   unverified. `reports_from_payload` reads a `data` list or a bare list and returns
   nothing for anything else -- zero reports is visible in the output, an exception
   in the middle of a nine-boss pass is not.
+- **The difficulty filter belongs in the extraction, not the query.** One
+  `report_kills` query per report serves every boss precisely because it carries no
+  encounter and no difficulty -- that is what makes the search affordable. So the
+  filter has to happen when the rows are read, and omitting it is not harmless: the
+  first run against Season 2's PTR zone found 54 kills of one boss and sampled
+  **none**, because every one was at a difficulty other than the Mythic the probe
+  then asked `fight_structure` for, which answered "fight 7 not in the report's
+  fights" fifty-four times. Nobody pushes a PTR raid to Mythic, so `--difficulty`
+  is the setting to relax there.
 - **`kill` is re-checked** even though `killType: Kills` is passed. A filter that
   silently stopped filtering would put a wipe into a sample of first kills, and a
   first-night wipe is precisely the row that would win the sort.

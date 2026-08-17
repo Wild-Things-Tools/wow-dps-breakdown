@@ -142,6 +142,7 @@ query ReportKills($code: String!) {
       fights(killType: Kills) {
         id
         encounterID
+        difficulty
         kill
         startTime
         endTime

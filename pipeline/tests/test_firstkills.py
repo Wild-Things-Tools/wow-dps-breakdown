@@ -158,3 +158,25 @@ def test_an_unanchored_search_does_not_claim_anything_about_earlier_kills():
     """`beat_anchor` is meaningless with no anchor, and the summary says so."""
     outcome = firstkills.SearchOutcome(reports_seen=40, pages_read=2, kills_found=30)
     assert "whole zone was searched" in outcome.summary(0.0)
+
+
+def test_kills_are_filtered_to_the_difficulty_the_probe_will_ask_for():
+    """The search is unfiltered by difficulty; the filter has to happen here.
+
+    One query per report serves every boss, which is what makes the search
+    affordable -- so the query cannot carry a difficulty. Leaving the filter out
+    entirely is not harmless: the first run against Season 2's PTR zone found 54
+    kills of one boss and sampled none, because every one was at a difficulty other
+    than the Mythic the probe then requested.
+    """
+    fights = [
+        {"id": 1, "encounterID": 42, "difficulty": 4, "kill": True, "startTime": 0, "endTime": 1},
+        {"id": 2, "encounterID": 42, "difficulty": 5, "kill": True, "startTime": 5, "endTime": 6},
+    ]
+
+    mythic = firstkills.kills_from_report("abc", fights, 42, EPOCH_BASE, difficulty=5)
+    assert [row.fight_id for row in mythic] == [2]
+
+    # None means any, which is right for a zone nobody has pushed to Mythic yet.
+    either = firstkills.kills_from_report("abc", fights, 42, EPOCH_BASE, difficulty=None)
+    assert [row.fight_id for row in either] == [1, 2]
