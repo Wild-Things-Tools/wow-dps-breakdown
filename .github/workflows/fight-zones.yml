@@ -44,6 +44,9 @@ on:
       move_to:
         description: 'Where move_from''s encounters land'
         default: ''
+      scan:
+        description: 'Walk a range of zone ids through the by-id lookup, e.g. "40 70". There is no endpoint that lists every zone — the PTR ones are missing from worldData.zones — so this is the enumeration'
+        default: ''
       seed_zone:
         description: 'Warcraft Logs zone id whose encounters are added to tier (empty to skip)'
         default: ''
@@ -96,12 +99,14 @@ jobs:
           MOVE_FROM: ${{ inputs.move_from }}
           MOVE_TO: ${{ inputs.move_to }}
           SEED_ZONE: ${{ inputs.seed_zone }}
+          SCAN: ${{ inputs.scan }}
           WRITE: ${{ inputs.write }}
         run: |
           args=()
           if [ "$VERBOSE" = "true" ]; then args+=(--verbose-zones); fi
           if [ -n "$MOVE_FROM" ] && [ -n "$MOVE_TO" ]; then args+=(--move "$MOVE_FROM" "$MOVE_TO"); fi
           if [ -n "$SEED_ZONE" ]; then args+=(--seed "$SEED_ZONE"); fi
+          if [ -n "$SCAN" ]; then args+=(--scan $SCAN); fi
           if [ "$WRITE" = "true" ]; then args+=(--write); fi
           wowdps -v fight-zones --tier "$TIER" --show "$SHOW" "${args[@]}" | tee zones.txt
 

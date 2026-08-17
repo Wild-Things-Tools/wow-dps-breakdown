@@ -531,6 +531,30 @@ def cmd_fight_zones(args: argparse.Namespace) -> int:
         moved = fightzones.move_tier(raw, source, destination)
         print(f"\nmoved {moved} encounter(s) from {source} to {destination}")
 
+    if args.scan:
+        # There is no endpoint that enumerates *every* zone: `worldData.zones`
+        # answers "what is currently ranked" and leaves out at least the PTR zones
+        # (54 is real and absent from it). `worldData.zone(id:)` reaches any of them
+        # one at a time, so walking a range of ids is the enumeration -- derived,
+        # not guessed, and cheap: one query per id, and the ids are small integers.
+        low, high = args.scan
+        print(f"\nscanning zone ids {low}-{high} directly, past what the list returns:")
+        with WarcraftLogsClient(credentials) as scan_client:
+            for zone_id in range(low, high + 1):
+                if any(entry.zone_id == zone_id for entry in zones):
+                    continue
+                fetched = scan_client.zone(zone_id)
+                found = next(iter(fightzones.parse_zones([fetched] if fetched else [])), None)
+                if not found:
+                    continue
+                state = "frozen" if found.frozen else "live"
+                print(
+                    f"  [{found.zone_id}] {found.name} -- {state}, "
+                    f"UNLISTED, {len(found.encounters)} encounter(s)"
+                )
+                for encounter in found.encounters:
+                    print(f"        {encounter.encounter_id:>6}  {encounter.name}")
+
     if args.seed:
         zone = next((entry for entry in zones if entry.zone_id == args.seed), None)
         if zone is None:
@@ -1319,6 +1343,15 @@ def build_parser() -> argparse.ArgumentParser:
         nargs=2,
         metavar=("FROM", "TO"),
         help="re-file a tier's encounters, with their facts, under another tier name",
+    )
+    p_fight_zones.add_argument(
+        "--scan",
+        nargs=2,
+        type=int,
+        metavar=("FROM", "TO"),
+        help="walk this range of zone ids through the by-id lookup and print every "
+        "zone the list does not return. There is no endpoint that enumerates all "
+        "zones, and at least the PTR ones are missing from `worldData.zones`",
     )
     p_fight_zones.add_argument("--difficulty", type=int, default=5)
     p_fight_zones.add_argument("--write", action="store_true", help="apply --seed/--move to disk")
