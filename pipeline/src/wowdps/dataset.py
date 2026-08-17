@@ -428,6 +428,7 @@ def merge_shards(shard_dirs: list[Path], out_dir: Path) -> None:
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     merged_gear = merge_gear_shards(shard_dirs, out_dir)
+    merged_buffs = merge_buff_shards(shard_dirs, out_dir)
 
     out_specs = out_dir / "specs"
     manifests: list[dict] = []
@@ -444,7 +445,7 @@ def merge_shards(shard_dirs: list[Path], out_dir: Path) -> None:
             )
 
     if not manifests:
-        if merged_gear:
+        if merged_gear or merged_buffs:
             return
         raise FileNotFoundError(f"no shard manifests found in {shard_dirs}")
 
@@ -473,6 +474,37 @@ def merge_shards(shard_dirs: list[Path], out_dir: Path) -> None:
         json.dumps(merged, separators=(",", ":")) + "\n", encoding="utf-8"
     )
     log.info("merged %d shards -> %d specs", len(manifests), len(merged["specs"]))
+
+
+def merge_buff_shards(shard_dirs: list[Path], out_dir: Path) -> Path | None:
+    """Combine per-shard ``buffs.json`` files, if the run produced any.
+
+    A buff sweep shards by spec, so every shard writes the same header and a slice
+    of ``specs``; merging is the union of those slices, keyed by build id so a
+    re-run of one shard replaces rather than duplicates. Same shape as the gear
+    merge, and for the same reason: a shard that failed has to shrink the published
+    set rather than be papered over.
+    """
+    documents = []
+    for shard in shard_dirs:
+        path = shard / "buffs.json"
+        if path.is_file():
+            documents.append(json.loads(path.read_text(encoding="utf-8")))
+    if not documents:
+        return None
+
+    documents.sort(key=lambda doc: doc.get("generatedAt", ""))
+    merged = dict(documents[-1])
+    by_id: dict[str, dict] = {}
+    for document in documents:
+        for spec in document.get("specs", []):
+            by_id[spec["id"]] = spec
+    merged["specs"] = [by_id[key] for key in sorted(by_id)]
+
+    path = out_dir / "buffs.json"
+    path.write_text(json.dumps(merged, separators=(",", ":")) + "\n", encoding="utf-8")
+    log.info("merged %d buff shard(s) -> %d specs", len(documents), len(merged["specs"]))
+    return path
 
 
 def merge_gear_shards(shard_dirs: list[Path], out_dir: Path) -> Path | None:

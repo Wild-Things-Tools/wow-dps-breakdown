@@ -113,3 +113,54 @@ jobs:
         with:
           name: buffs-${{ matrix.shard }}
           path: shard
+
+  publish:
+    name: Merge and commit
+    needs: [build-simc, sweep]
+    # Publish whatever finished: a partial sweep is a smaller honest answer, and
+    # the dataset says how many builds it covers.
+    if: always() && needs.sweep.result != 'cancelled'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: buffs-*
+          path: shards
+
+      - name: Install pipeline
+        run: pip install -e ./pipeline
+
+      - name: Merge shards
+        run: |
+          shopt -s nullglob
+          dirs=(shards/buffs-*)
+          if [ ${#dirs[@]} -eq 0 ]; then
+            echo "::error::no shard produced any buff data"
+            exit 1
+          fi
+          wowdps merge "${dirs[@]}" --out web/public/data
+
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add web/public/data
+          if git diff --staged --quiet; then
+            echo "buff dataset unchanged"
+            exit 0
+          fi
+          git commit -m "data: refresh buff and tier set comparison $(date -u +%Y-%m-%d)"
+          pushed=false
+          for attempt in 1 2 3; do
+            git pull --rebase --autostash origin "${{ github.ref_name }}" || true
+            if git push origin "HEAD:${{ github.ref_name }}"; then pushed=true; break; fi
+            echo "push attempt $attempt lost the race; retrying"
+            sleep $((attempt * 5))
+          done
+          [ "$pushed" = true ]
