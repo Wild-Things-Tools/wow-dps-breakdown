@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from wowdps import fightdataset
 from wowdps.fightextract import EncounterObservation, observe_fight
 from wowdps.fightprofile import Fact, FightProfile, Provenance, TierProfiles, load_profiles
@@ -777,3 +779,39 @@ def test_a_document_with_no_measurement_block_still_settles(tmp_path):
     before = path.read_text(encoding="utf-8")
     write_fights(tmp_path, {**first, "generatedAt": "2026-08-15T13:05:02+00:00"})
     assert path.read_text(encoding="utf-8") == before
+
+
+def test_writing_without_a_probe_refuses_to_discard_published_measurements(tmp_path):
+    """`wowdps fights` with no probe over a probed directory is silent data loss.
+
+    The command is deliberately usable with no probe at all -- that is the honest
+    state of a checkout that has never reached Warcraft Logs. Pointed at a
+    directory that already holds a probe's results it is something else: 30 sampled
+    kills per boss replaced by nulls, and the run reports success. Done exactly
+    that once, by hand, one command after promoting the facts those measurements
+    produced.
+    """
+    from wowdps.fightdataset import MeasurementWouldBeLost, write_fights
+
+    measured = {"coverage": {"encounters": 9, "asserted": 1, "measured": 9}, "encounters": []}
+    write_fights(tmp_path, measured)
+
+    bare = {"coverage": {"encounters": 9, "asserted": 9, "measured": 0}, "encounters": []}
+    with pytest.raises(MeasurementWouldBeLost, match="would discard"):
+        write_fights(tmp_path, bare)
+
+    # The published file is untouched by the refusal.
+    still = json.loads((tmp_path / "fights.json").read_text(encoding="utf-8"))
+    assert still["coverage"]["measured"] == 9
+
+    # And somebody who means it can say so.
+    write_fights(tmp_path, bare, force=True)
+    assert json.loads((tmp_path / "fights.json").read_text())["coverage"]["measured"] == 0
+
+
+def test_a_first_publish_is_not_a_loss(tmp_path):
+    """Nothing published yet means nothing to lose -- the guard must not block that."""
+    from wowdps.fightdataset import write_fights
+
+    bare = {"coverage": {"encounters": 9, "asserted": 9, "measured": 0}, "encounters": []}
+    assert write_fights(tmp_path, bare).is_file()

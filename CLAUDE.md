@@ -1778,7 +1778,21 @@ that are easy to get wrong a second time:
   something different for each.
 - `write_fights` keeps `generatedAt` when the rest of the document is unchanged, for the
   same reason `_settle_provenance` does in the manifest.
-- **The scenario can be run now, and is not run by default.** `wowdps build
+- **The boss scenarios are in the nightly run as of 2026-08-16**, which they were
+  not before, and the reason they were not is worth keeping: the profiles carried
+  only the 300s fallback, so `boss_3180` and `patchwerk` at three targets returned
+  **486,157 DPS both** -- the same simc invocation with a different label. What
+  changed is not the scenario machinery but the data behind it: `fight-promote
+  --from-fights` wrote a measured fight length into all nine encounters (139s to
+  493s) and a target count into the two whose event fetch ran to the end. Nine
+  extra cells per build, about 15% on a run.
+- **`wowdps fights` with no `--probe`, run over a directory that already holds a
+  probe's results, is silent data loss** -- 30 sampled kills per boss replaced by
+  nulls, and the command reports success. Done exactly that by hand, one command
+  after promoting the facts those measurements produced. `write_fights` now
+  refuses when the published file has measurements and the new document has none;
+  `--force` is the way through.
+- **The scenario can be run alone** `wowdps build
   --scenario bosses` expands to every boss whose profile has a `hand` or `logs` fact;
   `--scenario boss_<encounterId>` picks one. The default scenario set is untouched, so
   the nightly run's cost and content do not move until somebody decides they should.

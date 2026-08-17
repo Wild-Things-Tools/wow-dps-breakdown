@@ -1206,12 +1206,26 @@ def _carry_stamps(document: dict, published: dict) -> dict:
     return settled
 
 
-def write_fights(out_dir: Path, document: dict) -> Path:
+class MeasurementWouldBeLost(RuntimeError):
+    """Refusal: this write would replace measured fights with nothing."""
+
+
+def write_fights(out_dir: Path, document: dict, force: bool = False) -> Path:
     """Write ``<out_dir>/fights.json``, keeping the timestamp when nothing changed.
 
     Same reasoning as the manifest: a wall-clock timestamp that rewrites itself on
     every run means every run commits, and "a diff means something moved" stops
     being true. ``generatedAt`` reads as when the fight data last changed.
+
+    **A write that would drop a measurement is refused.** ``wowdps fights`` is
+    deliberately usable with no probe at all -- that is the state of a checkout
+    that has never reached Warcraft Logs, and publishing the assertions alone is
+    right there. Pointed at a directory that *already* holds a probe's results it
+    is something else entirely: it silently replaces 30 sampled kills per boss with
+    nulls, and the run reports success. Done exactly that once, by hand, one
+    command after promoting the facts those measurements produced.
+
+    ``force`` is the way through for somebody who means it.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "fights.json"
@@ -1221,6 +1235,17 @@ def write_fights(out_dir: Path, document: dict) -> Path:
         published = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         published = None
+
+    if published is not None and not force:
+        had = int((published.get("coverage") or {}).get("measured") or 0)
+        has = int((document.get("coverage") or {}).get("measured") or 0)
+        if had and not has:
+            raise MeasurementWouldBeLost(
+                f"{path} carries measurements for {had} encounter(s) and this "
+                f"document has none, so writing it would discard them. Pass a "
+                f"--probe payload to rebuild the measured half, or --force if "
+                f"dropping it is what you mean."
+            )
 
     if published is not None and _without_stamps(published) == _without_stamps(document):
         settled = _carry_stamps(document, published)

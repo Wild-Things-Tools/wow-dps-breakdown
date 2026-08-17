@@ -699,7 +699,13 @@ def cmd_fights(args: argparse.Namespace) -> int:
         )
 
     document = fightdataset.build_document(args.tier, tier_profiles, probe)
-    path = fightdataset.write_fights(Path(args.out) / args.tier, document)
+    try:
+        path = fightdataset.write_fights(
+            Path(args.out) / args.tier, document, force=getattr(args, "force", False)
+        )
+    except fightdataset.MeasurementWouldBeLost as exc:
+        logging.error("%s", exc)
+        return 1
     coverage = document["coverage"]
     logging.info(
         "wrote %s (%d encounters, %d with asserted facts, %d measured from logs)",
@@ -1182,6 +1188,13 @@ def build_parser() -> argparse.ArgumentParser:
         "the assertions alone",
     )
     p_fights.add_argument("--profiles-file", help="alternative fight profile file")
+    p_fights.add_argument(
+        "--force",
+        action="store_true",
+        help="write even when it would discard measurements the published file "
+        "already carries. Without --probe that is what this command does, and it "
+        "reports success while doing it",
+    )
     p_fights.set_defaults(func=cmd_fights)
 
     p_spec_index = sub.add_parser(

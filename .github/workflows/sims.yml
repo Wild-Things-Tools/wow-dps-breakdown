@@ -49,6 +49,9 @@ on:
       tiers:
         description: "Space-separated tiers to simulate: names, 'latest', 'previous'"
         default: 'latest'
+      scenarios:
+        description: "Scenario flags passed straight to `wowdps build`, e.g. '--scenario patchwerk'. Empty uses the default set plus every boss with facts"
+        default: ''
 
 concurrency:
   group: sims
@@ -179,6 +182,16 @@ jobs:
           pip install -e ./pipeline
 
       - name: Run simulations
+        env:
+          # The default scenario set plus every boss the tier's fight profiles know
+          # something about. Those were wiring waiting on data until 2026-08-16: the
+          # profiles carried only the 300s fallback, so a boss scenario reproduced
+          # the static sweep with a boss's name on it -- measured at 486,157 DPS
+          # both ways. `fight-promote` has since written a measured fight length
+          # into all nine (139s to 493s) and a target count into two, so they are
+          # now different simulations. Nine extra cells per build, about 15% on a
+          # run, which is what the fight subsystem has been for.
+          SCENARIOS: ${{ inputs.scenarios || '--scenario patchwerk --scenario addwaves --scenario hecticaddcleave --scenario dungeonslice --scenario bosses' }}
         run: |
           wowdps build \
             --simc bundle/simc \
@@ -187,6 +200,7 @@ jobs:
             --shard "${{ matrix.shard }}/$SHARDS" \
             --target-error "$TARGET_ERROR" \
             --max-iterations "$ITERATIONS" \
+            $SCENARIOS \
             --out shard
 
       # Each shard directory already holds its own <tier>/ subdirectory, so the merge
