@@ -1163,6 +1163,60 @@ Two things that would otherwise bite:
   step therefore clones `--filter=blob:none --no-checkout --depth 400`, which is
   metadata only and takes seconds.
 
+## Why specs are missing: simc wrote the profiles and switched them off
+
+`unvalidated.py` + `wowdps unvalidated`.
+
+The obvious explanation for MID2 shipping 15 of 26 damage specs is stale action
+lists. **It is not that.** Action lists live in simc's class modules and exist for
+every spec; a profile is only a character -- gear, talents, race -- pointing at
+one. What `profiles/generators/MID2/<Class>.simc` contains for each missing spec is
+a *complete* profile, talent hash and every gear slot with gems and enchants and
+the `save=` line naming its file, **with every line commented out**. Measured on
+2026-08-17:
+
+```
+Warrior       0 active,  3 commented        18 disabled profiles across the tier,
+Monk          0 active,  3 commented        15 of them damage specs -- including
+Druid         0 active,  2 commented        Devourer, Midnight's new one
+Evoker        0 active,  2 commented
+Demon Hunter  1 active,  5 commented
+```
+
+simc's authors disable a generator entry while the profile or the rotation is not
+validated for the tier. So the data exists and carries a warning, which is a
+different state from absent, and anybody publishing an all-spec chart is supplying
+profiles rather than waiting for simc to switch these on.
+
+**A number from one of these is not the same claim as one from a shipped profile.**
+Shipped means simc's authors saying "this is the spec this season"; disabled means
+"this is the character we had written down when we stopped". Both are useful and
+presenting them as one number would not be, so anything drawn from them has to be
+labelled -- a fourth coverage state beside `simulated`, `broken` and `missing`.
+
+One parse detail that cost a wrong answer: generator blocks separate the header,
+the gear and the `save=` line with **blank lines**, and the first version treated a
+blank as the end of a block. It returned zero profiles from files containing
+eighteen -- and "zero" reads exactly like "simc has no disabled profiles", which is
+the wrong answer stated confidently.
+
+### What the profiles do and do not vary
+
+Worth knowing before anyone asks for per-target-count builds: a shipped profile
+carries **exactly one `talents=` line**. simc ships one build per (spec, hero
+tree) -- `MID2_Mage_Arcane` and `MID2_Mage_Arcane_Sunfury` are hero-tree variants,
+not one-target and ten-target variants.
+
+What *does* adapt is the rotation. The action lists branch on `active_enemies` and
+`spell_targets` throughout: Shadow Priest calls a whole `aoe` list at
+`active_enemies>2`, Arcane gates `prismatic_bolt` on `active_enemies>=variable.aoe_count`.
+So at ten targets the spec plays its AoE rotation on its single-target talents.
+
+That is the honest shape of every multi-target number in this project, and it is
+the same gap `talentsweep.py` runs into from the other side: the variants it can
+build are the hero builds, because those are the hashes simc hands us. A real
+AoE-talent build would need a hash nobody in this pipeline has.
+
 ## Spec coverage: a missing spec looks exactly like a bad one
 
 `profiles.spec_coverage` + `components/SpecCoverage.tsx`, on the Overview above the

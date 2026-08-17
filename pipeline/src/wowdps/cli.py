@@ -768,6 +768,40 @@ def cmd_buffs(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_unvalidated(args: argparse.Namespace) -> int:
+    """Write out the profiles simc has written and left commented out.
+
+    Not the same claim as a shipped profile, and the command says so on every run.
+    A shipped profile is simc's authors saying "this is the spec this season"; one
+    of these is the character they had written down when they stopped. The results
+    have to carry that difference wherever they are shown.
+    """
+    from . import unvalidated
+
+    simc_dir = Path(args.simc_source)
+    tier = _resolve_tier(simc_dir / "profiles", args.tier)
+    found = unvalidated.extract_tier(simc_dir, tier)
+    shipped = {path.name for path in (simc_dir / "profiles" / tier).glob("*.simc")}
+
+    print(f"{len(found)} disabled profile(s) in {tier}'s generators:")
+    for profile in found:
+        mark = "shipped" if profile.filename in shipped else "DISABLED"
+        print(f"  [{mark}] {profile.name} ({profile.spec_line})")
+
+    if not args.write:
+        print("\nnothing written -- pass --out and --write to materialise them")
+        return 0
+
+    written = unvalidated.write_profiles(found, Path(args.out), shipped)
+    print(f"\nwrote {len(written)} profile(s) into {args.out}")
+    print(
+        "These are UNVALIDATED: simc's authors disabled them for this tier, so any "
+        "number from them is weaker evidence than one from a shipped profile and "
+        "must be labelled that way."
+    )
+    return 0
+
+
 def cmd_fights(args: argparse.Namespace) -> int:
     """Publish ``<tier>/fights.json``: what each boss is asserted and measured to be.
 
@@ -1309,6 +1343,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_buffs.add_argument("--limit", type=int)
     p_buffs.add_argument("--shard")
     p_buffs.set_defaults(func=cmd_buffs)
+
+    p_unvalidated = sub.add_parser(
+        "unvalidated",
+        help="list or write out the profiles simc wrote and left commented out",
+    )
+    p_unvalidated.add_argument("--tier", default="latest")
+    p_unvalidated.add_argument("--simc-source", default="simc")
+    p_unvalidated.add_argument("--out", help="directory to write the profiles into")
+    p_unvalidated.add_argument("--write", action="store_true")
+    p_unvalidated.set_defaults(func=cmd_unvalidated)
 
     p_spec_index = sub.add_parser(
         "spec-index",
