@@ -260,7 +260,9 @@ jobs:
         run: |
           git clone --depth 1 --filter=blob:none --sparse \
             https://github.com/simulationcraft/simc.git simc-src
-          git -C simc-src sparse-checkout set engine/dbc/generated
+          # `spec-index` needs the profiles too: role is the one field simc's
+          # generated data does not carry, and it comes from a profile's role= line.
+          git -C simc-src sparse-checkout set engine/dbc/generated profiles
 
       - name: Decode talent trees
         run: |
@@ -270,6 +272,19 @@ jobs:
           print(' '.join(t['id'] for t in index['tiers']))
           "); do
             wowdps -v talent-trees --tier "$tier" --simc-source simc-src
+          done
+
+      # Every class and spec in the game, for the Spec detail picker. Runs after the
+      # talent decode on purpose: hero tree names exist nowhere in simc's data and
+      # are joined out of `talent-trees.json`, so the order matters.
+      - name: Index every class and spec
+        run: |
+          for tier in $(python3 -c "
+          import json, pathlib
+          index = json.loads(pathlib.Path('web/public/data/tiers.json').read_text())
+          print(' '.join(t['id'] for t in index['tiers']))
+          "); do
+            wowdps -v spec-index --tier "$tier" --simc-source simc-src
           done
 
       # simc's own history, for "when did the engine last change and what moved".

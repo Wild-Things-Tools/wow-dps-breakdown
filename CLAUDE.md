@@ -2013,6 +2013,54 @@ starting around 84s, 112s and 136s. Magnitude is never in the API, so the 20% st
 an assertion either way. Per this file's own rule the disagreement is a finding and
 the profile is untouched.
 
+### The validation case passed, and the carrier has a name
+
+The one thing this whole subsystem was built to check. The owner asserted, from
+playing it, that one of Lightblinded Vanguard's three targets takes roughly 20%
+extra damage for roughly the first 20 seconds. Measured over 30 kills on
+2026-08-16:
+
+```
+ability 1246385  "Avenging Wrath"
+start     0.508s  (0.403-2.004, n=30)
+duration 20.011s  (19.996-20.047, n=30)
+carried by Commander Venel Lightblood, 30 of 30 fights, 1 instance
+```
+
+Start and duration match the assertion; the carrier is named, which is the
+question that was put to the owner twice and could not be answered from a
+statement. Magnitude is still an assertion and always will be -- no field in the
+API says what an aura does.
+
+**Do not mistake this for the old bug.** CLAUDE.md records Avenging Wrath being
+nominated once before, as a *Paladin cooldown* that the player-aura filter had
+missed. This is a different thing with the same name: Lightblinded Vanguard is a
+Light-themed boss trio and its own NPC casts an ability called Avenging Wrath. The
+aura sits on an **enemy** actor, `sourced` 30/30, and the filter is working. The
+name collision is exactly the shape that would make somebody revert a correct
+fix, so check `carriedBy` before believing the name.
+
+### Promoting without the 160 MB artifact
+
+`fight-promote --from-fights web/public/data/<tier>/fights.json` rebuilds the
+proposals from the published document instead of the probe payload, which is a CI
+attachment nobody has to hand. `fights.json` carries `Promotion.to_json()`
+verbatim, so nothing is recomputed and a stale document promotes stale facts --
+the command prints the measurement's own timestamp for that reason.
+
+This is what made the manual step reachable, and the manual step stays manual: an
+automatic promotion would consume the single most valuable output of this
+subsystem -- a disagreement between an assertion and the log reader -- on the way
+past.
+
+**Run on 2026-08-16, 21 facts promoted across all nine encounters.** Every profile
+now carries a measured fight length and raid size; Crown of the Cosmos and
+Chimaerus also carry a target count, the two whose event fetch ran to the end. The
+consequence is the one that matters: **`restates_a_static_sweep()` is now False for
+all nine**, where before MID2's only asserted boss reproduced Patchwerk at three
+targets to the unit. Fight lengths run 139s to 493s against the 300s default, so a
+boss scenario is now a different simulation rather than a differently-labelled one.
+
 ### Which enemy carries an aura, and which enemy is the boss
 
 `nominate_priority_enemy` answers "is this the priority target or an add", in three

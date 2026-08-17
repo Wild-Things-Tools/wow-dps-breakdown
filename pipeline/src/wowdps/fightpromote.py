@@ -135,17 +135,72 @@ def render(
     return lines
 
 
+def promotions_from_fights(document: dict, encounter_id: int) -> list[fightprofile.Promotion]:
+    """Rebuild ``Promotion`` objects from a published ``fights.json``.
+
+    The probe artifact is ~160 MB and lives in a CI run's attachments, while
+    ``fights.json`` is committed and carries `Promotion.to_json()` verbatim for
+    every encounter. Reconstructing from it means a promotion can be applied from a
+    plain checkout, which is what makes the manual step actually reachable -- and
+    the manual step is the point: an automatic promotion would consume the single
+    most valuable output of this subsystem, a disagreement between an assertion and
+    the log reader, on the way past.
+
+    Nothing is recomputed here. If the published block is stale, so is the
+    promotion, which is why the caller prints the document's own ``generatedAt``.
+    """
+    found: list[fightprofile.Promotion] = []
+    for entry in document.get("encounters") or []:
+        if entry.get("encounterId") != encounter_id:
+            continue
+        for raw in entry.get("promotions") or []:
+            found.append(
+                fightprofile.Promotion(
+                    key=raw["key"],
+                    label=raw.get("label", raw["key"]),
+                    value=raw.get("value"),
+                    summary=raw.get("summary", ""),
+                    evidence=raw.get("evidence", ""),
+                    sample=int(raw.get("sample") or 0),
+                    reports=tuple(raw.get("reports") or ()),
+                    eligible=bool(raw.get("eligible")),
+                    reason=raw.get("reason", ""),
+                    blocked_by=raw.get("blockedBy"),
+                    current=raw.get("current"),
+                    disagrees=bool(raw.get("disagrees")),
+                )
+            )
+    return found
+
+
 def cmd_fight_promote(args: argparse.Namespace) -> int:
-    probe = fightdataset.load_probe(Path(args.probe))
-    if probe.get("tier") and probe["tier"] != args.tier:
-        log.warning(
-            "the probe payload is for tier %s, promoting it into %s", probe["tier"], args.tier
+    # Two sources for the same proposals. The probe payload recomputes them from
+    # the events; the published fights.json carries them as they were computed on
+    # the run that wrote it. The second needs no 160 MB artifact, which is what
+    # makes this command runnable from a checkout.
+    if not args.probe and not getattr(args, "from_fights", None):
+        log.error("pass --probe or --from-fights")
+        return 1
+
+    fights_doc: dict | None = None
+    probe: dict = {}
+    if getattr(args, "from_fights", None):
+        fights_doc = json.loads(Path(args.from_fights).read_text(encoding="utf-8"))
+        observed_at = (fights_doc.get("measurement") or {}).get("generatedAt") or fights_doc.get(
+            "generatedAt"
         )
+        log.info("promoting from %s, measured %s", args.from_fights, observed_at)
+    else:
+        probe = fightdataset.load_probe(Path(args.probe))
+        if probe.get("tier") and probe["tier"] != args.tier:
+            log.warning(
+                "the probe payload is for tier %s, promoting it into %s", probe["tier"], args.tier
+            )
+        observed_at = probe.get("generatedAt")
 
     path = _profiles_path(args)
     profiles = fightprofile.load_profiles(args.tier, path)
     document = json.loads(path.read_text(encoding="utf-8"))
-    observed_at = probe.get("generatedAt")
 
     wanted = set(args.encounter or ())
     transcript: list[str] = []
@@ -156,11 +211,16 @@ def cmd_fight_promote(args: argparse.Namespace) -> int:
     for encounter_id, profile in sorted(profiles.profiles.items()):
         if wanted and encounter_id not in wanted:
             continue
-        payload = _measured_for(probe, encounter_id)
-        if not payload or not payload.get("fights"):
-            continue
-        measured = fightdataset.MeasuredEncounter(payload)
-        promotions = fightprofile.plan_promotions(profile, measured, min_fights=args.min_fights)
+        if fights_doc is not None:
+            promotions = promotions_from_fights(fights_doc, encounter_id)
+            if not promotions:
+                continue
+        else:
+            payload = _measured_for(probe, encounter_id)
+            if not payload or not payload.get("fights"):
+                continue
+            measured = fightdataset.MeasuredEncounter(payload)
+            promotions = fightprofile.plan_promotions(profile, measured, min_fights=args.min_fights)
         transcript.extend(render(profile.name, encounter_id, promotions))
         transcript.append("")
         for promotion in promotions:
@@ -209,8 +269,13 @@ def cmd_fight_promote(args: argparse.Namespace) -> int:
 def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--probe",
-        required=True,
         help="a fight-probe-<tier>.json from a probe run, live or downloaded from CI",
+    )
+    parser.add_argument(
+        "--from-fights",
+        help="a published web/public/data/<tier>/fights.json instead. It carries the "
+        "same proposals the probe computed, so this needs no 160 MB artifact -- which "
+        "is what makes applying one reachable from a plain checkout",
     )
     parser.add_argument("--tier", default="MID2", help="tier whose profiles are promoted into")
     parser.add_argument(
