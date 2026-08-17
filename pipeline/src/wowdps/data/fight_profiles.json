@@ -1,788 +1,832 @@
 {
- "note": "Per-boss fight shapes. Every fact carries a provenance: 'hand' means a person asserted it (first-class -- the owner plays these fights and the API cannot tell you what an aura does), 'logs' means `wowdps fight-probe` measured it from the named reports, 'default' means nothing is known and the value is the project fallback. See pipeline/src/wowdps/fightprofile.py. An encounter listed here with no facts is a known gap, not an empty fight.",
- "tiers": {
-  "MID2": {
-   "difficulty": 5,
-   "difficultyNote": "5 = Mythic, the difficulty the site's logs comparison uses.",
-   "encounters": [
-    {
-     "encounterId": 3176,
-     "name": "Imperator Averzian",
-     "facts": {
-      "fightLengthSeconds": {
-       "value": 195,
-       "provenance": {
-        "source": "logs",
-        "detail": "kill time 195s (range 136s-250s, n=30), from the report's own start and end times -- metadata, so a bounded event fetch does not affect it",
-        "sample": 30,
-        "reports": [
-         "2BvP18cDAXNTgkGY",
-         "2HdmK3zjNxgqTaP1",
-         "6Fa9Nwn43DHVCWGY",
-         "83tq6LTzjx2yN47J",
-         "Bm1zQTh3HaYLXDZy",
-         "BtyTLDwmdPAVxR1X",
-         "D3WrZpNy7dVxA9qH",
-         "DaMV3rKyRpmkbt9N",
-         "JhbMd7vDqrk4ZVFn",
-         "KPkDm6HFf38xWCbL",
-         "Ljyfm8HAxBtGPYDv",
-         "LtzHX3C9YydFwN2T",
-         "RJA2aP1wxqnCNMHZ",
-         "TCB1z4ydVgt9pAWZ",
-         "VqJjTcvxkYnDaZPw",
-         "VzpA28KgyjNPW4aw",
-         "Z2fa4HLT9M1gkyRq",
-         "a:dVvgn4D1zXFQMh7W",
-         "cQBZVrLPgMvDnjp1",
-         "ftdDn1Bjxp8WCkTP",
-         "gwdTPVz61yt8CHN3",
-         "j2cxqpR3H7dhANCz",
-         "jDAcBvftK7gnZC2F",
-         "m8hZWCgNYwkz9M16",
-         "mwHWNpvqyCb2jPMz",
-         "nCzyGQxja1RwYm6H",
-         "pmhMtqZV2KFAPfXY",
-         "ptT2nq8N6R4KdVCJ",
-         "ptaNBGA1PnLwf9kj",
-         "xkv2f87zYRGWbPdV"
-        ],
-        "observedAt": "2026-08-16T15:42:20+00:00"
-       }
-      },
-      "raidSize": {
-       "value": 20,
-       "provenance": {
-        "source": "logs",
-        "detail": "the log's own group size: 20 in every one of the 30 sampled fights. Metadata on the fight, so unaffected by how much of the event stream was fetched",
-        "sample": 30,
-        "reports": [
-         "2BvP18cDAXNTgkGY",
-         "2HdmK3zjNxgqTaP1",
-         "6Fa9Nwn43DHVCWGY",
-         "83tq6LTzjx2yN47J",
-         "Bm1zQTh3HaYLXDZy",
-         "BtyTLDwmdPAVxR1X",
-         "D3WrZpNy7dVxA9qH",
-         "DaMV3rKyRpmkbt9N",
-         "JhbMd7vDqrk4ZVFn",
-         "KPkDm6HFf38xWCbL",
-         "Ljyfm8HAxBtGPYDv",
-         "LtzHX3C9YydFwN2T",
-         "RJA2aP1wxqnCNMHZ",
-         "TCB1z4ydVgt9pAWZ",
-         "VqJjTcvxkYnDaZPw",
-         "VzpA28KgyjNPW4aw",
-         "Z2fa4HLT9M1gkyRq",
-         "a:dVvgn4D1zXFQMh7W",
-         "cQBZVrLPgMvDnjp1",
-         "ftdDn1Bjxp8WCkTP",
-         "gwdTPVz61yt8CHN3",
-         "j2cxqpR3H7dhANCz",
-         "jDAcBvftK7gnZC2F",
-         "m8hZWCgNYwkz9M16",
-         "mwHWNpvqyCb2jPMz",
-         "nCzyGQxja1RwYm6H",
-         "pmhMtqZV2KFAPfXY",
-         "ptT2nq8N6R4KdVCJ",
-         "ptaNBGA1PnLwf9kj",
-         "xkv2f87zYRGWbPdV"
-        ],
-        "observedAt": "2026-08-16T15:42:20+00:00"
-       }
-      }
-     }
-    },
-    {
-     "encounterId": 3177,
-     "name": "Vorasius",
-     "facts": {
-      "fightLengthSeconds": {
-       "value": 201,
-       "provenance": {
-        "source": "logs",
-        "detail": "kill time 201s (range 158s-271s, n=30), from the report's own start and end times -- metadata, so a bounded event fetch does not affect it",
-        "sample": 30,
-        "reports": [
-         "2BvP18cDAXNTgkGY",
-         "2KzaTHQnGJqg93mZ",
-         "6Fa9Nwn43DHVCWGY",
-         "7aJhTNwDZt94bYmf",
-         "83tq6LTzjx2yN47J",
-         "Bm1zQTh3HaYLXDZy",
-         "BtyTLDwmdPAVxR1X",
-         "D3WrZpNy7dVxA9qH",
-         "DaMV3rKyRpmkbt9N",
-         "DtnZWVHcyKR3M61G",
-         "JhbMd7vDqrk4ZVFn",
-         "KPkDm6HFf38xWCbL",
-         "LtzHX3C9YydFwN2T",
-         "PQrGLCJ837X94Ywx",
-         "RJA2aP1wxqnCNMHZ",
-         "VqJjTcvxkYnDaZPw",
-         "VzpA28KgyjNPW4aw",
-         "Z2fa4HLT9M1gkyRq",
-         "a:dVvgn4D1zXFQMh7W",
-         "a:phdzXgwfqrxKcvW9",
-         "cQBZVrLPgMvDnjp1",
-         "ftdDn1Bjxp8WCkTP",
-         "gwdTPVz61yt8CHN3",
-         "j2cxqpR3H7dhANCz",
-         "jDAcBvftK7gnZC2F",
-         "m8hZWCgNYwkz9M16",
-         "mwHWNpvqyCb2jPMz",
-         "nCzyGQxja1RwYm6H",
-         "xkv2f87zYRGWbPdV",
-         "y6MLw4P1cRp2fKYZ"
-        ],
-        "observedAt": "2026-08-16T15:42:20+00:00"
-       }
-      },
-      "raidSize": {
-       "value": 20,
-       "provenance": {
-        "source": "logs",
-        "detail": "the log's own group size: 20 in every one of the 30 sampled fights. Metadata on the fight, so unaffected by how much of the event stream was fetched",
-        "sample": 30,
-        "reports": [
-         "2BvP18cDAXNTgkGY",
-         "2KzaTHQnGJqg93mZ",
-         "6Fa9Nwn43DHVCWGY",
-         "7aJhTNwDZt94bYmf",
-         "83tq6LTzjx2yN47J",
-         "Bm1zQTh3HaYLXDZy",
-         "BtyTLDwmdPAVxR1X",
-         "D3WrZpNy7dVxA9qH",
-         "DaMV3rKyRpmkbt9N",
-         "DtnZWVHcyKR3M61G",
-         "JhbMd7vDqrk4ZVFn",
-         "KPkDm6HFf38xWCbL",
-         "LtzHX3C9YydFwN2T",
-         "PQrGLCJ837X94Ywx",
-         "RJA2aP1wxqnCNMHZ",
-         "VqJjTcvxkYnDaZPw",
-         "VzpA28KgyjNPW4aw",
-         "Z2fa4HLT9M1gkyRq",
-         "a:dVvgn4D1zXFQMh7W",
-         "a:phdzXgwfqrxKcvW9",
-         "cQBZVrLPgMvDnjp1",
-         "ftdDn1Bjxp8WCkTP",
-         "gwdTPVz61yt8CHN3",
-         "j2cxqpR3H7dhANCz",
-         "jDAcBvftK7gnZC2F",
-         "m8hZWCgNYwkz9M16",
-         "mwHWNpvqyCb2jPMz",
-         "nCzyGQxja1RwYm6H",
-         "xkv2f87zYRGWbPdV",
-         "y6MLw4P1cRp2fKYZ"
-        ],
-        "observedAt": "2026-08-16T15:42:20+00:00"
-       }
-      }
-     }
-    },
-    {
-     "encounterId": 3178,
-     "name": "Vaelgor & Ezzorak",
-     "facts": {
-      "fightLengthSeconds": {
-       "value": 284,
-       "provenance": {
-        "source": "logs",
-        "detail": "kill time 284s (range 224s-420s, n=30), from the report's own start and end times -- metadata, so a bounded event fetch does not affect it",
-        "sample": 30,
-        "reports": [
-         "47czGAMkWHZBxRVr",
-         "6Fa9Nwn43DHVCWGY",
-         "83tq6LTzjx2yN47J",
-         "BWpD6vZHRKcxmPwy",
-         "Bm1zQTh3HaYLXDZy",
-         "F8L9T6RhA2tpqwgC",
-         "JhbMd7vDqrk4ZVFn",
-         "KPkDm6HFf38xWCbL",
-         "M7aLqAywZY2XRBNT",
-         "RJA2aP1wxqnCNMHZ",
-         "Rr76hHXdJWTAvajP",
-         "TCB1z4ydVgt9pAWZ",
-         "VXJAyhqtMpdmTKZG",
-         "VqJjTcvxkYnDaZPw",
-         "VzpA28KgyjNPW4aw",
-         "XDPTaNtdzkCA2vgQ",
-         "Z2fa4HLT9M1gkyRq",
-         "a:dVvgn4D1zXFQMh7W",
-         "aHkVdfwp7DG3XhYg",
-         "aLkqzHvGmBbFP9cC",
-         "cQBZVrLPgMvDnjp1",
-         "j2cxqpR3H7dhANCz",
-         "jDAcBvftK7gnZC2F",
-         "m8hZWCgNYwkz9M16",
-         "mwHWNpvqyCb2jPMz",
-         "nCzyGQxja1RwYm6H",
-         "pmhMtqZV2KFAPfXY",
-         "ptT2nq8N6R4KdVCJ",
-         "t3g829YH7Bw1jPAx",
-         "zyXprjLNG9KgH4VY"
-        ],
-        "observedAt": "2026-08-16T15:42:20+00:00"
-       }
-      },
-      "raidSize": {
-       "value": 20,
-       "provenance": {
-        "source": "logs",
-        "detail": "the log's own group size: 20 in every one of the 30 sampled fights. Metadata on the fight, so unaffected by how much of the event stream was fetched",
-        "sample": 30,
-        "reports": [
-         "47czGAMkWHZBxRVr",
-         "6Fa9Nwn43DHVCWGY",
-         "83tq6LTzjx2yN47J",
-         "BWpD6vZHRKcxmPwy",
-         "Bm1zQTh3HaYLXDZy",
-         "F8L9T6RhA2tpqwgC",
-         "JhbMd7vDqrk4ZVFn",
-         "KPkDm6HFf38xWCbL",
-         "M7aLqAywZY2XRBNT",
-         "RJA2aP1wxqnCNMHZ",
-         "Rr76hHXdJWTAvajP",
-         "TCB1z4ydVgt9pAWZ",
-         "VXJAyhqtMpdmTKZG",
-         "VqJjTcvxkYnDaZPw",
-         "VzpA28KgyjNPW4aw",
-         "XDPTaNtdzkCA2vgQ",
-         "Z2fa4HLT9M1gkyRq",
-         "a:dVvgn4D1zXFQMh7W",
-         "aHkVdfwp7DG3XhYg",
-         "aLkqzHvGmBbFP9cC",
-         "cQBZVrLPgMvDnjp1",
-         "j2cxqpR3H7dhANCz",
-         "jDAcBvftK7gnZC2F",
-         "m8hZWCgNYwkz9M16",
-         "mwHWNpvqyCb2jPMz",
-         "nCzyGQxja1RwYm6H",
-         "pmhMtqZV2KFAPfXY",
-         "ptT2nq8N6R4KdVCJ",
-         "t3g829YH7Bw1jPAx",
-         "zyXprjLNG9KgH4VY"
-        ],
-        "observedAt": "2026-08-16T15:42:20+00:00"
-       }
-      }
-     }
-    },
-    {
-     "encounterId": 3179,
-     "name": "Fallen-King Salhadaar",
-     "facts": {
-      "fightLengthSeconds": {
-       "value": 195,
-       "provenance": {
-        "source": "logs",
-        "detail": "kill time 195s (range 140s-313s, n=30), from the report's own start and end times -- metadata, so a bounded event fetch does not affect it",
-        "sample": 30,
-        "reports": [
-         "6Fa9Nwn43DHVCWGY",
-         "7aJhTNwDZt94bYmf",
-         "83tq6LTzjx2yN47J",
-         "BWpD6vZHRKcxmPwy",
-         "Bm1zQTh3HaYLXDZy",
-         "Bn7dMkLZJYKcwXbx",
-         "D3WrZpNy7dVxA9qH",
-         "DaMV3rKyRpmkbt9N",
-         "DtnZWVHcyKR3M61G",
-         "KPkDm6HFf38xWCbL",
-         "LtzHX3C9YydFwN2T",
-         "PQrGLCJ837X94Ywx",
-         "RJA2aP1wxqnCNMHZ",
-         "VqJjTcvxkYnDaZPw",
-         "VzpA28KgyjNPW4aw",
-         "XjmpNnfxzYHGMkRV",
-         "Z2fa4HLT9M1gkyRq",
-         "a:phdzXgwfqrxKcvW9",
-         "cQBZVrLPgMvDnjp1",
-         "fYc8gVAWFHTQ2pvm",
-         "ftdDn1Bjxp8WCkTP",
-         "gwdTPVz61yt8CHN3",
-         "j2cxqpR3H7dhANCz",
-         "jDAcBvftK7gnZC2F",
-         "m8hZWCgNYwkz9M16",
-         "mwHWNpvqyCb2jPMz",
-         "nCzyGQxja1RwYm6H",
-         "nt8jbCvqND2PZYJR",
-         "pmhMtqZV2KFAPfXY",
-         "y6MLw4P1cRp2fKYZ"
-        ],
-        "observedAt": "2026-08-16T15:42:20+00:00"
-       }
-      },
-      "raidSize": {
-       "value": 20,
-       "provenance": {
-        "source": "logs",
-        "detail": "the log's own group size: 20 in every one of the 30 sampled fights. Metadata on the fight, so unaffected by how much of the event stream was fetched",
-        "sample": 30,
-        "reports": [
-         "6Fa9Nwn43DHVCWGY",
-         "7aJhTNwDZt94bYmf",
-         "83tq6LTzjx2yN47J",
-         "BWpD6vZHRKcxmPwy",
-         "Bm1zQTh3HaYLXDZy",
-         "Bn7dMkLZJYKcwXbx",
-         "D3WrZpNy7dVxA9qH",
-         "DaMV3rKyRpmkbt9N",
-         "DtnZWVHcyKR3M61G",
-         "KPkDm6HFf38xWCbL",
-         "LtzHX3C9YydFwN2T",
-         "PQrGLCJ837X94Ywx",
-         "RJA2aP1wxqnCNMHZ",
-         "VqJjTcvxkYnDaZPw",
-         "VzpA28KgyjNPW4aw",
-         "XjmpNnfxzYHGMkRV",
-         "Z2fa4HLT9M1gkyRq",
-         "a:phdzXgwfqrxKcvW9",
-         "cQBZVrLPgMvDnjp1",
-         "fYc8gVAWFHTQ2pvm",
-         "ftdDn1Bjxp8WCkTP",
-         "gwdTPVz61yt8CHN3",
-         "j2cxqpR3H7dhANCz",
-         "jDAcBvftK7gnZC2F",
-         "m8hZWCgNYwkz9M16",
-         "mwHWNpvqyCb2jPMz",
-         "nCzyGQxja1RwYm6H",
-         "nt8jbCvqND2PZYJR",
-         "pmhMtqZV2KFAPfXY",
-         "y6MLw4P1cRp2fKYZ"
-        ],
-        "observedAt": "2026-08-16T15:42:20+00:00"
-       }
-      }
-     }
-    },
-    {
-     "encounterId": 3180,
-     "name": "Lightblinded Vanguard",
-     "facts": {
-      "targets": {
-       "value": {
-        "baseline": 3,
-        "constant": true
-       },
-       "provenance": {
-        "source": "hand",
-        "statedBy": "owner",
-        "detail": "Permanent three-target fight: all three are up for the whole pull, from playing it. This is the validation case for the extraction -- a probe that measures anything other than three constant targets here has a bug, and the difference must not be rationalised away."
-       }
-      },
-      "amplifications": {
-       "value": [
+  "note": "Per-boss fight shapes. Every fact carries a provenance: 'hand' means a person asserted it (first-class -- the owner plays these fights and the API cannot tell you what an aura does), 'logs' means `wowdps fight-probe` measured it from the named reports, 'default' means nothing is known and the value is the project fallback. See pipeline/src/wowdps/fightprofile.py. An encounter listed here with no facts is a known gap, not an empty fight.",
+  "tiers": {
+    "MID1": {
+      "difficulty": 5,
+      "encounters": [
         {
-         "ability": "opening damage-taken buff",
-         "abilityId": 1246385,
-         "multiplier": 1.2,
-         "first": 0.0,
-         "duration": 20.0,
-         "target": "unknown",
-         "magnitudeSource": "hand"
+          "encounterId": 3176,
+          "name": "Imperator Averzian",
+          "facts": {
+            "fightLengthSeconds": {
+              "value": 195,
+              "provenance": {
+                "source": "logs",
+                "detail": "kill time 195s (range 136s-250s, n=30), from the report's own start and end times -- metadata, so a bounded event fetch does not affect it",
+                "sample": 30,
+                "reports": [
+                  "2BvP18cDAXNTgkGY",
+                  "2HdmK3zjNxgqTaP1",
+                  "6Fa9Nwn43DHVCWGY",
+                  "83tq6LTzjx2yN47J",
+                  "Bm1zQTh3HaYLXDZy",
+                  "BtyTLDwmdPAVxR1X",
+                  "D3WrZpNy7dVxA9qH",
+                  "DaMV3rKyRpmkbt9N",
+                  "JhbMd7vDqrk4ZVFn",
+                  "KPkDm6HFf38xWCbL",
+                  "Ljyfm8HAxBtGPYDv",
+                  "LtzHX3C9YydFwN2T",
+                  "RJA2aP1wxqnCNMHZ",
+                  "TCB1z4ydVgt9pAWZ",
+                  "VqJjTcvxkYnDaZPw",
+                  "VzpA28KgyjNPW4aw",
+                  "Z2fa4HLT9M1gkyRq",
+                  "a:dVvgn4D1zXFQMh7W",
+                  "cQBZVrLPgMvDnjp1",
+                  "ftdDn1Bjxp8WCkTP",
+                  "gwdTPVz61yt8CHN3",
+                  "j2cxqpR3H7dhANCz",
+                  "jDAcBvftK7gnZC2F",
+                  "m8hZWCgNYwkz9M16",
+                  "mwHWNpvqyCb2jPMz",
+                  "nCzyGQxja1RwYm6H",
+                  "pmhMtqZV2KFAPfXY",
+                  "ptT2nq8N6R4KdVCJ",
+                  "ptaNBGA1PnLwf9kj",
+                  "xkv2f87zYRGWbPdV"
+                ],
+                "observedAt": "2026-08-16T15:42:20+00:00"
+              }
+            },
+            "raidSize": {
+              "value": 20,
+              "provenance": {
+                "source": "logs",
+                "detail": "the log's own group size: 20 in every one of the 30 sampled fights. Metadata on the fight, so unaffected by how much of the event stream was fetched",
+                "sample": 30,
+                "reports": [
+                  "2BvP18cDAXNTgkGY",
+                  "2HdmK3zjNxgqTaP1",
+                  "6Fa9Nwn43DHVCWGY",
+                  "83tq6LTzjx2yN47J",
+                  "Bm1zQTh3HaYLXDZy",
+                  "BtyTLDwmdPAVxR1X",
+                  "D3WrZpNy7dVxA9qH",
+                  "DaMV3rKyRpmkbt9N",
+                  "JhbMd7vDqrk4ZVFn",
+                  "KPkDm6HFf38xWCbL",
+                  "Ljyfm8HAxBtGPYDv",
+                  "LtzHX3C9YydFwN2T",
+                  "RJA2aP1wxqnCNMHZ",
+                  "TCB1z4ydVgt9pAWZ",
+                  "VqJjTcvxkYnDaZPw",
+                  "VzpA28KgyjNPW4aw",
+                  "Z2fa4HLT9M1gkyRq",
+                  "a:dVvgn4D1zXFQMh7W",
+                  "cQBZVrLPgMvDnjp1",
+                  "ftdDn1Bjxp8WCkTP",
+                  "gwdTPVz61yt8CHN3",
+                  "j2cxqpR3H7dhANCz",
+                  "jDAcBvftK7gnZC2F",
+                  "m8hZWCgNYwkz9M16",
+                  "mwHWNpvqyCb2jPMz",
+                  "nCzyGQxja1RwYm6H",
+                  "pmhMtqZV2KFAPfXY",
+                  "ptT2nq8N6R4KdVCJ",
+                  "ptaNBGA1PnLwf9kj",
+                  "xkv2f87zYRGWbPdV"
+                ],
+                "observedAt": "2026-08-16T15:42:20+00:00"
+              }
+            }
+          }
+        },
+        {
+          "encounterId": 3177,
+          "name": "Vorasius",
+          "facts": {
+            "fightLengthSeconds": {
+              "value": 201,
+              "provenance": {
+                "source": "logs",
+                "detail": "kill time 201s (range 158s-271s, n=30), from the report's own start and end times -- metadata, so a bounded event fetch does not affect it",
+                "sample": 30,
+                "reports": [
+                  "2BvP18cDAXNTgkGY",
+                  "2KzaTHQnGJqg93mZ",
+                  "6Fa9Nwn43DHVCWGY",
+                  "7aJhTNwDZt94bYmf",
+                  "83tq6LTzjx2yN47J",
+                  "Bm1zQTh3HaYLXDZy",
+                  "BtyTLDwmdPAVxR1X",
+                  "D3WrZpNy7dVxA9qH",
+                  "DaMV3rKyRpmkbt9N",
+                  "DtnZWVHcyKR3M61G",
+                  "JhbMd7vDqrk4ZVFn",
+                  "KPkDm6HFf38xWCbL",
+                  "LtzHX3C9YydFwN2T",
+                  "PQrGLCJ837X94Ywx",
+                  "RJA2aP1wxqnCNMHZ",
+                  "VqJjTcvxkYnDaZPw",
+                  "VzpA28KgyjNPW4aw",
+                  "Z2fa4HLT9M1gkyRq",
+                  "a:dVvgn4D1zXFQMh7W",
+                  "a:phdzXgwfqrxKcvW9",
+                  "cQBZVrLPgMvDnjp1",
+                  "ftdDn1Bjxp8WCkTP",
+                  "gwdTPVz61yt8CHN3",
+                  "j2cxqpR3H7dhANCz",
+                  "jDAcBvftK7gnZC2F",
+                  "m8hZWCgNYwkz9M16",
+                  "mwHWNpvqyCb2jPMz",
+                  "nCzyGQxja1RwYm6H",
+                  "xkv2f87zYRGWbPdV",
+                  "y6MLw4P1cRp2fKYZ"
+                ],
+                "observedAt": "2026-08-16T15:42:20+00:00"
+              }
+            },
+            "raidSize": {
+              "value": 20,
+              "provenance": {
+                "source": "logs",
+                "detail": "the log's own group size: 20 in every one of the 30 sampled fights. Metadata on the fight, so unaffected by how much of the event stream was fetched",
+                "sample": 30,
+                "reports": [
+                  "2BvP18cDAXNTgkGY",
+                  "2KzaTHQnGJqg93mZ",
+                  "6Fa9Nwn43DHVCWGY",
+                  "7aJhTNwDZt94bYmf",
+                  "83tq6LTzjx2yN47J",
+                  "Bm1zQTh3HaYLXDZy",
+                  "BtyTLDwmdPAVxR1X",
+                  "D3WrZpNy7dVxA9qH",
+                  "DaMV3rKyRpmkbt9N",
+                  "DtnZWVHcyKR3M61G",
+                  "JhbMd7vDqrk4ZVFn",
+                  "KPkDm6HFf38xWCbL",
+                  "LtzHX3C9YydFwN2T",
+                  "PQrGLCJ837X94Ywx",
+                  "RJA2aP1wxqnCNMHZ",
+                  "VqJjTcvxkYnDaZPw",
+                  "VzpA28KgyjNPW4aw",
+                  "Z2fa4HLT9M1gkyRq",
+                  "a:dVvgn4D1zXFQMh7W",
+                  "a:phdzXgwfqrxKcvW9",
+                  "cQBZVrLPgMvDnjp1",
+                  "ftdDn1Bjxp8WCkTP",
+                  "gwdTPVz61yt8CHN3",
+                  "j2cxqpR3H7dhANCz",
+                  "jDAcBvftK7gnZC2F",
+                  "m8hZWCgNYwkz9M16",
+                  "mwHWNpvqyCb2jPMz",
+                  "nCzyGQxja1RwYm6H",
+                  "xkv2f87zYRGWbPdV",
+                  "y6MLw4P1cRp2fKYZ"
+                ],
+                "observedAt": "2026-08-16T15:42:20+00:00"
+              }
+            }
+          }
+        },
+        {
+          "encounterId": 3178,
+          "name": "Vaelgor & Ezzorak",
+          "facts": {
+            "fightLengthSeconds": {
+              "value": 284,
+              "provenance": {
+                "source": "logs",
+                "detail": "kill time 284s (range 224s-420s, n=30), from the report's own start and end times -- metadata, so a bounded event fetch does not affect it",
+                "sample": 30,
+                "reports": [
+                  "47czGAMkWHZBxRVr",
+                  "6Fa9Nwn43DHVCWGY",
+                  "83tq6LTzjx2yN47J",
+                  "BWpD6vZHRKcxmPwy",
+                  "Bm1zQTh3HaYLXDZy",
+                  "F8L9T6RhA2tpqwgC",
+                  "JhbMd7vDqrk4ZVFn",
+                  "KPkDm6HFf38xWCbL",
+                  "M7aLqAywZY2XRBNT",
+                  "RJA2aP1wxqnCNMHZ",
+                  "Rr76hHXdJWTAvajP",
+                  "TCB1z4ydVgt9pAWZ",
+                  "VXJAyhqtMpdmTKZG",
+                  "VqJjTcvxkYnDaZPw",
+                  "VzpA28KgyjNPW4aw",
+                  "XDPTaNtdzkCA2vgQ",
+                  "Z2fa4HLT9M1gkyRq",
+                  "a:dVvgn4D1zXFQMh7W",
+                  "aHkVdfwp7DG3XhYg",
+                  "aLkqzHvGmBbFP9cC",
+                  "cQBZVrLPgMvDnjp1",
+                  "j2cxqpR3H7dhANCz",
+                  "jDAcBvftK7gnZC2F",
+                  "m8hZWCgNYwkz9M16",
+                  "mwHWNpvqyCb2jPMz",
+                  "nCzyGQxja1RwYm6H",
+                  "pmhMtqZV2KFAPfXY",
+                  "ptT2nq8N6R4KdVCJ",
+                  "t3g829YH7Bw1jPAx",
+                  "zyXprjLNG9KgH4VY"
+                ],
+                "observedAt": "2026-08-16T15:42:20+00:00"
+              }
+            },
+            "raidSize": {
+              "value": 20,
+              "provenance": {
+                "source": "logs",
+                "detail": "the log's own group size: 20 in every one of the 30 sampled fights. Metadata on the fight, so unaffected by how much of the event stream was fetched",
+                "sample": 30,
+                "reports": [
+                  "47czGAMkWHZBxRVr",
+                  "6Fa9Nwn43DHVCWGY",
+                  "83tq6LTzjx2yN47J",
+                  "BWpD6vZHRKcxmPwy",
+                  "Bm1zQTh3HaYLXDZy",
+                  "F8L9T6RhA2tpqwgC",
+                  "JhbMd7vDqrk4ZVFn",
+                  "KPkDm6HFf38xWCbL",
+                  "M7aLqAywZY2XRBNT",
+                  "RJA2aP1wxqnCNMHZ",
+                  "Rr76hHXdJWTAvajP",
+                  "TCB1z4ydVgt9pAWZ",
+                  "VXJAyhqtMpdmTKZG",
+                  "VqJjTcvxkYnDaZPw",
+                  "VzpA28KgyjNPW4aw",
+                  "XDPTaNtdzkCA2vgQ",
+                  "Z2fa4HLT9M1gkyRq",
+                  "a:dVvgn4D1zXFQMh7W",
+                  "aHkVdfwp7DG3XhYg",
+                  "aLkqzHvGmBbFP9cC",
+                  "cQBZVrLPgMvDnjp1",
+                  "j2cxqpR3H7dhANCz",
+                  "jDAcBvftK7gnZC2F",
+                  "m8hZWCgNYwkz9M16",
+                  "mwHWNpvqyCb2jPMz",
+                  "nCzyGQxja1RwYm6H",
+                  "pmhMtqZV2KFAPfXY",
+                  "ptT2nq8N6R4KdVCJ",
+                  "t3g829YH7Bw1jPAx",
+                  "zyXprjLNG9KgH4VY"
+                ],
+                "observedAt": "2026-08-16T15:42:20+00:00"
+              }
+            }
+          }
+        },
+        {
+          "encounterId": 3179,
+          "name": "Fallen-King Salhadaar",
+          "facts": {
+            "fightLengthSeconds": {
+              "value": 195,
+              "provenance": {
+                "source": "logs",
+                "detail": "kill time 195s (range 140s-313s, n=30), from the report's own start and end times -- metadata, so a bounded event fetch does not affect it",
+                "sample": 30,
+                "reports": [
+                  "6Fa9Nwn43DHVCWGY",
+                  "7aJhTNwDZt94bYmf",
+                  "83tq6LTzjx2yN47J",
+                  "BWpD6vZHRKcxmPwy",
+                  "Bm1zQTh3HaYLXDZy",
+                  "Bn7dMkLZJYKcwXbx",
+                  "D3WrZpNy7dVxA9qH",
+                  "DaMV3rKyRpmkbt9N",
+                  "DtnZWVHcyKR3M61G",
+                  "KPkDm6HFf38xWCbL",
+                  "LtzHX3C9YydFwN2T",
+                  "PQrGLCJ837X94Ywx",
+                  "RJA2aP1wxqnCNMHZ",
+                  "VqJjTcvxkYnDaZPw",
+                  "VzpA28KgyjNPW4aw",
+                  "XjmpNnfxzYHGMkRV",
+                  "Z2fa4HLT9M1gkyRq",
+                  "a:phdzXgwfqrxKcvW9",
+                  "cQBZVrLPgMvDnjp1",
+                  "fYc8gVAWFHTQ2pvm",
+                  "ftdDn1Bjxp8WCkTP",
+                  "gwdTPVz61yt8CHN3",
+                  "j2cxqpR3H7dhANCz",
+                  "jDAcBvftK7gnZC2F",
+                  "m8hZWCgNYwkz9M16",
+                  "mwHWNpvqyCb2jPMz",
+                  "nCzyGQxja1RwYm6H",
+                  "nt8jbCvqND2PZYJR",
+                  "pmhMtqZV2KFAPfXY",
+                  "y6MLw4P1cRp2fKYZ"
+                ],
+                "observedAt": "2026-08-16T15:42:20+00:00"
+              }
+            },
+            "raidSize": {
+              "value": 20,
+              "provenance": {
+                "source": "logs",
+                "detail": "the log's own group size: 20 in every one of the 30 sampled fights. Metadata on the fight, so unaffected by how much of the event stream was fetched",
+                "sample": 30,
+                "reports": [
+                  "6Fa9Nwn43DHVCWGY",
+                  "7aJhTNwDZt94bYmf",
+                  "83tq6LTzjx2yN47J",
+                  "BWpD6vZHRKcxmPwy",
+                  "Bm1zQTh3HaYLXDZy",
+                  "Bn7dMkLZJYKcwXbx",
+                  "D3WrZpNy7dVxA9qH",
+                  "DaMV3rKyRpmkbt9N",
+                  "DtnZWVHcyKR3M61G",
+                  "KPkDm6HFf38xWCbL",
+                  "LtzHX3C9YydFwN2T",
+                  "PQrGLCJ837X94Ywx",
+                  "RJA2aP1wxqnCNMHZ",
+                  "VqJjTcvxkYnDaZPw",
+                  "VzpA28KgyjNPW4aw",
+                  "XjmpNnfxzYHGMkRV",
+                  "Z2fa4HLT9M1gkyRq",
+                  "a:phdzXgwfqrxKcvW9",
+                  "cQBZVrLPgMvDnjp1",
+                  "fYc8gVAWFHTQ2pvm",
+                  "ftdDn1Bjxp8WCkTP",
+                  "gwdTPVz61yt8CHN3",
+                  "j2cxqpR3H7dhANCz",
+                  "jDAcBvftK7gnZC2F",
+                  "m8hZWCgNYwkz9M16",
+                  "mwHWNpvqyCb2jPMz",
+                  "nCzyGQxja1RwYm6H",
+                  "nt8jbCvqND2PZYJR",
+                  "pmhMtqZV2KFAPfXY",
+                  "y6MLw4P1cRp2fKYZ"
+                ],
+                "observedAt": "2026-08-16T15:42:20+00:00"
+              }
+            }
+          }
+        },
+        {
+          "encounterId": 3180,
+          "name": "Lightblinded Vanguard",
+          "facts": {
+            "targets": {
+              "value": {
+                "baseline": 3,
+                "constant": true
+              },
+              "provenance": {
+                "source": "hand",
+                "statedBy": "owner",
+                "detail": "Permanent three-target fight: all three are up for the whole pull, from playing it. This is the validation case for the extraction -- a probe that measures anything other than three constant targets here has a bug, and the difference must not be rationalised away."
+              }
+            },
+            "amplifications": {
+              "value": [
+                {
+                  "ability": "opening damage-taken buff",
+                  "abilityId": 1246385,
+                  "multiplier": 1.2,
+                  "first": 0.0,
+                  "duration": 20.0,
+                  "target": "unknown",
+                  "magnitudeSource": "hand"
+                }
+              ],
+              "provenance": {
+                "source": "hand",
+                "statedBy": "owner",
+                "detail": "One of the three targets takes roughly 20% extra damage from a buff for roughly the first 20 seconds of the pull. Both numbers are approximate as stated and are written as such. Which of the three carries it was not stated, so `target` is 'unknown' and no simc vulnerable raid event is emitted -- see ScenarioPlan.unrepresented. The probe can measure the window (an aura id, a start and a duration); it can never measure the 20%, because no field in the Warcraft Logs API says what an aura does."
+              }
+            },
+            "fightLengthSeconds": {
+              "value": 348,
+              "provenance": {
+                "source": "logs",
+                "detail": "kill time 348s (range 284s-430s, n=30), from the report's own start and end times -- metadata, so a bounded event fetch does not affect it",
+                "sample": 30,
+                "reports": [
+                  "2KzaTHQnGJqg93mZ",
+                  "3Mk2VXKrptg49f8Y",
+                  "83tq6LTzjx2yN47J",
+                  "8zykTQfrLGbwHmP3",
+                  "ABy1DVvtMpbQzNL4",
+                  "BWpD6vZHRKcxmPwy",
+                  "Bdx9tpYGfvrZX8Jz",
+                  "Bm1zQTh3HaYLXDZy",
+                  "DaMV3rKyRpmkbt9N",
+                  "KPkDm6HFf38xWCbL",
+                  "KQCqJA9HzgRfDXvr",
+                  "M7aLqAywZY2XRBNT",
+                  "PQrGLCJ837X94Ywx",
+                  "RJA2aP1wxqnCNMHZ",
+                  "TCB1z4ydVgt9pAWZ",
+                  "VXJAyhqtMpdmTKZG",
+                  "VzpA28KgyjNPW4aw",
+                  "W4HhCd2pDb9kwjxv",
+                  "XjmpNnfxzYHGMkRV",
+                  "a:phdzXgwfqrxKcvW9",
+                  "aHkVdfwp7DG3XhYg",
+                  "aLkqzHvGmBbFP9cC",
+                  "ayztDgL4qKvBhCXr",
+                  "gwdTPVz61yt8CHN3",
+                  "j2cxqpR3H7dhANCz",
+                  "nCzyGQxja1RwYm6H",
+                  "pmhMtqZV2KFAPfXY",
+                  "rXA1jvHJx26czMfQ",
+                  "zfHZbDL9ckBJCA6M",
+                  "zyXprjLNG9KgH4VY"
+                ],
+                "observedAt": "2026-08-16T15:42:20+00:00"
+              }
+            },
+            "raidSize": {
+              "value": 20,
+              "provenance": {
+                "source": "logs",
+                "detail": "the log's own group size: 20 in every one of the 30 sampled fights. Metadata on the fight, so unaffected by how much of the event stream was fetched",
+                "sample": 30,
+                "reports": [
+                  "2KzaTHQnGJqg93mZ",
+                  "3Mk2VXKrptg49f8Y",
+                  "83tq6LTzjx2yN47J",
+                  "8zykTQfrLGbwHmP3",
+                  "ABy1DVvtMpbQzNL4",
+                  "BWpD6vZHRKcxmPwy",
+                  "Bdx9tpYGfvrZX8Jz",
+                  "Bm1zQTh3HaYLXDZy",
+                  "DaMV3rKyRpmkbt9N",
+                  "KPkDm6HFf38xWCbL",
+                  "KQCqJA9HzgRfDXvr",
+                  "M7aLqAywZY2XRBNT",
+                  "PQrGLCJ837X94Ywx",
+                  "RJA2aP1wxqnCNMHZ",
+                  "TCB1z4ydVgt9pAWZ",
+                  "VXJAyhqtMpdmTKZG",
+                  "VzpA28KgyjNPW4aw",
+                  "W4HhCd2pDb9kwjxv",
+                  "XjmpNnfxzYHGMkRV",
+                  "a:phdzXgwfqrxKcvW9",
+                  "aHkVdfwp7DG3XhYg",
+                  "aLkqzHvGmBbFP9cC",
+                  "ayztDgL4qKvBhCXr",
+                  "gwdTPVz61yt8CHN3",
+                  "j2cxqpR3H7dhANCz",
+                  "nCzyGQxja1RwYm6H",
+                  "pmhMtqZV2KFAPfXY",
+                  "rXA1jvHJx26czMfQ",
+                  "zfHZbDL9ckBJCA6M",
+                  "zyXprjLNG9KgH4VY"
+                ],
+                "observedAt": "2026-08-16T15:42:20+00:00"
+              }
+            }
+          }
+        },
+        {
+          "encounterId": 3181,
+          "name": "Crown of the Cosmos",
+          "facts": {
+            "targets": {
+              "value": {
+                "baseline": 3,
+                "constant": false
+              },
+              "provenance": {
+                "source": "logs",
+                "detail": "peak concurrent enemies above the significance floor: 3 in every one of the 5 sampled fights; time at that peak 10% (range 4%-13%, n=5); event fetch covered 100% (range 100%-100%, n=5) of each fight. The peak is used and the mean is not: an enemy counts only while it is being damaged, so the mean falls when the raid switches targets and falls again when the fetch stops early",
+                "sample": 5,
+                "reports": [
+                  "3Mk2VXKrptg49f8Y",
+                  "F8L9T6RhA2tpqwgC",
+                  "NHJmbyB9D2Z1X76F",
+                  "wmzdVXbn2pWvMCG3",
+                  "zqZ36Xvj4pVY8mAa"
+                ],
+                "observedAt": "2026-08-16T15:42:20+00:00"
+              }
+            },
+            "fightLengthSeconds": {
+              "value": 426,
+              "provenance": {
+                "source": "logs",
+                "detail": "kill time 426s (range 373s-502s, n=5), from the report's own start and end times -- metadata, so a bounded event fetch does not affect it",
+                "sample": 5,
+                "reports": [
+                  "3Mk2VXKrptg49f8Y",
+                  "F8L9T6RhA2tpqwgC",
+                  "NHJmbyB9D2Z1X76F",
+                  "wmzdVXbn2pWvMCG3",
+                  "zqZ36Xvj4pVY8mAa"
+                ],
+                "observedAt": "2026-08-16T15:42:20+00:00"
+              }
+            },
+            "raidSize": {
+              "value": 20,
+              "provenance": {
+                "source": "logs",
+                "detail": "the log's own group size: 20 in every one of the 5 sampled fights. Metadata on the fight, so unaffected by how much of the event stream was fetched",
+                "sample": 5,
+                "reports": [
+                  "3Mk2VXKrptg49f8Y",
+                  "F8L9T6RhA2tpqwgC",
+                  "NHJmbyB9D2Z1X76F",
+                  "wmzdVXbn2pWvMCG3",
+                  "zqZ36Xvj4pVY8mAa"
+                ],
+                "observedAt": "2026-08-16T15:42:20+00:00"
+              }
+            }
+          }
+        },
+        {
+          "encounterId": 3182,
+          "name": "Belo'ren, Child of Al'ar",
+          "facts": {
+            "fightLengthSeconds": {
+              "value": 289,
+              "provenance": {
+                "source": "logs",
+                "detail": "kill time 289s (range 220s-324s, n=30), from the report's own start and end times -- metadata, so a bounded event fetch does not affect it",
+                "sample": 30,
+                "reports": [
+                  "2LhT8NnfZQz4xC1J",
+                  "3ZvhRnbgHp87qT6j",
+                  "6VTzcLaYKmZvJ2p4",
+                  "782436pkTxPfJjMb",
+                  "8LMh7zyr3dtwYDk9",
+                  "AMgtn9zTqmWKQCxb",
+                  "CDayR1GwL9NMTXgp",
+                  "CJvxLntdTz2NrMhA",
+                  "ChdtHbVamLW37v4x",
+                  "Cp3mX4BqWdZbK6Ln",
+                  "D3GJTbnFwcmqg6hd",
+                  "J8r7Mj2ahtL6Qxw9",
+                  "KNwFa82pZbVA4dLC",
+                  "KQM4jfDCatZg8d2F",
+                  "NaywTcHgWLKBXRJx",
+                  "QTghrpza4Hxd8NK6",
+                  "R4AnBZdYKDtmMg7X",
+                  "VCvp83Pd1RYKb4Tj",
+                  "Vj3yfdxHXL24BDRh",
+                  "ayx8P12XTfHNk6jv",
+                  "fAtMF18LmX47BjJr",
+                  "fk24RHDFrQtJwv8V",
+                  "ft2FpP8gvG6LxCnh",
+                  "h9qrY8wBTv36baWz",
+                  "h9zb2LnKC6Y43BcD",
+                  "ngJymLcXbr2QCwAR",
+                  "p6Pw8qLtfj1gaHdb",
+                  "p9DwyfnjTN7KMY1Z",
+                  "rRK9zqWJZgMtkwyQ",
+                  "wrBc4aYhX9mdCZWP"
+                ],
+                "observedAt": "2026-08-16T15:42:20+00:00"
+              }
+            },
+            "raidSize": {
+              "value": 20,
+              "provenance": {
+                "source": "logs",
+                "detail": "the log's own group size: 20 in every one of the 30 sampled fights. Metadata on the fight, so unaffected by how much of the event stream was fetched",
+                "sample": 30,
+                "reports": [
+                  "2LhT8NnfZQz4xC1J",
+                  "3ZvhRnbgHp87qT6j",
+                  "6VTzcLaYKmZvJ2p4",
+                  "782436pkTxPfJjMb",
+                  "8LMh7zyr3dtwYDk9",
+                  "AMgtn9zTqmWKQCxb",
+                  "CDayR1GwL9NMTXgp",
+                  "CJvxLntdTz2NrMhA",
+                  "ChdtHbVamLW37v4x",
+                  "Cp3mX4BqWdZbK6Ln",
+                  "D3GJTbnFwcmqg6hd",
+                  "J8r7Mj2ahtL6Qxw9",
+                  "KNwFa82pZbVA4dLC",
+                  "KQM4jfDCatZg8d2F",
+                  "NaywTcHgWLKBXRJx",
+                  "QTghrpza4Hxd8NK6",
+                  "R4AnBZdYKDtmMg7X",
+                  "VCvp83Pd1RYKb4Tj",
+                  "Vj3yfdxHXL24BDRh",
+                  "ayx8P12XTfHNk6jv",
+                  "fAtMF18LmX47BjJr",
+                  "fk24RHDFrQtJwv8V",
+                  "ft2FpP8gvG6LxCnh",
+                  "h9qrY8wBTv36baWz",
+                  "h9zb2LnKC6Y43BcD",
+                  "ngJymLcXbr2QCwAR",
+                  "p6Pw8qLtfj1gaHdb",
+                  "p9DwyfnjTN7KMY1Z",
+                  "rRK9zqWJZgMtkwyQ",
+                  "wrBc4aYhX9mdCZWP"
+                ],
+                "observedAt": "2026-08-16T15:42:20+00:00"
+              }
+            }
+          }
+        },
+        {
+          "encounterId": 3183,
+          "name": "Midnight Falls",
+          "facts": {
+            "fightLengthSeconds": {
+              "value": 493,
+              "provenance": {
+                "source": "logs",
+                "detail": "kill time 493s (range 482s-523s, n=30), from the report's own start and end times -- metadata, so a bounded event fetch does not affect it",
+                "sample": 30,
+                "reports": [
+                  "21A6dpZFVfgy9bzR",
+                  "2M8zHWgrDBcxtj9n",
+                  "2ZtxVDy3fC8k4zwq",
+                  "3ZvhRnbgHp87qT6j",
+                  "6VTzcLaYKmZvJ2p4",
+                  "79c3aD24JP1hqmW6",
+                  "8dH37gGPWMtYCvw2",
+                  "CDayR1GwL9NMTXgp",
+                  "ChdtHbVamLW37v4x",
+                  "Cp3mX4BqWdZbK6Ln",
+                  "DvRdMa9XxhnW8myq",
+                  "FXNmTwaADfMC7kB4",
+                  "GBvkwndyV47DxQLW",
+                  "GCkfvXyNxRJVc6ZD",
+                  "GwjtJxkvnQgz6rAf",
+                  "J8r7Mj2ahtL6Qxw9",
+                  "KQM4jfDCatZg8d2F",
+                  "N2Vbfz4GgjyC6DBc",
+                  "NaywTcHgWLKBXRJx",
+                  "R4AnBZdYKDtmMg7X",
+                  "R9fkThJazLxrWVAd",
+                  "VCvp83Pd1RYKb4Tj",
+                  "Wb8jDTmwnxpZcHNM",
+                  "XKMdRTxDQjt8FAq9",
+                  "XT2brFnRVYAmBtKc",
+                  "d2TyrCVfz4KLx3ba",
+                  "fAtMF18LmX47BjJr",
+                  "qr23FDaNyRM8Q9h1",
+                  "wrBc4aYhX9mdCZWP",
+                  "zBRyLwxZ1HpKt3vX"
+                ],
+                "observedAt": "2026-08-16T15:42:20+00:00"
+              }
+            },
+            "raidSize": {
+              "value": 20,
+              "provenance": {
+                "source": "logs",
+                "detail": "the log's own group size: 20 in every one of the 30 sampled fights. Metadata on the fight, so unaffected by how much of the event stream was fetched",
+                "sample": 30,
+                "reports": [
+                  "21A6dpZFVfgy9bzR",
+                  "2M8zHWgrDBcxtj9n",
+                  "2ZtxVDy3fC8k4zwq",
+                  "3ZvhRnbgHp87qT6j",
+                  "6VTzcLaYKmZvJ2p4",
+                  "79c3aD24JP1hqmW6",
+                  "8dH37gGPWMtYCvw2",
+                  "CDayR1GwL9NMTXgp",
+                  "ChdtHbVamLW37v4x",
+                  "Cp3mX4BqWdZbK6Ln",
+                  "DvRdMa9XxhnW8myq",
+                  "FXNmTwaADfMC7kB4",
+                  "GBvkwndyV47DxQLW",
+                  "GCkfvXyNxRJVc6ZD",
+                  "GwjtJxkvnQgz6rAf",
+                  "J8r7Mj2ahtL6Qxw9",
+                  "KQM4jfDCatZg8d2F",
+                  "N2Vbfz4GgjyC6DBc",
+                  "NaywTcHgWLKBXRJx",
+                  "R4AnBZdYKDtmMg7X",
+                  "R9fkThJazLxrWVAd",
+                  "VCvp83Pd1RYKb4Tj",
+                  "Wb8jDTmwnxpZcHNM",
+                  "XKMdRTxDQjt8FAq9",
+                  "XT2brFnRVYAmBtKc",
+                  "d2TyrCVfz4KLx3ba",
+                  "fAtMF18LmX47BjJr",
+                  "qr23FDaNyRM8Q9h1",
+                  "wrBc4aYhX9mdCZWP",
+                  "zBRyLwxZ1HpKt3vX"
+                ],
+                "observedAt": "2026-08-16T15:42:20+00:00"
+              }
+            }
+          }
+        },
+        {
+          "encounterId": 3306,
+          "name": "Chimaerus, the Undreamt God",
+          "facts": {
+            "targets": {
+              "value": {
+                "baseline": 2,
+                "constant": false
+              },
+              "provenance": {
+                "source": "logs",
+                "detail": "peak concurrent enemies above the significance floor: 2 in every one of the 11 sampled fights; time at that peak 33% (range 30%-40%, n=11); event fetch covered 100% (range 100%-100%, n=11) of each fight. The peak is used and the mean is not: an enemy counts only while it is being damaged, so the mean falls when the raid switches targets and falls again when the fetch stops early",
+                "sample": 11,
+                "reports": [
+                  "Bn7dMkLZJYKcwXbx",
+                  "HGLnpvBNZD6wY7da",
+                  "Qarx3N9KXcpgtFWA",
+                  "XDPTaNtdzkCA2vgQ",
+                  "ayYCP4W6JMrg2hQH",
+                  "d7cRQnWwKt2q6kJB",
+                  "j6mDgtXTLnKH9AZF",
+                  "tCyYTA12HvKZwQbM",
+                  "wmzdVXbn2pWvMCG3",
+                  "yWMzRrQnJC2x94GV",
+                  "zqZ36Xvj4pVY8mAa"
+                ],
+                "observedAt": "2026-08-16T15:42:20+00:00"
+              }
+            },
+            "fightLengthSeconds": {
+              "value": 139,
+              "provenance": {
+                "source": "logs",
+                "detail": "kill time 139s (range 122s-149s, n=11), from the report's own start and end times -- metadata, so a bounded event fetch does not affect it",
+                "sample": 11,
+                "reports": [
+                  "Bn7dMkLZJYKcwXbx",
+                  "HGLnpvBNZD6wY7da",
+                  "Qarx3N9KXcpgtFWA",
+                  "XDPTaNtdzkCA2vgQ",
+                  "ayYCP4W6JMrg2hQH",
+                  "d7cRQnWwKt2q6kJB",
+                  "j6mDgtXTLnKH9AZF",
+                  "tCyYTA12HvKZwQbM",
+                  "wmzdVXbn2pWvMCG3",
+                  "yWMzRrQnJC2x94GV",
+                  "zqZ36Xvj4pVY8mAa"
+                ],
+                "observedAt": "2026-08-16T15:42:20+00:00"
+              }
+            },
+            "raidSize": {
+              "value": 20,
+              "provenance": {
+                "source": "logs",
+                "detail": "the log's own group size: 20 in every one of the 11 sampled fights. Metadata on the fight, so unaffected by how much of the event stream was fetched",
+                "sample": 11,
+                "reports": [
+                  "Bn7dMkLZJYKcwXbx",
+                  "HGLnpvBNZD6wY7da",
+                  "Qarx3N9KXcpgtFWA",
+                  "XDPTaNtdzkCA2vgQ",
+                  "ayYCP4W6JMrg2hQH",
+                  "d7cRQnWwKt2q6kJB",
+                  "j6mDgtXTLnKH9AZF",
+                  "tCyYTA12HvKZwQbM",
+                  "wmzdVXbn2pWvMCG3",
+                  "yWMzRrQnJC2x94GV",
+                  "zqZ36Xvj4pVY8mAa"
+                ],
+                "observedAt": "2026-08-16T15:42:20+00:00"
+              }
+            }
+          }
         }
-       ],
-       "provenance": {
-        "source": "hand",
-        "statedBy": "owner",
-        "detail": "One of the three targets takes roughly 20% extra damage from a buff for roughly the first 20 seconds of the pull. Both numbers are approximate as stated and are written as such. Which of the three carries it was not stated, so `target` is 'unknown' and no simc vulnerable raid event is emitted -- see ScenarioPlan.unrepresented. The probe can measure the window (an aura id, a start and a duration); it can never measure the 20%, because no field in the Warcraft Logs API says what an aura does."
-       }
-      },
-      "fightLengthSeconds": {
-       "value": 348,
-       "provenance": {
-        "source": "logs",
-        "detail": "kill time 348s (range 284s-430s, n=30), from the report's own start and end times -- metadata, so a bounded event fetch does not affect it",
-        "sample": 30,
-        "reports": [
-         "2KzaTHQnGJqg93mZ",
-         "3Mk2VXKrptg49f8Y",
-         "83tq6LTzjx2yN47J",
-         "8zykTQfrLGbwHmP3",
-         "ABy1DVvtMpbQzNL4",
-         "BWpD6vZHRKcxmPwy",
-         "Bdx9tpYGfvrZX8Jz",
-         "Bm1zQTh3HaYLXDZy",
-         "DaMV3rKyRpmkbt9N",
-         "KPkDm6HFf38xWCbL",
-         "KQCqJA9HzgRfDXvr",
-         "M7aLqAywZY2XRBNT",
-         "PQrGLCJ837X94Ywx",
-         "RJA2aP1wxqnCNMHZ",
-         "TCB1z4ydVgt9pAWZ",
-         "VXJAyhqtMpdmTKZG",
-         "VzpA28KgyjNPW4aw",
-         "W4HhCd2pDb9kwjxv",
-         "XjmpNnfxzYHGMkRV",
-         "a:phdzXgwfqrxKcvW9",
-         "aHkVdfwp7DG3XhYg",
-         "aLkqzHvGmBbFP9cC",
-         "ayztDgL4qKvBhCXr",
-         "gwdTPVz61yt8CHN3",
-         "j2cxqpR3H7dhANCz",
-         "nCzyGQxja1RwYm6H",
-         "pmhMtqZV2KFAPfXY",
-         "rXA1jvHJx26czMfQ",
-         "zfHZbDL9ckBJCA6M",
-         "zyXprjLNG9KgH4VY"
-        ],
-        "observedAt": "2026-08-16T15:42:20+00:00"
-       }
-      },
-      "raidSize": {
-       "value": 20,
-       "provenance": {
-        "source": "logs",
-        "detail": "the log's own group size: 20 in every one of the 30 sampled fights. Metadata on the fight, so unaffected by how much of the event stream was fetched",
-        "sample": 30,
-        "reports": [
-         "2KzaTHQnGJqg93mZ",
-         "3Mk2VXKrptg49f8Y",
-         "83tq6LTzjx2yN47J",
-         "8zykTQfrLGbwHmP3",
-         "ABy1DVvtMpbQzNL4",
-         "BWpD6vZHRKcxmPwy",
-         "Bdx9tpYGfvrZX8Jz",
-         "Bm1zQTh3HaYLXDZy",
-         "DaMV3rKyRpmkbt9N",
-         "KPkDm6HFf38xWCbL",
-         "KQCqJA9HzgRfDXvr",
-         "M7aLqAywZY2XRBNT",
-         "PQrGLCJ837X94Ywx",
-         "RJA2aP1wxqnCNMHZ",
-         "TCB1z4ydVgt9pAWZ",
-         "VXJAyhqtMpdmTKZG",
-         "VzpA28KgyjNPW4aw",
-         "W4HhCd2pDb9kwjxv",
-         "XjmpNnfxzYHGMkRV",
-         "a:phdzXgwfqrxKcvW9",
-         "aHkVdfwp7DG3XhYg",
-         "aLkqzHvGmBbFP9cC",
-         "ayztDgL4qKvBhCXr",
-         "gwdTPVz61yt8CHN3",
-         "j2cxqpR3H7dhANCz",
-         "nCzyGQxja1RwYm6H",
-         "pmhMtqZV2KFAPfXY",
-         "rXA1jvHJx26czMfQ",
-         "zfHZbDL9ckBJCA6M",
-         "zyXprjLNG9KgH4VY"
-        ],
-        "observedAt": "2026-08-16T15:42:20+00:00"
-       }
-      }
-     }
+      ]
     },
-    {
-     "encounterId": 3181,
-     "name": "Crown of the Cosmos",
-     "facts": {
-      "targets": {
-       "value": {
-        "baseline": 3,
-        "constant": false
-       },
-       "provenance": {
-        "source": "logs",
-        "detail": "peak concurrent enemies above the significance floor: 3 in every one of the 5 sampled fights; time at that peak 10% (range 4%-13%, n=5); event fetch covered 100% (range 100%-100%, n=5) of each fight. The peak is used and the mean is not: an enemy counts only while it is being damaged, so the mean falls when the raid switches targets and falls again when the fetch stops early",
-        "sample": 5,
-        "reports": [
-         "3Mk2VXKrptg49f8Y",
-         "F8L9T6RhA2tpqwgC",
-         "NHJmbyB9D2Z1X76F",
-         "wmzdVXbn2pWvMCG3",
-         "zqZ36Xvj4pVY8mAa"
-        ],
-        "observedAt": "2026-08-16T15:42:20+00:00"
-       }
-      },
-      "fightLengthSeconds": {
-       "value": 426,
-       "provenance": {
-        "source": "logs",
-        "detail": "kill time 426s (range 373s-502s, n=5), from the report's own start and end times -- metadata, so a bounded event fetch does not affect it",
-        "sample": 5,
-        "reports": [
-         "3Mk2VXKrptg49f8Y",
-         "F8L9T6RhA2tpqwgC",
-         "NHJmbyB9D2Z1X76F",
-         "wmzdVXbn2pWvMCG3",
-         "zqZ36Xvj4pVY8mAa"
-        ],
-        "observedAt": "2026-08-16T15:42:20+00:00"
-       }
-      },
-      "raidSize": {
-       "value": 20,
-       "provenance": {
-        "source": "logs",
-        "detail": "the log's own group size: 20 in every one of the 5 sampled fights. Metadata on the fight, so unaffected by how much of the event stream was fetched",
-        "sample": 5,
-        "reports": [
-         "3Mk2VXKrptg49f8Y",
-         "F8L9T6RhA2tpqwgC",
-         "NHJmbyB9D2Z1X76F",
-         "wmzdVXbn2pWvMCG3",
-         "zqZ36Xvj4pVY8mAa"
-        ],
-        "observedAt": "2026-08-16T15:42:20+00:00"
-       }
-      }
-     }
-    },
-    {
-     "encounterId": 3182,
-     "name": "Belo'ren, Child of Al'ar",
-     "facts": {
-      "fightLengthSeconds": {
-       "value": 289,
-       "provenance": {
-        "source": "logs",
-        "detail": "kill time 289s (range 220s-324s, n=30), from the report's own start and end times -- metadata, so a bounded event fetch does not affect it",
-        "sample": 30,
-        "reports": [
-         "2LhT8NnfZQz4xC1J",
-         "3ZvhRnbgHp87qT6j",
-         "6VTzcLaYKmZvJ2p4",
-         "782436pkTxPfJjMb",
-         "8LMh7zyr3dtwYDk9",
-         "AMgtn9zTqmWKQCxb",
-         "CDayR1GwL9NMTXgp",
-         "CJvxLntdTz2NrMhA",
-         "ChdtHbVamLW37v4x",
-         "Cp3mX4BqWdZbK6Ln",
-         "D3GJTbnFwcmqg6hd",
-         "J8r7Mj2ahtL6Qxw9",
-         "KNwFa82pZbVA4dLC",
-         "KQM4jfDCatZg8d2F",
-         "NaywTcHgWLKBXRJx",
-         "QTghrpza4Hxd8NK6",
-         "R4AnBZdYKDtmMg7X",
-         "VCvp83Pd1RYKb4Tj",
-         "Vj3yfdxHXL24BDRh",
-         "ayx8P12XTfHNk6jv",
-         "fAtMF18LmX47BjJr",
-         "fk24RHDFrQtJwv8V",
-         "ft2FpP8gvG6LxCnh",
-         "h9qrY8wBTv36baWz",
-         "h9zb2LnKC6Y43BcD",
-         "ngJymLcXbr2QCwAR",
-         "p6Pw8qLtfj1gaHdb",
-         "p9DwyfnjTN7KMY1Z",
-         "rRK9zqWJZgMtkwyQ",
-         "wrBc4aYhX9mdCZWP"
-        ],
-        "observedAt": "2026-08-16T15:42:20+00:00"
-       }
-      },
-      "raidSize": {
-       "value": 20,
-       "provenance": {
-        "source": "logs",
-        "detail": "the log's own group size: 20 in every one of the 30 sampled fights. Metadata on the fight, so unaffected by how much of the event stream was fetched",
-        "sample": 30,
-        "reports": [
-         "2LhT8NnfZQz4xC1J",
-         "3ZvhRnbgHp87qT6j",
-         "6VTzcLaYKmZvJ2p4",
-         "782436pkTxPfJjMb",
-         "8LMh7zyr3dtwYDk9",
-         "AMgtn9zTqmWKQCxb",
-         "CDayR1GwL9NMTXgp",
-         "CJvxLntdTz2NrMhA",
-         "ChdtHbVamLW37v4x",
-         "Cp3mX4BqWdZbK6Ln",
-         "D3GJTbnFwcmqg6hd",
-         "J8r7Mj2ahtL6Qxw9",
-         "KNwFa82pZbVA4dLC",
-         "KQM4jfDCatZg8d2F",
-         "NaywTcHgWLKBXRJx",
-         "QTghrpza4Hxd8NK6",
-         "R4AnBZdYKDtmMg7X",
-         "VCvp83Pd1RYKb4Tj",
-         "Vj3yfdxHXL24BDRh",
-         "ayx8P12XTfHNk6jv",
-         "fAtMF18LmX47BjJr",
-         "fk24RHDFrQtJwv8V",
-         "ft2FpP8gvG6LxCnh",
-         "h9qrY8wBTv36baWz",
-         "h9zb2LnKC6Y43BcD",
-         "ngJymLcXbr2QCwAR",
-         "p6Pw8qLtfj1gaHdb",
-         "p9DwyfnjTN7KMY1Z",
-         "rRK9zqWJZgMtkwyQ",
-         "wrBc4aYhX9mdCZWP"
-        ],
-        "observedAt": "2026-08-16T15:42:20+00:00"
-       }
-      }
-     }
-    },
-    {
-     "encounterId": 3183,
-     "name": "Midnight Falls",
-     "facts": {
-      "fightLengthSeconds": {
-       "value": 493,
-       "provenance": {
-        "source": "logs",
-        "detail": "kill time 493s (range 482s-523s, n=30), from the report's own start and end times -- metadata, so a bounded event fetch does not affect it",
-        "sample": 30,
-        "reports": [
-         "21A6dpZFVfgy9bzR",
-         "2M8zHWgrDBcxtj9n",
-         "2ZtxVDy3fC8k4zwq",
-         "3ZvhRnbgHp87qT6j",
-         "6VTzcLaYKmZvJ2p4",
-         "79c3aD24JP1hqmW6",
-         "8dH37gGPWMtYCvw2",
-         "CDayR1GwL9NMTXgp",
-         "ChdtHbVamLW37v4x",
-         "Cp3mX4BqWdZbK6Ln",
-         "DvRdMa9XxhnW8myq",
-         "FXNmTwaADfMC7kB4",
-         "GBvkwndyV47DxQLW",
-         "GCkfvXyNxRJVc6ZD",
-         "GwjtJxkvnQgz6rAf",
-         "J8r7Mj2ahtL6Qxw9",
-         "KQM4jfDCatZg8d2F",
-         "N2Vbfz4GgjyC6DBc",
-         "NaywTcHgWLKBXRJx",
-         "R4AnBZdYKDtmMg7X",
-         "R9fkThJazLxrWVAd",
-         "VCvp83Pd1RYKb4Tj",
-         "Wb8jDTmwnxpZcHNM",
-         "XKMdRTxDQjt8FAq9",
-         "XT2brFnRVYAmBtKc",
-         "d2TyrCVfz4KLx3ba",
-         "fAtMF18LmX47BjJr",
-         "qr23FDaNyRM8Q9h1",
-         "wrBc4aYhX9mdCZWP",
-         "zBRyLwxZ1HpKt3vX"
-        ],
-        "observedAt": "2026-08-16T15:42:20+00:00"
-       }
-      },
-      "raidSize": {
-       "value": 20,
-       "provenance": {
-        "source": "logs",
-        "detail": "the log's own group size: 20 in every one of the 30 sampled fights. Metadata on the fight, so unaffected by how much of the event stream was fetched",
-        "sample": 30,
-        "reports": [
-         "21A6dpZFVfgy9bzR",
-         "2M8zHWgrDBcxtj9n",
-         "2ZtxVDy3fC8k4zwq",
-         "3ZvhRnbgHp87qT6j",
-         "6VTzcLaYKmZvJ2p4",
-         "79c3aD24JP1hqmW6",
-         "8dH37gGPWMtYCvw2",
-         "CDayR1GwL9NMTXgp",
-         "ChdtHbVamLW37v4x",
-         "Cp3mX4BqWdZbK6Ln",
-         "DvRdMa9XxhnW8myq",
-         "FXNmTwaADfMC7kB4",
-         "GBvkwndyV47DxQLW",
-         "GCkfvXyNxRJVc6ZD",
-         "GwjtJxkvnQgz6rAf",
-         "J8r7Mj2ahtL6Qxw9",
-         "KQM4jfDCatZg8d2F",
-         "N2Vbfz4GgjyC6DBc",
-         "NaywTcHgWLKBXRJx",
-         "R4AnBZdYKDtmMg7X",
-         "R9fkThJazLxrWVAd",
-         "VCvp83Pd1RYKb4Tj",
-         "Wb8jDTmwnxpZcHNM",
-         "XKMdRTxDQjt8FAq9",
-         "XT2brFnRVYAmBtKc",
-         "d2TyrCVfz4KLx3ba",
-         "fAtMF18LmX47BjJr",
-         "qr23FDaNyRM8Q9h1",
-         "wrBc4aYhX9mdCZWP",
-         "zBRyLwxZ1HpKt3vX"
-        ],
-        "observedAt": "2026-08-16T15:42:20+00:00"
-       }
-      }
-     }
-    },
-    {
-     "encounterId": 3306,
-     "name": "Chimaerus, the Undreamt God",
-     "facts": {
-      "targets": {
-       "value": {
-        "baseline": 2,
-        "constant": false
-       },
-       "provenance": {
-        "source": "logs",
-        "detail": "peak concurrent enemies above the significance floor: 2 in every one of the 11 sampled fights; time at that peak 33% (range 30%-40%, n=11); event fetch covered 100% (range 100%-100%, n=11) of each fight. The peak is used and the mean is not: an enemy counts only while it is being damaged, so the mean falls when the raid switches targets and falls again when the fetch stops early",
-        "sample": 11,
-        "reports": [
-         "Bn7dMkLZJYKcwXbx",
-         "HGLnpvBNZD6wY7da",
-         "Qarx3N9KXcpgtFWA",
-         "XDPTaNtdzkCA2vgQ",
-         "ayYCP4W6JMrg2hQH",
-         "d7cRQnWwKt2q6kJB",
-         "j6mDgtXTLnKH9AZF",
-         "tCyYTA12HvKZwQbM",
-         "wmzdVXbn2pWvMCG3",
-         "yWMzRrQnJC2x94GV",
-         "zqZ36Xvj4pVY8mAa"
-        ],
-        "observedAt": "2026-08-16T15:42:20+00:00"
-       }
-      },
-      "fightLengthSeconds": {
-       "value": 139,
-       "provenance": {
-        "source": "logs",
-        "detail": "kill time 139s (range 122s-149s, n=11), from the report's own start and end times -- metadata, so a bounded event fetch does not affect it",
-        "sample": 11,
-        "reports": [
-         "Bn7dMkLZJYKcwXbx",
-         "HGLnpvBNZD6wY7da",
-         "Qarx3N9KXcpgtFWA",
-         "XDPTaNtdzkCA2vgQ",
-         "ayYCP4W6JMrg2hQH",
-         "d7cRQnWwKt2q6kJB",
-         "j6mDgtXTLnKH9AZF",
-         "tCyYTA12HvKZwQbM",
-         "wmzdVXbn2pWvMCG3",
-         "yWMzRrQnJC2x94GV",
-         "zqZ36Xvj4pVY8mAa"
-        ],
-        "observedAt": "2026-08-16T15:42:20+00:00"
-       }
-      },
-      "raidSize": {
-       "value": 20,
-       "provenance": {
-        "source": "logs",
-        "detail": "the log's own group size: 20 in every one of the 11 sampled fights. Metadata on the fight, so unaffected by how much of the event stream was fetched",
-        "sample": 11,
-        "reports": [
-         "Bn7dMkLZJYKcwXbx",
-         "HGLnpvBNZD6wY7da",
-         "Qarx3N9KXcpgtFWA",
-         "XDPTaNtdzkCA2vgQ",
-         "ayYCP4W6JMrg2hQH",
-         "d7cRQnWwKt2q6kJB",
-         "j6mDgtXTLnKH9AZF",
-         "tCyYTA12HvKZwQbM",
-         "wmzdVXbn2pWvMCG3",
-         "yWMzRrQnJC2x94GV",
-         "zqZ36Xvj4pVY8mAa"
-        ],
-        "observedAt": "2026-08-16T15:42:20+00:00"
-       }
-      }
-     }
+    "MID2": {
+      "difficulty": 5,
+      "encounters": [
+        {
+          "encounterId": 53420,
+          "name": "Sszorak",
+          "facts": {}
+        },
+        {
+          "encounterId": 53421,
+          "name": "The Twin Fangs",
+          "facts": {}
+        },
+        {
+          "encounterId": 53429,
+          "name": "The Coiled Altar",
+          "facts": {}
+        },
+        {
+          "encounterId": 53445,
+          "name": "Entombed Sentinels",
+          "facts": {}
+        },
+        {
+          "encounterId": 53455,
+          "name": "Vashnik the Malignant",
+          "facts": {}
+        },
+        {
+          "encounterId": 53470,
+          "name": "Nek'zali the Soulcoiler",
+          "facts": {}
+        },
+        {
+          "encounterId": 53492,
+          "name": "Ula'tek",
+          "facts": {}
+        },
+        {
+          "encounterId": 53497,
+          "name": "The Lost Explorers",
+          "facts": {}
+        }
+      ]
     }
-   ]
   }
- }
 }
