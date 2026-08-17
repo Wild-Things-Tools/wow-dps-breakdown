@@ -219,10 +219,28 @@ def test_the_shipped_file_matches_what_the_owner_stated_about_lightblinded_vangu
     assert amplification.target == fightprofile.TARGET_UNKNOWN
 
 
-def test_an_encounter_with_no_facts_falls_back_and_does_not_pretend_otherwise():
-    """Eight of the nine MID2 bosses are unmeasured. That has to read as a gap."""
-    profiles = load_profiles("MID2")
-    unknown = profiles.get(3176)
+def test_an_encounter_with_no_facts_falls_back_and_does_not_pretend_otherwise(tmp_path):
+    """A gap has to read as a gap, whatever the shipped file happens to contain.
+
+    Driven from a synthetic file: every MID2 boss carries promoted facts now, so
+    the shipped data no longer has a factless encounter, and a test that quietly
+    stopped exercising its own case would be worse than one that fails.
+    """
+    path = tmp_path / "profiles.json"
+    path.write_text(
+        json.dumps(
+            {
+                "tiers": {
+                    "MID2": {
+                        "difficulty": 5,
+                        "encounters": [{"encounterId": 3176, "name": "A boss", "facts": {}}],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    unknown = load_profiles("MID2", path).get(3176)
     assert unknown is not None and unknown.facts == {}
     plan = unknown.to_plan()
     assert plan.targets == 1 and plan.asserted == ()
@@ -336,11 +354,15 @@ def test_an_amplification_with_an_ability_id_is_matched_exactly():
 
 
 def test_the_probe_confirming_the_owner_leaves_both_numbers_standing():
+    """The validation case: the owner's three targets, reproduced by the reader.
+
+    Raid size is now a promoted `logs` fact rather than absent, which is the
+    promotion working -- so this asserts the confirmation rather than the gap.
+    """
     vanguard = load_profiles("MID2").get(3180)
     rows = {row["fact"]: row for row in vanguard.compare_to_measurement(observation_of(3, 20, 280))}
     assert rows["baseline targets"]["profile"] == rows["baseline targets"]["measured"] == 3
-    assert rows["raid size"]["profile"] is None  # never asserted; the probe answers it
-    assert rows["raid size"]["measured"] == 20
+    assert rows["raid size"]["profile"] == rows["raid size"]["measured"] == 20
 
 
 # --------------------------------------------------------------------------------

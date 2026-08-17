@@ -114,18 +114,40 @@ def test_a_dataset_with_no_probe_run_publishes_every_boss_with_a_null_measuremen
     document = fightdataset.build_document("MID2", load_profiles("MID2"))
 
     assert document["measurement"] is None
-    assert document["coverage"] == {"encounters": 9, "asserted": 1, "measured": 0}
+    # Every boss carries facts now: `fight-promote --from-fights` wrote a measured
+    # fight length and raid size into all nine on 2026-08-16. `asserted` counts
+    # bosses something is known about, not bosses a *person* asserted -- the per-fact
+    # provenance is where hand and logs are told apart.
+    assert document["coverage"] == {"encounters": 9, "asserted": 9, "measured": 0}
     assert all(entry["measured"] is None for entry in document["encounters"])
 
 
-def test_a_boss_nobody_has_written_facts_for_says_so_rather_than_defaulting_to_one_target():
-    """Eight of the nine bosses are in this state, and it is the point of the view.
+def test_a_boss_nobody_has_written_facts_for_says_so_rather_than_defaulting_to_one_target(
+    tmp_path,
+):
+    """The scenario still says one target, but no fact may read as a measurement.
 
-    The scenario still says one target because something has to be simmed, but every
-    fact key reports `default` with the reason, so nothing on the page can read as a
-    measurement of a one-target fight.
+    Driven from a synthetic profile file rather than the shipped one. Every MID2
+    boss now carries promoted facts, so the shipped data no longer contains this
+    state -- and a test that quietly stopped exercising its own case would be worse
+    than one that fails.
     """
-    document = fightdataset.build_document("MID2", load_profiles("MID2"))
+    path = tmp_path / "fight_profiles.json"
+    path.write_text(
+        json.dumps(
+            {
+                "note": "n",
+                "tiers": {
+                    "MID2": {
+                        "difficulty": 5,
+                        "encounters": [{"encounterId": 3176, "name": "A boss", "facts": {}}],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    document = fightdataset.build_document("MID2", load_profiles("MID2", path))
     entry = find(document, 3176)
 
     assert entry["hasFacts"] is False
@@ -141,7 +163,9 @@ def test_an_asserted_boss_carries_its_provenance_per_fact():
 
     assert by_key["targets"]["source"] == "hand"
     assert by_key["targets"]["statedBy"] == "owner"
-    assert by_key["fightLengthSeconds"]["source"] == "default"
+    # Promoted from the logs on 2026-08-16; it was `default` before that, and the
+    # point of the assertion is that hand and logs sit side by side per fact.
+    assert by_key["fightLengthSeconds"]["source"] == "logs"
     # The magnitude of an amplification is the one number the API cannot ever
     # supply, and the file says so where a reader will meet it.
     assert entry["profile"]["amplifications"][0]["magnitudeMeasurable"] is False
@@ -235,8 +259,68 @@ def test_a_player_cooldown_on_an_enemy_is_not_drawn_as_a_boss_mechanic():
     assert [entry["ability"] for entry in drawn] == ["Blinding Fervor"]
 
 
-def test_the_comparison_puts_both_claims_on_the_page_and_resolves_neither():
-    document = fightdataset.build_document("MID2", load_profiles("MID2"), vanguard_payload())
+def hand_only_profiles(tmp_path):
+    """Lightblinded Vanguard as the owner asserted it, with nothing promoted yet.
+
+    The comparison tests are about the *mechanism* -- an assertion and a measurement
+    side by side, resolved by neither -- so they must not move every time a
+    promotion writes a measured fight length into the shipped file. The hand facts
+    below are exactly what `fight_profiles.json` carried before the first
+    promotion run.
+    """
+    path = tmp_path / "fight_profiles.json"
+    path.write_text(
+        json.dumps(
+            {
+                "note": "n",
+                "tiers": {
+                    "MID2": {
+                        "difficulty": 5,
+                        "encounters": [
+                            {
+                                "encounterId": 3180,
+                                "name": "Lightblinded Vanguard",
+                                "facts": {
+                                    "targets": {
+                                        "value": {"baseline": 3, "constant": True},
+                                        "provenance": {
+                                            "source": "hand",
+                                            "statedBy": "owner",
+                                            "detail": "permanent three-target fight",
+                                        },
+                                    },
+                                    "amplifications": {
+                                        "value": [
+                                            {
+                                                "ability": "opening damage-taken buff",
+                                                "multiplier": 1.2,
+                                                "first": 0,
+                                                "duration": 20,
+                                                "target": "unknown",
+                                                "abilityId": None,
+                                                "magnitudeSource": "hand",
+                                            }
+                                        ],
+                                        "provenance": {
+                                            "source": "hand",
+                                            "statedBy": "owner",
+                                            "detail": "roughly 20% for roughly 20s",
+                                        },
+                                    },
+                                },
+                            }
+                        ],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return load_profiles("MID2", path)
+
+
+def test_the_comparison_puts_both_claims_on_the_page_and_resolves_neither(tmp_path):
+    document = fightdataset.build_document("MID2", hand_only_profiles(tmp_path), vanguard_payload())
     rows = {row["fact"]: row for row in find(document, 3180)["comparison"]}
 
     assert rows["baseline targets"]["profile"] == 3
@@ -357,9 +441,9 @@ def test_a_drawn_aura_window_names_the_enemy_that_carried_it():
     assert "nominates one as the priority target" in pooled["roleEvidence"]
 
 
-def test_the_comparison_asks_which_enemy_carries_the_amplification():
+def test_the_comparison_asks_which_enemy_carries_the_amplification(tmp_path):
     entry = find(
-        fightdataset.build_document("MID2", load_profiles("MID2"), vanguard_payload()), 3180
+        fightdataset.build_document("MID2", hand_only_profiles(tmp_path), vanguard_payload()), 3180
     )
     row = next(row for row in entry["comparison"] if "carried by" in row["fact"])
 
