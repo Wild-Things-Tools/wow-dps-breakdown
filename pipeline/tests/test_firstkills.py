@@ -180,3 +180,24 @@ def test_kills_are_filtered_to_the_difficulty_the_probe_will_ask_for():
     # None means any, which is right for a zone nobody has pushed to Mythic yet.
     either = firstkills.kills_from_report("abc", fights, 42, EPOCH_BASE, difficulty=None)
     assert [row.fight_id for row in either] == [1, 2]
+
+
+def test_the_difficulties_a_search_saw_are_countable_for_diagnosis():
+    """A guess was made here once and was wrong, so the next run measures instead.
+
+    "0 kills" and "0 at Mythic, 54 at Heroic" are different problems, and only the
+    second names its own fix. A missing difficulty field is its own key, because
+    "absent" and "Heroic" are different findings.
+    """
+    fights = [
+        {"id": 1, "encounterID": 42, "difficulty": 5, "kill": True},
+        {"id": 2, "encounterID": 42, "difficulty": 4, "kill": True},
+        {"id": 3, "encounterID": 42, "difficulty": 4, "kill": True},
+        {"id": 4, "encounterID": 42, "kill": True},
+        {"id": 5, "encounterID": 42, "difficulty": 5, "kill": False},
+        {"id": 6, "encounterID": 99, "difficulty": 5, "kill": True},
+    ]
+
+    seen = firstkills.difficulties_seen(fights, 42)
+
+    assert seen == {5: 1, 4: 2, None: 1}

@@ -99,13 +99,20 @@ def kills_from_report(
     anything" is never unanimous.
 
     ``difficulty`` must match what the probe will ask for afterwards. The search is
-    unfiltered by difficulty on purpose -- one query per report serves every boss --
-    so the filter belongs here, and leaving it out is not harmless: the first run
-    against Season 2's PTR zone found 54 kills of one boss and sampled none of them,
-    because every one was at a difficulty other than the Mythic the probe then
-    requested, and `fight_structure` answered "fight 7 not in the report's fights"
-    fifty-four times. None means "any", which is right for a zone nobody has pushed
-    to Mythic yet.
+    unfiltered by difficulty on purpose -- one query per report serves every boss,
+    which is what makes it affordable -- so the filter belongs here.
+
+    Leaving it out is not harmless: the first run against Season 2's PTR zone found
+    54 kills of one boss and sampled **none**, with `fight_structure` answering
+    "fight 7 not in the report's fights" once per kill. What that means is that the
+    search and the probe disagreed about which fights exist, and difficulty is the
+    only filter between them. *Why* they disagreed is not settled -- the owner says
+    PTR testing does happen on Mythic, so "these were all Heroic" is not the
+    explanation it looked like. `difficulties_seen` exists to answer it from a run
+    rather than from a guess.
+
+    ``None`` means any, and is the setting to reach for when a zone's kills are not
+    where they are expected to be.
 
     ``killType: Kills`` is passed to the query, but ``kill`` is re-checked here: a
     filter that silently stopped filtering would otherwise put wipes into a sample
@@ -229,3 +236,24 @@ class SearchOutcome:
         if self.aborted:
             return f"{base}; none earlier so far, but the search did not finish"
         return f"{base}; none earlier than the best-parse sample"
+
+
+def difficulties_seen(fights: object, encounter_id: int) -> dict[int | None, int]:
+    """How many kills of one encounter sit at each difficulty, for diagnosis.
+
+    Written because a guess was made once and was wrong. When a search finds kills
+    that the probe then cannot open, this says whether difficulty is the reason --
+    and it reports ``None`` as its own key, because "the field was absent" and "the
+    field said Heroic" are different findings.
+    """
+    counts: dict[int | None, int] = {}
+    if not isinstance(fights, list):
+        return counts
+    for fight in fights:
+        if not isinstance(fight, dict) or fight.get("encounterID") != encounter_id:
+            continue
+        if not fight.get("kill"):
+            continue
+        key = fight.get("difficulty")
+        counts[key if isinstance(key, int) else None] = counts.get(key, 0) + 1
+    return counts

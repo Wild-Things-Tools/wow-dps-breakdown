@@ -252,6 +252,7 @@ def _public_first_kills(
     )
     rows: list[firstkills.KillRow] = []
     seen_codes: set[str] = set()
+    seen_difficulties: dict[int | None, int] = {}
 
     # The ceiling is caught here rather than allowed out. `probe_encounter` already
     # treats a budget abort as "return what was read and say why" -- two fights read
@@ -293,6 +294,20 @@ def _public_first_kills(
         outcome.truncated = True
         outcome.aborted = str(exc)
         log.warning("  report search stopped on the point ceiling: %s", exc)
+
+    # If the search found nothing at the requested difficulty, say what it *did*
+    # find. A run that reports "0 kills" and a run that reports "0 at Mythic, 54 at
+    # Heroic" are different problems, and only the second one names its own fix.
+    if not rows and seen_difficulties:
+        log.warning(
+            "  no kills at difficulty %s; the reports carry %s. Re-run with "
+            "--difficulty 0 to take any.",
+            settings.difficulty,
+            ", ".join(
+                f"{count} at {key if key is not None else 'no difficulty recorded'}"
+                for key, count in sorted(seen_difficulties.items(), key=lambda kv: -kv[1])
+            ),
+        )
 
     outcome.kills_found = len(rows)
     outcome.beat_anchor = sum(1 for row in rows if row.started_at < anchor_ms)
