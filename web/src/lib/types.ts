@@ -949,3 +949,40 @@ export interface SpecIndexHeroTree {
   /** null when no build in any tier plays it — simc ships no tree names. */
   name: string | null
 }
+
+/**
+ * What a tier set and an outside Power Infusion are worth, per spec.
+ *
+ * Every figure is a *difference* between two profilesets against the spec's own
+ * profile, not a level — see `buffsweep.py`. The four-piece value is what it adds
+ * over the two-piece, because that is the choice being made.
+ */
+export interface BuffDataset {
+  tier: string
+  generatedAt: string
+  settings: { deterministic: boolean; iterations: number }
+  note: string
+  specs: BuffSpec[]
+}
+
+export interface BuffSpec {
+  id: string
+  displayName: string
+  class: string
+  spec: string
+  heroTalent: string
+  baseDps: number
+  dpsError: number
+  /** Null when simc ships no set for this class in this tier. */
+  setName: string | null
+  twoPieceGain: number | null
+  twoPiecePercent: number | null
+  /** Over the two-piece, not over nothing. */
+  fourPieceGain: number | null
+  fourPiecePercent: number | null
+  powerInfusionGain: number | null
+  powerInfusionPercent: number | null
+  /** The seconds Power Infusion lands at. The number means nothing without them. */
+  powerInfusionTimes: number[]
+  errors: string[]
+}

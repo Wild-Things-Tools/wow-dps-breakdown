@@ -1,6 +1,7 @@
 /** Loading the static dataset, with a small in-memory cache. */
 
 import type {
+  BuffDataset,
   FightsDataset,
   GearDataset,
   LogsVerification,
@@ -103,6 +104,15 @@ export async function loadFights(tier: string): Promise<FightsDataset | null> {
 export async function loadSpecIndex(tier: string): Promise<SpecIndex | null> {
   try {
     return await fetchJson<SpecIndex>(`${tier}/spec-index.json`)
+  } catch {
+    return null
+  }
+}
+
+/** Tier set and Power Infusion values. Absent until `wowdps buffs` has run. */
+export async function loadBuffs(tier: string): Promise<BuffDataset | null> {
+  try {
+    return await fetchJson<BuffDataset>(`${tier}/buffs.json`)
   } catch {
     return null
   }

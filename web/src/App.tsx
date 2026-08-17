@@ -4,6 +4,7 @@ import { ErrorState, Panel, Spinner } from './components/ui'
 import {
   loadFights,
   loadGear,
+  loadBuffs,
   loadSpecIndex,
   loadTalentTrees,
   loadLogsVerification,
@@ -14,6 +15,7 @@ import {
 } from './lib/data'
 import { describeConvergence, describeGameBuild, samplingError } from './lib/format'
 import type {
+  BuffDataset,
   FightsDataset,
   GearDataset,
   LogsVerification,
@@ -24,6 +26,7 @@ import type {
   TierIndex,
   TalentTreeDataset,
 } from './lib/types'
+import { BuffsView } from './views/BuffsView'
 import { BuildsView } from './views/BuildsView'
 import { FightsView } from './views/FightsView'
 import { FunnelView } from './views/FunnelView'
@@ -203,6 +206,20 @@ export default function App() {
 
   // Every class and spec in the game, which the Spec detail picker draws so that a
   // spec's absence reads as absence. ~10 KB, and only that view needs it.
+  // Tier set and Power Infusion values. Small, and only one view draws them.
+  const [buffs, setBuffs] = useState<BuffDataset | null>(null)
+  useEffect(() => {
+    if (!tier) return
+    let cancelled = false
+    setBuffs(null)
+    loadBuffs(tier).then((data) => {
+      if (!cancelled) setBuffs(data)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [tier, reloadToken])
+
   const [specIndex, setSpecIndex] = useState<SpecIndex | null>(null)
   useEffect(() => {
     if (!tier) return
@@ -410,6 +427,8 @@ export default function App() {
       ) : null}
 
       {view === 'gear' ? <GearView gear={gear} /> : null}
+
+      {view === 'buffs' ? <BuffsView data={buffs} /> : null}
 
       {view === 'fights' ? (
         <FightsView
