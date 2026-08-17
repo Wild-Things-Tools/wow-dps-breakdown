@@ -341,6 +341,20 @@ is the ceiling, from the measured ~11 CPU-seconds a caster's variant costs:
 Trinkets stay additive until somebody decides to pay for that, and the dataset
 says which method produced each baseline rather than leaving it to be assumed.
 
+**Measured on the first exhaustive ring sweep, MID2, one target, 1000
+deterministic iterations: the two methods disagree on 13 of 26 builds.** Half the
+tier gets a different pair from "fill the sockets every way and run it" than from
+"take the two best measured alone" -- Frost DK, both Hunters, Arcane and Frost
+Mage, Shadow and seven more. So the additive approximation was not merely
+imprecise at the cut, it was picking the wrong rings on half the builds, and the
+owner's objection to it was right in the way that matters rather than in
+principle.
+
+Two things this does *not* say, and neither is measurable from the published file:
+how much DPS the wrong pair costs (the per-pair numbers are not published, only
+per-item), and whether trinkets behave the same (their 351 combinations are still
+out of budget, so they remain additive and say so).
+
 The solo run still happens either way, because a reader needs to see a close call
 at the cut. What changes is the *ranking* of the runners-up: under the exhaustive
 method an item is ranked by the best full combination containing it, not by its
