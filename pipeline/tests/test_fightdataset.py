@@ -19,6 +19,13 @@ from wowdps import fightdataset
 from wowdps.fightextract import EncounterObservation, observe_fight
 from wowdps.fightprofile import Fact, FightProfile, Provenance, TierProfiles, load_profiles
 
+# These nine encounters are The Voidspire, Midnight Season 1's raid. They were
+# filed under MID2 until 2026-08-17, when Warcraft Logs' own zone list settled
+# it -- see the "nine bosses filed under MID2" note in CLAUDE.md. MID2 now holds
+# The Venomous Abyss, whose bosses nobody has facts for yet.
+VOIDSPIRE_TIER = "MID1"
+
+
 START = 1_000_000
 
 
@@ -113,7 +120,7 @@ def find(document: dict, encounter_id: int) -> dict:
 
 
 def test_a_dataset_with_no_probe_run_publishes_every_boss_with_a_null_measurement():
-    document = fightdataset.build_document("MID2", load_profiles("MID2"))
+    document = fightdataset.build_document(VOIDSPIRE_TIER, load_profiles(VOIDSPIRE_TIER))
 
     assert document["measurement"] is None
     # Every boss carries facts now: `fight-promote --from-fights` wrote a measured
@@ -149,7 +156,7 @@ def test_a_boss_nobody_has_written_facts_for_says_so_rather_than_defaulting_to_o
         ),
         encoding="utf-8",
     )
-    document = fightdataset.build_document("MID2", load_profiles("MID2", path))
+    document = fightdataset.build_document(VOIDSPIRE_TIER, load_profiles("MID2", path))
     entry = find(document, 3176)
 
     assert entry["hasFacts"] is False
@@ -160,7 +167,7 @@ def test_a_boss_nobody_has_written_facts_for_says_so_rather_than_defaulting_to_o
 
 
 def test_an_asserted_boss_carries_its_provenance_per_fact():
-    entry = find(fightdataset.build_document("MID2", load_profiles("MID2")), 3180)
+    entry = find(fightdataset.build_document(VOIDSPIRE_TIER, load_profiles(VOIDSPIRE_TIER)), 3180)
     by_key = {fact["key"]: fact for fact in entry["facts"]}
 
     assert by_key["targets"]["source"] == "hand"
@@ -236,7 +243,9 @@ def test_the_timeline_is_one_real_pull_and_never_an_average_of_pulls():
     The published curve therefore belongs to a named report and fight, and the
     other sampled pulls are carried whole beside it.
     """
-    document = fightdataset.build_document("MID2", load_profiles("MID2"), vanguard_payload())
+    document = fightdataset.build_document(
+        VOIDSPIRE_TIER, load_profiles(VOIDSPIRE_TIER), vanguard_payload()
+    )
     timeline = find(document, 3180)["measured"]["timeline"]
 
     assert timeline["pooling"] == "representative"
@@ -255,7 +264,9 @@ def test_a_player_cooldown_on_an_enemy_is_not_drawn_as_a_boss_mechanic():
     Filtering to the pooled shortlist -- which already dropped player-applied auras
     -- is what keeps Avenging Wrath off the chart. This exact mistake shipped once.
     """
-    document = fightdataset.build_document("MID2", load_profiles("MID2"), vanguard_payload())
+    document = fightdataset.build_document(
+        VOIDSPIRE_TIER, load_profiles(VOIDSPIRE_TIER), vanguard_payload()
+    )
     drawn = find(document, 3180)["measured"]["timeline"]["representative"]["auras"]
 
     assert [entry["ability"] for entry in drawn] == ["Blinding Fervor"]
@@ -322,7 +333,9 @@ def hand_only_profiles(tmp_path):
 
 
 def test_the_comparison_puts_both_claims_on_the_page_and_resolves_neither(tmp_path):
-    document = fightdataset.build_document("MID2", hand_only_profiles(tmp_path), vanguard_payload())
+    document = fightdataset.build_document(
+        VOIDSPIRE_TIER, hand_only_profiles(tmp_path), vanguard_payload()
+    )
     rows = {row["fact"]: row for row in find(document, 3180)["comparison"]}
 
     assert rows["baseline targets"]["profile"] == 3
@@ -335,7 +348,9 @@ def test_the_comparison_puts_both_claims_on_the_page_and_resolves_neither(tmp_pa
 
 
 def test_the_caveats_travel_with_the_numbers():
-    document = fightdataset.build_document("MID2", load_profiles("MID2"), vanguard_payload())
+    document = fightdataset.build_document(
+        VOIDSPIRE_TIER, load_profiles(VOIDSPIRE_TIER), vanguard_payload()
+    )
     caveats = " ".join(find(document, 3180)["measured"]["caveats"])
 
     assert "page 1" in caveats
@@ -348,7 +363,7 @@ def test_looking_and_finding_nothing_is_not_the_same_as_never_looking():
     empty = EncounterObservation(3176, "Imperator Averzian", 5)
     payload = vanguard_payload()
     payload["encounters"].append(empty.to_json())
-    document = fightdataset.build_document("MID2", load_profiles("MID2"), payload)
+    document = fightdataset.build_document(VOIDSPIRE_TIER, load_profiles(VOIDSPIRE_TIER), payload)
 
     assert find(document, 3176)["measured"]["fightsSampled"] == 0
     assert find(document, 3177)["measured"] is None
@@ -374,21 +389,27 @@ def test_a_probe_of_an_encounter_the_profiles_have_never_heard_of_still_publishe
 
 
 def test_an_unchanged_dataset_keeps_its_timestamp_so_a_quiet_run_commits_nothing(tmp_path):
-    profiles = load_profiles("MID2")
-    first = fightdataset.build_document("MID2", profiles, generated_at="2026-01-01T00:00:00+00:00")
+    profiles = load_profiles(VOIDSPIRE_TIER)
+    first = fightdataset.build_document(
+        VOIDSPIRE_TIER, profiles, generated_at="2026-01-01T00:00:00+00:00"
+    )
     fightdataset.write_fights(tmp_path, first)
 
-    second = fightdataset.build_document("MID2", profiles, generated_at="2026-06-06T00:00:00+00:00")
+    second = fightdataset.build_document(
+        VOIDSPIRE_TIER, profiles, generated_at="2026-06-06T00:00:00+00:00"
+    )
     path = fightdataset.write_fights(tmp_path, second)
 
     assert json.loads(path.read_text())["generatedAt"] == "2026-01-01T00:00:00+00:00"
 
 
 def test_a_changed_dataset_takes_the_new_timestamp(tmp_path):
-    profiles = load_profiles("MID2")
+    profiles = load_profiles(VOIDSPIRE_TIER)
     fightdataset.write_fights(
         tmp_path,
-        fightdataset.build_document("MID2", profiles, generated_at="2026-01-01T00:00:00+00:00"),
+        fightdataset.build_document(
+            VOIDSPIRE_TIER, profiles, generated_at="2026-01-01T00:00:00+00:00"
+        ),
     )
     path = fightdataset.write_fights(
         tmp_path,
@@ -407,7 +428,10 @@ def test_a_changed_dataset_takes_the_new_timestamp(tmp_path):
 
 def test_promotions_are_published_so_the_decision_can_be_looked_at():
     entry = find(
-        fightdataset.build_document("MID2", load_profiles("MID2"), vanguard_payload()), 3180
+        fightdataset.build_document(
+            VOIDSPIRE_TIER, load_profiles(VOIDSPIRE_TIER), vanguard_payload()
+        ),
+        3180,
     )
     plan = {promotion["key"]: promotion for promotion in entry["promotions"]}
 
@@ -423,7 +447,7 @@ def test_promotions_are_published_so_the_decision_can_be_looked_at():
 
 
 def test_a_boss_nobody_probed_offers_no_promotions():
-    entry = find(fightdataset.build_document("MID2", load_profiles("MID2")), 3180)
+    entry = find(fightdataset.build_document(VOIDSPIRE_TIER, load_profiles(VOIDSPIRE_TIER)), 3180)
     assert entry["promotions"] == []
 
 
@@ -431,7 +455,10 @@ def test_a_drawn_aura_window_names_the_enemy_that_carried_it():
     """A band labelled only with an ability, over a three-target chart, does not
     answer the question the band exists to raise."""
     entry = find(
-        fightdataset.build_document("MID2", load_profiles("MID2"), vanguard_payload()), 3180
+        fightdataset.build_document(
+            VOIDSPIRE_TIER, load_profiles(VOIDSPIRE_TIER), vanguard_payload()
+        ),
+        3180,
     )
     drawn = entry["measured"]["timeline"]["representative"]["auras"]
 
@@ -445,7 +472,10 @@ def test_a_drawn_aura_window_names_the_enemy_that_carried_it():
 
 def test_the_comparison_asks_which_enemy_carries_the_amplification(tmp_path):
     entry = find(
-        fightdataset.build_document("MID2", hand_only_profiles(tmp_path), vanguard_payload()), 3180
+        fightdataset.build_document(
+            VOIDSPIRE_TIER, hand_only_profiles(tmp_path), vanguard_payload()
+        ),
+        3180,
     )
     row = next(row for row in entry["comparison"] if "carried by" in row["fact"])
 
@@ -499,7 +529,7 @@ def payload_of(fights) -> dict:
 
 
 def timeline_of(payload) -> dict:
-    document = fightdataset.build_document("MID2", load_profiles("MID2"), payload)
+    document = fightdataset.build_document(VOIDSPIRE_TIER, load_profiles(VOIDSPIRE_TIER), payload)
     return find(document, 3180)["measured"]["timeline"]
 
 

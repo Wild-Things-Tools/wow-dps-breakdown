@@ -26,6 +26,12 @@ from wowdps.fightprofile import (
     load_profiles,
 )
 
+# These nine encounters are The Voidspire, Midnight Season 1's raid. They were
+# filed under MID2 until 2026-08-17, when Warcraft Logs' own zone list settled
+# it -- see the "nine bosses filed under MID2" note in CLAUDE.md. MID2 now holds
+# The Venomous Abyss, whose bosses nobody has facts for yet.
+VOIDSPIRE_TIER = "MID1"
+
 
 def profile(**facts) -> FightProfile:
     return FightProfile(
@@ -194,7 +200,7 @@ def test_an_amplification_multiplier_is_never_marked_as_measured():
 
 
 def test_the_shipped_file_carries_provenance_on_every_fact():
-    profiles = load_profiles("MID2")
+    profiles = load_profiles(VOIDSPIRE_TIER)
     assert profiles.profiles, "MID2 should list the tier's encounters"
     for entry in profiles.profiles.values():
         for key, fact in entry.facts.items():
@@ -206,7 +212,7 @@ def test_the_shipped_file_matches_what_the_owner_stated_about_lightblinded_vangu
     """The known-good case, pinned. Lightblinded Vanguard is a permanent three
     target fight, and one of the three takes about 20% extra damage for roughly
     the first twenty seconds."""
-    vanguard = load_profiles("MID2").get(3180)
+    vanguard = load_profiles(VOIDSPIRE_TIER).get(3180)
     assert vanguard is not None
     assert vanguard.baseline_targets == 3
     assert vanguard.targets.provenance.source == SOURCE_HAND
@@ -296,7 +302,7 @@ def observation_of(peak: int, size: int, duration: float) -> fightextract.Encoun
 def test_a_disagreement_between_profile_and_probe_is_shown_rather_than_resolved():
     """If the probe says two targets on a fight the owner knows has three, the
     extraction is wrong -- and that is invisible if one overwrites the other."""
-    vanguard = load_profiles("MID2").get(3180)
+    vanguard = load_profiles(VOIDSPIRE_TIER).get(3180)
     rows = {row["fact"]: row for row in vanguard.compare_to_measurement(observation_of(2, 20, 280))}
 
     assert rows["baseline targets"]["profile"] == 3
@@ -359,7 +365,7 @@ def test_the_probe_confirming_the_owner_leaves_both_numbers_standing():
     Raid size is now a promoted `logs` fact rather than absent, which is the
     promotion working -- so this asserts the confirmation rather than the gap.
     """
-    vanguard = load_profiles("MID2").get(3180)
+    vanguard = load_profiles(VOIDSPIRE_TIER).get(3180)
     rows = {row["fact"]: row for row in vanguard.compare_to_measurement(observation_of(3, 20, 280))}
     assert rows["baseline targets"]["profile"] == rows["baseline targets"]["measured"] == 3
     assert rows["raid size"]["profile"] == rows["raid size"]["measured"] == 20

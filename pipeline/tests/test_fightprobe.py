@@ -19,6 +19,13 @@ from wowdps.fightextract import EncounterObservation, observe_fight
 from wowdps.fightprofile import load_profiles
 from wowdps.warcraftlogs import PointLedger
 
+# These nine encounters are The Voidspire, Midnight Season 1's raid. They were
+# filed under MID2 until 2026-08-17, when Warcraft Logs' own zone list settled
+# it -- see the "nine bosses filed under MID2" note in CLAUDE.md. MID2 now holds
+# The Venomous Abyss, whose bosses nobody has facts for yet.
+VOIDSPIRE_TIER = "MID1"
+
+
 START, END = 1_000_000, 1_300_000
 
 
@@ -281,7 +288,7 @@ def test_the_dump_says_that_an_aura_window_is_not_a_magnitude():
 def test_the_dump_puts_the_profile_next_to_the_measurement():
     observation = EncounterObservation(3180, "Lightblinded Vanguard", 5)
     observation.fights = [one_fight("r1"), one_fight("r2")]
-    text = "\n".join(fightprobe.render(observation, load_profiles("MID2").get(3180)))
+    text = "\n".join(fightprobe.render(observation, load_profiles(VOIDSPIRE_TIER).get(3180)))
     assert "profile vs measurement" in text
     assert "desired_targets=3" in text
     # And it says out loud which part of the encounter the scenario does not model.
@@ -346,13 +353,26 @@ def test_the_command_writes_a_dump_a_json_file_and_a_measured_cost(tmp_path, mon
     monkeypatch.setattr(fightprobe, "WarcraftLogsClient", lambda *a, **k: stub)
 
     args = cli.build_parser().parse_args(
-        ["fight-probe", "--encounter", "3180", "--reports", "1", "--out", str(tmp_path)]
+        # Encounter 3180 is Lightblinded Vanguard, which lives under MID1 since the
+        # re-file -- the dump pairs a measurement with its *profile*, so the tier has
+        # to be the one that holds it or there is nothing to pair with.
+        [
+            "fight-probe",
+            "--tier",
+            VOIDSPIRE_TIER,
+            "--encounter",
+            "3180",
+            "--reports",
+            "1",
+            "--out",
+            str(tmp_path),
+        ]
     )
     assert fightprobe.cmd_fight_probe(args) == 0
 
     import json
 
-    payload = json.loads((tmp_path / "fight-probe-MID2.json").read_text())
+    payload = json.loads((tmp_path / f"fight-probe-{VOIDSPIRE_TIER}.json").read_text())
     # The cost is the difference between the two bracketing readings, not a guess.
     assert payload["cost"]["pointsSpentThisRun"] == 40.0
     assert payload["encounters"][0]["peakTargets"]["median"] == 3
@@ -361,7 +381,7 @@ def test_the_command_writes_a_dump_a_json_file_and_a_measured_cost(tmp_path, mon
     assert payload["order"] == "first"
     assert "earliest kills" in payload["sampling"]
 
-    text = (tmp_path / "fight-probe-MID2.txt").read_text()
+    text = (tmp_path / f"fight-probe-{VOIDSPIRE_TIER}.txt").read_text()
     assert "Lightblinded Vanguard" in text and "profile vs measurement" in text
 
 

@@ -1560,6 +1560,22 @@ Four things in it that are deliberate:
   would take its hand facts with it. Re-running is therefore free, which is what a
   scheduled run would need.
 
+**Done on 2026-08-17.** Zone 54 -- *The Venomous Abyss*, live, eight encounters --
+is what settled it, and the owner had to point at it because
+`worldData.zones` does not return it. Its bosses are exactly the eight the owner
+named (Sszorak, The Twin Fangs, The Coiled Altar, Entombed Sentinels, Vashnik the
+Malignant, Nek'zali the Soulcoiler, Ula'tek, The Lost Explorers); the ninth,
+Nymrissa Wavecaller, is in The Tidebound Grotto, which is a second zone -- and
+that is the *same* two-instance split `identify_tier_raid` found on the Blizzard
+side from what MID2's profiles wear. Three independent routes agree, and the only
+source that disagreed was the hand-typed list being replaced.
+
+So MID1 now holds the nine Voidspire encounters with every fact intact -- the
+owner's Vanguard assertions and the 21 promoted measurements travelled with them
+-- and MID2 holds the eight Venomous Abyss encounters with no facts yet. Tests
+that load those nine by tier say `VOIDSPIRE_TIER = "MID1"` with a note, because
+"MID2" reads like a typo to anyone who has not read this section.
+
 One consequence to expect and not mistake for a bug: once the nine move to MID1, MID2
 has no fight profiles until its raid opens, so the Fights view's empty state is the
 **correct** reading of a season whose first kills have not happened yet.
