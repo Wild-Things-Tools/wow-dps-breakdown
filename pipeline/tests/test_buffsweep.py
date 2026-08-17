@@ -11,13 +11,13 @@ from pathlib import Path
 from wowdps import buffsweep
 from wowdps.simc_runner import ProfilesetResult
 
-SETS_INC = '''// Set bonus data
+SETS_INC = """// Set bonus data
 static constexpr std::array<item_set_bonus_t, 3> __set_bonus_data { {
-  { "Jade Warlord's Dominion", "midnight_season_2", "MID2", 18, 1957, 2, 1, -1, -1, 1270977, { 1, 0 } },
-  { "Jade Warlord's Dominion", "midnight_season_2", "MID2", 18, 1957, 4, 1, -1, -1, 1270978, { 1, 0 } },
-  { "Old Thing", "midnight_season_1", "MID1", 17, 1900, 2, 1, -1, -1, 1, { 1, 0 } },
+  { "Jade Warlord's Dominion", "midnight_season_2", "MID2", 18, 1957, 2, 1, -1, -1, 1, {0} },
+  { "Jade Warlord's Dominion", "midnight_season_2", "MID2", 18, 1957, 4, 1, -1, -1, 2, {0} },
+  { "Old Thing", "midnight_season_1", "MID1", 17, 1900, 2, 1, -1, -1, 3, {0} },
 } };
-'''
+"""
 
 
 def write_sets(tmp_path: Path) -> Path:
