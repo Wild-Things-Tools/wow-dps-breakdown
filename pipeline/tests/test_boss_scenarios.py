@@ -136,3 +136,40 @@ def test_a_tier_with_no_asserted_boss_explains_what_to_run(profiles_file):
         _resolve_scenarios(["bosses"], "MID9", str(profiles_file))
     message = caught.value.args[0]
     assert "fight-probe" in message and "fight-promote" in message
+
+
+def test_an_empty_boss_list_is_fatal_alone_and_a_warning_alongside_others(tmp_path):
+    """A season whose raid has not opened has no boss to sim. That is not a failure.
+
+    It was treated as one, and on 2026-08-18 it took down all twelve shards of a
+    nightly run that had four other scenarios to do -- one day after the re-file
+    moved MID2's asserted bosses to MID1 and left MID2 with eight factless
+    encounters. Asking for bosses and getting none is still an error when the
+    bosses are the whole request.
+    """
+    import json
+
+    import pytest
+
+    from wowdps.cli import _resolve_scenarios
+
+    path = tmp_path / "profiles.json"
+    path.write_text(
+        json.dumps(
+            {
+                "tiers": {
+                    "MID2": {
+                        "difficulty": 5,
+                        "encounters": [{"encounterId": 1, "name": "A boss", "facts": {}}],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(KeyError, match="no boss in MID2"):
+        _resolve_scenarios(["bosses"], "MID2", str(path))
+
+    resolved = _resolve_scenarios(["patchwerk", "bosses"], "MID2", str(path))
+    assert [scenario.id for scenario in resolved] == ["patchwerk"]

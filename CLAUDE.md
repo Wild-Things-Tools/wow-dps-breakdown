@@ -1981,6 +1981,13 @@ that are easy to get wrong a second time:
   --from-fights` wrote a measured fight length into all nine encounters (139s to
   493s) and a target count into the two whose event fetch ran to the end. Nine
   extra cells per build, about 15% on a run.
+- **An empty `bosses` expansion is fatal only when it is the whole request.** As
+  one entry in a scenario list it is an ordinary state: a season whose raid has not
+  opened yet has no boss to sim. Treating it as an error took down **all twelve
+  shards** of the nightly run on 2026-08-18, one day after the re-file moved MID2's
+  asserted bosses to MID1 and left MID2 with eight factless encounters -- a run that
+  had four other scenarios to do failed on the fifth. Asking for `bosses` alone and
+  getting none is still an error, because then nothing was asked for that exists.
 - **`wowdps fights` with no `--probe`, run over a directory that already holds a
   probe's results, is silent data loss** -- 30 sampled kills per boss replaced by
   nulls, and the command reports success. Done exactly that by hand, one command

@@ -135,12 +135,26 @@ def _resolve_scenarios(
         loaded = fightprofile.load_profiles(tier, Path(profiles_file) if profiles_file else None)
         available = fightprofile.boss_scenarios(loaded)
         if not available:
-            raise KeyError(
+            empty = (
                 f"no boss in {tier} has a fight profile with anything asserted or "
                 f"measured in it, so there is no boss scenario to run. "
                 f"`wowdps fight-probe` measures them; `wowdps fight-promote` writes "
                 f"a measurement into a profile."
             )
+            # Fatal only when the bosses are all that was asked for. As one entry in
+            # a scenario list it is an ordinary state -- a season whose raid has not
+            # opened has no boss to sim -- and failing there took down all twelve
+            # shards of a nightly run that had four other scenarios to do. That
+            # happened on 2026-08-18, one day after the re-file moved MID2's
+            # asserted bosses to MID1 and left MID2 with eight factless encounters.
+            others = [
+                name
+                for name in names
+                if name != BOSS_SCENARIO_TOKEN and not name.startswith("boss_")
+            ]
+            if not others:
+                raise KeyError(empty)
+            logging.warning("%s Running the other %d scenario(s).", empty, len(others))
 
     resolved: list[scenarios.Scenario] = []
     for name in names:
