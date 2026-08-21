@@ -37,6 +37,14 @@ _OPEN = re.compile(r"^#\s*([a-z_]+)\s*=\s*\"([^\"]+)\"\s*$")
 _SAVE = re.compile(r"^#\s*save\s*=\s*(\S+\.simc)\s*$")
 _COMMENT = re.compile(r"^#\s?")
 
+#: Written into every profile this module emits, and read back by
+#: ``profiles.parse_profile``. The state travels **in the file** rather than
+#: through a flag on the command line: a sharded run materialises these
+#: separately in every job, and a side channel would have to be threaded through
+#: all of them and could disagree between two of them. A profile that says what
+#: it is cannot.
+MARKER = "# wowdps-unvalidated"
+
 
 @dataclass(frozen=True)
 class DisabledProfile:
@@ -140,6 +148,11 @@ def write_profiles(
             log.info("  %s is shipped by simc; leaving it alone", profile.filename)
             continue
         path = out_dir / profile.filename
-        path.write_text(profile.body, encoding="utf-8")
+        path.write_text(marked(profile), encoding="utf-8")
         written.append(path)
     return written
+
+
+def marked(profile: DisabledProfile) -> str:
+    """The profile's body with the provenance header that labels it."""
+    return f"{MARKER} {profile.source.name}\n{profile.body}"

@@ -1,3 +1,6 @@
+from pathlib import Path
+
+
 def test_simc_metadata_carries_the_game_build_the_reader_needs():
     """ "Is last night's tuning in here?" is answered by the hotfix date on the page.
 
@@ -109,3 +112,47 @@ def test_a_manifest_predating_shipped_is_left_alone_rather_than_guessed_at():
 
     assert "broken" not in coverage
     assert "simulated" not in coverage
+
+
+def test_an_unvalidated_build_is_labelled_in_both_documents():
+    """A number off a disabled profile is a weaker claim and has to say so."""
+    from wowdps.dataset import SpecResult
+    from wowdps.profiles import SpecProfile
+
+    def result(unvalidated: bool) -> SpecResult:
+        return SpecResult(
+            profile=SpecProfile(
+                path=Path("MID2_Warrior_Fury.simc"),
+                tier="MID2",
+                wow_class="Warrior",
+                spec="Fury",
+                hero_talent="Slayer",
+                role="attack",
+                talent_hash=None,
+                unvalidated=unvalidated,
+            )
+        )
+
+    assert result(True).to_json()["unvalidated"] is True
+    assert result(True).summary()["unvalidated"] is True
+    # Absent, not false: a tier of shipped profiles produces the bytes it did
+    # before this existed, so a quiet night still has nothing to commit.
+    assert "unvalidated" not in result(False).to_json()
+    assert "unvalidated" not in result(False).summary()
+
+
+def test_coverage_counts_the_unvalidated_builds_a_run_actually_produced():
+    from wowdps.dataset import apply_simulated_coverage
+
+    manifest = {
+        "coverage": {"shipped": [{"class": "Mage", "spec": "Arcane"}]},
+        "specs": [
+            {"class": "Mage", "spec": "Arcane"},
+            {"class": "Warrior", "spec": "Fury", "unvalidated": True},
+            {"class": "Warrior", "spec": "Arms", "unvalidated": True},
+        ],
+    }
+    coverage = apply_simulated_coverage(manifest)["coverage"]
+    assert coverage["simulated"] == 1
+    assert coverage["broken"] == []
+    assert coverage["unvalidatedSimulated"] == 2

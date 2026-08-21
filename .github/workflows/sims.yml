@@ -52,6 +52,9 @@ on:
       scenarios:
         description: "Scenario flags passed straight to `wowdps build`, e.g. '--scenario patchwerk'. Empty uses the default set plus every boss with facts"
         default: ''
+      include_unvalidated:
+        description: "Also simulate the profiles simc wrote and left commented out. They are labelled everywhere they appear"
+        default: 'true'
 
 concurrency:
   group: sims
@@ -181,6 +184,27 @@ jobs:
           chmod +x bundle/simc
           pip install -e ./pipeline
 
+      # The specs simc wrote a complete profile for and did not switch on. MID2
+      # ships 15 of 26 damage specs and the reason is not stale action lists --
+      # those live in the class modules and exist for every spec. It is that
+      # `profiles/generators/<tier>/<Class>.simc` carries a whole profile for each
+      # of the others, talent hash and every gear slot, with every line commented
+      # out. Materialising them is the difference between "the data does not exist"
+      # and "simc's authors have not signed this off yet".
+      #
+      # Every shard runs it, over the same generator files, so the discovered set
+      # is identical in all of them and the round-robin split stays consistent. The
+      # unvalidated state travels in the written file rather than through this flag
+      # (`unvalidated.MARKER`), so no shard can label its builds differently from
+      # another's.
+      - name: Materialise the unvalidated profiles
+        if: ${{ (inputs.include_unvalidated || 'true') == 'true' }}
+        run: |
+          wowdps -v unvalidated \
+            --tier "${{ matrix.tier }}" \
+            --simc-source bundle \
+            --write
+
       - name: Run simulations
         env:
           # The default scenario set plus every boss the tier's fight profiles know
@@ -277,6 +301,21 @@ jobs:
           # `spec-index` needs the profiles too: role is the one field simc's
           # generated data does not carry, and it comes from a profile's role= line.
           git -C simc-src sparse-checkout set engine/dbc/generated profiles
+
+      # The same materialisation the shards did, so `spec-index` sees the same set.
+      # Without it a spec this run simulated from a disabled profile would be drawn
+      # as "simc ships no profile for this spec" while its build sits in the
+      # ranking -- the coverage panel contradicting the chart beside it.
+      - name: Materialise the unvalidated profiles
+        if: ${{ (inputs.include_unvalidated || 'true') == 'true' }}
+        run: |
+          for tier in $(python3 -c "
+          import json, pathlib
+          index = json.loads(pathlib.Path('web/public/data/tiers.json').read_text())
+          print(' '.join(t['id'] for t in index['tiers']))
+          "); do
+            wowdps -v unvalidated --tier "$tier" --simc-source simc-src --write
+          done
 
       - name: Decode talent trees
         run: |

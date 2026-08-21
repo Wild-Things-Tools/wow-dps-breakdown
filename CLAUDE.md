@@ -1428,6 +1428,31 @@ Shipped means simc's authors saying "this is the spec this season"; disabled mea
 presenting them as one number would not be, so anything drawn from them has to be
 labelled -- a fourth coverage state beside `simulated`, `broken` and `missing`.
 
+**That state is built, and the way it travels is the part worth keeping.** The
+label is written **into the profile** as a header comment (`unvalidated.MARKER`),
+not passed as a flag: a sharded run materialises these separately in twelve jobs,
+so a flag would have to be threaded through all of them and could be set in one and
+forgotten in another -- which publishes an unvalidated build as a shipped one
+silently, because the number itself looks fine. A file that says what it is cannot
+disagree with another shard. `parse_profile` reads it back into
+`SpecProfile.unvalidated`, `SpecResult` emits `unvalidated: true` (and *only* true,
+so a tier of shipped profiles produces the bytes it did before this existed), and
+`BuildIdentity`/`BuildChip` draw the mark wherever a build is named in HTML.
+
+`spec_coverage` subtracts these specs from **both** `shipped` and `missing`. Both
+of the wrong answers are worth naming: counting them as shipped publishes an
+unfinished profile as this season's answer, and counting them as missing says the
+data does not exist while it sits in the generator. The panel's headline stays the
+shipped count and the unvalidated ones are a separate `+K`, because adding them
+would make one number out of two different claims and the weaker one would vanish
+into it.
+
+The materialisation runs in `sims.yml` behind `include_unvalidated` (default
+`true`), twice: once per sim shard, and once in the publish job before `spec-index`
+-- without the second, a spec this run simulated from a disabled profile would be
+drawn as "simc ships no profile for this spec" while its build sat in the ranking,
+the coverage panel contradicting the chart beside it.
+
 One parse detail that cost a wrong answer: generator blocks separate the header,
 the gear and the `save=` line with **blank lines**, and the first version treated a
 blank as the end of a block. It returned zero profiles from files containing

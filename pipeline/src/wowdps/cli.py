@@ -842,11 +842,16 @@ def cmd_unvalidated(args: argparse.Namespace) -> int:
         print(f"  [{mark}] {profile.name} ({profile.spec_line})")
 
     if not args.write:
-        print("\nnothing written -- pass --out and --write to materialise them")
+        print("\nnothing written -- pass --write to materialise them")
         return 0
 
-    written = unvalidated.write_profiles(found, Path(args.out), shipped)
-    print(f"\nwrote {len(written)} profile(s) into {args.out}")
+    # Default destination is the tier's own profile directory, which is what makes
+    # `wowdps build` pick them up with no flag of its own: the state travels in the
+    # file (`unvalidated.MARKER`), so a sharded run materialises them identically in
+    # every job and no shard can disagree with another about what it simulated.
+    out_dir = Path(args.out) if args.out else simc_dir / "profiles" / tier
+    written = unvalidated.write_profiles(found, out_dir, shipped)
+    print(f"\nwrote {len(written)} profile(s) into {out_dir}")
     print(
         "These are UNVALIDATED: simc's authors disabled them for this tier, so any "
         "number from them is weaker evidence than one from a shipped profile and "
@@ -1403,7 +1408,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_unvalidated.add_argument("--tier", default="latest")
     p_unvalidated.add_argument("--simc-source", default="simc")
-    p_unvalidated.add_argument("--out", help="directory to write the profiles into")
+    p_unvalidated.add_argument(
+        "--out",
+        help="directory to write the profiles into (default: the tier's own profile directory)",
+    )
     p_unvalidated.add_argument("--write", action="store_true")
     p_unvalidated.set_defaults(func=cmd_unvalidated)
 

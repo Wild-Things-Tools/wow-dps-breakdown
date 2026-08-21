@@ -91,3 +91,70 @@ def test_a_block_with_no_save_line_is_not_a_profile(tmp_path):
     path = tmp_path / "MID2_Generate_X.simc"
     path.write_text('# mage="MID2_Mage_Nothing"\n# spec=arcane\n', encoding="utf-8")
     assert unvalidated.extract(path) == []
+
+
+def test_a_written_profile_says_what_it_is(tmp_path):
+    """The state travels in the file, so no shard can disagree about it.
+
+    A sharded run materialises these separately in every job. A flag on the command
+    line would have to be threaded through all of them and could be passed in one
+    and forgotten in another, which publishes an unvalidated build as a shipped one
+    -- silently, because the number itself looks fine.
+    """
+    from wowdps.profiles import parse_profile
+
+    found = unvalidated.extract(write_generator(tmp_path))
+    out = tmp_path / "MID2"
+    unvalidated.write_profiles(found, out)
+
+    profile = parse_profile(out / "MID2_Warrior_Arms.simc", "MID2")
+    assert profile is not None
+    assert profile.unvalidated is True
+    assert profile.spec == "Arms"
+    # The marker is a comment, so simc reads the profile exactly as before.
+    assert (out / "MID2_Warrior_Arms.simc").read_text().startswith("# wowdps-unvalidated")
+
+
+def test_a_shipped_profile_is_not_marked(tmp_path):
+    from wowdps.profiles import parse_profile
+
+    path = tmp_path / "MID2_Mage_Arcane.simc"
+    path.write_text('mage="MID2_Mage_Arcane"\nspec=arcane\nrole=spell\n', encoding="utf-8")
+    profile = parse_profile(path, "MID2")
+    assert profile is not None
+    assert profile.unvalidated is False
+
+
+def test_coverage_counts_an_unvalidated_spec_as_neither_shipped_nor_missing(tmp_path):
+    """The fourth state, and both of the wrong answers it replaces.
+
+    Counting it as shipped publishes somebody's unfinished profile as this season's
+    answer; counting it as missing says the data does not exist while it sits in the
+    generator.
+    """
+    from wowdps.profiles import spec_coverage
+
+    old = tmp_path / "MID1"
+    new = tmp_path / "MID2"
+    old.mkdir()
+    new.mkdir()
+    (old / "MID1_Warrior_Fury.simc").write_text(
+        'warrior="MID1_Warrior_Fury"\nspec=fury\nrole=attack\n', encoding="utf-8"
+    )
+    (old / "MID1_Mage_Arcane.simc").write_text(
+        'mage="MID1_Mage_Arcane"\nspec=arcane\nrole=spell\n', encoding="utf-8"
+    )
+    (new / "MID2_Mage_Arcane.simc").write_text(
+        'mage="MID2_Mage_Arcane"\nspec=arcane\nrole=spell\n', encoding="utf-8"
+    )
+    (new / "MID2_Warrior_Fury.simc").write_text(
+        f"{unvalidated.MARKER} MID2_Generate_Warrior.simc\n"
+        'warrior="MID2_Warrior_Fury"\nspec=fury\nrole=attack\n',
+        encoding="utf-8",
+    )
+
+    coverage = spec_coverage(tmp_path, "MID2")
+    assert coverage["damageSpecs"] == 1
+    assert coverage["shipped"] == [{"class": "Mage", "spec": "Arcane"}]
+    assert coverage["unvalidated"] == [{"class": "Warrior", "spec": "Fury"}]
+    assert coverage["missing"] == []

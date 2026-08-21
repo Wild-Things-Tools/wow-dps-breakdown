@@ -91,6 +91,7 @@ class SpecResult:
             "displayName": self.profile.display_name,
             "role": self.profile.role,
             "talentHash": self.profile.talent_hash,
+            **({"unvalidated": True} if self.profile.unvalidated else {}),
             "caveats": self.caveats,
             "errors": self.errors,
             "scenarios": {
@@ -111,6 +112,11 @@ class SpecResult:
             "role": self.profile.role,
             "scenarios": {},
         }
+        if self.profile.unvalidated:
+            # Emitted only when true, so a tier of shipped profiles produces the
+            # same bytes it did before this existed and a quiet night still has
+            # nothing to commit.
+            out["unvalidated"] = True
         if self.errors:
             out["errors"] = self.errors
 
@@ -386,11 +392,13 @@ def apply_simulated_coverage(manifest: dict) -> dict:
     looks exactly like a bad one" failure the coverage panel was built to prevent,
     one level deeper and stated with more confidence than before it existed.
 
-    Three states, and they are three different sentences on the site:
+    Four states, and they are four different sentences on the site:
 
-    ``simulated``  simc ships it and it produced results
-    ``broken``     simc ships a profile and this run got nothing out of it
-    ``missing``    simc ships no profile for it at all
+    ``simulated``    simc ships it and it produced results
+    ``broken``       simc ships a profile and this run got nothing out of it
+    ``unvalidated``  simc wrote a profile and left it commented out; if this run
+                     materialised it, the spec has a number that is a weaker claim
+    ``missing``      simc has no profile for it at all
 
     Mutates and returns ``manifest``. A manifest whose coverage predates ``shipped``
     is left alone rather than guessed at: without knowing what the tier shipped,
@@ -411,6 +419,17 @@ def apply_simulated_coverage(manifest: dict) -> dict:
 
     coverage["simulated"] = len(shipped) - len(broken)
     coverage["broken"] = [{"class": wow_class, "spec": spec} for wow_class, spec in broken]
+    # How many of the tier's unvalidated specs this run got a result out of. The
+    # list of them is what simc wrote and did not switch on; this is the subset
+    # that ran, which is the number a coverage panel can honestly show beside the
+    # shipped one.
+    coverage["unvalidatedSimulated"] = len(
+        {
+            (spec.get("class"), spec.get("spec"))
+            for spec in manifest.get("specs", [])
+            if spec.get("unvalidated")
+        }
+    )
     manifest["coverage"] = coverage
     return manifest
 

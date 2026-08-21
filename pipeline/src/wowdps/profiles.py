@@ -123,6 +123,13 @@ class SpecProfile:
     #: The id then names simc's build *slot* ("default") while ``hero_talent`` names
     #: the tree it plays ("Deathbringer"); both are true and neither moves the joins.
     name_hero: str | None = None
+    #: True for a profile simc wrote into its generator and left commented out --
+    #: complete, and not switched on for the tier. A number from one of these is a
+    #: different claim from a number off a shipped profile ("this is the character
+    #: we had written down when we stopped" against "this is the spec this season"),
+    #: so it is carried through every dataset and labelled wherever it is drawn.
+    #: See ``unvalidated``.
+    unvalidated: bool = False
 
     @property
     def id(self) -> str:
@@ -157,6 +164,8 @@ def parse_profile(
     ``hero_overrides`` maps a profile's internal name to the hero tree it actually
     plays, for the builds simc ships without a hero suffix. See ``herotrees``.
     """
+    from . import unvalidated
+
     text = path.read_text(encoding="utf-8", errors="replace")
 
     player = _PLAYER_LINE.search(text)
@@ -198,6 +207,7 @@ def parse_profile(
         role=role,
         talent_hash=talents.group(1) if talents else None,
         name_hero=name_hero,
+        unvalidated=text.startswith(unvalidated.MARKER),
     )
 
 
@@ -243,6 +253,14 @@ def spec_coverage(profiles_dir: Path, tier: str) -> dict:
     is "Mages rank nowhere" -- precisely the conclusion this panel exists to prevent,
     now stated with more confidence than before it existed.
 
+    A fourth state sits between shipped and missing, and it is the reason MID2 looks
+    as thin as it does: simc's generators carry a **complete** profile for most of
+    the specs the tier does not ship, with every line commented out. Those are
+    reported as ``unvalidated`` and are subtracted from both the shipped count and
+    the missing list -- calling them shipped would publish an unfinished profile as
+    this season's answer, and calling them missing would say the data does not exist
+    when it is sitting in the generator. See ``unvalidated``.
+
     So ``shipped`` is emitted too, and the *broken* set -- shipped for this tier, no
     build in the dataset -- is worked out where the whole run is known. It cannot be
     computed here: this function is called from a shard, which simulated one slice,
@@ -250,18 +268,28 @@ def spec_coverage(profiles_dir: Path, tier: str) -> dict:
     ``dataset.apply_simulated_coverage``.
     """
     covered: set[tuple[str, str]] = set()
+    unvalidated: set[tuple[str, str]] = set()
     known: set[tuple[str, str]] = set()
     for candidate in available_tiers(profiles_dir):
-        specs = {(p.wow_class, p.spec) for p in discover(profiles_dir, candidate, dps_only=True)}
-        known |= specs
+        found = discover(profiles_dir, candidate, dps_only=True)
+        known |= {(p.wow_class, p.spec) for p in found}
         if candidate == tier:
-            covered = specs
+            # A spec simc wrote and left commented out is neither shipped nor
+            # absent, so it is subtracted from both. Counting it as shipped would
+            # publish somebody else's unfinished profile as this season's answer;
+            # counting it as missing would say the data does not exist when it is
+            # sitting in the generator. See ``unvalidated``.
+            covered = {(p.wow_class, p.spec) for p in found if not p.unvalidated}
+            unvalidated = {(p.wow_class, p.spec) for p in found if p.unvalidated} - covered
 
-    missing = sorted(known - covered)
+    missing = sorted(known - covered - unvalidated)
     return {
         "damageSpecs": len(covered),
         "damageSpecsKnown": len(known),
         "missing": [{"class": wow_class, "spec": spec} for wow_class, spec in missing],
+        "unvalidated": [
+            {"class": wow_class, "spec": spec} for wow_class, spec in sorted(unvalidated)
+        ],
         # What simc ships for *this* tier, which is what a completed run should have
         # produced. Shard-safe for the same reason the counts above are: it describes
         # the profiles directory, not this run's slice.
