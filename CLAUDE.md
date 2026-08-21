@@ -1513,6 +1513,15 @@ profile simc did not ship is drawn beside ones it did.
 weapon or a crafted back sits a few levels off the rest, and a mean reports a level
 nothing is actually at.
 
+**The flag has to travel separately from the sentence.** The caveat text lives in the
+build's own `<spec>.json`; the ranking reads `index.json`. So without
+`gearComparable: false` in the *summary*, the one place a gear gap actually misleads
+-- a bar chart of absolute DPS -- is the one place that cannot see it.
+`BuildIdentity` draws it as a second mark beside `unvalidated`, because they are
+different claims: one says simc has not signed the profile off, the other says this
+number cannot be ranked against the ones beside it, and a build can be either without
+being the other.
+
 The materialisation runs in `sims.yml` behind `include_unvalidated` (default
 `true`), twice: once per sim shard, and once in the publish job before `spec-index`
 -- without the second, a spec this run simulated from a disabled profile would be

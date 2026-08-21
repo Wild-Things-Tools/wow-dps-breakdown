@@ -49,6 +49,12 @@ class SpecResult:
     #: scenario id -> target count -> cell
     cells: dict[str, dict[int, Cell]] = field(default_factory=dict)
     caveats: list[str] = field(default_factory=list)
+    #: Set when this build's gear could not be matched to the tier's. Kept beside the
+    #: caveat text rather than derived from it: the ranking reads the manifest and the
+    #: caveat lives in the spec file, so without a flag here the one place the gear
+    #: gap actually misleads -- a bar chart of absolute DPS -- is the one place that
+    #: cannot see it.
+    gear_comparable: bool = True
     errors: list[str] = field(default_factory=list)
 
     def add(self, scenario_id: str, cell: Cell) -> None:
@@ -112,6 +118,10 @@ class SpecResult:
             "role": self.profile.role,
             "scenarios": {},
         }
+        if not self.gear_comparable:
+            # Only when false, so a tier whose builds all wear the tier's gear
+            # produces the bytes it did before this existed.
+            out["gearComparable"] = False
         if self.profile.unvalidated:
             # Emitted only when true, so a tier of shipped profiles produces the
             # same bytes it did before this existed and a quiet night still has
@@ -224,6 +234,7 @@ def run_spec(
         log.warning("  %s", gear)
         seen_caveats.add(gear)
         result.caveats.append(gear)
+        result.gear_comparable = False
 
     for scenario in scenarios:
         for targets in scenario.sims():

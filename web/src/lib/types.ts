@@ -90,6 +90,15 @@ export interface SpecSummary {
   scenarios: Record<string, SpecSummaryScenario>;
   errors?: string[];
   /**
+   * False when this build's gear could not be matched to the tier's, so its place in
+   * a ranking of absolute DPS is partly gear rather than spec. Absent when it is
+   * comparable. simc's disabled profiles are routinely a whole tier behind its
+   * shipped ones -- MID2's wear item level 289 against a shipped 334-344 -- which
+   * puts every one of them below every shipped build for reasons that have nothing to
+   * do with the spec. The full sentence is in the build's own `caveats`.
+   */
+  gearComparable?: boolean;
+  /**
    * True when this build came from a profile simc wrote into its generator and left
    * commented out -- complete, and not switched on for the tier. Absent, never
    * false, so a tier of shipped profiles produces the bytes it did before this

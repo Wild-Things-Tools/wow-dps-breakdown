@@ -52,6 +52,13 @@ export interface BuildLike {
    * -- so it travels with the identity and is drawn wherever the identity is.
    */
   unvalidated?: boolean;
+  /**
+   * False when the build's gear could not be matched to the tier's. Separate from
+   * `unvalidated` because they are different claims: one says simc has not signed the
+   * profile off, the other says this particular number cannot be ranked against the
+   * ones beside it. A build can be either without being the other.
+   */
+  gearComparable?: boolean;
 }
 
 /** "Frost Death Knight" -- the spec, without the hero tree in brackets. */
@@ -330,15 +337,36 @@ export function BuildIdentity({
 export function UnvalidatedMark({
   build,
 }: {
-  build: Pick<BuildLike, "unvalidated">;
+  build: Pick<BuildLike, "unvalidated" | "gearComparable">;
 }) {
-  if (!build.unvalidated) return null;
+  return (
+    <>
+      {build.unvalidated ? (
+        <Mark title="SimulationCraft wrote this profile and left it commented out for this tier — a real simulation of a character its authors have not signed off">
+          unvalidated
+        </Mark>
+      ) : null}
+      {build.gearComparable === false ? (
+        // The mark that changes how a number should be *read*, so it is drawn on any
+        // build carrying it, shipped or not. Measured on MID2: the disabled profiles
+        // wear item level 289 against a shipped 334-344, which put all eight of their
+        // builds below all twenty-eight shipped ones — a gear gap that reads as a
+        // balance result unless it is said out loud.
+        <Mark title="This profile's gear is not at the tier's item level, so its place in a ranking of absolute damage is partly gear rather than spec. The build's own page states the gap.">
+          gear differs
+        </Mark>
+      ) : null}
+    </>
+  );
+}
+
+function Mark({ title, children }: { title: string; children: ReactNode }) {
   return (
     <span
       className="shrink-0 rounded-sm border border-subtle px-1 py-px text-[10px] uppercase tracking-wide text-ink-tertiary"
-      title="SimulationCraft wrote this profile and left it commented out for this tier — a real simulation of a character its authors have not signed off"
+      title={title}
     >
-      unvalidated
+      {children}
     </span>
   );
 }
