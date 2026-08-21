@@ -165,6 +165,7 @@ def probe_encounter(
     )
     pairs = ranked
     exhausted = False
+    difficulties: dict[int | None, int] = {}
     if settings.order == "public":
         # The rankings are used only to *anchor* the search: their earliest kill is
         # an upper bound on the true first kill, and the report search runs from
@@ -178,6 +179,7 @@ def probe_encounter(
         # reports, not because a page limit or the point ceiling stopped it. Set on
         # the observation below, which does not exist yet at this point.
         exhausted = not outcome.truncated and outcome.aborted is None
+        difficulties = outcome.difficulties_seen
         if found:
             pairs = found
         else:
@@ -190,6 +192,7 @@ def probe_encounter(
         encounter_name=str(encounter.get("name") or encounter_id),
         difficulty=settings.difficulty,
         search_exhausted=exhausted,
+        difficulties_seen=difficulties,
     )
     if not pairs:
         log.warning("encounter %d: rankings carried no report codes", encounter_id)
@@ -289,7 +292,28 @@ def _public_first_kills(
                 except WarcraftLogsError as exc:
                     log.debug("  report %s: %s", code, exc)
                     continue
-                rows.extend(firstkills.kills_from_report(code, fights, encounter_id, report_start))
+                # The difficulty filter belongs here, and omitting it was the second
+                # half of the same defect. The search query carries no difficulty on
+                # purpose -- one `report_kills` per report serves every boss, which
+                # is what makes it affordable -- so this call is the only filter
+                # between finding a kill and asking to open it. Without it the
+                # search hands back Heroic kills and `fight_structure`, which *is*
+                # filtered, answers "fight N not in the report's fights" once per
+                # kill: the exact symptom `kills_from_report`'s own docstring
+                # describes, with the parameter written for it never passed.
+                rows.extend(
+                    firstkills.kills_from_report(
+                        code, fights, encounter_id, report_start, settings.difficulty
+                    )
+                )
+                # Populated here, and this line is the whole of the fix: the dict
+                # below was declared and never written to, so the "0 at Mythic, 54
+                # at Heroic" diagnostic could not fire on any run. Its guard reads
+                # `if not rows and seen_difficulties`, which was permanently False
+                # -- present, and inoperative. The same shape as the settle guard
+                # that missed a nested stamp.
+                for level, count in firstkills.difficulties_seen(fights, encounter_id).items():
+                    seen_difficulties[level] = seen_difficulties.get(level, 0) + count
             if len(reports) < settings.report_limit:
                 break
         else:
@@ -304,6 +328,7 @@ def _public_first_kills(
     # If the search found nothing at the requested difficulty, say what it *did*
     # find. A run that reports "0 kills" and a run that reports "0 at Mythic, 54 at
     # Heroic" are different problems, and only the second one names its own fix.
+    outcome.difficulties_seen = dict(seen_difficulties)
     if not rows and seen_difficulties:
         log.warning(
             "  no kills at difficulty %s; the reports carry %s. Re-run with "

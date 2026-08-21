@@ -1120,6 +1120,11 @@ class EncounterObservation:
     #: with genuinely few kills count as finished instead of being re-opened every
     #: hour forever.
     search_exhausted: bool = False
+    #: Kills the search saw of this encounter, per difficulty, keyed by the raw
+    #: value (``None`` for a row that stated none). It is what separates "nobody
+    #: has killed this boss yet" from "the kills are at a difficulty this run did
+    #: not ask for", and those look identical on a view that only has a count.
+    difficulties_seen: dict[int | None, int] = field(default_factory=dict)
 
     def _values(self, pick) -> list[float]:
         return [value for value in (pick(fight) for fight in self.fights) if value is not None]
@@ -1369,6 +1374,21 @@ class EncounterObservation:
             "activeTimeFraction": _json(self.uptime),
             "eventCoverage": _json(self.event_coverage),
             "searchExhausted": self.search_exhausted,
+            # Only when there is something to say. An encounter that was read fine
+            # publishes the bytes it did before this existed, so a quiet re-probe
+            # still leaves nothing to commit.
+            **(
+                {
+                    "difficultiesSeen": {
+                        str(k): v
+                        for k, v in sorted(
+                            self.difficulties_seen.items(), key=lambda kv: (kv[0] is None, kv[0])
+                        )
+                    }
+                }
+                if self.difficulties_seen
+                else {}
+            ),
             # When the sampled kills happened. Published so `--order first` can be
             # checked rather than believed: it takes the earliest kills *among the
             # damage-sorted ranking pages gathered*, so a narrow gather returns

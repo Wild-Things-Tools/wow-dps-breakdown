@@ -845,3 +845,22 @@ def test_a_first_publish_is_not_a_loss(tmp_path):
 
     bare = {"coverage": {"encounters": 9, "asserted": 9, "measured": 0}, "encounters": []}
     assert write_fights(tmp_path, bare).is_file()
+
+
+def test_an_empty_encounter_says_whether_the_kills_exist_elsewhere():
+    """"No fights" and "no fights at the difficulty asked for" are different answers.
+
+    Only the second names its own fix, and on a page that shows a count they look
+    the same. The counts come from the report search, which is deliberately
+    unfiltered by difficulty, so it sees the kills the probe then declines to open.
+    """
+    from wowdps.fightdataset import _no_fights_caveats
+
+    plain = _no_fights_caveats({"difficulty": 5})
+    assert len(plain) == 1
+
+    told = _no_fights_caveats({"difficulty": 5, "difficultiesSeen": {"4": 54, "None": 3}})
+    assert len(told) == 2
+    assert "54 at Heroic" in told[1]
+    assert "3 with no difficulty recorded" in told[1]
+    assert "asked for Mythic" in told[1]

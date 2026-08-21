@@ -2720,6 +2720,31 @@ envelope is the one part of the route the server would **not** introspect:
   search actually found whenever nothing matches -- "0 at Mythic, 54 at Heroic" and
   "0 kills" are different problems and only one of them names its own fix. Do not
   replace that with a second guess.
+
+  **Both halves of that were written and neither was connected, until 2026-08-21.**
+  Read this before trusting anything else on this page: the code looked complete
+  from every angle except running it.
+
+  - `seen_difficulties` in `_public_first_kills` was **declared and never written
+    to**, so its guard `if not rows and seen_difficulties` was permanently False and
+    the diagnostic could not fire on any run. `firstkills.difficulties_seen` -- the
+    function written for exactly this -- had no caller outside its own test.
+  - `kills_from_report` takes a `difficulty` argument whose own docstring calls it
+    load-bearing, and **the single call site omitted it**. So the search accepted
+    kills at any difficulty and `fight_structure`, which *is* filtered, then
+    answered "fight N not in the report's fights" once per kill. The symptom the
+    parameter was written to prevent was the symptom it was producing.
+
+  Three states now, not two: a row stating a **different** difficulty is dropped, a
+  row stating **none** is kept (unknown is not the same as wrong, and dropping it
+  loses a real kill invisibly), and every row is counted into
+  `SearchOutcome.difficulties_seen` either way.
+
+  The counts are published as `difficultiesSeen` on the encounter and turned into a
+  caveat by `_no_fights_caveats`, so the Fights view can say *"the log search did
+  find kills -- 54 at Heroic -- but this run asked for Mythic"*. Before this the
+  reason lived in a CI log for a run nobody kept, and an empty boss on the site was
+  indistinguishable from a boss nobody had tried to read.
 - **`kill` is re-checked** even though `killType: Kills` is passed. A filter that
   silently stopped filtering would put a wipe into a sample of first kills, and a
   first-night wipe is precisely the row that would win the sort.

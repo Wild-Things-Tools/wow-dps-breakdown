@@ -1009,6 +1009,36 @@ def _comparison(profile: FightProfile, measured: MeasuredEncounter | None) -> li
     return rows
 
 
+def _no_fights_caveats(payload: dict) -> list[str]:
+    """Why an encounter has no kills in it, when the search can say.
+
+    "The probe read no fights" is true and answers nothing: a boss nobody has killed
+    yet and a boss whose kills are all at a difficulty this run did not ask for look
+    identical on the page, and only one of them names its own fix. The counts come
+    from the report search, which is unfiltered by difficulty on purpose -- so it
+    sees the kills the probe then declines to open.
+    """
+    caveats = ["The probe read no fights for this encounter."]
+    seen = payload.get("difficultiesSeen")
+    if not isinstance(seen, dict) or not seen:
+        return caveats
+
+    wanted = payload.get("difficulty")
+    names = {"5": "Mythic", "4": "Heroic", "3": "Normal", "1": "Raid Finder"}
+    parts = [
+        f"{count} at {names.get(str(key), f'difficulty {key}')}"
+        if key != "None"
+        else f"{count} with no difficulty recorded"
+        for key, count in seen.items()
+    ]
+    asked = names.get(str(wanted), f"difficulty {wanted}")
+    caveats.append(
+        f"The log search did find kills of this encounter -- {', '.join(parts)} -- "
+        f"but this run asked for {asked}, so none of them was opened."
+    )
+    return caveats
+
+
 def _encounter_document(
     profile: FightProfile,
     payload: dict | None,
@@ -1055,7 +1085,7 @@ def _encounter_document(
         measured_block = {
             "fightsSampled": 0,
             "reports": list(payload.get("reports") or []),
-            "caveats": ["The probe read no fights for this encounter."],
+            "caveats": _no_fights_caveats(payload),
             "timeline": None,
         }
 

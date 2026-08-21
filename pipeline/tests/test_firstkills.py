@@ -201,3 +201,36 @@ def test_the_difficulties_a_search_saw_are_countable_for_diagnosis():
     seen = firstkills.difficulties_seen(fights, 42)
 
     assert seen == {5: 1, 4: 2, None: 1}
+
+
+def test_a_stated_mismatch_is_dropped_and_an_absent_difficulty_is_not():
+    """Unknown is not the same as wrong, and the two fail in opposite directions.
+
+    Dropping a row that states no difficulty loses a real kill for a reason nobody
+    can see afterwards. Keeping a row that states Heroic hands the probe a fight
+    `fight_structure` will not return, which is the "fight N not in the report's
+    fights" symptom, once per kill.
+    """
+    base = 1_700_000_000_000
+    fights = [
+        {"id": 1, "encounterID": 7, "kill": True, "startTime": 10, "difficulty": 5},
+        {"id": 2, "encounterID": 7, "kill": True, "startTime": 20, "difficulty": 4},
+        {"id": 3, "encounterID": 7, "kill": True, "startTime": 30},
+    ]
+    rows = firstkills.kills_from_report("ABC", fights, 7, base, difficulty=5)
+    assert [row.fight_id for row in rows] == [1, 3]
+
+    # And with no filter asked for, everything comes back.
+    assert len(firstkills.kills_from_report("ABC", fights, 7, base)) == 3
+
+
+def test_the_outcome_carries_why_a_search_found_nothing():
+    """`difficulties_seen` on the outcome, not only in a log line that scrolls away.
+
+    An empty boss on the site is otherwise indistinguishable from a boss nobody has
+    tried to read, and the reason lived in CI output for a run nobody kept.
+    """
+    outcome = firstkills.SearchOutcome()
+    assert outcome.difficulties_seen == {}
+    outcome.difficulties_seen = {4: 54, None: 3}
+    assert outcome.difficulties_seen[4] == 54

@@ -789,3 +789,41 @@ def test_a_truncated_search_is_not_exhausted():
     ):
         assert not (not outcome.truncated and outcome.aborted is None)
     assert SearchOutcome().aborted is None and not SearchOutcome().truncated
+
+
+def test_the_search_counts_the_difficulties_it_saw():
+    """The diagnostic fires. Its guard was permanently False before this.
+
+    `seen_difficulties` was declared and never written to, so
+    `if not rows and seen_difficulties` could not be true on any run and the one
+    thing that explains an empty encounter never printed. Present, and inoperative
+    -- the same shape as a settle guard that misses a nested stamp.
+    """
+    from wowdps.fightprobe import _public_first_kills
+
+    base = 1_700_000_000_000.0
+
+    def heroic(fight_id):
+        return [
+            {
+                "id": fight_id,
+                "encounterID": 42,
+                "kill": True,
+                "startTime": 10_000,
+                "difficulty": 4,
+            }
+        ]
+
+    client = _ReportSearchClient(
+        pages=[[{"code": "AAA"}, {"code": "BBB"}]],
+        kills={"AAA": heroic(1), "BBB": heroic(2)},
+        starts={"AAA": base, "BBB": base},
+        limit=2,
+    )
+
+    pairs, outcome = _public_first_kills(client, 42, base, _settings(difficulty=5))
+
+    # Two Heroic kills exist and neither is the Mythic kill that was asked for, so
+    # "0 kills" would be true and useless. This is the number that names the fix.
+    assert pairs == []
+    assert outcome.difficulties_seen == {4: 2}

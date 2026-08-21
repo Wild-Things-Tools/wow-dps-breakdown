@@ -37,7 +37,7 @@ failure.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 log = logging.getLogger(__name__)
 
@@ -127,7 +127,14 @@ def kills_from_report(
             continue
         if fight.get("encounterID") != encounter_id or not fight.get("kill"):
             continue
-        if difficulty is not None and fight.get("difficulty") != difficulty:
+        level = fight.get("difficulty")
+        if difficulty is not None and level is not None and level != difficulty:
+            # A row that *states* a different difficulty is not the kill being asked
+            # for. A row that states none is unknown, and unknown is not the same as
+            # wrong -- dropping it would lose a real kill for a reason nobody could
+            # see afterwards. It is counted in `difficulties_seen` under None, so a
+            # run reports "54 with no difficulty recorded" rather than silently
+            # deciding for itself.
             continue
         start = fight.get("startTime")
         end = fight.get("endTime")
@@ -221,6 +228,12 @@ class SearchOutcome:
     #: earliest of what was *reached*, not the earliest that exists, and the two
     #: must not be reported as the same thing.
     aborted: str | None = None
+    #: Kills of this encounter per difficulty, as the search saw them, keyed by the
+    #: raw difficulty (``None`` for a row that carried none). This is the answer to
+    #: "the search found kills and the probe sampled none of them", and it belongs
+    #: in the published document rather than only in a CI log: an empty boss on the
+    #: site is otherwise indistinguishable from a boss nobody has tried to read.
+    difficulties_seen: dict[int | None, int] = field(default_factory=dict)
 
     def summary(self, anchor_ms: float) -> str:
         base = (
