@@ -26,7 +26,7 @@ function specSlug(spec: BuffSpec): string {
   return `${spec.class} ${spec.spec}`.toLowerCase().replace(/[^a-z0-9]+/g, '_')
 }
 
-type Measure = 'powerInfusion' | 'fourPiece' | 'twoPiece'
+type Measure = 'powerInfusion' | 'fourPiece' | 'twoPiece' | 'crossover'
 
 const MEASURES: { value: Measure; label: string; blurb: string }[] = [
   {
@@ -46,9 +46,22 @@ const MEASURES: { value: Measure; label: string; blurb: string }[] = [
     label: 'Tier set, 2-piece',
     blurb: 'What the first two set pieces add over wearing none.',
   },
+  {
+    value: 'crossover',
+    label: 'Season boundary',
+    blurb:
+      'Keeping last season’s 4-piece is the option you already have, so this is three states rather than one gain: keep it, sit in the split while the first two new pieces replace it, or change over fully.',
+  },
 ]
 
 function gainOf(spec: BuffSpec, measure: Measure): { absolute: number | null; share: number | null } {
+  if (measure === 'crossover') {
+    // Ranked by what changing over fully is worth against what the player has now.
+    // The table shows all three states, so the sort key is a choice about ordering
+    // rather than about which comparison matters.
+    const over = spec.crossover?.currentFourOverPreviousFour ?? null
+    return { absolute: null, share: over }
+  }
   if (measure === 'powerInfusion') {
     return { absolute: spec.powerInfusionGain, share: spec.powerInfusionPercent }
   }
@@ -58,6 +71,93 @@ function gainOf(spec: BuffSpec, measure: Measure): { absolute: number | null; sh
   return { absolute: spec.twoPieceGain, share: spec.twoPiecePercent }
 }
 
+
+/**
+ * The season boundary as three columns, because it is three alternatives.
+ *
+ * The middle one is the state a player is actually in for a while: the first two
+ * new pieces have replaced the old four-piece and the third and fourth have not
+ * dropped. A negative there means changing over costs damage until the set
+ * completes, which is a real and common situation and the reason this view is not
+ * a single "the new set is worth X%" number.
+ */
+function CrossoverTable({
+  rows,
+}: {
+  rows: { spec: BuffSpec; absolute: number | null; share: number | null }[]
+}) {
+  return (
+    <div className="overflow-x-auto px-5 pb-5">
+      <table className="w-full text-[12.5px]">
+        <thead>
+          <tr className="border-b border-hairline text-left text-[11.5px] uppercase tracking-wide text-ink-tertiary">
+            <th className="py-2 pr-3 font-medium">Build</th>
+            <th className="py-2 pr-3 text-right font-medium" title="Last season's two and four pieces">
+              Old 4pc
+            </th>
+            <th
+              className="py-2 pr-3 text-right font-medium"
+              title="Last season's 2-piece plus this season's 2-piece — the state you pass through"
+            >
+              Split vs old 4pc
+            </th>
+            <th
+              className="py-2 pr-3 text-right font-medium"
+              title="This season's two and four pieces, against the split state"
+            >
+              New 4pc vs split
+            </th>
+            <th
+              className="py-2 text-right font-medium"
+              title="This season's four pieces against last season's four"
+            >
+              New 4pc vs old 4pc
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ spec }) => {
+            const cross = spec.crossover
+            if (!cross) return null
+            return (
+              <tr key={spec.id} className="border-b border-hairline/60">
+                <td className="py-1.5 pr-3">
+                  <BuildIdentity build={{ ...spec, specId: specSlug(spec) }} />
+                </td>
+                <td className="py-1.5 pr-3 text-right tabular-nums text-ink-tertiary">
+                  {fullNumber(cross.previousFourDps)}
+                </td>
+                <Delta value={cross.splitOverPreviousFour} />
+                <Delta value={cross.currentFourOverSplit} />
+                <Delta value={cross.currentFourOverPreviousFour} last />
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+/** One signed share, coloured by direction rather than by class. */
+function Delta({ value, last }: { value: number | null; last?: boolean }) {
+  if (value === null) {
+    return <td className={last ? 'py-1.5 text-right' : 'py-1.5 pr-3 text-right'}>—</td>
+  }
+  // Gain and loss are the two validated series slots, used here because the mark
+  // is a direction rather than a build -- see the palette note in CLAUDE.md.
+  const colour = value >= 0 ? 'var(--series-1)' : 'var(--series-2)'
+  return (
+    <td
+      className={last ? 'py-1.5 text-right tabular-nums' : 'py-1.5 pr-3 text-right tabular-nums'}
+      style={{ color: colour }}
+    >
+      {value >= 0 ? '+' : ''}
+      {percent(value)}
+    </td>
+  )
+}
+
 export function BuffsView({ data }: { data: BuffDataset | null }) {
   const [measure, setMeasure] = useState<Measure>('powerInfusion')
 
@@ -65,7 +165,7 @@ export function BuffsView({ data }: { data: BuffDataset | null }) {
     if (!data) return []
     return data.specs
       .map((spec) => ({ spec, ...gainOf(spec, measure) }))
-      .filter((row) => row.absolute !== null)
+      .filter((row) => (measure === 'crossover' ? row.share !== null : row.absolute !== null))
       .sort((a, b) => (b.share ?? 0) - (a.share ?? 0))
   }, [data, measure])
 
@@ -104,6 +204,8 @@ export function BuffsView({ data }: { data: BuffDataset | null }) {
 
         {rows.length === 0 ? (
           <EmptyState>Nothing was measured for this comparison.</EmptyState>
+        ) : measure === 'crossover' ? (
+          <CrossoverTable rows={rows} />
         ) : (
           <div className="overflow-x-auto px-5 pb-5">
             <table className="w-full text-[12.5px]">

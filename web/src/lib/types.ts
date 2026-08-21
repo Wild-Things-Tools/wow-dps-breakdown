@@ -1067,5 +1067,27 @@ export interface BuffSpec {
   powerInfusionPercent: number | null
   /** The seconds Power Infusion lands at. The number means nothing without them. */
   powerInfusionTimes: number[]
+  /** The season boundary, or null for a tier with no predecessor. */
+  crossover: BuffCrossover | null
   errors: string[]
+}
+
+
+/**
+ * The three set states a player chooses between when a season turns.
+ *
+ * Levels rather than gains, deliberately: they are alternatives to each other and
+ * there is no natural baseline among them — which one is the reference is the
+ * question being asked. `split` is the state a player passes *through*, when the
+ * first two new pieces have replaced the old four-piece and the third and fourth
+ * have not arrived.
+ */
+export interface BuffCrossover {
+  previousSetName: string | null
+  previousFourDps: number
+  splitDps: number | null
+  currentFourDps: number
+  splitOverPreviousFour: number | null
+  currentFourOverSplit: number | null
+  currentFourOverPreviousFour: number | null
 }
