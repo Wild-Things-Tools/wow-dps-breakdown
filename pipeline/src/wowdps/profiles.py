@@ -49,6 +49,9 @@ CLASS_TOKENS: dict[str, tuple[str, str]] = {
 HERO_ALIASES: dict[str, str] = {
     "FS": "Flameshaper",
     "SB": "Scalecommander",
+    # The generator entries spell it SC where the shipped profiles use SB. Both are
+    # Devastation's Scalecommander; without this the build is drawn as "(SC)".
+    "SC": "Scalecommander",
     "Rider": "Rider of the Apocalypse",
     "Conduit": "Conduit of the Celestials",
     "Herald": "Herald of the Sun",

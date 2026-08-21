@@ -87,6 +87,9 @@ export function SpecCoverage({ manifest }: { manifest: Manifest }) {
           <div className="mt-1 text-[13px] text-ink-tertiary">
             <span className="tabular-nums text-ink-secondary">
               +{unvalidatedRan}
+              {unvalidated.length > unvalidatedRan
+                ? ` of ${unvalidated.length}`
+                : ""}
             </span>{" "}
             more ran from a profile simc wrote and left switched off. Those are
             shown throughout with an{" "}
