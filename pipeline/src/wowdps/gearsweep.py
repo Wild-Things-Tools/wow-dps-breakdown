@@ -278,7 +278,7 @@ class WornSet:
         return [{"id": o.item.item_id, "ilevel": o.level.ilevel} for o in self.offers]
 
 
-def _runner_up_json(winner: WornSet, runner: WornSet | None) -> dict | None:
+def _runner_up_json(winner: WornSet | None, runner: WornSet | None) -> dict | None:
     """What the winning set beat, and by how much against the noise.
 
     Published because a winner that ties its runner-up is not a winner, and nothing
@@ -286,8 +286,16 @@ def _runner_up_json(winner: WornSet, runner: WornSet | None) -> dict | None:
     that differ by one ring and a tenth of a percent look like a settled answer from
     the outside. Same rule as everywhere else -- a margin inside ``hypot`` of the two
     errors is a tie.
+
+    Both arguments are whole sets and **both must come from the same invocation**.
+    This took a winner's DPS and error as two loose floats for a while, which let the
+    baseline path hand it a number from the candidate run to compare against a
+    runner-up from the combination run. Two things went wrong with that and only the
+    second was visible: the gap was a cross-invocation difference, and it could come
+    out *negative* -- at which point ``abs(gap)`` still called it a lead and the view,
+    which prefixes the figure with a minus, rendered "--0.40%".
     """
-    if runner is None:
+    if winner is None or runner is None:
         return None
     gap = winner.dps / runner.dps - 1
     gap_error = math.hypot(winner.dps_error, runner.dps_error) / 100
@@ -346,6 +354,18 @@ class BestSet:
             "dpsError": round(self.worn.dps_error, 4),
             "gain": round(self.gain, 5),
             "gainError": round(self.gain_error, 5),
+            # The denominator, spelled out. `gain` is *not* this set over
+            # `baseline.dps`: that figure comes from the candidate invocation and
+            # this one from the combination invocation, and a consumer who divides
+            # the published numbers gets a third answer with no field explaining it.
+            # `baseline.drift` measures how far apart the two are.
+            "baselineDps": round(self.baseline.dps, 1),
+            # Serialised rather than left to the reader. The tie rule is the project's
+            # uncertainty convention and belongs in one implementation: the sibling
+            # `runnerUp.tie` one field over is already published from here, and having
+            # the view recompute this one put the same rule in two places with nothing
+            # to catch a change to one of them.
+            "isTie": self.is_tie,
             "isBaseline": self.is_baseline,
             "runnerUp": _runner_up_json(self.worn, self.runner_up),
         }
@@ -371,13 +391,35 @@ class TargetResult:
     baseline_dps_error: float
     pool: list[PoolEntry] = field(default_factory=list)
     candidates: list[CandidateResult] = field(default_factory=list)
+    #: Which of ``baseline`` the candidates displace: the measured weakest of the
+    #: set. Published beside the items rather than left to be re-derived, because
+    #: the obvious derivation -- "the last one" -- is the defect this used to have,
+    #: and a reader who repeats it gets the same wrong answer the pipeline did.
+    replaces: GearItem | None = None
     #: ``EXHAUSTIVE`` or ``ADDITIVE`` -- see the constants above.
     baseline_method: str = ADDITIVE
     #: How many farmed combinations produced a measurement, i.e. how many the
     #: choice actually rests on. 0 under the additive rule.
     baseline_combinations: int = 0
+    #: The winning Mythic+ set as the *combination* run measured it. The same gear
+    #: as ``baseline``, and a different number from ``baseline_dps``, which the
+    #: candidate run measured. Kept because the runner-up gap and the ceiling gains
+    #: both have to be taken against a reference from their own invocation.
+    baseline_set: WornSet | None = None
     #: The best Mythic+ set that is not the baseline, when one was measured.
     baseline_runner_up: WornSet | None = None
+    #: How far the baseline moved between the two invocations that both measured it,
+    #: as a fraction, with the two errors in quadrature beside it.
+    #:
+    #: It should be exactly zero: profilesets with identical gear repeat
+    #: bit-identically, which is what lets the ceiling be judged inside the
+    #: combination run while candidates are judged inside the candidate run. Under
+    #: ``--target-error`` the two runs converge separately and it stops being zero,
+    #: and then the ceiling gains and the candidate gains on the same page are
+    #: measured from references this far apart. Published rather than only logged,
+    #: because a gap nobody can see from the file is one nobody can allow for.
+    baseline_drift: float | None = None
+    baseline_drift_error: float = 0.0
     #: The ceiling, one entry per candidate item level. Empty when the full
     #: enumeration was over budget -- which is not the same as "the baseline is the
     #: ceiling", so it is absent rather than equal.
@@ -392,10 +434,12 @@ class TargetResult:
             "method": self.baseline_method,
             "combinations": self.baseline_combinations,
         }
-        runner_up = _runner_up_json(
-            WornSet(offers=(), dps=self.baseline_dps, dps_error=self.baseline_dps_error),
-            self.baseline_runner_up,
-        )
+        if self.replaces is not None:
+            baseline["replaces"] = self.replaces.item_id
+        if self.baseline_drift is not None:
+            baseline["drift"] = round(self.baseline_drift, 6)
+            baseline["driftError"] = round(self.baseline_drift_error, 6)
+        runner_up = _runner_up_json(self.baseline_set, self.baseline_runner_up)
         if runner_up is not None:
             baseline["runnerUp"] = runner_up
         out = {
@@ -453,10 +497,19 @@ def _candidate_key(item: GearItem, level: ItemLevel) -> str:
 
 
 #: Above this many combinations the exhaustive search is not worth its runtime and
-#: the additive approximation is used instead, with the dataset saying which. Sized
-#: from the measured ~11 CPU-seconds a caster's variant costs at 3000 iterations,
-#: about a third of that at the 1000 this sweep runs at: 120 variants is roughly 7
-#: CPU-minutes per spec per target count, which fits a dispatched run.
+#: the additive approximation is used instead, with the dataset saying which.
+#:
+#: **It counts combinations, and a sweep runs more variants than that.** Each also
+#: runs the both-sockets-empty reference, one solo variant per farmed item, and a
+#: second invocation carrying the baseline and every candidate at every item level.
+#: Finger at 82 combinations runs 98 variants; the gap is the farmed pool plus the
+#: candidate grid, so it widens as a pool grows. Read as a variant budget this
+#: number under-buys by about 20% at the finger's shape and more at a larger one.
+#:
+#: Sized from the measured ~11 CPU-seconds a caster's variant costs at 3000
+#: iterations, about a third of that at the 1000 this sweep runs at: the ~98
+#: variants a 82-combination slot actually runs came in at 125-193 seconds of wall
+#: clock on four cores, which fits a dispatched run comfortably.
 #:
 #: Counted against MID2's derived pools -- and the counts are *not* the pool sizes,
 #: which is what an earlier note here got wrong. The Mythic+ half is what forms a
@@ -509,6 +562,8 @@ def _combination_variants(
     chosen: dict[str, tuple[Offer, ...]] = {}
 
     for combo in itertools.combinations(worn, size):
+        if not _fills_every_socket(combo, size):
+            continue
         chosen[_combo_key(combo)] = combo
 
     by_level: dict[str, list[Offer]] = {}
@@ -518,14 +573,25 @@ def _combination_variants(
         for combo in itertools.combinations([*worn, *level_offers], size):
             if all(offer in farmed for offer in combo):
                 continue  # already enumerated above, and level-independent
-            # One item cannot fill two sockets. It cannot happen from the pools as
-            # they are built (the two sources are disjoint, and one level is offered
-            # at a time), and simc would answer a duplicate by leaving a socket
-            # empty -- a plausible number for a set nobody could wear.
-            if len({offer.item.item_id for offer in combo}) != size:
+            if not _fills_every_socket(combo, size):
                 continue
             chosen[_combo_key(combo)] = combo
     return chosen
+
+
+def _fills_every_socket(combo: tuple[Offer, ...], size: int) -> bool:
+    """Does this combination put a *different* item in each socket?
+
+    One item cannot fill two sockets, and simc answers a duplicate by leaving one
+    empty -- a plausible number for a set nobody could wear, which could then win the
+    enumeration and be published as the baseline. The guard used to sit on the
+    drop-bearing loop alone, on the reasoning that the two sources are disjoint and
+    one level is offered at a time. That covers a duplicate *across* the two halves
+    and not one *within* either: `gear_pools.json` is written by `gearpool.py` from
+    the journal's loot tables, where one item placed by two encounters is an ordinary
+    thing, and a repeated id would be paired with itself here.
+    """
+    return len({offer.item.item_id for offer in combo}) == size
 
 
 def _combo_key(combo: tuple[Offer, ...]) -> str:
@@ -583,6 +649,28 @@ def _pair_variant(
             )
         ),
     )
+
+
+def _published_pool(entries: list[PoolEntry], limit: int) -> list[PoolEntry]:
+    """The pool rows worth publishing, under *both* rankings rather than one.
+
+    ``entries`` arrives sorted by whichever figure chose the baseline -- best
+    combination under the exhaustive rule, standalone value under the additive one --
+    and truncating there quietly answers only that ranking's question. The view has
+    two columns over these rows: what an item is worth in the winning company, and
+    what it is worth alone. Measured on MID2's finger sweep, the head of the
+    combination ranking is not the head of the standalone ranking on four builds of
+    six, and on one of them neither of the two best-alone items survived the cut at
+    all -- so a column labelled "alone" was printing standalone numbers for items
+    picked by a different figure entirely.
+
+    Keeping the union of both heads costs a couple of rows and makes each column
+    complete over what is published. Order is left as the ranking left it, since that
+    is what the tables read down.
+    """
+    keep = {id(entry) for entry in entries[:limit]}
+    keep |= {id(entry) for entry in sorted(entries, key=lambda e: -e.standalone_gain)[:limit]}
+    return [entry for entry in entries if id(entry) in keep]
 
 
 def _measured_sets(
@@ -803,21 +891,46 @@ def _sweep_one(
             )
 
     # Step 2 and 3 share one run so the baseline and every candidate are measured
-    # under identical conditions. The candidate always replaces the *second* socket,
-    # which holds the weaker of the two baseline items.
+    # under identical conditions. The candidate replaces the *weakest* item of the
+    # baseline set, because "does this drop beat the worse of the two I wear" is the
+    # decision a loot council has.
+    #
+    # Which one that is has to be *measured*, and this took the wrong answer for the
+    # whole life of the exhaustive method. `baseline_items` is the enumeration's
+    # order, which follows `gear_pools.json`; under the additive rule the entries
+    # were already sorted by standalone value so `[-1]` happened to be the weakest,
+    # and under the exhaustive rule it is whichever member of the winning pair sorts
+    # later in the pool file. On MID2's published finger sweep that named the
+    # *stronger* ring on 10 of 26 builds, so every candidate on those builds was
+    # priced against throwing away the better of the two.
+    #
+    # For two sockets the measured answer is exactly the solo run: dropping B leaves
+    # A alone and dropping A leaves B alone, so the one to drop is the one whose
+    # partner scores higher by itself -- i.e. the lower standalone value. Ties break
+    # on position so a re-run picks the same socket.
+    solo_gain = {entry.item.item_id: entry.standalone_gain for entry in entries}
+    replaced_index = min(
+        range(len(baseline_items)),
+        key=lambda index: (solo_gain.get(baseline_items[index].item_id, 0.0), index),
+    )
+    replaced = baseline_items[replaced_index]
+
     ilevels = [baseline_level.ilevel] * len(baseline_items)
     variants = [_pair_variant(_BASELINE_KEY, slot, baseline_items, ilevels, adornments)]
-    replaced = baseline_items[-1]
-    kept = baseline_items[:-1]
     for item in candidates:
         for level in pool.item_levels:
+            # Substituted *in place* rather than appended after the survivors. The
+            # baseline and the candidate then differ in exactly one socket, which is
+            # what "swap one ring" means -- and each surviving item keeps the socket
+            # it was measured in, which matters because a profile's two ring sockets
+            # carry different gems.
+            worn_items = list(baseline_items)
+            worn_ilevels = list(ilevels)
+            worn_items[replaced_index] = item
+            worn_ilevels[replaced_index] = level.ilevel
             variants.append(
                 _pair_variant(
-                    _candidate_key(item, level),
-                    slot,
-                    [*kept, item],
-                    [*([baseline_level.ilevel] * len(kept)), level.ilevel],
-                    adornments,
+                    _candidate_key(item, level), slot, worn_items, worn_ilevels, adornments
                 )
             )
     step_two = _run(simc, profile, targets, settings, variants, timeout)
@@ -833,16 +946,19 @@ def _sweep_one(
     # bit-identically. If that ever stops being true both halves of this file are
     # comparing across a gap, so it is checked rather than assumed -- reported as a
     # finding, not raised, because the numbers are still each internally consistent.
+    baseline_drift: float | None = None
+    baseline_drift_error = 0.0
     if best_baseline is not None:
-        drift = abs(baseline.dps / best_baseline.dps - 1)
-        if drift > math.hypot(baseline.dps_error, best_baseline.dps_error) / 100:
+        baseline_drift = baseline.dps / best_baseline.dps - 1
+        baseline_drift_error = math.hypot(baseline.dps_error, best_baseline.dps_error) / 100
+        if abs(baseline_drift) > baseline_drift_error:
             log.warning(
                 "  the baseline set measured %.1f in the combination run and %.1f in the "
                 "candidate run, a %.3f%% gap outside their combined error -- profilesets "
                 "with identical gear are supposed to repeat exactly",
                 best_baseline.dps,
                 baseline.dps,
-                drift * 100,
+                baseline_drift * 100,
             )
 
     results: list[CandidateResult] = []
@@ -894,10 +1010,14 @@ def _sweep_one(
         baseline_ilevel=baseline_level.ilevel,
         baseline_dps=baseline.dps,
         baseline_dps_error=baseline.dps_error,
-        pool=entries[: baseline_size(slot) + RUNNERS_UP],
+        pool=_published_pool(entries, baseline_size(slot) + RUNNERS_UP),
         candidates=results,
+        replaces=replaced,
         baseline_method=EXHAUSTIVE if best_baseline is not None else ADDITIVE,
         baseline_combinations=len(ranked_baseline),
+        baseline_set=best_baseline,
         baseline_runner_up=ranked_baseline[1] if len(ranked_baseline) > 1 else None,
+        baseline_drift=baseline_drift,
+        baseline_drift_error=baseline_drift_error,
         best_sets=best_sets,
     )

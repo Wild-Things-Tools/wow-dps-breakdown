@@ -960,3 +960,390 @@ def test_a_ceiling_that_was_never_measured_is_absent_rather_than_equal(stub_simc
     result = gearsweep.sweep_spec(Path("simc"), profile, POOL, SimSettings(), [1], timeout=60)
     assert result.targets[0].best_sets == []
     assert "bestSets" not in result.targets[0].to_json()
+
+
+# --------------------------------------------------------------------------------
+# Which item the candidate replaces
+# --------------------------------------------------------------------------------
+#
+# Pool-file order and measured value are different orderings, and for the whole life
+# of the exhaustive method the sweep used the first where it documented the second.
+# `baseline_items` comes out of `itertools.combinations(worn, ...)`, which follows
+# `gear_pools.json`; under the additive rule `entries` was already sorted by
+# standalone value, so `[-1]` happened to be the weakest and nothing showed. Under
+# the exhaustive rule it is whichever member of the winning pair sorts later in the
+# file, and on MID2's published finger sweep that was the *stronger* ring on 10 of 26
+# builds.
+#
+# The table below is built so the two orderings disagree: X is first in the pool and
+# weakest, Y is second and strongest, and X + Y is the pair that wins.
+
+RING_X, RING_Y, RING_Z = (gear(301, "mythicplus"), gear(302, "mythicplus"), gear(303, "mythicplus"))
+DROP_D = gear(401, "raid")
+
+ORDER_POOL = SlotPool(
+    tier="MID2",
+    slot=EquipmentSlot(
+        id="finger", label="Ring", sockets=("finger1", "finger2"), inventory_type=11
+    ),
+    items=(RING_X, RING_Y, RING_Z, DROP_D),
+    item_levels=(MYTHIC,),
+    baseline_source="mythicplus",
+    candidate_source="raid",
+)
+
+Y = MYTHIC.ilevel
+ORDER_DPS: dict[frozenset[tuple[int, int]], float] = {
+    frozenset(): 100_000.0,
+    # Standalone: X is the weakest of the three and Y the strongest.
+    frozenset({(301, Y)}): 105_000.0,
+    frozenset({(302, Y)}): 120_000.0,
+    frozenset({(303, Y)}): 110_000.0,
+    # ...and yet X + Y is the best farmed pair, so the winning set holds both the
+    # weakest item and the strongest.
+    frozenset({(301, Y), (302, Y)}): 130_000.0,
+    frozenset({(301, Y), (303, Y)}): 118_000.0,
+    frozenset({(302, Y), (303, Y)}): 125_000.0,
+    # The drop beside each farmed ring. Dropping X for it is worth far more than
+    # dropping Y for it, which is the whole point of getting the choice right.
+    frozenset({(301, Y), (401, Y)}): 121_000.0,
+    frozenset({(302, Y), (401, Y)}): 133_000.0,
+    frozenset({(303, Y), (401, Y)}): 128_000.0,
+}
+
+
+@pytest.fixture
+def order_sweep(monkeypatch, tmp_path):
+    def fake_run(simc, profile, targets, settings, variants, timeout):
+        out = {}
+        for variant in variants:
+            worn = frozenset(
+                (item.item_id, ilevel)
+                for _socket, item, ilevel in variant.equipped.sockets
+                if item is not None
+            )
+            if worn in ORDER_DPS:
+                out[variant.key] = gearsweep.VariantResult(
+                    key=variant.key, dps=ORDER_DPS[worn], dps_error=0.05, iterations=1000
+                )
+        return out
+
+    monkeypatch.setattr(gearsweep, "_run", fake_run)
+    path = tmp_path / "MID2_Mage_Arcane_Sunfury.simc"
+    path.write_text("# gear_intellect=2751\n", encoding="utf-8")
+    return gearsweep._sweep_one(
+        simc=Path("simc"),
+        profile=spec_profile(path),
+        pool=ORDER_POOL,
+        settings=SimSettings(target_error=0, max_iterations=1000),
+        targets=1,
+        primary="intellect",
+        baseline_pool=[RING_X, RING_Y, RING_Z],
+        candidates=[DROP_D],
+        baseline_level=MYTHIC,
+        timeout=600,
+    )
+
+
+def test_the_candidate_replaces_the_measured_weakest_not_the_last_in_the_pool_file(order_sweep):
+    """The defect, stated as the assertion that catches it.
+
+    The winning pair is X + Y in pool order. Taking the last of those names Y, which
+    is the *strongest* ring the build wears; the weakest is X. Getting this wrong
+    prices every drop against throwing the better ring away, so a real upgrade can
+    publish as a downgrade.
+    """
+    assert [item.item_id for item in order_sweep.baseline] == [301, 302]
+    assert order_sweep.replaces is not None
+    assert order_sweep.replaces.item_id == 301
+    assert {entry.replaces.item_id for entry in order_sweep.candidates} == {301}
+    assert order_sweep.to_json()["baseline"]["replaces"] == 301
+
+
+def test_the_candidate_is_equipped_in_the_socket_it_replaces(order_sweep):
+    """Naming the right item is half of it; the run has to equip that way too.
+
+    The surviving item keeps the socket it was measured in, so the baseline and the
+    candidate differ in exactly one socket. That matters beyond tidiness: a profile's
+    two ring sockets carry different gems, so moving the survivor across would change
+    two things at once and call the difference the drop's.
+    """
+    [candidate] = order_sweep.candidates
+    # 133,000 is the drop *beside Y*, i.e. X swapped out. 121,000 would be Y
+    # swapped out -- the old answer, and a 9.9% different number.
+    assert candidate.dps == 133_000.0
+    assert candidate.gain == pytest.approx(133_000.0 / 130_000.0 - 1)
+
+
+def test_replacing_the_stronger_item_would_publish_an_upgrade_as_a_downgrade(order_sweep):
+    """Why this is severe rather than untidy.
+
+    Against the correct baseline the drop gains 2.3%. Priced against dropping Y
+    instead it *loses* 6.9% -- so the same drop, the same build and the same run
+    publish opposite advice depending on which item the sweep decided to throw away.
+    """
+    [candidate] = order_sweep.candidates
+    wrong_way = 121_000.0 / 130_000.0 - 1
+    assert candidate.gain > 0
+    assert wrong_way < 0
+
+
+def test_a_duplicated_pool_id_never_becomes_a_one_ring_baseline():
+    """`gearpool.py` builds the pool from the journal's loot tables, and an item two
+    encounters both drop is an ordinary thing there. Repeated in the farmed half it
+    would be paired with itself, `_pair_variant` would emit the same id for both
+    sockets, and simc answers that by leaving one empty -- a plausible number for a
+    set nobody can wear, which could then win and be published as "Standard".
+
+    The guard was on the drop-bearing loop only, where the disjoint sources and the
+    one-level-at-a-time enumeration already made it unreachable. It was missing from
+    the loop where a duplicate can actually arrive.
+    """
+    from wowdps.gearsweep import _combination_variants
+
+    duplicated = gear(101, "mythicplus")
+    worn = offers([duplicated, duplicated, gear(102, "mythicplus")], HEROIC)
+
+    combos = _combination_variants(FINGER_SLOT, worn, [])
+
+    for combo in combos.values():
+        assert len({offer.item.item_id for offer in combo}) == len(combo)
+    # 101+101 is gone; 101+102 survives once rather than twice, because two identical
+    # offers produce the same variant key.
+    assert len(combos) == 1
+
+
+# --------------------------------------------------------------------------------
+# Two invocations, two references
+# --------------------------------------------------------------------------------
+
+
+def test_the_runner_up_gap_is_taken_inside_one_invocation(ring_sweep):
+    """Both sides of a gap have to come from the same run.
+
+    The baseline's runner-up used to be compared against `baseline_dps`, which the
+    *candidate* invocation measured, while the runner-up itself came from the
+    *combination* invocation. Under `--target-error` the two converge separately, so
+    the gap was part real and part the difference between two runs -- and it could
+    come out negative, at which point `abs(gap)` still called it a lead and the view
+    printed the figure with a minus in front of a minus.
+    """
+    payload = ring_sweep.to_json()["baseline"]["runnerUp"]
+    assert ring_sweep.baseline_set is not None
+    assert payload["gap"] >= 0
+    assert payload["gap"] == pytest.approx(
+        ring_sweep.baseline_set.dps / ring_sweep.baseline_runner_up.dps - 1, abs=1e-5
+    )
+
+
+def test_a_gap_needs_two_whole_sets_and_refuses_a_missing_one():
+    """The helper used to take the winner as loose floats, which is what let a
+    fabricated set with no items into it. Passing nothing is now an absent gap."""
+    assert gearsweep._runner_up_json(None, worn_set(120_000.0)) is None
+    assert gearsweep._runner_up_json(worn_set(122_000.0), None) is None
+
+
+def test_the_ceiling_publishes_the_denominator_it_used(ring_sweep):
+    """`gain` is this set over the *combination* run's baseline, and `baseline.dps`
+    is the *candidate* run's. A consumer dividing the two published numbers gets a
+    third answer, so the reference is published beside the gain rather than implied."""
+    payload = ring_sweep.to_json()
+    for entry in payload["bestSets"]:
+        assert entry["baselineDps"] == pytest.approx(ring_sweep.baseline_set.dps, abs=0.1)
+        assert entry["gain"] == pytest.approx(entry["dps"] / entry["baselineDps"] - 1, abs=1e-5)
+
+
+def test_the_drift_between_the_two_baseline_runs_is_published(ring_sweep):
+    """Deterministic runs make it exactly zero -- profilesets with identical gear
+    repeat bit-identically -- and that is the point: a reader can see it is zero
+    rather than being asked to assume it. Under `--target-error` it is not, and the
+    ceiling and candidate columns on one page are then that far apart."""
+    payload = ring_sweep.to_json()["baseline"]
+    assert payload["drift"] == 0.0
+    assert payload["driftError"] > 0
+
+
+@pytest.fixture
+def drifting_sweep(monkeypatch, tmp_path):
+    """The same sweep with the two invocations disagreeing about identical gear.
+
+    Deterministic runs make that impossible -- profilesets with identical gear repeat
+    bit-identically -- so every other fixture here returns one number per gear set and
+    cannot see a cross-invocation mistake at all. Under ``--target-error`` the two
+    invocations converge separately and this is the real shape. 2% is far larger than
+    a real run would drift; it is chosen so the consequence is unambiguous rather
+    than plausible.
+    """
+    calls: list[int] = []
+
+    def fake_run(simc, profile, targets, settings, variants, timeout):
+        calls.append(1)
+        scale = 1.0 if len(calls) == 1 else 0.98
+        out = {}
+        for variant in variants:
+            worn = frozenset(
+                (item.item_id, ilevel)
+                for _socket, item, ilevel in variant.equipped.sockets
+                if item is not None
+            )
+            if worn in RING_DPS:
+                out[variant.key] = gearsweep.VariantResult(
+                    key=variant.key,
+                    dps=RING_DPS[worn] * scale,
+                    dps_error=0.05,
+                    iterations=1000,
+                )
+        return out
+
+    monkeypatch.setattr(gearsweep, "_run", fake_run)
+    path = tmp_path / "MID2_Mage_Arcane_Sunfury.simc"
+    path.write_text("# gear_intellect=2751\n", encoding="utf-8")
+    return gearsweep._sweep_one(
+        simc=Path("simc"),
+        profile=spec_profile(path),
+        pool=RING_POOL,
+        settings=SimSettings(target_error=0.3),
+        targets=1,
+        primary="intellect",
+        baseline_pool=[RING_A, RING_B, RING_C],
+        candidates=[DROP_1, DROP_2],
+        baseline_level=HEROIC,
+        timeout=600,
+    )
+
+
+def test_a_drifting_baseline_never_produces_a_negative_runner_up_gap(drifting_sweep):
+    """The visible half of the cross-invocation bug.
+
+    The winning pair measures 122,000 in the combination run and its runner-up
+    120,000, so the lead is 1.7%. Take the winner from the *candidate* run instead --
+    119,560 after the drift -- and the runner-up is suddenly ahead: `gap` goes
+    negative, `abs(gap)` still calls it outside the band, and the view renders it as a
+    minus in front of a minus. Both sides now come from the combination run, so the
+    sign cannot invert.
+    """
+    payload = drifting_sweep.to_json()["baseline"]
+    assert payload["runnerUp"]["gap"] == pytest.approx(122_000.0 / 120_000.0 - 1, abs=1e-5)
+    assert payload["runnerUp"]["gap"] > 0
+    assert payload["runnerUp"]["tie"] is False
+
+
+def test_a_drifting_baseline_is_published_rather_than_only_logged(drifting_sweep):
+    """The invisible half. The ceiling gains and the candidate gains on one page are
+    then measured from references 2% apart, and until this was published nothing in
+    the file said so -- the guard only wrote a line to a log nobody reads later."""
+    payload = drifting_sweep.to_json()["baseline"]
+    assert payload["drift"] == pytest.approx(-0.02, abs=1e-4)
+    assert abs(payload["drift"]) > payload["driftError"]
+
+
+def test_the_published_pool_answers_both_rankings_not_only_the_winning_one():
+    """The rows carry two columns -- worth in company, worth alone -- and used to be
+    cut by one ranking. On MID2's real finger sweep the two heads disagree on four
+    builds of six, and on one neither best-alone item survived the cut, so a column
+    labelled "alone" listed items chosen by a different figure."""
+    from wowdps.gearsweep import _published_pool
+
+    def entry(item_id: int, alone: float, in_company: float) -> gearsweep.PoolEntry:
+        return gearsweep.PoolEntry(
+            item=gear(item_id, "mythicplus"),
+            ilevel=334,
+            dps=100_000 + alone,
+            dps_error=0.05,
+            standalone_gain=alone,
+            best_combination_dps=in_company,
+        )
+
+    # Ranked by company (the order `entries` arrives in); 104 is the best alone and
+    # the worst in company, so a cut at two would drop it entirely.
+    entries = [
+        entry(101, alone=5_000, in_company=130_000),
+        entry(102, alone=4_000, in_company=129_000),
+        entry(103, alone=3_000, in_company=128_000),
+        entry(104, alone=9_000, in_company=110_000),
+    ]
+
+    kept = [e.item.item_id for e in _published_pool(entries, 2)]
+    assert kept == [101, 102, 104]  # both heads, in the ranking's own order
+
+
+# --------------------------------------------------------------------------------
+# When the dataset reaches disk
+# --------------------------------------------------------------------------------
+
+
+def test_the_sweep_publishes_after_every_spec_and_not_once_more_at_the_end(monkeypatch, tmp_path):
+    """Two properties in one count, and both were wrong in opposite directions.
+
+    `write_gear` used to be called once, after the loop, so a sweep interrupted at
+    spec 9 of 26 left nothing -- while CLAUDE.md described it leaving a smaller,
+    honestly-counted dataset, which is what the view's coverage line reports. Moving
+    it into the loop then left a redundant trailing call that reserialised an
+    unchanged document and restamped `generatedAt`.
+
+    So: one write per spec, and no more. Three specs, three writes.
+    """
+    from wowdps import cli, dataset, equipment, profiles, simc_runner
+    from wowdps import gearsweep as sweep
+
+    written: list[int] = []
+
+    def fake_write_gear(out_dir, results, pools, tier, simc_meta, settings, specs_available):
+        written.append(len(results))
+        path = Path(out_dir) / "gear.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}", encoding="utf-8")
+        return path
+
+    def fake_discover(profiles_dir, tier, dps_only=True):
+        return [
+            SpecProfile(
+                path=tmp_path / f"MID2_Mage_Arcane_{name}.simc",
+                tier="MID2",
+                wow_class="Mage",
+                spec="Arcane",
+                hero_talent=name,
+                role="spell",
+                talent_hash=None,
+            )
+            for name in ("Sunfury", "Spellslinger", "Frostfire")
+        ]
+
+    monkeypatch.setattr(dataset, "write_gear", fake_write_gear)
+    monkeypatch.setattr(profiles, "discover", fake_discover)
+    monkeypatch.setattr(simc_runner, "find_simc", lambda *a, **k: Path("simc"))
+    monkeypatch.setattr(cli, "_resolve_tier", lambda *a, **k: "MID2")
+    monkeypatch.setattr(cli, "_probe_simc_metadata", lambda *a, **k: {"version": "stub"})
+    monkeypatch.setattr(
+        equipment,
+        "load_pools",
+        lambda *a, **k: equipment.GearPools(tier="MID2", slots={"finger": POOL}),
+    )
+    monkeypatch.setattr(
+        sweep,
+        "sweep_spec",
+        lambda *a, **k: sweep.SpecSlotResult(
+            profile=fake_discover(None, None)[0],
+            slot=POOL.slot,
+            primary_stat="intellect",
+            targets=[
+                sweep.TargetResult(
+                    targets=1,
+                    empty_dps=1.0,
+                    baseline=[MPLUS[0]],
+                    baseline_ilevel=334,
+                    baseline_dps=1.0,
+                    baseline_dps_error=0.05,
+                )
+            ],
+        ),
+    )
+
+    args = cli.build_parser().parse_args(
+        ["gear", "--profiles", str(tmp_path), "--tier", "MID2", "--out", str(tmp_path / "out")]
+    )
+    assert cli.cmd_gear(args) == 0
+
+    # One write per spec, each carrying everything swept so far -- never a final
+    # duplicate of the last one.
+    assert written == [1, 2, 3]
