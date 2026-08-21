@@ -655,6 +655,31 @@ shipped profile. The previous tier is resolved through `profiles.previous_tier`,
 this keeps meaning "last season" after the next one lands, and a first tier
 publishes `crossover: null` rather than a comparison against nothing.
 
+### What the boundary sweep found
+
+MID2 against MID1, one target, 3000 deterministic iterations, all 28 builds, median
+error 0.056%. Both halves of the answer are things a single "the new set is worth
+X%" number cannot say.
+
+**Changing over is worth between nothing and 11.9%.** Outlaw Rogue +11.92%,
+Arcane Sunfury +10.17%, Elemental Stormbringer +10.11% at the top; **Beast Mastery
+Hunter -0.03%**, which is inside its own tie band and therefore *no reason to change
+sets at all*. A spread that wide over one decision is the argument for publishing it
+per build rather than as a tier headline.
+
+**The split step is a real loss on two builds**: Beast Mastery -0.72% and Subtlety
+Rogue -0.18%, both outside the tie band. Those are the builds that get *worse* when
+the first two new pieces replace the old four-piece, and stay worse until the third
+and fourth drop -- which is exactly the state the middle column exists to show and
+the one a gain-over-nothing number hides completely.
+
+**Front-loaded and back-loaded survive the boundary, and they reverse the advice.**
+Ten of 28 get more from the first two new pieces than from the last two. Arcane
+Sunfury takes +8.02% then +1.99%: swap the moment two pieces drop. Outlaw Rogue takes
++1.36% then +10.41%: the split is nearly pointless and only the finished set matters.
+Same total ballpark on neither, but the *sequence* is opposite, and it is what a
+player actually acts on during a changeover.
+
 Set and Power Infusion run as **two invocations**. Combined, Power Infusion would
 be measured on whichever set state the shipped profile carries, answering neither
 question.
