@@ -848,7 +848,7 @@ def test_a_first_publish_is_not_a_loss(tmp_path):
 
 
 def test_an_empty_encounter_says_whether_the_kills_exist_elsewhere():
-    """"No fights" and "no fights at the difficulty asked for" are different answers.
+    """ "No fights" and "no fights at the difficulty asked for" are different answers.
 
     Only the second names its own fix, and on a page that shows a count they look
     the same. The counts come from the report search, which is deliberately
