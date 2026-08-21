@@ -106,3 +106,73 @@ def test_a_class_with_no_set_for_the_tier_gets_none_rather_than_another_class_se
     # class_id 1 is Warrior in simc's player_e order, which is what the table keys on.
     assert buffsweep.class_id_of(warrior, sets) is not None
     assert buffsweep.class_id_of(mage, sets) is None
+
+
+def test_the_season_boundary_is_three_states_not_a_gain():
+    """Keeping last season's four-piece is the incumbent option, so it is one of them.
+
+    The question at a season turn is never "what is the new set worth" on its own.
+    It is whether to keep the old 4pc, sit in the split state while the first two
+    new pieces arrive, or change over fully -- and the split is the state a player
+    passes *through*, which is where the decision actually bites.
+    """
+    keys = {variant.key: variant.options for variant in buffsweep.crossover_variants("s1", "s2")}
+
+    assert keys["cross__prev4"] == (
+        "set_bonus=s1_2pc=1",
+        "set_bonus=s1_4pc=1",
+        "set_bonus=s2_2pc=0",
+        "set_bonus=s2_4pc=0",
+    )
+    assert keys["cross__split"] == (
+        "set_bonus=s1_2pc=1",
+        "set_bonus=s1_4pc=0",
+        "set_bonus=s2_2pc=1",
+        "set_bonus=s2_4pc=0",
+    )
+    assert keys["cross__cur4"] == (
+        "set_bonus=s1_2pc=0",
+        "set_bonus=s1_4pc=0",
+        "set_bonus=s2_2pc=1",
+        "set_bonus=s2_4pc=1",
+    )
+
+
+def test_every_token_is_written_including_the_zeroes():
+    """A profile already wearing either set would otherwise poison the variant."""
+    for variant in buffsweep.crossover_variants("s1", "s2"):
+        assert len(variant.options) == 4
+        assert (
+            sum(option.endswith("=0") for option in variant.options)
+            + sum(option.endswith("=1") for option in variant.options)
+            == 4
+        )
+
+
+def test_the_three_comparisons_are_published_as_shares_of_what_is_left_behind():
+    result = buffsweep.BuffResult(
+        spec_id="a",
+        display_name="A",
+        wow_class="Mage",
+        spec="Fire",
+        hero_talent="Sunfury",
+        previous_set_name="Old Set",
+        prev_four_dps=100_000,
+        split_dps=103_000,
+        current_four_dps=110_000,
+    )
+
+    crossover = result.to_json()["crossover"]
+
+    assert crossover["previousSetName"] == "Old Set"
+    assert crossover["splitOverPreviousFour"] == 0.03
+    assert crossover["currentFourOverSplit"] == round(110_000 / 103_000 - 1, 5)
+    assert crossover["currentFourOverPreviousFour"] == 0.1
+
+
+def test_a_tier_with_no_predecessor_publishes_no_crossover():
+    """A first season has nothing to leave behind, and null says so."""
+    result = buffsweep.BuffResult(
+        spec_id="a", display_name="A", wow_class="Mage", spec="Fire", hero_talent="Sunfury"
+    )
+    assert result.to_json()["crossover"] is None

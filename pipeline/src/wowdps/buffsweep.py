@@ -69,6 +69,11 @@ _FOUR = "set__4pc"
 _NO_PI = "pi__none"
 _WITH_PI = "pi__oncooldown"
 
+#: The three states a player is actually choosing between at a season boundary.
+_PREV4 = "cross__prev4"
+_SPLIT = "cross__split"
+_CUR4 = "cross__cur4"
+
 
 @dataclass(frozen=True)
 class TierSet:
@@ -137,6 +142,42 @@ def set_variants(option: str) -> list[Profileset]:
     ]
 
 
+def crossover_variants(previous: str, current: str) -> list[Profileset]:
+    """The three set states a player weighs when a new season opens.
+
+    Keeping last season's four-piece is a real option and usually the incumbent, so
+    the question is never "what is the new set worth" on its own. It is:
+
+        prev4   last season's 2 + 4      -- keep what you have
+        split   last season's 2 + this season's 2
+        cur4    this season's 2 + 4      -- fully changed over
+
+    ``split`` is the state a player passes through: the first two new pieces
+    replace the old four-piece before the third and fourth arrive, and whether that
+    step is an upgrade or a loss is the decision the whole season boundary turns on.
+
+    Every set token is written explicitly in all three, including the zeroes. A
+    profile that already wears either set would otherwise carry it into a variant
+    that is supposed to be without it, and the differences would be measured against
+    the wrong baseline -- the same reason the single-season sweep overrides rather
+    than relies on the shipped profile.
+    """
+
+    def options(prev_two: int, prev_four: int, cur_two: int, cur_four: int) -> tuple[str, ...]:
+        return (
+            f"set_bonus={previous}_2pc={prev_two}",
+            f"set_bonus={previous}_4pc={prev_four}",
+            f"set_bonus={current}_2pc={cur_two}",
+            f"set_bonus={current}_4pc={cur_four}",
+        )
+
+    return [
+        Profileset(key=_PREV4, options=options(1, 1, 0, 0)),
+        Profileset(key=_SPLIT, options=options(1, 0, 1, 0)),
+        Profileset(key=_CUR4, options=options(0, 0, 1, 1)),
+    ]
+
+
 def power_infusion_variants(times: tuple[float, ...]) -> list[Profileset]:
     cast_at = "/".join(f"{value:g}" for value in times)
     return [
@@ -160,6 +201,12 @@ class BuffResult:
     set_name: str | None = None
     power_infusion_gain: float | None = None
     power_infusion_times: tuple[float, ...] = ()
+    #: The season boundary, as DPS for each of the three states a player chooses
+    #: between. None when the tier has no predecessor with a set.
+    previous_set_name: str | None = None
+    prev_four_dps: float | None = None
+    split_dps: float | None = None
+    current_four_dps: float | None = None
     dps_error: float = 0.0
     errors: list[str] | None = None
 
@@ -182,8 +229,35 @@ class BuffResult:
             "powerInfusionGain": _gain(self.power_infusion_gain),
             "powerInfusionPercent": _percent(self.power_infusion_gain, self.base_dps),
             "powerInfusionTimes": list(self.power_infusion_times),
+            # The season boundary. Levels rather than gains, because the three
+            # states are alternatives to each other and there is no natural
+            # baseline among them -- which one is "the" reference is exactly the
+            # question. The view subtracts whichever pair a reader asks for.
+            "crossover": self._crossover_json(),
             "errors": self.errors or [],
         }
+
+    def _crossover_json(self) -> dict | None:
+        if self.prev_four_dps is None or self.current_four_dps is None:
+            return None
+        return {
+            "previousSetName": self.previous_set_name,
+            "previousFourDps": round(self.prev_four_dps, 1),
+            "splitDps": round(self.split_dps, 1) if self.split_dps is not None else None,
+            "currentFourDps": round(self.current_four_dps, 1),
+            # The three comparisons a season boundary is actually about, as shares
+            # of the state being left behind.
+            "splitOverPreviousFour": _ratio(self.split_dps, self.prev_four_dps),
+            "currentFourOverSplit": _ratio(self.current_four_dps, self.split_dps),
+            "currentFourOverPreviousFour": _ratio(self.current_four_dps, self.prev_four_dps),
+        }
+
+
+def _ratio(value: float | None, against: float | None) -> float | None:
+    """``value`` over ``against`` minus one, so 0.03 reads as three percent better."""
+    if value is None or not against:
+        return None
+    return round(value / against - 1, 5)
 
 
 def _gain(value: float | None) -> float | None:
@@ -204,13 +278,18 @@ def sweep_spec(
     scenario: Scenario = PATCHWERK,
     targets: int = 1,
     timeout: int = 1800,
+    previous_set: TierSet | None = None,
 ) -> BuffResult:
-    """Both sweeps for one spec, in two simc invocations.
+    """Every sweep for one spec, in up to three simc invocations.
 
-    Two rather than one on purpose: the set variants and the Power Infusion
-    variants are independent questions, and combining them into one profileset list
-    would measure Power Infusion on whichever set state simc's shipped profile
-    happens to carry -- an answer to neither question.
+    Separate rather than combined on purpose: each is an independent question, and
+    putting them in one profileset list would measure each on whichever state the
+    shipped profile happens to carry -- an answer to none of them. Power Infusion
+    measured on an unknown set state is the clearest case.
+
+    The third is the season boundary and only runs when the previous tier has a set
+    for this class. Its three variants are alternatives to each other rather than
+    gains over a baseline, so they are reported as levels.
     """
     result = BuffResult(
         spec_id=profile.id,
@@ -232,6 +311,28 @@ def sweep_spec(
             result.errors.append(f"tier set: {exc}")
         else:
             result = _read_sets(result, measured)
+
+    if tier_set is not None and previous_set is not None:
+        result.previous_set_name = previous_set.name
+        try:
+            measured = run_profilesets(
+                simc,
+                request,
+                settings,
+                crossover_variants(previous_set.option, tier_set.option),
+                timeout=timeout,
+            )
+        except Exception as exc:  # noqa: BLE001
+            result.errors.append(f"season boundary: {exc}")
+        else:
+            for key, attribute in (
+                (_PREV4, "prev_four_dps"),
+                (_SPLIT, "split_dps"),
+                (_CUR4, "current_four_dps"),
+            ):
+                entry = measured.get(key)
+                if entry:
+                    setattr(result, attribute, entry.dps)
 
     fight_length = float(scenario.max_time)
     times = power_infusion_times(fight_length)

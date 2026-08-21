@@ -768,9 +768,25 @@ def cmd_buffs(args: argparse.Namespace) -> int:
         target_error=args.target_error, max_iterations=args.max_iterations, threads=args.threads
     )
 
-    sets = buffsweep.sets_for_tier(buffsweep.parse_tier_sets(Path(args.simc_source)), tier)
+    all_sets = buffsweep.parse_tier_sets(Path(args.simc_source))
+    sets = buffsweep.sets_for_tier(all_sets, tier)
     if not sets:
         logging.warning("simc ships no set bonuses labelled %s; only Power Infusion will run", tier)
+
+    # The season boundary needs the tier before this one. Resolved against the tiers
+    # simc ships rather than by decrementing the name, so it keeps meaning "last
+    # season" after the next one lands.
+    previous_sets: list[buffsweep.TierSet] = []
+    try:
+        previous_tier = profiles.previous_tier(profiles_dir)
+    except Exception as exc:  # noqa: BLE001 - a first tier has no predecessor
+        logging.info("no previous tier to compare sets against: %s", exc)
+    else:
+        previous_sets = buffsweep.sets_for_tier(all_sets, previous_tier)
+        if previous_sets:
+            logging.info("comparing against %s's sets for the season boundary", previous_tier)
+        else:
+            logging.warning("simc ships no set bonuses labelled %s", previous_tier)
 
     found = profiles.discover(profiles_dir, tier, dps_only=True)
     selected = _select(found, args.wow_class, args.spec, args.limit, _parse_shard(args.shard))
@@ -785,7 +801,13 @@ def cmd_buffs(args: argparse.Namespace) -> int:
             tier_set.name if tier_set else "no tier set",
         )
         result = buffsweep.sweep_spec(
-            simc, profile, tier_set, settings, targets=args.targets, timeout=args.timeout
+            simc,
+            profile,
+            tier_set,
+            settings,
+            targets=args.targets,
+            timeout=args.timeout,
+            previous_set=buffsweep.class_id_of(profile, previous_sets),
         )
         for message in result.errors or ():
             logging.warning("  %s", message)

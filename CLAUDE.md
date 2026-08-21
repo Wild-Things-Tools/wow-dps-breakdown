@@ -626,6 +626,35 @@ Three decisions the numbers rest on:
   cooldown from the pull -- (0, 120, 240) for a 300s fight -- and the seconds are
   published beside the number.
 
+### The season boundary: three states, not a gain
+
+Keeping last season's four-piece is the incumbent option, so "what is the new set
+worth" is never the question on its own. `crossover_variants` runs the three states
+a player actually chooses between:
+
+```
+prev4   last season's 2 + 4          keep what you have
+split   last season's 2 + this season's 2
+cur4    this season's 2 + 4          fully changed over
+```
+
+`split` is the state a player passes *through* -- the first two new pieces replace
+the old four-piece before the third and fourth arrive -- and whether that step is an
+upgrade or a loss is what the whole boundary turns on.
+
+Published as **levels rather than gains**, because the three are alternatives to
+each other and there is no natural baseline among them; which one is the reference
+is exactly the question. The three ratios a reader wants
+(`splitOverPreviousFour`, `currentFourOverSplit`, `currentFourOverPreviousFour`)
+sit beside them.
+
+Every set token is written in all three variants, zeroes included: a profile
+already wearing either set would otherwise carry it into a variant meant to be
+without it. Same reason the single-season sweep overrides rather than trusts the
+shipped profile. The previous tier is resolved through `profiles.previous_tier`, so
+this keeps meaning "last season" after the next one lands, and a first tier
+publishes `crossover: null` rather than a comparison against nothing.
+
 Set and Power Infusion run as **two invocations**. Combined, Power Infusion would
 be measured on whichever set state the shipped profile carries, answering neither
 question.
