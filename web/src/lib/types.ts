@@ -367,9 +367,21 @@ export interface GearBestSet {
   items: { id: number; ilevel: number }[]
   dps: number
   dpsError: number
-  /** Fraction of baseline DPS. Zero when the ceiling *is* the baseline. */
+  /**
+   * Fraction of `baselineDps` gained. Zero when the ceiling *is* the baseline.
+   *
+   * Note the denominator: `baselineDps` is the winning farmed set as the
+   * *combination* invocation measured it, while `GearTargetResult.baseline.dps` is
+   * the same gear as the *candidate* invocation measured it. Dividing the two
+   * published DPS figures gives a third number; `baseline.drift` is how far apart
+   * the two runs were.
+   */
   gain: number
   gainError: number
+  /** The reference `gain` was taken against, spelled out rather than implied. */
+  baselineDps: number
+  /** The project's tie rule, applied by the pipeline: `|gain| <= gainError`. */
+  isTie?: boolean
   /** True when nothing in the drop pool improves on what the build already wears. */
   isBaseline: boolean
   runnerUp: GearRunnerUp | null
@@ -413,6 +425,21 @@ export interface GearTargetResult {
     method?: string
     /** How many combinations the choice rests on. 0 under the additive rule. */
     combinations?: number
+    /**
+     * How far the same gear moved between the two invocations that both measured
+     * it, with the two errors in quadrature. Exactly zero on a deterministic run,
+     * which is the point — a reader can see it rather than assume it. Non-zero
+     * under `--target-error`, and then the ceiling gains and the candidate gains on
+     * one page are measured from references this far apart.
+     */
+    drift?: number
+    driftError?: number
+    /**
+     * Which of `items` the candidates displace: the measured weakest of the set.
+     * Never "the last one" — that is pool-file order, and reading it that way is
+     * the defect the pipeline carried. Absent on data written before it.
+     */
+    replaces?: number
     runnerUp?: GearRunnerUp
   }
   pool: GearPoolEntry[]
