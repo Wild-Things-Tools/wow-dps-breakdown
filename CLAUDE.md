@@ -1513,6 +1513,18 @@ profile simc did not ship is drawn beside ones it did.
 weapon or a crafted back sits a few levels off the rest, and a mean reports a level
 nothing is actually at.
 
+**The chart needed a fourth channel, and it could not be words.** The Overview
+opens on the bar chart, whose axis ticks are SVG -- an HTML badge cannot live in
+one. So for a run the eight builds sat in the ranking as ordinary bars while the
+panel *underneath* explained they were not comparable, which is the failure that
+panel exists to prevent, happening above it. A third line of tick text was tried
+and collided with the row below: the tick's height is the chart's row spacing and
+it already carries two lines. The answer is `buildOpacity` -- the bar is drawn
+faded, never recoloured and never dropped -- with the sentence in the chart's
+caption, where its other qualifications already live. Opacity alone is a weak
+channel; what makes it legal is that the caption, the table twin's badge and the
+coverage panel all say it in words.
+
 **The flag has to travel separately from the sentence.** The caveat text lives in the
 build's own `<spec>.json`; the ranking reads `index.json`. So without
 `gearComparable: false` in the *summary*, the one place a gear gap actually misleads
@@ -1807,6 +1819,15 @@ helper, both of which cost time to work out:
 - A sandbox that routes egress through a proxy needs `--proxy-server=$HTTPS_PROXY`
   passed to Chromium, and `waitUntil: 'networkidle'` never settles once third-party
   requests are in play — use `domcontentloaded` plus a fixed wait.
+- **The proxy must be bypassed for localhost, or the page is blank.** Chromium sends
+  the preview server's own requests through it too and gets **405 Method Not
+  Allowed** on every one, so the app shell loads and no dataset does. It looks
+  exactly like a data bug: the chart renders empty and the console shows only two
+  405s. Playwright's launch option is `proxy: { server, bypass: 'localhost,127.0.0.1' }`.
+- **The Overview opens on Chart, so `tr` count is zero and proves nothing.** A check
+  that looks for the table twin's badges finds none because the table is not in the
+  DOM until the Chart/Table toggle is switched. Assert against the chart, or flip
+  the toggle first.
 - Even with the proxy the icon CDN may be unreachable, in which case every icon
   renders as its fallback tile and the shots tell you nothing about the icons. Point
   `SHOT_ICON_CACHE` at a directory of `<slug>.jpg` / `<element>.webp` files fetched

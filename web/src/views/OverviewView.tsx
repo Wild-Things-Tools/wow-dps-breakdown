@@ -9,7 +9,7 @@
  * with its class colour, its spec icon and its hero tree written out.
  */
 
-import { useMemo, useState } from 'react'
+import { useMemo, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -19,9 +19,19 @@ import {
   Tooltip,
   XAxis,
   YAxis,
-} from 'recharts'
-import { AXIS_LINE, AXIS_TICK, CURSOR_FILL, GRID, TooltipCard } from '../components/chart'
-import { BuildIdentity, makeBuildTick } from '../components/BuildIdentity'
+} from "recharts";
+import {
+  AXIS_LINE,
+  AXIS_TICK,
+  CURSOR_FILL,
+  GRID,
+  TooltipCard,
+} from "../components/chart";
+import {
+  BuildIdentity,
+  buildOpacity,
+  makeBuildTick,
+} from "../components/BuildIdentity";
 import {
   EmptyState,
   Note,
@@ -29,34 +39,34 @@ import {
   PanelHeader,
   SegmentedControl,
   Select,
-} from '../components/ui'
-import { PatchState } from '../components/PatchState'
-import { SpecCoverage } from '../components/SpecCoverage'
+} from "../components/ui";
+import { PatchState } from "../components/PatchState";
+import { SpecCoverage } from "../components/SpecCoverage";
 import {
   compactNumber,
   describeFunnelGain,
   fullNumber,
   percent,
   samplingError,
-} from '../lib/format'
-import { classColor } from '../lib/palette'
-import type { Manifest, ScenarioMeta, SpecSummary } from '../lib/types'
+} from "../lib/format";
+import { classColor } from "../lib/palette";
+import type { Manifest, ScenarioMeta, SpecSummary } from "../lib/types";
 
-const SUMMARY_TARGETS = [1, 3, 5, 10]
+const SUMMARY_TARGETS = [1, 3, 5, 10];
 
 /** Two lines of tick text plus the icon need more room than a bare name. */
-const ROW_HEIGHT = 32
-const TICK_WIDTH = 205
+const ROW_HEIGHT = 32;
+const TICK_WIDTH = 205;
 
-type Mode = 'chart' | 'table'
+type Mode = "chart" | "table";
 
 interface Row {
-  id: string
-  label: string
-  build: SpecSummary
-  dps: number
-  funnelGain?: number
-  priorityShare?: number
+  id: string;
+  label: string;
+  build: SpecSummary;
+  dps: number;
+  funnelGain?: number;
+  priorityShare?: number;
 }
 
 export function OverviewView({
@@ -65,33 +75,36 @@ export function OverviewView({
   onScenarioChange,
   onOpenSpec,
 }: {
-  manifest: Manifest
-  scenario: ScenarioMeta
-  onScenarioChange: (id: string) => void
-  onOpenSpec: (id: string) => void
+  manifest: Manifest;
+  scenario: ScenarioMeta;
+  onScenarioChange: (id: string) => void;
+  onOpenSpec: (id: string) => void;
 }) {
-  const [targets, setTargets] = useState(1)
-  const [mode, setMode] = useState<Mode>('chart')
+  const [targets, setTargets] = useState(1);
+  const [mode, setMode] = useState<Mode>("chart");
 
   const available = useMemo(
-    () => SUMMARY_TARGETS.filter((count) => scenario.targetCounts.includes(count)),
+    () =>
+      SUMMARY_TARGETS.filter((count) => scenario.targetCounts.includes(count)),
     [scenario],
-  )
-  const effectiveTargets = available.includes(targets) ? targets : (available[0] ?? 1)
+  );
+  const effectiveTargets = available.includes(targets)
+    ? targets
+    : (available[0] ?? 1);
 
   const rows = useMemo(
     () => buildRows(manifest.specs, scenario.id, effectiveTargets),
     [manifest.specs, scenario.id, effectiveTargets],
-  )
+  );
 
-  const best = rows[0]?.dps ?? 0
+  const best = rows[0]?.dps ?? 0;
 
   return (
     <div className="space-y-4">
       <Panel>
         <PanelHeader
           title={`${scenario.label} — ${effectiveTargets} ${
-            effectiveTargets === 1 ? 'target' : 'targets'
+            effectiveTargets === 1 ? "target" : "targets"
           }`}
           subtitle={scenario.description}
           actions={
@@ -110,7 +123,10 @@ export function OverviewView({
                   label="Targets"
                   value={effectiveTargets}
                   onChange={setTargets}
-                  options={available.map((count) => ({ value: count, label: String(count) }))}
+                  options={available.map((count) => ({
+                    value: count,
+                    label: String(count),
+                  }))}
                 />
               ) : null}
               <SegmentedControl
@@ -118,8 +134,8 @@ export function OverviewView({
                 value={mode}
                 onChange={setMode}
                 options={[
-                  { value: 'chart', label: 'Chart' },
-                  { value: 'table', label: 'Table' },
+                  { value: "chart", label: "Chart" },
+                  { value: "table", label: "Table" },
                 ]}
               />
             </>
@@ -128,21 +144,34 @@ export function OverviewView({
 
         {rows.length === 0 ? (
           <EmptyState>
-            No results for this scenario yet. The nightly simulation run fills these in as
-            SimulationCraft adds profiles for the current tier.
+            No results for this scenario yet. The nightly simulation run fills
+            these in as SimulationCraft adds profiles for the current tier.
           </EmptyState>
-        ) : mode === 'chart' ? (
+        ) : mode === "chart" ? (
           <RankingChart rows={rows} best={best} onOpenSpec={onOpenSpec} />
         ) : (
           <RankingTable rows={rows} best={best} onOpenSpec={onOpenSpec} />
         )}
 
         <Note>
-          Simulated damage per second against a stationary target with no external buffs,
-          using SimulationCraft's own tier profiles. Treat gaps under a few percent as a
-          tie — the sampling error alone is around {samplingError(manifest.settings)}. Bars
-          carry each build's class colour; the icon and the name beside it are what
-          identify it.
+          Simulated damage per second against a stationary target with no
+          external buffs, using SimulationCraft's own tier profiles. Treat gaps
+          under a few percent as a tie — the sampling error alone is around{" "}
+          {samplingError(manifest.settings)}. Bars carry each build's class
+          colour; the icon and the name beside it are what identify it.
+          {rows.some((row) => row.build.gearComparable === false) ? (
+            <>
+              {" "}
+              <strong className="font-medium text-ink-secondary">
+                Faded bars wear gear at a different item level from the tier's.
+              </strong>{" "}
+              Absolute damage does not survive that difference, so where those
+              builds sit against the rest is partly gear rather than spec — each
+              one&rsquo;s own page states the gap. They are drawn rather than
+              dropped because a spec that is absent reads as a spec that ranks
+              badly, which is the thing this page most has to avoid.
+            </>
+          ) : null}
         </Note>
       </Panel>
 
@@ -150,15 +179,19 @@ export function OverviewView({
 
       <PatchState manifest={manifest} />
     </div>
-  )
+  );
 }
 
-function buildRows(specs: SpecSummary[], scenarioId: string, targets: number): Row[] {
-  const rows: Row[] = []
+function buildRows(
+  specs: SpecSummary[],
+  scenarioId: string,
+  targets: number,
+): Row[] {
+  const rows: Row[] = [];
   for (const spec of specs) {
-    const entry = spec.scenarios[scenarioId]
-    const dps = entry?.dps[String(targets)]
-    if (typeof dps !== 'number') continue
+    const entry = spec.scenarios[scenarioId];
+    const dps = entry?.dps[String(targets)];
+    if (typeof dps !== "number") continue;
     rows.push({
       id: spec.id,
       label: spec.displayName,
@@ -166,10 +199,10 @@ function buildRows(specs: SpecSummary[], scenarioId: string, targets: number): R
       dps,
       funnelGain: entry?.funnelGain,
       priorityShare: entry?.priorityShare,
-    })
+    });
   }
-  rows.sort((a, b) => b.dps - a.dps)
-  return rows
+  rows.sort((a, b) => b.dps - a.dps);
+  return rows;
 }
 
 function RankingChart({
@@ -177,20 +210,30 @@ function RankingChart({
   best,
   onOpenSpec,
 }: {
-  rows: Row[]
-  best: number
-  onOpenSpec: (id: string) => void
+  rows: Row[];
+  best: number;
+  onOpenSpec: (id: string) => void;
 }) {
   // Horizontal bars: the labels are long spec names, which read far better along
   // the y-axis than rotated under a vertical chart.
-  const height = Math.max(280, rows.length * ROW_HEIGHT + 40)
-  const byLabel = useMemo(() => new Map(rows.map((row) => [row.label, row.build])), [rows])
-  const tick = useMemo(() => makeBuildTick(byLabel, { width: TICK_WIDTH }), [byLabel])
+  const height = Math.max(280, rows.length * ROW_HEIGHT + 40);
+  const byLabel = useMemo(
+    () => new Map(rows.map((row) => [row.label, row.build])),
+    [rows],
+  );
+  const tick = useMemo(
+    () => makeBuildTick(byLabel, { width: TICK_WIDTH }),
+    [byLabel],
+  );
 
   return (
     <div className="px-2 py-4">
       <ResponsiveContainer width="100%" height={height}>
-        <BarChart data={rows} layout="vertical" margin={{ top: 4, right: 56, bottom: 4, left: 8 }}>
+        <BarChart
+          data={rows}
+          layout="vertical"
+          margin={{ top: 4, right: 56, bottom: 4, left: 8 }}
+        >
           <CartesianGrid {...GRID} vertical horizontal={false} />
           <XAxis
             type="number"
@@ -210,25 +253,25 @@ function RankingChart({
           <Tooltip
             cursor={CURSOR_FILL}
             content={({ active, payload }) => {
-              if (!active || !payload?.length) return null
-              const row = payload[0]?.payload as Row | undefined
-              if (!row) return null
+              if (!active || !payload?.length) return null;
+              const row = payload[0]?.payload as Row | undefined;
+              if (!row) return null;
               return (
                 <TooltipCard
                   title={row.label}
                   subtitle={`${percent(row.dps / best, 0)} of the top build`}
                   rows={[
                     {
-                      id: 'dps',
-                      label: 'DPS',
+                      id: "dps",
+                      label: "DPS",
                       color: classColor(row.build.class),
                       value: fullNumber(row.dps),
                     },
                     ...(row.funnelGain !== undefined
                       ? [
                           {
-                            id: 'funnel',
-                            label: 'Funnel gain at 5T',
+                            id: "funnel",
+                            label: "Funnel gain at 5T",
                             value: `${row.funnelGain.toFixed(2)}x`,
                             hint: describeFunnelGain(row.funnelGain),
                           },
@@ -236,7 +279,7 @@ function RankingChart({
                       : []),
                   ]}
                 />
-              )
+              );
             }}
           />
           {/* Class colour, per the site's identity rule: the bar length carries the
@@ -248,18 +291,27 @@ function RankingChart({
             barSize={16}
             isAnimationActive={false}
             onClick={(entry: unknown) => {
-              const row = (entry as { payload?: Row } | undefined)?.payload
-              if (row) onOpenSpec(row.id)
+              const row = (entry as { payload?: Row } | undefined)?.payload;
+              if (row) onOpenSpec(row.id);
             }}
           >
             {rows.map((row) => (
-              <Cell key={row.id} cursor="pointer" fill={classColor(row.build.class)} />
+              <Cell
+                key={row.id}
+                cursor="pointer"
+                fill={classColor(row.build.class)}
+                // Faded, not hidden and not recoloured: the bar is a real
+                // measurement, and dropping it would recreate exactly the failure
+                // the coverage panel exists to prevent. Class colour stays the
+                // identity channel; the axis tick carries the words.
+                fillOpacity={buildOpacity(row.build)}
+              />
             ))}
           </Bar>
         </BarChart>
       </ResponsiveContainer>
     </div>
-  )
+  );
 }
 
 function RankingTable({
@@ -267,9 +319,9 @@ function RankingTable({
   best,
   onOpenSpec,
 }: {
-  rows: Row[]
-  best: number
-  onOpenSpec: (id: string) => void
+  rows: Row[];
+  best: number;
+  onOpenSpec: (id: string) => void;
 }) {
   return (
     <div className="overflow-x-auto px-1 pb-2">
@@ -295,7 +347,10 @@ function RankingTable({
         </thead>
         <tbody>
           {rows.map((row, index) => (
-            <tr key={row.id} className="border-b border-hairline/60 last:border-0">
+            <tr
+              key={row.id}
+              className="border-b border-hairline/60 last:border-0"
+            >
               <td className="tnum px-4 py-2 text-ink-muted">{index + 1}</td>
               <td className="px-4 py-2">
                 <button
@@ -329,5 +384,5 @@ function RankingTable({
         </tbody>
       </table>
     </div>
-  )
+  );
 }

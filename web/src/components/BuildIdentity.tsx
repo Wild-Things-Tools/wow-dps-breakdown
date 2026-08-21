@@ -558,3 +558,23 @@ export function makeBuildTick(
     );
   };
 }
+
+/**
+ * How opaque a build's mark should be drawn: full for a comparable one, faded for a
+ * build whose number cannot be ranked against the others.
+ *
+ * Fading rather than hiding, and never recolouring: the bar is still a real
+ * measurement of a real profile, and dropping it would recreate the failure the
+ * coverage panel exists to prevent -- a spec that is absent reads as a spec that
+ * ranks badly. Class colour stays the identity channel it is everywhere else.
+ *
+ * **The words go in the caption, not in the axis tick.** A third line under the
+ * spec name was tried and collided with the row below it: the tick's height is the
+ * chart's row spacing, which already carries two lines. Opacity is a weak channel
+ * on its own, so what makes this legal is that three other channels say it in
+ * words -- the caption under the chart, the badge in the table twin, and the
+ * coverage panel.
+ */
+export function buildOpacity(build: Pick<BuildLike, "gearComparable">): number {
+  return build.gearComparable === false ? 0.45 : 1;
+}
