@@ -21,9 +21,13 @@ name: Gear comparison
 # target for a caster and about 2.5x that for a pet spec, and five targets is
 # roughly 3x one.
 #
-#   full tier, trinket, one target : 26 specs x ~12 CPU-min = ~310 CPU-min
-#   full tier, finger,  one target : 26 specs x ~98 variants x ~4.5 CPU-s
-#                                    = ~190 CPU-min for casters, ~260 with pet specs
+# Measured end to end rather than derived: two runs of six ring specs at 1,000
+# iterations on four cores cost 47m58s and 48m53s of CPU, i.e. ~8.1 CPU-minutes a
+# spec. Wall clock on the same six spread 109-247s between the runs on load alone,
+# so it is the CPU figure that travels.
+#
+#   full tier, trinket, one target : 26 specs x ~12 CPU-min  = ~310 CPU-min
+#   full tier, finger,  one target : 26 specs x ~8.1 CPU-min = ~210 CPU-min
 #   full tier, 1 + 5 targets                                 = roughly 4x either
 #
 # Against 2,000 Actions minutes a month with ~800 already committed to the weekly
@@ -172,11 +176,25 @@ jobs:
             "${args[@]}" \
             --out shard
 
+      # `always()`, because this is the only step that gets a partial sweep off the
+      # runner and the two cases it exists for are both failures. A step with no
+      # `if:` defaults to `success()`, so a `wowdps gear` that exits non-zero, or a
+      # shard that hits `timeout-minutes: 350`, would skip the upload entirely --
+      # `publish` below then downloads nothing for that shard and merges none of its
+      # specs. The dataset is written after every spec precisely so an interrupted
+      # sweep leaves a smaller honest answer, and without this that answer never
+      # leaves the machine. `always()` rather than `!cancelled()` on purpose: a job
+      # timeout *is* a cancellation, and it is one of the two cases.
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: gear-shard-${{ matrix.shard }}
           path: shard
           retention-days: 3
+          # A shard that failed before its first spec finished has no directory to
+          # upload, and that is an ordinary outcome here rather than a fault worth
+          # a red annotation on an otherwise-explained run.
+          if-no-files-found: ignore
 
   publish:
     name: Merge and commit

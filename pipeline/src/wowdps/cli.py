@@ -378,7 +378,9 @@ def cmd_gear(args: argparse.Namespace) -> int:
         logging.error("every spec failed; not writing a gear dataset")
         return 1
 
-    path = publish()
+    # The loop's last iteration already published exactly this, so serialising a
+    # several-hundred-kilobyte document again would only restamp `generatedAt`.
+    path = out_dir / "gear.json"
     failed = sum(len(result.errors) for result in results)
     logging.info(
         "wrote %s (%d spec-slot results of %d profiles, %d failures)",
