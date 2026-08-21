@@ -2,16 +2,29 @@ name: Gear comparison
 
 # On demand only, and deliberately so.
 #
-# The arithmetic, measured rather than guessed. One spec's trinket sweep is two simc
-# invocations covering ~36 profilesets: every eligible Mythic+ trinket on its own to
-# find the baseline pair, then the baseline plus every eligible raid trinket at two
-# item levels. At 3,000 deterministic iterations a variant costs roughly 11 CPU-
-# seconds at one target for a caster and about 2.5x that for a pet spec, so a spec
-# lands between 7 and 18 CPU-minutes at one target, and roughly three times that at
-# five.
+# The arithmetic, measured rather than guessed, and it is now different per slot.
 #
-#   full tier, one target  : 26 specs x ~12 CPU-min  = ~310 CPU-min = ~155 job-min on 2 vCPU
-#   full tier, 1 + 5 targets                          = ~600 job-min
+# A trinket spec is two simc invocations covering ~36 profilesets: every eligible
+# Mythic+ trinket on its own to find the baseline pair, then the baseline plus every
+# eligible raid trinket at two item levels. Its pool is too large to enumerate (351
+# Mythic+ pairs), so it ranks items by standalone value and stays at ~36.
+#
+# A ring spec enumerates instead, over the whole pool rather than the Mythic+ half:
+# 1 empty + 8 solo + 82 combinations + 1 baseline + 6 candidates = 98 profilesets.
+# That is 2.2x the 44 the Mythic+-only enumeration ran, and it buys the second
+# answer -- the best set overall, which the baseline-plus-one-swap search cannot
+# reach. Measured on Arcane Mage, MID2, one target, 300 deterministic iterations:
+# 63.5 CPU-seconds for 44 variants against 135.5 for 98, i.e. ~1.35 CPU-seconds a
+# variant at that count and ~4.5 at the 1,000 this workflow defaults to.
+#
+# At 3,000 deterministic iterations a variant costs roughly 11 CPU-seconds at one
+# target for a caster and about 2.5x that for a pet spec, and five targets is
+# roughly 3x one.
+#
+#   full tier, trinket, one target : 26 specs x ~12 CPU-min = ~310 CPU-min
+#   full tier, finger,  one target : 26 specs x ~98 variants x ~4.5 CPU-s
+#                                    = ~190 CPU-min for casters, ~260 with pet specs
+#   full tier, 1 + 5 targets                                 = roughly 4x either
 #
 # Against 2,000 Actions minutes a month with ~800 already committed to the weekly
 # simulation pass, CI and deploys: a single-target full pass fits comfortably as an
