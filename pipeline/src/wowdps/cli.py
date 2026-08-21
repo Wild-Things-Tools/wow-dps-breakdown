@@ -337,6 +337,27 @@ def cmd_gear(args: argparse.Namespace) -> int:
 
     results: list[gearsweep.SpecSlotResult] = []
     simc_meta: dict = {}
+
+    def publish() -> Path:
+        """Write everything swept so far, and carry its own coverage count.
+
+        Called after every spec rather than once at the end, which CLAUDE.md has
+        claimed for a while and the code did not do. A sweep that is interrupted at
+        spec 9 of 26 then leaves a dataset that is smaller *and* honest about being
+        smaller, instead of leaving nothing at all -- and this matters more now than
+        it did, because enumerating the whole pool roughly doubles what a ring spec
+        costs and so doubles what a timeout throws away.
+        """
+        return dataset.write_gear(
+            out_dir,
+            results,
+            {slot: pools.slots[slot] for slot in wanted_slots},
+            tier,
+            simc_meta,
+            settings,
+            specs_available=len(all_profiles),
+        )
+
     for index, profile in enumerate(selected, start=1):
         logging.info("[%d/%d] %s", index, len(selected), profile.display_name)
         for slot_id in wanted_slots:
@@ -350,20 +371,14 @@ def cmd_gear(args: argparse.Namespace) -> int:
 
         if not simc_meta and results:
             simc_meta = _probe_simc_metadata(simc, profile)
+        if results:
+            publish()
 
     if not results:
         logging.error("every spec failed; not writing a gear dataset")
         return 1
 
-    path = dataset.write_gear(
-        out_dir,
-        results,
-        {slot: pools.slots[slot] for slot in wanted_slots},
-        tier,
-        simc_meta,
-        settings,
-        specs_available=len(all_profiles),
-    )
+    path = publish()
     failed = sum(len(result.errors) for result in results)
     logging.info(
         "wrote %s (%d spec-slot results of %d profiles, %d failures)",
