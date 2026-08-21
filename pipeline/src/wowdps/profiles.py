@@ -46,12 +46,20 @@ CLASS_TOKENS: dict[str, tuple[str, str]] = {
 # Hero-talent names that simc profiles shorten. Anything not listed here is used
 # verbatim (with underscores turned into spaces), so a newly added hero tree still
 # shows up correctly without a code change -- just less prettily.
+#
+# **This table renames build ids, so it is effectively frozen.** `SpecProfile.id` is
+# built from the prettified suffix, which means adding an entry moves the id of every
+# build whose profile carries that abbreviation -- and the joins that break are the
+# ones nothing re-runs nightly. Measured: MID2's generator spells Devastation's
+# Scalecommander `_SC` where the shipped profiles use `_SB`, so mapping SC would have
+# been correct about the tree and would have renamed MID1's published
+# `evoker_devastation_sc`, orphaning its rows in gear.json (a dispatch-only sweep)
+# from the spec file. An ugly abbreviation on one build is the cheaper of the two.
+# A tree whose *display* name is wrong belongs in `herotrees`, which resolves
+# `hero_talent` without touching `name_hero`.
 HERO_ALIASES: dict[str, str] = {
     "FS": "Flameshaper",
     "SB": "Scalecommander",
-    # The generator entries spell it SC where the shipped profiles use SB. Both are
-    # Devastation's Scalecommander; without this the build is drawn as "(SC)".
-    "SC": "Scalecommander",
     "Rider": "Rider of the Apocalypse",
     "Conduit": "Conduit of the Celestials",
     "Herald": "Herald of the Sun",
