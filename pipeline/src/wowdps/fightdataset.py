@@ -1260,7 +1260,6 @@ def write_fights(out_dir: Path, document: dict, force: bool = False) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "fights.json"
 
-    settled = document
     try:
         published = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -1277,11 +1276,56 @@ def write_fights(out_dir: Path, document: dict, force: bool = False) -> Path:
                 f"dropping it is what you mean."
             )
 
+    if published is not None and not force:
+        # After the refusal above and before the settle below: the carried-forward
+        # entries have to be in the document the settle compares, or a run that
+        # changed nothing else would still write a new timestamp.
+        document = _keep_measurements(published, document)
+
+    settled = document
     if published is not None and _without_stamps(published) == _without_stamps(document):
         settled = _carry_stamps(document, published)
 
     path.write_text(json.dumps(settled, separators=(",", ":")) + "\n", encoding="utf-8")
     return path
+
+
+def _keep_measurements(published: dict, document: dict) -> dict:
+    """Carry an encounter's measurements forward when this run produced none for it.
+
+    The payload level already works this way -- "a run contributes what it managed;
+    everything else comes back from the previous payload untouched" -- but
+    ``--no-resume`` clears the previous payload by design, so an encounter the run
+    did not reach vanishes from it and publishes as ``measured: null``.
+
+    That is not a smaller claim, it is a *different* one. ``fightsSampled: 0`` says
+    the probe looked and read nothing; ``measured: null`` says nothing ever looked,
+    and the view says something different for each. Observed on 2026-08-21: a
+    ``--no-resume`` pass moved four of MID2's eight encounters from the first state
+    to the second, and the whole-document guard above could not see it because the
+    other four still carried measurements.
+
+    The carried block is from an earlier run, so ``measurement.generatedAt`` bounds
+    the newest measurement in the document rather than every entry in it. That is
+    the lesser of the two inaccuracies: the alternative asserts an encounter was
+    never probed when it was.
+    """
+    by_id = {
+        entry.get("encounterId"): entry
+        for entry in published.get("encounters") or []
+        if isinstance(entry, dict)
+    }
+    kept = 0
+    encounters = []
+    for entry in document.get("encounters") or []:
+        was = by_id.get(entry.get("encounterId"))
+        if entry.get("measured") is None and was is not None and was.get("measured") is not None:
+            entry = {**entry, "measured": was["measured"]}
+            kept += 1
+        encounters.append(entry)
+    if not kept:
+        return document
+    return {**document, "encounters": encounters}
 
 
 def load_probe(path: Path) -> dict:

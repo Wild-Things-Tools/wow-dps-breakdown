@@ -864,3 +864,50 @@ def test_an_empty_encounter_says_whether_the_kills_exist_elsewhere():
     assert "54 at Heroic" in told[1]
     assert "3 with no difficulty recorded" in told[1]
     assert "asked for Mythic" in told[1]
+
+
+def test_an_encounter_this_run_did_not_reach_keeps_what_it_had(tmp_path):
+    """`--no-resume` clears the previous payload, so an unreached boss publishes null.
+
+    "The probe looked and read nothing" and "nothing ever looked" are different
+    claims and the view says something different for each. Observed on 2026-08-21:
+    a --no-resume pass moved four of MID2's eight encounters from the first to the
+    second, and the whole-document guard could not see it because the other four
+    still carried measurements.
+    """
+    from wowdps.fightdataset import write_fights
+
+    def doc(*pairs):
+        return {
+            "generatedAt": "2026-08-21T00:00:00+00:00",
+            "coverage": {"measured": sum(1 for _, m in pairs if m is not None)},
+            "encounters": [
+                {"encounterId": eid, "name": str(eid), "measured": m} for eid, m in pairs
+            ],
+        }
+
+    write_fights(tmp_path, doc((1, {"fightsSampled": 3}), (2, {"fightsSampled": 0})))
+    # A second run reaches only encounter 1.
+    write_fights(tmp_path, doc((1, {"fightsSampled": 5}), (2, None)))
+
+    written = json.loads((tmp_path / "fights.json").read_text())
+    by_id = {e["encounterId"]: e for e in written["encounters"]}
+    assert by_id[1]["measured"]["fightsSampled"] == 5, "a fresh measurement still wins"
+    assert by_id[2]["measured"]["fightsSampled"] == 0, "the unreached one keeps its own"
+
+
+def test_force_still_lets_a_measurement_go(tmp_path):
+    """The override has to override this too, or --force stops meaning what it says."""
+    from wowdps.fightdataset import write_fights
+
+    def doc(measured):
+        return {
+            "generatedAt": "2026-08-21T00:00:00+00:00",
+            "coverage": {"measured": 1 if measured else 0},
+            "encounters": [{"encounterId": 1, "name": "1", "measured": measured}],
+        }
+
+    write_fights(tmp_path, doc({"fightsSampled": 3}))
+    write_fights(tmp_path, doc(None), force=True)
+    written = json.loads((tmp_path / "fights.json").read_text())
+    assert written["encounters"][0]["measured"] is None

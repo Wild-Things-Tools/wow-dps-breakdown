@@ -2357,6 +2357,20 @@ that are easy to get wrong a second time:
   asserted bosses to MID1 and left MID2 with eight factless encounters -- a run that
   had four other scenarios to do failed on the fifth. Asking for `bosses` alone and
   getting none is still an error, because then nothing was asked for that exists.
+- **`--no-resume` publishes an unreached encounter as never-probed**, and the
+  whole-document guard cannot see it. The payload level already works the right way
+  -- "a run contributes what it managed; everything else comes back from the
+  previous payload untouched" -- but `--no-resume` clears that previous payload by
+  design, so an encounter the run does not reach vanishes and writes
+  `measured: null`. That is not a smaller claim than `fightsSampled: 0`, it is a
+  different one, and the view says something different for each. Measured on
+  2026-08-21: a `--no-resume` pass moved four of MID2's eight encounters from
+  "probed, read nothing" to "never probed" while the other four kept theirs, so
+  `coverage.measured` stayed non-zero and the refusal above never fired.
+  `_keep_measurements` carries an encounter's block forward per encounter, which is
+  the same union rule `merge_gear_shards` uses. The carried block is older, so
+  `measurement.generatedAt` bounds the newest measurement rather than every entry --
+  the lesser inaccuracy against asserting a boss was never looked at.
 - **`wowdps fights` with no `--probe`, run over a directory that already holds a
   probe's results, is silent data loss** -- 30 sampled kills per boss replaced by
   nulls, and the command reports success. Done exactly that by hand, one command
