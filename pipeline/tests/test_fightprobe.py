@@ -756,3 +756,36 @@ def test_a_tier_with_no_fight_profiles_refuses_rather_than_borrowing_a_raid():
 
     with pytest.raises(WarcraftLogsError, match="no fight profiles"):
         _tier_encounters(TierProfiles(tier="MID9", note="", profiles={}))
+
+
+def test_a_search_that_saw_everything_counts_as_done_however_few_kills_it_found():
+    """Otherwise an encounter with genuinely few kills is re-opened forever.
+
+    MID2 stalled on exactly this for two days: every hourly run restarted at the
+    first encounter, spent the point ceiling re-reading the four it already had,
+    and never reached the other four -- which sat at `sampled: null` while the raid
+    was open.
+    """
+    from wowdps.fightprobe import is_complete
+
+    short = {"fightsSampled": 3, "eventBudget": 200_000, "order": "public"}
+    assert is_complete(short, 30, 200_000, "public") is False
+
+    short["searchExhausted"] = True
+    assert is_complete(short, 30, 200_000, "public") is True
+
+
+def test_a_truncated_search_is_not_exhausted():
+    """A page limit or the point ceiling stopping the walk means more may exist."""
+    from wowdps.firstkills import SearchOutcome
+
+    assert SearchOutcome(truncated=True).aborted is None
+    # The probe's rule, stated where it can be checked: exhausted means the walk
+    # ended because it ran out of reports, not because something stopped it.
+    for outcome in (
+        SearchOutcome(truncated=True),
+        SearchOutcome(aborted="ceiling"),
+        SearchOutcome(truncated=True, aborted="ceiling"),
+    ):
+        assert not (not outcome.truncated and outcome.aborted is None)
+    assert SearchOutcome().aborted is None and not SearchOutcome().truncated

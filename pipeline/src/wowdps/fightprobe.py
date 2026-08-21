@@ -164,6 +164,7 @@ def probe_encounter(
         gathered, settings.reports, order="first" if settings.order == "public" else settings.order
     )
     pairs = ranked
+    exhausted = False
     if settings.order == "public":
         # The rankings are used only to *anchor* the search: their earliest kill is
         # an upper bound on the true first kill, and the report search runs from
@@ -173,6 +174,10 @@ def probe_encounter(
         anchor = min((start for _, _, start in ranked if start), default=0.0)
         found, outcome = _public_first_kills(client, encounter_id, anchor, settings)
         log.info("  public-log search: %s", outcome.summary(anchor))
+        # The search saw everything only if it stopped because it ran out of
+        # reports, not because a page limit or the point ceiling stopped it. Set on
+        # the observation below, which does not exist yet at this point.
+        exhausted = not outcome.truncated and outcome.aborted is None
         if found:
             pairs = found
         else:
@@ -184,6 +189,7 @@ def probe_encounter(
         encounter_id=encounter_id,
         encounter_name=str(encounter.get("name") or encounter_id),
         difficulty=settings.difficulty,
+        search_exhausted=exhausted,
     )
     if not pairs:
         log.warning("encounter %d: rankings carried no report codes", encounter_id)
@@ -610,10 +616,15 @@ def is_complete(
     Two ways to be short of it, and both re-open the encounter, because both are
     somebody asking for *more* rather than asking to skip:
 
-    - **Fewer kills than `--reports`.** Compared against the requested number rather
-      than a fixed one. An encounter with genuinely fewer kills logged than requested
-      is re-fetched every run and costs nothing after the first, because every one of
-      its queries is already in the response cache.
+    - **Fewer kills than `--reports`, unless the search proved there are no more.**
+      An encounter that has genuinely fewer kills logged than requested can never
+      reach the number, and re-opening it forever is not free once the search is a
+      whole-zone walk: MID2 stalled for two days on exactly this. Every hourly run
+      restarted at the first encounter, spent the point ceiling on the four it had
+      already read, and never reached the other four at all -- which is why they sat
+      at `sampled: null` while the raid was open. So a search that ran to completion
+      records `searchExhausted`, and that counts as done however few kills it found.
+      A *truncated* or *aborted* search does not, because then more may exist.
     - **A smaller event budget than `--max-pages` now asks for.** This one is not
       cosmetic. The number of kills is only half of what the target-count band needs;
       the other half is reading each kill to the *end*, and a bounded event fetch
@@ -629,7 +640,7 @@ def is_complete(
     zone on the next run for everybody. Use ``--no-resume`` once to rebuild such a
     payload; from then on the budget travels with it.
     """
-    if int(entry.get("fightsSampled") or 0) < wanted:
+    if int(entry.get("fightsSampled") or 0) < wanted and not entry.get("searchExhausted"):
         return False
     if event_budget is not None:
         recorded = entry.get("eventBudget")
@@ -734,6 +745,15 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
                 continue
             remaining.append(encounter_id)
 
+        # Never-probed encounters first. The pass is bounded by the point ceiling
+        # and restarts from the top every hour, so a fixed order starves the tail:
+        # MID2 sat for two days with its last four bosses at `sampled: null` while
+        # the first four were re-read every run. An encounter with no data at all is
+        # worth more than one more kill on an encounter that already has some. The
+        # sort is stable, so within each group the encounter order is kept and a run
+        # is still reproducible.
+        remaining.sort(key=lambda eid: 0 if eid not in previous else 1)
+
         if previous and not remaining:
             log.info("every encounter already carries %d fights; nothing to do", settings.reports)
 
@@ -758,6 +778,12 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         entry = observation.to_json()
         entry["eventBudget"] = event_budget
         entry["order"] = settings.order
+        # Whether the selection saw everything there was to see. Only the report
+        # search can say so -- a ranking page walk is always a window on a larger
+        # list -- so this is absent for the other orders and `is_complete` then
+        # falls back to the kill count.
+        if observation.search_exhausted:
+            entry["searchExhausted"] = True
         fresh[observation.encounter_id] = entry
     by_id = {**previous, **fresh}
     merged = [by_id[eid] for eid in encounter_ids if eid in by_id]

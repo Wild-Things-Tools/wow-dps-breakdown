@@ -1534,6 +1534,20 @@ the payload rather than from the trigger.
 
 Three things that would otherwise bite:
 
+- **An encounter that can never reach `--reports` must not be re-opened forever,
+  and a bounded pass must not always restart at the top.** Both halves cost MID2
+  two days: every hourly run began at the first encounter, spent the point ceiling
+  re-reading the four it already had, and never reached the other four, which sat
+  at `sampled: null` while the raid was open. The zone simply has fewer than thirty
+  kills of those bosses, so no number of runs would have finished them.
+
+  Two fixes, and they are different rules. A report search that ended because it
+  ran out of reports -- rather than on a page limit or the point ceiling -- records
+  `searchExhausted`, and that counts as done however few kills it found; a
+  truncated or aborted one does not, because then more may exist. And `remaining`
+  is sorted so encounters with no data at all go first: one boss with nothing is
+  worth more than one more kill on a boss that already has some. The sort is
+  stable, so a run stays reproducible.
 - **Raising `--reports` re-opens every encounter**, on purpose: somebody raising it
   wants a bigger sample, not a skip. **So does raising `--max-pages`**, and that one is
   not cosmetic. The number of kills is only half of what the band needs; the other half

@@ -1115,6 +1115,11 @@ class EncounterObservation:
     encounter_name: str
     difficulty: int | None
     fights: list[FightObservation] = field(default_factory=list)
+    #: True when the selection walked the whole candidate set rather than a window
+    #: of it -- only the report search can claim that. It is what lets an encounter
+    #: with genuinely few kills count as finished instead of being re-opened every
+    #: hour forever.
+    search_exhausted: bool = False
 
     def _values(self, pick) -> list[float]:
         return [value for value in (pick(fight) for fight in self.fights) if value is not None]
@@ -1363,6 +1368,7 @@ class EncounterObservation:
             "peakTargetShare": _json(self.peak_share),
             "activeTimeFraction": _json(self.uptime),
             "eventCoverage": _json(self.event_coverage),
+            "searchExhausted": self.search_exhausted,
             # When the sampled kills happened. Published so `--order first` can be
             # checked rather than believed: it takes the earliest kills *among the
             # damage-sorted ranking pages gathered*, so a narrow gather returns
