@@ -3,8 +3,12 @@
 What these tests pin is the *method*, not the arithmetic — every one of them is a
 decision that would still produce a plausible number if it were made differently:
 
-* the baseline pair is the two highest **standalone** values, measured against both
-  sockets empty rather than against some arbitrary partner;
+* the baseline pair is the **best measured combination**, not the two items that
+  ranked highest alone -- and the additive rule is the fallback for a pool too large
+  to enumerate, never the method;
+* the ceiling is drawn from the **same enumeration**, over the whole pool rather
+  than the farmed half, so it can name a set the baseline-then-one-swap search
+  cannot reach;
 * a candidate replaces the **second** baseline item, i.e. the weaker of the two,
   because "does this drop beat my worse trinket" is the question a loot council
   actually has;
@@ -15,12 +19,13 @@ decision that would still produce a plausible number if it were made differently
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import pytest
 
 from wowdps import gearsweep, simc_runner
-from wowdps.equipment import TRINKET, GearItem, ItemLevel, SlotPool
+from wowdps.equipment import TRINKET, EquipmentSlot, GearItem, ItemLevel, SlotPool
 from wowdps.gearsweep import Equipped, Variant
 from wowdps.profiles import SpecProfile
 from wowdps.scenarios import SimSettings
@@ -245,11 +250,22 @@ def stub_simc(monkeypatch):
     return calls
 
 
-def test_sweep_picks_the_two_highest_standalone_values(stub_simc, profile):
+def test_a_pool_with_no_measured_combination_falls_back_to_standalone_value(stub_simc, profile):
+    """The additive rule, which is the fallback and no longer the method.
+
+    ``STUB_DPS`` carries no combination keys, so every enumerated combination comes
+    back unmeasured and the sweep has nothing to rank -- exactly the state a pool
+    over ``MAX_BASELINE_COMBINATIONS`` is in. It must then take the top two by
+    standalone value and *say* that is what it did, rather than publish an
+    exhaustive-looking answer it did not measure.
+    """
     result = gearsweep.sweep_spec(Path("simc"), profile, POOL, SimSettings(), [1], timeout=60)
     [target] = result.targets
     assert [item.item_id for item in target.baseline] == [102, 101]
     assert target.empty_dps == 100_000.0
+    assert target.baseline_method == gearsweep.ADDITIVE
+    assert target.baseline_combinations == 0
+    assert target.best_sets == []
     # The runners-up are published too, so a near-tie at the cut is visible.
     assert [entry.item.item_id for entry in target.pool] == [102, 101, 103]
     assert [entry.chosen for entry in target.pool] == [True, True, False]
@@ -567,6 +583,19 @@ def test_a_one_socket_sweep_runs_end_to_end(monkeypatch, tmp_path):
     # And the candidates were actually measured, each against that baseline.
     assert len(result.candidates) == len(RAID)
     assert all(entry.gain != 0 for entry in result.candidates)
+    # The ceiling has to survive one socket too: for a neck it is the best single
+    # item in the whole pool, which is a real answer and not a degenerate one.
+    assert [len(entry.worn.offers) for entry in result.best_sets] == [1]
+
+
+FINGER_SLOT = EquipmentSlot(
+    id="finger", label="Ring", sockets=("finger1", "finger2"), inventory_type=11
+)
+NECK_SLOT = EquipmentSlot(id="neck", label="Neck", sockets=("neck",), inventory_type=2)
+
+
+def offers(items, level):
+    return [gearsweep.Offer(item, level) for item in items]
 
 
 def test_the_baseline_is_the_best_combination_not_the_best_items():
@@ -578,46 +607,356 @@ def test_the_baseline_is_the_best_combination_not_the_best_items():
     both be pressed). This is the case that separates the two methods, and the old
     top-two-standalone rule gets it wrong.
     """
-    from wowdps.equipment import EquipmentSlot
     from wowdps.gearsweep import _combination_variants, _combo_key
 
-    slot = EquipmentSlot(
-        id="finger", label="Ring", sockets=("finger1", "finger2"), inventory_type=11
-    )
     items = [gear(1, "mythicplus"), gear(2, "mythicplus"), gear(3, "mythicplus")]
+    worn = offers(items, HEROIC)
 
-    combos = _combination_variants(slot, items, 334, {})
+    combos = _combination_variants(FINGER_SLOT, worn, [])
 
     # Every pair, and only pairs -- one per way of filling the two sockets.
     assert len(combos) == 3
     assert set(combos) == {
-        _combo_key((items[0], items[1])),
-        _combo_key((items[0], items[2])),
-        _combo_key((items[1], items[2])),
+        _combo_key((worn[0], worn[1])),
+        _combo_key((worn[0], worn[2])),
+        _combo_key((worn[1], worn[2])),
     }
 
 
 def test_a_one_socket_slot_yields_one_combination_per_item():
     """For a neck, "the best combination" and "the best item" are the same question."""
-    from wowdps.equipment import EquipmentSlot
     from wowdps.gearsweep import _combination_variants
 
-    slot = EquipmentSlot(id="neck", label="Neck", sockets=("neck",), inventory_type=2)
     items = [gear(i, "mythicplus") for i in (1, 2, 3)]
+    assert len(_combination_variants(NECK_SLOT, offers(items, HEROIC), [])) == 3
 
-    assert len(_combination_variants(slot, items, 334, {})) == 3
+
+def test_the_enumeration_covers_the_drops_at_every_item_level():
+    """The step the baseline-then-one-swap search cannot take.
+
+    Farmed items are priced at one level, so their pairs are enumerated once. A drop
+    is offered at each level it can drop at, and every pair containing one is run at
+    that level -- including pairs of two drops, which no swap into the baseline can
+    ever produce.
+    """
+    from wowdps.gearsweep import _combination_variants
+
+    worn = offers([gear(i, "mythicplus") for i in (1, 2, 3)], HEROIC)
+    drops = [
+        gearsweep.Offer(item, level)
+        for item in (gear(201, "raid"), gear(202, "raid"))
+        for level in (HEROIC, MYTHIC)
+    ]
+
+    combos = _combination_variants(FINGER_SLOT, worn, drops)
+
+    # 3 farmed pairs, plus per level (3x2 farmed-with-drop + 1 drop pair) x 2.
+    assert len(combos) == 3 + 2 * 7
+    both_drops = [
+        combo for combo in combos.values() if all(offer.item.source == "raid" for offer in combo)
+    ]
+    assert len(both_drops) == 2
 
 
-def test_the_exhaustive_baseline_is_bounded_by_a_stated_ceiling():
-    """Trinkets are deliberately outside it, and the number says why.
+def test_one_variant_never_mixes_two_drop_item_levels():
+    """A ring at 334 beside a ring at 344 is a third question, and the published
+    comparison has one item-level control rather than two."""
+    from wowdps.gearsweep import _combination_variants
 
-    27 Mythic+ trinkets is 351 pairs, about 28 CPU-hours across the tier at the
-    measured ~11 CPU-seconds a variant. Neck (7 -> 7) and finger (11 -> 55) fit.
+    drops = [
+        gearsweep.Offer(item, level)
+        for item in (gear(201, "raid"), gear(202, "raid"))
+        for level in (HEROIC, MYTHIC)
+    ]
+    combos = _combination_variants(FINGER_SLOT, [], drops)
+
+    for combo in combos.values():
+        assert len({offer.level.id for offer in combo}) == 1
+        # And no set wears the same ring twice, which simc would answer by leaving
+        # a socket empty -- a plausible number for a set nobody could wear.
+        assert len({offer.item.item_id for offer in combo}) == len(combo)
+
+
+def test_a_farmed_item_is_priced_at_one_level_and_a_drop_at_every_level():
+    """``baseline_ilevel``'s rule, applied per item. Pricing a Mythic+ ring at the
+    raid's top level is the flattery that rule exists to prevent."""
+    assert POOL.wearable_levels(MPLUS[0]) == (HEROIC,)
+    assert POOL.wearable_levels(RAID[0]) == (HEROIC, MYTHIC)
+
+
+def test_the_exhaustive_search_is_bounded_by_a_stated_ceiling():
+    """Trinkets are deliberately outside it, and the numbers say why.
+
+    Counted against MID2's derived pools. The count is the *Mythic+* half for a
+    baseline and the whole pool for a ceiling -- not the pool size, which is what an
+    earlier version of this test asserted and what CLAUDE.md's table repeated.
     """
     from math import comb
 
     from wowdps.gearsweep import MAX_BASELINE_COMBINATIONS
 
-    assert comb(7, 1) <= MAX_BASELINE_COMBINATIONS
-    assert comb(11, 2) <= MAX_BASELINE_COMBINATIONS
-    assert comb(27, 2) > MAX_BASELINE_COMBINATIONS
+    def full(farmed: int, dropped: int, sockets: int, levels: int = 2) -> int:
+        """Farmed combinations once, plus every combination with a drop, per level."""
+        base = comb(farmed, sockets)
+        return base + levels * (comb(farmed + dropped, sockets) - base)
+
+    # neck: 4 Mythic+, 3 raid, one socket.
+    assert comb(4, 1) <= MAX_BASELINE_COMBINATIONS
+    assert full(4, 3, 1) == 10 <= MAX_BASELINE_COMBINATIONS
+    # finger: 8 Mythic+, 3 raid, two sockets.
+    assert comb(8, 2) == 28 <= MAX_BASELINE_COMBINATIONS
+    assert full(8, 3, 2) == 82 <= MAX_BASELINE_COMBINATIONS
+    # trinket: 27 Mythic+, 15 raid. Out of budget on the baseline alone, so neither
+    # answer is measured and the method is recorded as additive.
+    assert comb(27, 2) == 351 > MAX_BASELINE_COMBINATIONS
+    assert full(27, 15, 2) == 1371 > MAX_BASELINE_COMBINATIONS
+
+
+# --------------------------------------------------------------------------------
+# The exhaustive search, end to end
+# --------------------------------------------------------------------------------
+#
+# One stub table drives every test below, and it is built so that each of the three
+# possible methods gives a *different* answer. Nothing here is arithmetic: a test
+# that only checked the numbers add up would pass under all three.
+#
+#   singles         B 112k > A 110k > C 105k          "the two best alone" says B + A
+#   farmed pairs    A + C 122k > B + C 120k > A + B 118k    the measured pair is A + C
+#   with a drop     B + R1 135k > A + R1 130k         the ceiling is B + R1
+#
+# A and B overlap, so the pair of the two best singles is the worst farmed pair --
+# the case the additive rule was measured to get wrong on 13 of 26 builds. And B is
+# not in the baseline pair, so no swap into {A, C} can ever reach B + R1: the
+# two-step search is structurally blind to it, however many item levels it tries.
+
+RING_A, RING_B, RING_C = (gear(101, "mythicplus"), gear(102, "mythicplus"), gear(103, "mythicplus"))
+DROP_1, DROP_2 = gear(201, "raid"), gear(202, "raid")
+
+RING_POOL = SlotPool(
+    tier="MID2",
+    slot=EquipmentSlot(
+        id="finger", label="Ring", sockets=("finger1", "finger2"), inventory_type=11
+    ),
+    items=(RING_A, RING_B, RING_C, DROP_1, DROP_2),
+    item_levels=(HEROIC, MYTHIC),
+    baseline_source="mythicplus",
+    candidate_source="raid",
+)
+
+H, M = HEROIC.ilevel, MYTHIC.ilevel
+RING_DPS: dict[frozenset[tuple[int, int]], float] = {
+    frozenset(): 100_000.0,
+    frozenset({(101, H)}): 110_000.0,
+    frozenset({(102, H)}): 112_000.0,
+    frozenset({(103, H)}): 105_000.0,
+    frozenset({(101, H), (102, H)}): 118_000.0,
+    frozenset({(101, H), (103, H)}): 122_000.0,
+    frozenset({(102, H), (103, H)}): 120_000.0,
+    # Heroic drops: none of them beats the farmed pair, so the ceiling there is what
+    # the character already wears -- an answer, not a gap.
+    frozenset({(101, H), (201, H)}): 121_500.0,
+    frozenset({(102, H), (201, H)}): 121_000.0,
+    frozenset({(103, H), (201, H)}): 120_000.0,
+    frozenset({(101, H), (202, H)}): 119_000.0,
+    frozenset({(102, H), (202, H)}): 118_000.0,
+    frozenset({(103, H), (202, H)}): 117_000.0,
+    frozenset({(201, H), (202, H)}): 116_000.0,
+    # Mythic drops: the best set pairs the drop with B, which the baseline never named.
+    frozenset({(101, H), (201, M)}): 130_000.0,
+    frozenset({(102, H), (201, M)}): 135_000.0,
+    frozenset({(103, H), (201, M)}): 128_000.0,
+    frozenset({(101, H), (202, M)}): 125_000.0,
+    frozenset({(102, H), (202, M)}): 126_000.0,
+    frozenset({(103, H), (202, M)}): 124_000.0,
+    frozenset({(201, M), (202, M)}): 127_000.0,
+}
+
+
+@pytest.fixture
+def ring_sweep(monkeypatch, tmp_path):
+    """``_sweep_one`` with simc replaced by a lookup on what each variant wears.
+
+    Keyed on the equipped items rather than on the variant name: a test that spelled
+    out profileset keys would pass while the sweep equipped something else entirely,
+    which is the failure mode a one-socket run already shipped once.
+    """
+
+    def fake_run(simc, profile, targets, settings, variants, timeout):
+        out = {}
+        for variant in variants:
+            worn = frozenset(
+                (item.item_id, ilevel)
+                for _socket, item, ilevel in variant.equipped.sockets
+                if item is not None
+            )
+            if worn in RING_DPS:
+                out[variant.key] = gearsweep.VariantResult(
+                    key=variant.key, dps=RING_DPS[worn], dps_error=0.05, iterations=1000
+                )
+        return out
+
+    monkeypatch.setattr(gearsweep, "_run", fake_run)
+
+    path = tmp_path / "MID2_Mage_Arcane_Sunfury.simc"
+    path.write_text(
+        "# gear_intellect=2751\nfinger1=,id=1,ilevel=334\nfinger2=,id=2,ilevel=334\n",
+        encoding="utf-8",
+    )
+    return gearsweep._sweep_one(
+        simc=Path("simc"),
+        profile=spec_profile(path),
+        pool=RING_POOL,
+        settings=SimSettings(target_error=0, max_iterations=1000),
+        targets=1,
+        primary="intellect",
+        baseline_pool=[RING_A, RING_B, RING_C],
+        candidates=[DROP_1, DROP_2],
+        baseline_level=HEROIC,
+        timeout=600,
+    )
+
+
+def test_the_baseline_is_the_measured_pair_not_the_two_best_singles(ring_sweep):
+    """The defect this replaced, stated as the assertion that catches it.
+
+    B is the best ring measured alone and A the second, so ranking singles picks
+    B + A -- which is the *worst* of the three pairs here. Only running the pairs
+    finds A + C. If this ever goes back to sorting standalone values, this fails.
+    """
+    assert [item.item_id for item in ring_sweep.baseline] == [101, 103]
+    assert ring_sweep.baseline_method == gearsweep.EXHAUSTIVE
+    assert ring_sweep.baseline_combinations == 3
+    assert ring_sweep.baseline_dps == 122_000.0
+
+    # And the runner-up pair is published, because two pairs a tenth of a percent
+    # apart look like a settled answer from the per-item numbers alone.
+    assert ring_sweep.baseline_runner_up is not None
+    assert ring_sweep.baseline_runner_up.item_ids == (102, 103)
+
+
+def test_the_ceiling_names_a_set_the_two_step_search_cannot_reach(ring_sweep):
+    """Best Mythic+ pair, then one drop into it, is a two-step search over a space
+    where the optimum is not reachable in two steps. B is not in the baseline pair,
+    so no swap into {A, C} produces B + R1 -- the best set here by 3.8%."""
+    mythic = {entry.level.id: entry for entry in ring_sweep.best_sets}["mythic"]
+
+    assert mythic.worn.item_ids == (102, 201)
+    assert mythic.worn.dps == 135_000.0
+    assert mythic.is_baseline is False
+    assert mythic.gain == pytest.approx(135_000.0 / 122_000.0 - 1)
+    assert mythic.is_tie is False
+
+    # The two-step answer, for comparison: the best single drop into the baseline is
+    # A + R1, and it is worth 3.8% less than the set nobody would have proposed.
+    best_candidate = ring_sweep.candidates[0]
+    assert (best_candidate.item.item_id, best_candidate.item_level.id) == (201, "mythic")
+    assert best_candidate.dps == 130_000.0
+    assert mythic.worn.dps / best_candidate.dps - 1 == pytest.approx(0.0385, abs=1e-4)
+
+
+def test_the_ceiling_can_be_what_the_character_already_wears(ring_sweep):
+    """A real answer -- "no drop at this item level belongs in this slot" -- and it
+    has to be distinguishable from the ceiling not having been measured."""
+    heroic = {entry.level.id: entry for entry in ring_sweep.best_sets}["heroic"]
+
+    assert heroic.worn.item_ids == (101, 103)
+    assert heroic.is_baseline is True
+    assert heroic.gain == 0.0
+    assert heroic.to_json()["isBaseline"] is True
+    # The ceiling's reference and the candidates' reference are the same gear run in
+    # two different invocations, which is only sound because profilesets with
+    # identical gear repeat exactly. Pinned here so the two halves of the file are
+    # known to be on one scale.
+    assert heroic.baseline.dps == ring_sweep.baseline_dps
+
+
+def test_the_ceiling_is_published_per_item_level(ring_sweep):
+    assert [entry.level.id for entry in ring_sweep.best_sets] == ["heroic", "mythic"]
+    payload = ring_sweep.to_json()
+    assert [entry["level"] for entry in payload["bestSets"]] == ["heroic", "mythic"]
+    assert payload["baseline"]["method"] == "exhaustive"
+    assert payload["baseline"]["combinations"] == 3
+
+
+def test_the_per_item_comparison_still_answers_should_i_take_this_drop(ring_sweep):
+    """The ceiling is an addition, not a replacement. A reader still has to be able
+    to price one drop against what is worn today, which is a different question from
+    what the slot should eventually hold."""
+    assert {entry.replaces.item_id for entry in ring_sweep.candidates} == {103}
+    assert len(ring_sweep.candidates) == 4  # two drops at two item levels
+    for entry in ring_sweep.candidates:
+        assert entry.gain == pytest.approx(entry.dps / 122_000.0 - 1)
+
+
+# --------------------------------------------------------------------------------
+# The tie rule, applied to sets rather than to items
+# --------------------------------------------------------------------------------
+
+
+def worn_set(dps: float, error: float = 0.05, ids=(101, 103)) -> gearsweep.WornSet:
+    return gearsweep.WornSet(
+        offers=tuple(gearsweep.Offer(gear(i, "mythicplus"), HEROIC) for i in ids),
+        dps=dps,
+        dps_error=error,
+    )
+
+
+@pytest.mark.parametrize(
+    ("winner", "runner", "tie"),
+    [
+        (122_000.0, 120_000.0, False),  # 1.7%, far outside the noise
+        (122_000.0, 121_950.0, True),  # 0.04%, inside hypot(0.05, 0.05)/100
+    ],
+)
+def test_a_winning_set_inside_the_noise_reads_as_a_tie(winner, runner, tie):
+    """The project's uncertainty convention, applied where it was missing: the
+    published pool entries are per item, so a pair that beat its runner-up by a
+    tenth of a percent looked like a settled answer from outside."""
+    payload = gearsweep._runner_up_json(worn_set(winner), worn_set(runner))
+    assert payload is not None
+    assert payload["tie"] is tie
+
+
+def test_the_tie_band_sits_at_the_two_errors_in_quadrature():
+    """Not at a fixed percentage. The whole point of the project's rule is that the
+    band tracks the precision the run achieved, so it has to be *this* number --
+    written from ``hypot`` rather than from a figure somebody typed, and pinned from
+    both sides so a band twice or half as wide fails."""
+    floor = math.hypot(0.05, 0.05) / 100
+    inside = gearsweep._runner_up_json(
+        worn_set(122_000.0), worn_set(122_000.0 / (1 + floor * 0.99))
+    )
+    outside = gearsweep._runner_up_json(
+        worn_set(122_000.0), worn_set(122_000.0 / (1 + floor * 1.01))
+    )
+    assert inside is not None and outside is not None
+    assert inside["tie"] is True
+    assert outside["tie"] is False
+
+
+def test_a_set_with_nothing_behind_it_publishes_no_runner_up():
+    assert gearsweep._runner_up_json(worn_set(122_000.0), None) is None
+
+
+@pytest.mark.parametrize(
+    ("ceiling", "tie"),
+    [(130_000.0, False), (122_060.0, True)],
+)
+def test_a_ceiling_inside_the_noise_is_not_an_upgrade_over_the_baseline(ceiling, tie):
+    best = gearsweep.BestSet(
+        level=MYTHIC,
+        worn=worn_set(ceiling, ids=(102, 201)),
+        runner_up=None,
+        baseline=worn_set(122_000.0),
+    )
+    assert best.is_tie is tie
+    assert best.is_baseline is False
+
+
+def test_a_ceiling_that_was_never_measured_is_absent_rather_than_equal(stub_simc, profile):
+    """ "The baseline is the ceiling" and "nobody measured the ceiling" are different
+    claims, and publishing the first for the second would assert that no drop
+    improves on what is worn -- which nothing ran."""
+    result = gearsweep.sweep_spec(Path("simc"), profile, POOL, SimSettings(), [1], timeout=60)
+    assert result.targets[0].best_sets == []
+    assert "bestSets" not in result.targets[0].to_json()
