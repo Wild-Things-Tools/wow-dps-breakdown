@@ -244,12 +244,28 @@ def cmd_build(args: argparse.Namespace) -> int:
         simc,
     )
 
+    # From every profile the tier ships, not from this shard's slice, so all twelve
+    # shards anchor on the same number. A build whose gear sits away from it gets a
+    # caveat rather than a silent place in the ranking -- absolute DPS does not
+    # survive an item-level difference, and simc's disabled profiles are routinely a
+    # whole tier behind its shipped ones.
+    reference_item_level = dataset.shipped_item_levels(all_profiles)
+    if reference_item_level:
+        logging.info("tier %s ships item levels %s", tier, reference_item_level)
+
     results: list[dataset.SpecResult] = []
     simc_meta: dict = {}
 
     for index, profile in enumerate(selected, start=1):
         logging.info("[%d/%d] %s", index, len(selected), profile.display_name)
-        result = dataset.run_spec(simc, profile, selected_scenarios, settings, timeout=args.timeout)
+        result = dataset.run_spec(
+            simc,
+            profile,
+            selected_scenarios,
+            settings,
+            timeout=args.timeout,
+            reference_item_level=reference_item_level,
+        )
         if not result.cells:
             logging.error("  no successful sims for %s, skipping", profile.id)
             continue

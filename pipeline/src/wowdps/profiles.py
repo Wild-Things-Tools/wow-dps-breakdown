@@ -75,6 +75,7 @@ _PLAYER_LINE = re.compile(
 _SPEC_LINE = re.compile(r"^spec\s*=\s*(\S+)\s*$", re.MULTILINE)
 _ROLE_LINE = re.compile(r"^role\s*=\s*(\S+)\s*$", re.MULTILINE)
 _TALENTS_LINE = re.compile(r"^talents\s*=\s*(\S+)\s*$", re.MULTILINE)
+_ILEVEL = re.compile(r"\bilevel=(\d+)")
 
 
 def _titleize(token: str) -> str:
@@ -141,6 +142,14 @@ class SpecProfile:
     #: so it is carried through every dataset and labelled wherever it is drawn.
     #: See ``unvalidated``.
     unvalidated: bool = False
+    #: The item level most of this profile's gear sits at, or None where no gear
+    #: line states one. It is not decoration: **absolute DPS does not survive an
+    #: item-level difference**, so two profiles at different item levels cannot be
+    #: ranked against each other as a balance statement. simc's *disabled* profiles
+    #: are routinely a whole tier behind its shipped ones -- MID2 ships 334/344 and
+    #: its generator entries carry 289 -- which puts every one of them below every
+    #: shipped build for reasons that have nothing to do with the spec.
+    item_level: int | None = None
 
     @property
     def id(self) -> str:
@@ -219,7 +228,22 @@ def parse_profile(
         talent_hash=talents.group(1) if talents else None,
         name_hero=name_hero,
         unvalidated=text.startswith(unvalidated.MARKER),
+        item_level=modal_item_level(text),
     )
+
+
+def modal_item_level(text: str) -> int | None:
+    """The item level the most gear lines in a profile state, or None if none do.
+
+    The mode rather than the mean: a profile's weapon or its crafted back piece
+    sits a few levels off the rest, and a mean would report a level nothing is
+    actually at. What this is for is comparing one profile against another, and
+    "what most of it wears" is the honest summary for that.
+    """
+    levels = [int(match) for match in _ILEVEL.findall(text)]
+    if not levels:
+        return None
+    return max(set(levels), key=lambda level: (levels.count(level), level))
 
 
 def _hero_from_name(name: str, tier: str, class_filename_form: str, spec_token: str) -> str | None:

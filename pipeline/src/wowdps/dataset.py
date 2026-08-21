@@ -140,16 +140,90 @@ class SpecResult:
         return out
 
 
+def shipped_item_levels(profiles: list[SpecProfile]) -> tuple[int, int] | None:
+    """The band of item levels the tier's *shipped* profiles wear, low to high.
+
+    A band rather than a single figure, because the tier genuinely spans one: MID2's
+    shipped profiles sit at 334 and 344, so comparing against the mode alone flags
+    seven of them as incomparable with themselves. The band is derived from the data
+    for the same reason the coverage reference list is -- a fixed tolerance is a
+    magic number that goes wrong in exactly the season nobody re-checks it.
+
+    Shard-safe, and it has to be: it reads what simc publishes for the tier, which
+    every shard sees identically, rather than the slice this run simulated. Disabled
+    profiles are excluded so one cannot drag the anchor toward itself and quietly
+    excuse its own gap.
+    """
+    levels = sorted(p.item_level for p in profiles if not p.unvalidated and p.item_level)
+    if not levels:
+        return None
+    return levels[0], levels[-1]
+
+
+def gear_caveat(profile: SpecProfile, band: tuple[int, int] | None) -> str | None:
+    """Say so when a build's gear, not its spec, is what puts it where it is.
+
+    **Absolute DPS does not survive an item-level difference.** This project already
+    states that for the tier axis -- a season-over-season comparison has to be
+    restricted to within-run ratios -- and the same thing happens *inside* one tier
+    the moment a profile simc did not ship is drawn beside ones it did.
+
+    Measured on the first run that included them: MID2's disabled generator profiles
+    wear item level 289 where its shipped profiles wear 334-344, and all eight
+    resulting builds landed below all twenty-eight shipped ones with no overlap. A
+    clean separation like that is the signature of a systematic difference, not of
+    eight underperforming specs, and without this caveat the ranking presents a gear
+    gap as a balance finding. One of them wears **723**, which is not a Midnight item
+    level at all, so the gap is not always downward either.
+    """
+    if band is None:
+        return None
+    low, high = band
+    written = f"{low}" if low == high else f"{low}-{high}"
+
+    if profile.item_level is None:
+        # Absence is not comparability. Five of MID2's disabled profiles state no
+        # item level on any gear line, so their gear sits at whatever base level the
+        # item ids carry -- which this cannot read, and which there is no reason to
+        # assume matches the tier. Saying nothing would let exactly the builds that
+        # *cannot* be checked pass as checked. Shipped profiles omit it routinely
+        # (eight of MID2's do), so this only fires for the ones simc did not ship.
+        if not profile.unvalidated:
+            return None
+        return (
+            "This profile states no item level on any gear line, so its gear could not "
+            f"be compared against the {written} the tier's shipped profiles wear. Its "
+            "position against those builds may be gear rather than spec."
+        )
+
+    if low <= profile.item_level <= high:
+        return None
+    gap = profile.item_level - (low if profile.item_level < low else high)
+    direction = "below" if gap < 0 else "above"
+    return (
+        f"This profile wears item level {profile.item_level}, {abs(gap)} {direction} the "
+        f"{written} the tier's shipped profiles wear. Absolute damage does not survive "
+        f"that difference, so its position against those builds is mostly gear."
+    )
+
+
 def run_spec(
     simc: Path,
     profile: SpecProfile,
     scenarios: list[Scenario],
     settings: SimSettings,
     timeout: int = 1800,
+    reference_item_level: int | None = None,
 ) -> SpecResult:
     """Run every scenario x target count for one spec."""
     result = SpecResult(profile=profile)
     seen_caveats: set[str] = set()
+
+    gear = gear_caveat(profile, reference_item_level)
+    if gear:
+        log.warning("  %s", gear)
+        seen_caveats.add(gear)
+        result.caveats.append(gear)
 
     for scenario in scenarios:
         for targets in scenario.sims():

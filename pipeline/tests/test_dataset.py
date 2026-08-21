@@ -156,3 +156,70 @@ def test_coverage_counts_the_unvalidated_builds_a_run_actually_produced():
     assert coverage["simulated"] == 1
     assert coverage["broken"] == []
     assert coverage["unvalidatedSimulated"] == 2
+
+
+def _profile(item_level, unvalidated=False, name="Fury"):
+    from wowdps.profiles import SpecProfile
+
+    return SpecProfile(
+        path=Path(f"MID2_Warrior_{name}.simc"),
+        tier="MID2",
+        wow_class="Warrior",
+        spec=name,
+        hero_talent="Slayer",
+        role="attack",
+        talent_hash=None,
+        unvalidated=unvalidated,
+        item_level=item_level,
+    )
+
+
+def test_the_shipped_band_is_a_range_because_the_tier_wears_one():
+    """A single mode flagged seven of MID2's own shipped builds as incomparable.
+
+    Its profiles genuinely sit at both 334 and 344, so the anchor has to be the band
+    they span. Disabled profiles are excluded from it so one cannot drag the anchor
+    toward itself and excuse its own gap.
+    """
+    from wowdps.dataset import shipped_item_levels
+
+    tier = [_profile(344), _profile(334), _profile(289, unvalidated=True)]
+    assert shipped_item_levels(tier) == (334, 344)
+    assert shipped_item_levels([_profile(None)]) is None
+
+
+def test_a_build_outside_the_band_says_its_place_is_gear():
+    """Absolute DPS does not survive an item-level difference, inside a tier either.
+
+    MID2's disabled profiles wear 289 against a shipped 334-344, and all eight
+    resulting builds landed below all twenty-eight shipped ones with no overlap --
+    the signature of a systematic difference, not of eight bad specs.
+    """
+    from wowdps.dataset import gear_caveat
+
+    band = (334, 344)
+    assert gear_caveat(_profile(344), band) is None
+    assert gear_caveat(_profile(334), band) is None
+
+    low = gear_caveat(_profile(289, unvalidated=True), band)
+    assert low is not None
+    assert "45 below" in low and "334-344" in low
+
+    # Not always downward: one MID2 generator entry carries a War Within item level.
+    high = gear_caveat(_profile(723, unvalidated=True), band)
+    assert high is not None and "379 above" in high
+
+
+def test_an_unstated_item_level_is_flagged_only_for_a_profile_simc_did_not_ship():
+    """Absence is not comparability -- but eight shipped MID2 profiles omit it too.
+
+    Saying nothing for an unvalidated build would let exactly the ones that cannot be
+    checked pass as checked; saying something for a shipped one would flag a third of
+    the tier for a convention simc uses everywhere.
+    """
+    from wowdps.dataset import gear_caveat
+
+    assert gear_caveat(_profile(None), (334, 344)) is None
+    unchecked = gear_caveat(_profile(None, unvalidated=True), (334, 344))
+    assert unchecked is not None
+    assert "could not" in unchecked

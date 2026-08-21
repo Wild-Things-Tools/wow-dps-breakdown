@@ -1472,6 +1472,47 @@ shipped count and the unvalidated ones are a separate `+K`, because adding them
 would make one number out of two different claims and the weaker one would vanish
 into it.
 
+### They wear a whole tier less gear, and the first run published that as balance
+
+The run that included them, MID2 on 2026-08-21: **all eight resulting builds landed
+below all twenty-eight shipped ones, with no overlap** -- 112k-134k against
+177k-268k. A separation that clean is never a balance finding; it is the signature
+of a systematic difference, and this one is gear.
+
+simc's *disabled* profiles are routinely a whole tier behind its shipped ones.
+Measured against the checkout:
+
+| | item level |
+|---|---|
+| shipped MID2 profiles | **334-344** (13 at 344, 7 at 334, 8 state none) |
+| six disabled ones | **289** -- 45 below the band |
+| Havoc Aldrachi Reaver | **723** -- a War Within number, 379 *above* |
+| five disabled ones | state none at all |
+
+So the gap is not even always downward, and the file this project already tells you
+not to trust across tiers ("absolute DPS does not travel between tiers -- the gap is
+mostly item level, not balance") has the same problem *inside* one tier the moment a
+profile simc did not ship is drawn beside ones it did.
+
+`shipped_item_levels` + `gear_caveat` in `dataset.py`. Three decisions:
+
+- **The anchor is the band, not the mode.** A tolerance around 344 flagged seven of
+  MID2's own shipped builds as incomparable with themselves, because the tier
+  genuinely spans two item levels. The band is derived from the shipped profiles for
+  the same reason the coverage reference list is: a fixed tolerance is a magic number
+  that goes wrong in the season nobody re-checks it.
+- **Disabled profiles are excluded from the band**, or one drags the anchor toward
+  itself and quietly excuses its own gap.
+- **An unstated item level is flagged for an unvalidated build and not for a shipped
+  one.** Absence is not comparability, so saying nothing would let exactly the builds
+  that *cannot* be checked pass as checked -- but eight shipped MID2 profiles omit
+  `ilevel=` too, and flagging a third of the tier for a convention simc uses
+  everywhere is the other wrong answer.
+
+`modal_item_level` takes the mode over a profile's gear lines rather than the mean: a
+weapon or a crafted back sits a few levels off the rest, and a mean reports a level
+nothing is actually at.
+
 The materialisation runs in `sims.yml` behind `include_unvalidated` (default
 `true`), twice: once per sim shard, and once in the publish job before `spec-index`
 -- without the second, a spec this run simulated from a disabled profile would be
