@@ -332,8 +332,59 @@ export interface GearPoolEntry {
   dpsError: number
   /** DPS this item adds over wearing nothing at all in the slot. */
   standaloneGain: number
+  /**
+   * The best full set containing this item, when the sweep enumerated them.
+   * Absent under the additive rule, and absent from data written before the
+   * exhaustive method existed — in both cases `standaloneGain` is the ranking.
+   */
+  bestCombinationDps?: number | null
   /** True for the items that became the baseline. */
   chosen: boolean
+}
+
+/** One measured way of filling the slot, as a runner-up to something better. */
+export interface GearRunnerUp {
+  items: { id: number; ilevel: number }[]
+  dps: number
+  /** How far the winner is ahead, as a fraction of this set's DPS. */
+  gap: number
+  gapError: number
+  /** A gap inside `gapError` is a tie: the winner did not measurably win. */
+  tie: boolean
+}
+
+/**
+ * The best the slot can hold at one item level, drawn from the whole pool.
+ *
+ * Not the same answer as "the baseline plus its best single drop". That is a
+ * two-step search — fix the farmed pair, then swap one socket — and it cannot reach
+ * a set whose farmed half is not in the best farmed pair.
+ */
+export interface GearBestSet {
+  /** Matches a GearItemLevel id. */
+  level: string
+  ilevel: number
+  items: { id: number; ilevel: number }[]
+  dps: number
+  dpsError: number
+  /**
+   * Fraction of `baselineDps` gained. Zero when the ceiling *is* the baseline.
+   *
+   * Note the denominator: `baselineDps` is the winning farmed set as the
+   * *combination* invocation measured it, while `GearTargetResult.baseline.dps` is
+   * the same gear as the *candidate* invocation measured it. Dividing the two
+   * published DPS figures gives a third number; `baseline.drift` is how far apart
+   * the two runs were.
+   */
+  gain: number
+  gainError: number
+  /** The reference `gain` was taken against, spelled out rather than implied. */
+  baselineDps: number
+  /** The project's tie rule, applied by the pipeline: `|gain| <= gainError`. */
+  isTie?: boolean
+  /** True when nothing in the drop pool improves on what the build already wears. */
+  isBaseline: boolean
+  runnerUp: GearRunnerUp | null
 }
 
 export interface GearCandidate {
@@ -364,9 +415,41 @@ export interface GearTargetResult {
     ilevel: number
     dps: number
     dpsError: number
+    /**
+     * "exhaustive" — every combination was filled and run, and the baseline is the
+     * one that won. "additive" — the pool was too large for the budget, so the top
+     * items by standalone value were taken instead. The two disagree on half the
+     * tier and the numbers look identical either way, so this is recorded rather
+     * than assumed. Absent on data written before it was.
+     */
+    method?: string
+    /** How many combinations the choice rests on. 0 under the additive rule. */
+    combinations?: number
+    /**
+     * How far the same gear moved between the two invocations that both measured
+     * it, with the two errors in quadrature. Exactly zero on a deterministic run,
+     * which is the point — a reader can see it rather than assume it. Non-zero
+     * under `--target-error`, and then the ceiling gains and the candidate gains on
+     * one page are measured from references this far apart.
+     */
+    drift?: number
+    driftError?: number
+    /**
+     * Which of `items` the candidates displace: the measured weakest of the set.
+     * Never "the last one" — that is pool-file order, and reading it that way is
+     * the defect the pipeline carried. Absent on data written before it.
+     */
+    replaces?: number
+    runnerUp?: GearRunnerUp
   }
   pool: GearPoolEntry[]
   candidates: GearCandidate[]
+  /**
+   * The ceiling, one entry per item level. Absent when the enumeration was over
+   * budget — which is not the same as "the baseline is the ceiling", so it is
+   * missing rather than equal to it.
+   */
+  bestSets?: GearBestSet[]
 }
 
 export interface GearSpecResult {

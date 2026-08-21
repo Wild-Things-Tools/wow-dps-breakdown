@@ -297,12 +297,22 @@ thing by an order of magnitude, and against an unenchanted baseline every candid
 would "win" by the enchant. `GearItem` carries `gem_ids` and `enchant_id` for that
 reason; `bonus_ids` stays because it costs nothing, not because anything needs it.
 
-Ring and neck pools have the same structural shape as the trinket pools, from
-`wowdps gear-candidates`: **4 epic rings at base ilevel 219** and 7 rares at 108,
-against 15 and 25 trinkets. Small enough that a full pairwise sweep is affordable
-where it was not for trinkets -- but two finger slots and two neck gems mean the
-baseline construction is a different problem, not the trinket one with a new slot
-name.
+Ring and neck pools have the same structural shape as the trinket pools. The
+enumeration `wowdps gear-candidates` prints is not what the sweep runs, though --
+the shipped pools are journal-derived, and the numbers that matter are the split by
+source, read out of `gear_pools.json`:
+
+| slot | Mythic+ | raid | total |
+|---|---|---|---|
+| finger | 8 | 3 | 11 |
+| neck | 4 | 3 | 7 |
+| trinket | 27 | 15 | 42 |
+
+Small enough that a full pairwise sweep is affordable for rings and necks where it
+was not for trinkets -- and it is now what they run, over the *whole* pool rather
+than the Mythic+ half. See "The baseline is the best combination" and "The ceiling"
+below. Two finger sockets and two neck gems still mean the baseline construction is
+a different problem, not the trinket one with a new slot name.
 
 ### Compare profilesets to profilesets, never to the base actor
 
@@ -330,16 +340,28 @@ that cannot both be pressed).
 
 So step 1 now fills the sockets **every possible way** and runs each, and the
 baseline is the combination that actually won. `MAX_BASELINE_COMBINATIONS` (120)
-is the ceiling, from the measured ~11 CPU-seconds a caster's variant costs:
+is the ceiling on how many are run.
 
-| slot | Mythic+ pool | combinations | method |
+**The counts in the table that used to sit here were wrong, and in a way worth
+naming.** It read "neck 7 -> 7, finger 11 -> 55", which are the *pool* sizes
+combined -- but only the Mythic+ half of a pool forms a baseline, so the real
+figures were 4 -> 4 and 8 -> 28. The number was never load-bearing (both fit the
+budget either way), and it is the shape of error to watch for: a table of
+plausible arithmetic over the wrong column.
+
+The counts against MID2's derived pools, with the enumeration the sweep now runs:
+
+| slot | baseline (Mythic+ only) | full (whole pool, per item level) | method |
 |---|---|---|---|
-| neck | 7 | 7 | exhaustive |
-| finger | 11 | 55 | exhaustive |
-| trinket | 27 | **351** | additive -- about 28 CPU-hours across the tier |
+| neck | 4 | 10 | exhaustive |
+| finger | 28 | 82 | exhaustive |
+| trinket | 351 | 1371 | additive -- about 28 CPU-hours across the tier for the baseline alone |
 
-Trinkets stay additive until somebody decides to pay for that, and the dataset
-says which method produced each baseline rather than leaving it to be assumed.
+The two budgets are checked **separately**, so a pool that can afford a measured
+baseline but not a measured ceiling keeps the baseline. Trinkets are over the line
+on the first one, so nothing about them changed; they stay additive until somebody
+decides to pay for it, and the dataset says which method produced each baseline
+rather than leaving it to be assumed.
 
 **Measured on the first exhaustive ring sweep, MID2, one target, 1000
 deterministic iterations: the two methods disagree on 13 of 26 builds.** Half the
@@ -361,15 +383,176 @@ method an item is ranked by the best full combination containing it, not by its
 standalone value, since ranking by standalone would contradict the baseline the
 run just picked.
 
+### The candidate replaces the *measured* weakest item, not the last one
+
+A correction to numbers that are **published right now**, not a bug caught before
+shipping. `5c9c731` made the baseline the best measured combination; `replaced =
+baseline_items[-1]` was left as it was. Under the additive rule that was correct by
+accident -- `entries` is sorted by standalone value, so the last of the chosen is
+the weakest. Under the exhaustive rule `baseline_items` comes out of
+`itertools.combinations(worn, ...)`, which follows **`gear_pools.json` order**, and
+the last member of the winning pair is whichever one sorts later in the file.
+
+Measured against the committed `web/public/data/MID2/gear.json` (written
+2026-08-17 by `a9bc652`):
+
+| slot | method | `replaces` is not the weakest |
+|---|---|---|
+| finger | exhaustive | **10 of 26 builds** |
+| trinket | additive | 0 of 26 |
+| neck | one socket | not expressible |
+
+So on ten ring builds every published candidate gain is priced against throwing
+away the *better* of the two rings the build wears. Enhancement Shaman (Totemic) is
+the widest: it discards a ring worth 20,036 alone where the weakest is worth
+16,300. A drop that is a real upgrade can publish as a downgrade, and the Loot view
+compounds it -- the "Kept" and "Replaced by candidates" columns name the two the
+wrong way round.
+
+**The right answer is measured and was already in the run.** For two sockets,
+dropping B leaves A alone and dropping A leaves B alone, so the one to drop is the
+one whose partner scores higher by itself -- the lower standalone value, which the
+solo variants measure. Ties break on position so a re-run picks the same socket.
+
+Two things the fix carries with it:
+
+- **The candidate is substituted in place**, not appended after the survivors. The
+  baseline and the candidate then differ in exactly one socket, and each surviving
+  item keeps the socket it was measured in -- which matters because a profile's two
+  ring sockets carry *different gems* (`finger1 gem_id=240906`, `finger2
+  gem_id=240916`), so moving the survivor across would change two things and call
+  the difference the drop's.
+- **`replaces` is published on the baseline block.** The view was deriving it as
+  "the last item", which is the same wrong reasoning one layer up; it now reads the
+  field. Do not re-derive it anywhere.
+
+Re-run the finger sweep before trusting any ring number in the published file.
+**How wrong it gets** -- Elemental Shaman, MID2, one target, 1,000 iterations, the
+same six-build sample run before and after the fix:
+
+| ring at 344 | as published | corrected | |
+|---|---|---|---|
+| Apex Brute's Claw Ring | +0.60% | **+1.06%** | understated by 0.46 pts |
+| Vile Alchemist's Band | -2.03% | **-0.87%** | overstated as a loss by 1.16 pts |
+| Alluring Bubbleband | -0.30% | -0.82% | |
+
+Its two rings are 21,312 and 22,242 alone, so the file order named the *better* one
+and every drop was priced against losing it. And the fix moved a published
+conclusion: Elemental Shaman's ceiling used to look unreachable by the per-item view
+and now is exactly what the per-item view finds.
+
+### The ceiling: one enumeration, ranked twice
+
+The owner's second objection, and the same shape as the first. Picking the best
+Mythic+ pair and *then* swapping one raid drop into it is a **two-step search**, and
+a two-step search cannot reach an optimum that needs both steps at once. The best
+set overall may pair a raid ring with a Mythic+ ring the baseline never named, or
+fill both sockets from the raid -- and neither step would ever propose it, however
+many item levels it tries.
+
+So the enumeration covers the **whole** pool, Mythic+ and raid together, and one
+run is read twice:
+
+- over the Mythic+ subset -> the **baseline**, "what the character already wears",
+  which is what the owner asked to see;
+- over all of it, per candidate item level -> the **ceiling**, "what should end up
+  in this slot".
+
+Published as `bestSets` on each target result, one entry per item level, with the
+winning set, its gain over the baseline, the runner-up set and `isBaseline`. The
+per-item comparison is untouched and still answers the other question -- *is this
+particular drop an upgrade today* -- which is what a loot council asks on the night.
+
+Four things in it that are decisions rather than arithmetic:
+
+- **A drop is offered at every item level it can drop at; a farmed item at one.**
+  That is `baseline_ilevel`'s rule applied per item (`SlotPool.wearable_levels`).
+  Pricing a Mythic+ ring at the raid's top level is exactly the flattery that rule
+  exists to prevent, one layer down.
+- **One variant never mixes two drop item levels.** A ring at 334 beside a ring at
+  344 is a third question, and the view has one item-level control, not two. It also
+  keeps the count at 82 rather than 88.
+- **Absent is not equal.** A pool over budget publishes no `bestSets` at all rather
+  than the baseline, because "the baseline is the ceiling" is a claim that nothing
+  in an unrun enumeration supports.
+- **The winner's runner-up is published, and the tie rule applies to sets.** The
+  `pool` entries are per *item*, so two pairs a tenth of a percent apart looked like
+  a settled answer from outside the file. This is the gap the previous note here
+  named ("only per-item numbers are published, not per-pair") and it is closed for
+  both the baseline and the ceiling.
+
+**What it cost.** 98 profilesets per spec per target count for finger against the
+44 the Mythic+-only enumeration ran -- 1 empty, 8 solo, 82 combinations, then the
+baseline and 6 candidates in the second invocation. Measured on Arcane Mage,
+MID2, one target, 300 deterministic iterations: **63.5 CPU-seconds against 135.5**,
+same machine, same simc, and both runs returned the *same baseline to the DPS*.
+At the shipped 1,000 iterations, two runs of the same six specs on four cores cost
+**47m58s and 48m53s of CPU** -- about **8.1 CPU-minutes per spec**, which puts a
+full 26-build single-target ring pass near **210 CPU-minutes**. Quote the CPU figure
+rather than wall clock: the same six specs spread 109-247 seconds of wall clock
+across the two runs purely on how busy the box was, so a wall-clock range read as a
+per-spec cost is a measurement of the machine.
+
+Pet specs are not the outlier the trinket arithmetic assumes. Beast Mastery came in
+under two of the three casters on the first run and mid-pack on the second, so the
+2.5x multiplier does not carry over to a slot whose variants differ only in two
+rings.
+
+### What the ceiling found: the two-step answer is low on most builds
+
+MID2 finger, one target, 1,000 deterministic iterations, six builds
+(2026-08-21, simc 1210-01 at 69a46e1). Every ceiling below is at item level 344:
+
+| build | best single drop, from the per-item view | ceiling | understated by |
+|---|---|---|---|
+| Destruction Warlock | +0.24% | **+0.80%** | 0.55 pts |
+| Frost Death Knight | +0.24% | **+0.78%** | 0.54 pts |
+| Shadow Priest | +0.36% | **+0.70%** | 0.35 pts |
+| Arcane Mage | +0.18% | +0.23% | 0.05 pts -- a tie |
+| Beast Mastery Hunter | +0.26% | +0.26% | 0 -- the same set |
+| Elemental Shaman | +1.06% | +1.06% | 0 -- the same set |
+
+Median candidate `gainError` on that run is **0.136%**, so the three gaps at the top
+are three to four times the noise floor and the three at the bottom are not.
+
+**Four of the six ceilings are sets the per-item comparison could not have
+proposed**, and all four wear *two* raid rings, which no single swap reaches. Beast
+Mastery and Elemental Shaman are the controls: their ceilings *are* the two-step
+answer, to the DPS, so the machinery is not simply inventing distance.
+
+**These numbers replace an earlier set that the `replaces` defect produced, and the
+way they moved is the lesson.** Before that fix this read "five of six", with
+Elemental Shaman as the showpiece -- a ceiling that kept the ring the candidate step
+throws away. That build's candidate step was throwing away the *wrong* ring, so the
+example was an artifact of the bug rather than a property of the method. Corrected,
+its per-item answer finds the same +1.06% the ceiling does. Every ring number in
+this file was re-measured after the fix; do not copy figures across it.
+
+Two things this does not say. It is six builds of twenty-six, at one target count,
+and it is a different simc revision from the published dataset -- these numbers
+justify the method, they are not the tier's answer. And the *baseline* choice itself
+is frequently inside the noise: on three of the six the runner-up pair is a tie, and
+Arcane picked a different pair at 300 iterations than at 1,000 for exactly that
+reason. That is not an argument against enumerating; it is the argument for
+publishing the runner-up set, which is how it became visible at all.
+
 ### Standalone trinket value is additive to about 3%
 
 Arcane Mage, one target, both sockets empty = 159,026 DPS. Freightrunner's Flask
 alone adds 13,342; Gebbo's Bottomless Bag alone adds 14,646; the two together add
 28,804 where the sum of the singles is 27,988 -- the pair is worth **2.9% more** than
-its parts. So ranking by standalone value picks the right pair unless two candidates
-sit within a few percent of each other at the cut, which is why the runners-up are
-published rather than dropped. Pairwise would be N(N-1)/2 -- about 120 variants per
-spec instead of 16 -- for a correction of that size.
+its parts.
+
+**This is the trinket measurement, and it is still why trinkets are additive.**
+Pairwise there is N(N-1)/2 over 27 farmable trinkets -- 351 variants per spec per
+target count against 16 -- for a correction of that size, so trinkets rank by
+standalone value and publish their runners-up so a near-tie at the cut is visible.
+
+It was also, for a while, the argument for ranking *rings* that way, and there it
+was wrong twice. The pool is a third the size, so pairwise costs 82 variants rather
+than 351; and the correction is not small -- measured, the two methods name a
+different pair on 13 of 26 builds. A number measured on one slot is not a fact about
+the slot next to it. Do not carry this one back to rings.
 
 ### Cost, measured
 
@@ -393,6 +576,28 @@ dataset carries its own `coverage` count. A sweep that is interrupted at spec 9 
 leaves a dataset that is smaller *and* honest about being smaller. The view prints
 "covers N of M builds in the tier" from that field -- never from the array length,
 which would be the same number with none of the meaning.
+
+**This entry described something the code did not do**, from whenever it was written
+until 2026-08-21: `write_gear` was called once, after the loop over specs, so an
+interrupted sweep left *nothing* rather than a smaller dataset. It does now write per
+spec, which is the cheaper of the two fixes and the one that keeps the sentence true.
+Worth knowing about this file: a claim here can be a description of intent that the
+code never grew into, and this one survived a sweep being extended twice without
+anybody re-reading the loop it was about.
+
+**And the workflow threw the result away anyway.** A step with no `if:` defaults to
+`if: success()`, so `gear.yml`'s shard `upload-artifact` was skipped on exactly the
+two failures the per-spec write exists for -- a non-zero `wowdps gear` and a shard
+hitting `timeout-minutes: 350`. The `publish` job below it already carried
+`if: always() && needs.sweep.result != 'cancelled'` with a comment about publishing
+whatever finished, so the intent was there and was defeated at the first hop. It is
+`if: always()` now, with `if-no-files-found: ignore` for a shard that died before
+its first spec.
+
+**`buffs.yml` and `sims.yml` have the same shape and are not touched here.** Both
+carry the same `always()` publish job over an upload step with no condition. Whether
+their sweeps write partial output at all is a separate question from this one, so
+that is a finding for a human rather than a change made in passing.
 
 ## Tier sets and Power Infusion, as differences rather than levels
 

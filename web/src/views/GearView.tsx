@@ -2,10 +2,17 @@
  * Loot: is this drop an upgrade over what the character already wears?
  *
  * The charts are *diverging* bars around zero, and zero is not "no damage" — it is
- * the spec's own baseline, the two best Mythic+ trinkets it already has, worn at the
+ * the spec's own baseline, the best set of Mythic+ items it already has, worn at the
  * lower of the two item levels. So a bar to the left is a real answer ("this drop is
  * a downgrade for this spec"), not a missing one, and the baseline has to be named
  * on screen rather than implied.
+ *
+ * Two questions, not one, and the view has to keep them apart. "Is this drop an
+ * upgrade today" is the per-item comparison: one socket swapped, everything else
+ * held. "What should this slot end up holding" is the ceiling, chosen from every
+ * combination the pool allows — and it can name a set the first question cannot
+ * reach, because that one only ever swaps a single socket out of the farmed pair.
+ * Both are published; where they disagree, the disagreement is the finding.
  *
  * Two things this view has to keep visible or it starts lying:
  *
@@ -54,10 +61,28 @@ import {
 } from '../components/ui'
 import { fullNumber, percent } from '../lib/format'
 import { classColor } from '../lib/palette'
-import type { GearDataset, GearItemMeta, GearSpecResult } from '../lib/types'
+import type {
+  GearDataset,
+  GearItemMeta,
+  GearRunnerUp,
+  GearSlot,
+  GearSpecResult,
+} from '../lib/types'
 
 /** Two lines of tick text plus the icon, and the axis band beneath the plot. */
 const ROW_HEIGHT = 32
+
+/**
+ * A percentage whose sign comes from the number rather than from the call site.
+ *
+ * `percent()` renders a negative as "-0.40%", so a template that prefixes its own
+ * minus for a figure it assumes is a lead prints "−-0.40%" the moment the assumption
+ * breaks — a malformed string that reads as the opposite of what happened. Every
+ * signed figure on this view goes through here so the two can never disagree.
+ */
+function signedPercent(value: number, digits = 1): string {
+  return `${value >= 0 ? '+' : '−'}${percent(Math.abs(value), digits)}`
+}
 const AXIS_BAND = 44
 const TICK_WIDTH = 205
 
@@ -123,6 +148,10 @@ export function GearView({ gear }: { gear: GearDataset | null }) {
     () => headline(rows, specs, noise, level?.ilevel ?? 0),
     [rows, specs, noise, level],
   )
+  const ceilings = useMemo(
+    () => buildCeilings(specs, targetCount, level?.id ?? ''),
+    [specs, targetCount, level],
+  )
 
   if (!gear || !slot || !level) {
     return (
@@ -183,10 +212,11 @@ export function GearView({ gear }: { gear: GearDataset | null }) {
           title={`${slot.candidateSourceLabel} ${slot.label.toLowerCase()}s, against what you already wear`}
           subtitle={
             <>
-              Zero is each spec’s own baseline: its two best {slot.baselineSourceLabel}{' '}
-              {slot.label.toLowerCase()}s at item level {rows[0]?.baselineIlevel ?? '—'}. A
-              candidate takes the place of the <em>weaker</em> of the two, because that is
-              the decision a loot council actually makes. Covers {gear.coverage.specs} of{' '}
+              Zero is each spec’s own baseline: the best set of{' '}
+              {slot.baselineSourceLabel} {slot.label.toLowerCase()}s it can farm, at item
+              level {rows[0]?.baselineIlevel ?? '—'}. A candidate takes the place of the{' '}
+              <em>weakest</em> item in that set, because that is the decision a loot
+              council actually makes. Covers {gear.coverage.specs} of{' '}
               {gear.coverage.specsAvailable} builds in the tier.
             </>
           }
@@ -280,10 +310,74 @@ export function GearView({ gear }: { gear: GearDataset | null }) {
 
       <Panel>
         <PanelHeader
-          title={`The baseline: each build’s two best ${slot.baselineSourceLabel} ${slot.label.toLowerCase()}s`}
-          subtitle={`Chosen by running every eligible ${slot.baselineSourceLabel} ${slot.label.toLowerCase()} on its own, with the other socket empty, and taking the two that added the most. Runners-up are listed so a close call at the cut is visible.`}
+          title={`The best ${slot.label.toLowerCase()}s each build could wear at ${level.ilevel}`}
+          subtitle={
+            // Past tense only when something ran. The panel used to assert "was run,
+            // and this is the set that won" above an empty state explaining that
+            // nothing had been — two adjacent sentences contradicting each other, and
+            // the same defect as giving one cause for four.
+            ceilings.length === 0 ? (
+              <>
+                Not the baseline plus its best single drop: the best set out of every way
+                of filling {slot.sockets.length === 1 ? 'the socket' : 'every socket'} from
+                the whole pool — {slot.baselineSourceLabel} and {slot.candidateSourceLabel}{' '}
+                together. The panel above only ever swaps one socket out of what the build
+                already farms, so it cannot propose a set whose{' '}
+                {slot.baselineSourceLabel} half the baseline did not name.
+              </>
+            ) : (
+              <>
+                Not the baseline plus its best single drop. Every way of filling{' '}
+                {slot.sockets.length === 1 ? 'the socket' : 'every socket'} from the whole
+                pool — {slot.baselineSourceLabel} and {slot.candidateSourceLabel} together —
+                was run, and this is the set that won. The panel above swaps one socket out
+                of what the build already farms, so it can never propose a set whose{' '}
+                {slot.baselineSourceLabel} half the baseline did not name.
+              </>
+            )
+          }
+        />
+        {ceilings.length === 0 ? (
+          <EmptyState>
+            <CeilingAbsence specs={specs} targetCount={targetCount} slot={slot} />
+          </EmptyState>
+        ) : (
+          <>
+            <CeilingTable rows={ceilings} items={items} ilevel={level.ilevel} />
+            <Note>
+              <strong>Beyond one swap</strong> marks the builds where the winning set is
+              one the per-item comparison could not have reached: it either keeps a{' '}
+              {slot.baselineSourceLabel} item the baseline left out, or fills every socket
+              from the drop pool.
+              Those are the rows where reading the per-item chart alone gives the wrong
+              answer to “what should I end up wearing”. A gain inside the run’s own
+              noise still reads as a tie, here as everywhere — and “baseline” in the
+              gain column is a real answer, meaning no drop at this item level belongs in
+              the slot at all.
+            </Note>
+          </>
+        )}
+      </Panel>
+
+      <Panel>
+        <PanelHeader
+          title={`The baseline: each build’s best ${slot.baselineSourceLabel} ${slot.label.toLowerCase()}s`}
+          subtitle={
+            <>
+              What the build already wears, and the zero every gain above is measured
+              from. Chosen by filling{' '}
+              {slot.sockets.length === 1 ? 'the socket' : 'every socket'} every possible
+              way from the eligible {slot.baselineSourceLabel} {slot.label.toLowerCase()}s
+              and running each, so it is the set that won rather than the items that ranked
+              highest on their own. Those are different questions: measured on rings, the
+              two named a different pair on half the tier. Where a pool is too large to
+              enumerate, the top items by standalone value are taken instead, and the note
+              under the table says which happened.
+            </>
+          }
         />
         <BaselineTable specs={specs} targetCount={targetCount} items={items} />
+        <BaselineMethodNote specs={specs} targetCount={targetCount} />
         <Note>
           This pool is still selected by item level rather than by where an item drops,
           and that is wrong in two directions. It cannot tell this season’s dungeon
@@ -298,12 +392,15 @@ export function GearView({ gear }: { gear: GearDataset | null }) {
           rather than “this season’s”.
         </Note>
         <Note>
-          Standalone value is not perfectly additive — measured on Arcane Mage, a pair is
-          worth about 3% more than the sum of its two parts — so two items within a few
-          percent of each other at the cut could swap once paired. Hovering an item name
-          asks Wowhead for its card at the item level in play; any difficulty name printed
-          in that card is Wowhead’s reading of the item level, not something simc’s files
-          say.
+          “Alone” is each item measured by itself with every other socket empty, and it
+          is shown because it is legible, not because it decides anything: standalone
+          value is not additive — measured on Arcane Mage, a pair is worth about 3% more
+          than the sum of its parts — so the item that adds most alone is regularly not
+          in the pair that wins. Where the runner-up set is marked a tie, the two
+          differ by less than this run measured to, and the choice between them is a coin
+          toss rather than a finding. Hovering an item name asks Wowhead for its card at
+          the item level in play; any difficulty name printed in that card is Wowhead’s
+          reading of the item level, not something simc’s files say.
         </Note>
       </Panel>
     </div>
@@ -782,7 +879,7 @@ function ItemTable({ rows, noise }: { rows: ItemRow[]; noise: number }) {
                 <td
                   className={`py-2 pr-4 text-right tabular-nums ${tie ? 'text-ink-muted' : 'text-ink'}`}
                 >
-                  {tie ? 'tie' : `${row.gain >= 0 ? '+' : ''}${percent(row.gain)}`}
+                  {tie ? 'tie' : signedPercent(row.gain)}
                 </td>
                 <td className="py-2 pr-5 text-right tabular-nums text-ink-secondary">
                   {fullNumber(row.dps)}
@@ -793,6 +890,282 @@ function ItemTable({ rows, noise }: { rows: ItemRow[]; noise: number }) {
         </tbody>
       </table>
     </div>
+  )
+}
+
+/**
+ * Why there is no ceiling, said from the data rather than assumed.
+ *
+ * Four conditions produce the same empty table and they are four different claims.
+ * The first version of this gave one of them — "the pool was too big" — as the
+ * explanation for all four, and on the dataset committed today it fired for rings
+ * while telling the reader that rings fit inside the budget. That is the project's
+ * own "probed and read nothing is not never probed" distinction, got wrong.
+ */
+function CeilingAbsence({
+  specs,
+  targetCount,
+  slot,
+}: {
+  specs: GearSpecResult[]
+  targetCount: number
+  slot: GearSlot
+}) {
+  const targets = specs
+    .map((spec) => spec.targets.find((entry) => entry.targets === targetCount))
+    .filter((entry) => entry !== undefined)
+
+  if (targets.length === 0) {
+    return (
+      <>
+        No build in this sweep was run at {targetCount}{' '}
+        {targetCount === 1 ? 'target' : 'targets'}. Pick another target count — this
+        is a gap in what was swept, not an answer about the {slot.label.toLowerCase()}
+        s.
+      </>
+    )
+  }
+  if (targets.every((entry) => entry.baseline.method === undefined)) {
+    return (
+      <>
+        This sweep predates the ceiling. Its baselines were still published without
+        saying which method chose them, so there is no enumeration over the whole pool
+        to read a best set out of — the drops were only ever measured one socket at a
+        time. Re-run <code>wowdps gear --slot {slot.id}</code> to fill this in. What
+        is below is unaffected and still says what it always did.
+      </>
+    )
+  }
+  if (targets.some((entry) => entry.baseline.method === 'additive')) {
+    return (
+      <>
+        This pool is too large to enumerate. Filling{' '}
+        {slot.sockets.length === 1 ? 'the socket' : 'every socket'} every possible way
+        from all {slot.items.length} {slot.label.toLowerCase()}s is more combinations
+        than the sweep’s budget allows, so the baseline below was chosen by ranking
+        items on their own and no best set was measured. “Nobody ran it” rather than
+        “nothing beats the baseline” — the two look identical from a table and are not
+        the same claim.
+      </>
+    )
+  }
+  return (
+    <>
+      The baseline here was enumerated and the ceiling was not: filling{' '}
+      {slot.sockets.length === 1 ? 'the socket' : 'every socket'} from what the build
+      farms fits the sweep’s budget, and doing it from the whole pool does not. That is
+      deliberate — losing a measured baseline to the cost of a measured ceiling would
+      be the worse trade — but it means nothing here has been compared against the
+      drops except one socket at a time.
+    </>
+  )
+}
+
+/** One build's answer to "what should this slot end up holding". */
+interface CeilingRow {
+  build: GearSpecResult
+  items: { id: number; ilevel: number }[]
+  gain: number
+  gainError: number
+  /** The pipeline's verdict, carried rather than recomputed. */
+  isTie: boolean
+  isBaseline: boolean
+  runnerUp: GearRunnerUp | null
+  /**
+   * True when the per-item comparison could not have proposed this set.
+   *
+   * That comparison holds every socket but one and swaps a single drop in, so the
+   * only sets it can reach are the baseline itself and "baseline minus its weakest,
+   * plus one candidate". Anything else — a farmed item the baseline left out, or
+   * every socket filled from the drop pool — is invisible to it however many item
+   * levels it tries. This is the whole reason the ceiling is published.
+   */
+  beyondOneSwap: boolean
+}
+
+function buildCeilings(
+  specs: GearSpecResult[],
+  targetCount: number,
+  levelId: string,
+): CeilingRow[] {
+  const rows: CeilingRow[] = []
+  for (const spec of specs) {
+    const target = spec.targets.find((entry) => entry.targets === targetCount)
+    const best = target?.bestSets?.find((entry) => entry.level === levelId)
+    if (!target || !best) continue
+
+    // What the per-item comparison could reach is not a rule to re-derive here — it
+    // is a record of what the sweep ran, and every candidate carries it. Deriving it
+    // as "the baseline minus its last item" repeats the exact defect the pipeline
+    // had: the last item is pool-file order, not the weakest, so on any build where
+    // those differ every reachable set would be built around the wrong survivor and
+    // ceilings that *are* one swap away would be flagged as beyond it.
+    const key = (ids: number[]) => [...ids].sort((a, b) => a - b).join('/')
+    const reachable = new Set([key(target.baseline.items)])
+    for (const candidate of target.candidates) {
+      if (candidate.level !== levelId) continue
+      const kept = target.baseline.items.filter((id) => id !== candidate.replaces)
+      reachable.add(key([...kept, candidate.id]))
+    }
+
+    rows.push({
+      build: spec,
+      items: best.items,
+      gain: best.gain,
+      gainError: best.gainError,
+      // `?? ` for data written before the flag was published: those rows fall back
+      // to the same rule rather than silently reading as "not a tie", which is the
+      // direction that overstates a lead.
+      isTie: best.isTie ?? Math.abs(best.gain) <= best.gainError,
+      isBaseline: best.isBaseline,
+      runnerUp: best.runnerUp,
+      beyondOneSwap: !reachable.has(key(best.items.map((item) => item.id))),
+    })
+  }
+  // Best gain first, and a build whose ceiling is its baseline sorts to the bottom
+  // by the same rule rather than by a special case: its gain is exactly zero.
+  return rows.sort((a, b) => b.gain - a.gain)
+}
+
+function CeilingTable({
+  rows,
+  items,
+  ilevel,
+}: {
+  rows: CeilingRow[]
+  items: Map<number, GearItemMeta>
+  ilevel: number
+}) {
+  const link = (id: number, at: number) => (
+    <GameLink kind="item" id={id} name={items.get(id)?.name ?? `Item ${id}`} ilevel={at} />
+  )
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[760px] text-[13px]">
+        <thead>
+          <tr className="border-b border-hairline text-left text-[11.5px] tracking-wide text-ink-muted uppercase">
+            <th className="py-2 pr-4 pl-5 font-medium">Build</th>
+            <th className="py-2 pr-4 font-medium">Best set at {ilevel}</th>
+            <th className="py-2 pr-4 text-right font-medium">Over baseline</th>
+            <th className="py-2 pr-4 font-medium">Beyond one swap</th>
+            <th className="py-2 pr-5 font-medium">Next best set</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => {
+            // Published by the pipeline, not recomputed here. The tie rule is the
+            // project's uncertainty convention and it lives in one place; the sibling
+            // `runnerUp.tie` one column over already came from Python, so recomputing
+            // this one left the same rule in two implementations with nothing to
+            // catch them diverging.
+            const tie = row.isTie
+            return (
+              <tr key={row.build.id} className="border-b border-hairline/60 last:border-0">
+                <td className="py-2 pr-4 pl-5">
+                  <BuildIdentity build={row.build} />
+                </td>
+                <td className="py-2 pr-4 text-ink-secondary">
+                  {row.items.map((item, index) => (
+                    <span key={item.id}>
+                      {index ? ' + ' : null}
+                      {link(item.id, item.ilevel)}
+                    </span>
+                  ))}
+                </td>
+                <td
+                  className={`py-2 pr-4 text-right tabular-nums ${
+                    row.isBaseline || tie ? 'text-ink-muted' : 'text-ink'
+                  }`}
+                >
+                  {row.isBaseline ? 'baseline' : tie ? 'tie' : signedPercent(row.gain)}
+                </td>
+                <td className="py-2 pr-4 text-ink-muted">{row.beyondOneSwap ? 'yes' : '—'}</td>
+                <td className="py-2 pr-5 text-ink-muted">
+                  {row.runnerUp ? (
+                    <>
+                      {row.runnerUp.items.map((item, index) => (
+                        <span key={item.id}>
+                          {index ? ' + ' : null}
+                          {link(item.id, item.ilevel)}
+                        </span>
+                      ))}{' '}
+                      ({row.runnerUp.tie ? 'tie' : signedPercent(-row.runnerUp.gap)})
+                    </>
+                  ) : (
+                    '—'
+                  )}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+/**
+ * Which method picked the baselines on screen, said once rather than per row.
+ *
+ * The two produce numbers that look identical and disagree about half the time, so
+ * leaving it to be inferred from the presence of a runner-up column would be exactly
+ * the kind of silence this view exists to avoid. Data written before the method was
+ * recorded says so instead of guessing on its behalf.
+ */
+function BaselineMethodNote({
+  specs,
+  targetCount,
+}: {
+  specs: GearSpecResult[]
+  targetCount: number
+}) {
+  // Counts per method, kept as a range rather than a maximum. `usable_by` admits a
+  // different number of items to an intellect spec than to a strength one, so one
+  // number printed as "per build" can be true of no build on the page. And membership
+  // is tested with `has`, not truthiness: a merged dataset keeps older specs verbatim,
+  // so an exhaustive spec can arrive with no `combinations` field, and `0` then read
+  // as "no exhaustive builds" and left the sentence ending in a bare full stop.
+  const seen = new Map<string, { low: number; high: number }>()
+  for (const spec of specs) {
+    const target = spec.targets.find((entry) => entry.targets === targetCount)
+    if (!target) continue
+    const method = target.baseline.method ?? 'unrecorded'
+    const count = target.baseline.combinations
+    const range = seen.get(method) ?? { low: Infinity, high: 0 }
+    if (count !== undefined) {
+      range.low = Math.min(range.low, count)
+      range.high = Math.max(range.high, count)
+    }
+    seen.set(method, range)
+  }
+  if (seen.size === 0) return null
+
+  const parts: string[] = []
+  const exhaustive = seen.get('exhaustive')
+  if (exhaustive) {
+    const counted =
+      exhaustive.high === 0
+        ? ''
+        : exhaustive.low === exhaustive.high
+          ? ` — ${exhaustive.high} combinations per build —`
+          : ` — ${exhaustive.low} to ${exhaustive.high} combinations per build, depending on how many items the spec can use —`
+    parts.push(`filling every socket every possible way${counted} and running each`)
+  }
+  if (seen.has('additive')) {
+    parts.push(
+      'ranking items by what each adds on its own, because this pool has too many combinations to enumerate inside the sweep’s budget',
+    )
+  }
+  if (seen.has('unrecorded')) {
+    parts.push('a method this dataset was written too early to record')
+  }
+  return (
+    <Note>
+      Baselines here were chosen by {parts.join('; and by ')}.{' '}
+      {seen.size > 1
+        ? 'More than one method appears above, which happens when slots or specs were swept at different times — the two are not interchangeable, so read the mixed rows with that in mind.'
+        : null}
+    </Note>
   )
 }
 
@@ -808,6 +1181,11 @@ function BaselineTable({
   // The baseline is worn at the lower of the two item levels, and every pool
   // entry carries the level it was measured at, so each link asks Wowhead about
   // the item at the level this row's numbers came from.
+  //
+  // Two "next best" columns because they answer two questions and the older one
+  // stopped deciding anything. "Next best set" is the runner-up combination, which
+  // is what the choice was actually made between; "next best alone" is the per-item
+  // standalone value, which is legible and no longer the method.
   const link = (id: number, ilevel: number) => (
     <GameLink kind="item" id={id} name={items.get(id)?.name ?? `Item ${id}`} ilevel={ilevel} />
   )
@@ -820,28 +1198,73 @@ function BaselineTable({
             <th className="py-2 pr-4 font-medium">Kept</th>
             <th className="py-2 pr-4 font-medium">Replaced by candidates</th>
             <th className="py-2 pr-4 text-right font-medium">Baseline DPS</th>
-            <th className="py-2 pr-5 font-medium">Next best</th>
+            <th className="py-2 pr-4 font-medium">Next best set</th>
+            <th className="py-2 pr-5 font-medium">Next best alone</th>
           </tr>
         </thead>
         <tbody>
           {specs.map((spec) => {
             const target = spec.targets.find((entry) => entry.targets === targetCount)
             if (!target) return null
-            const [kept, replaced] = target.baseline.items
-            const runnersUp = target.pool.filter((entry) => !entry.chosen).slice(0, 2)
+            // Which item the candidates displace is published, in two places for two
+            // reasons: `baseline.replaces` says it once for the row, and every
+            // candidate repeats it as a record of what that variant equipped. Read,
+            // never re-derived — "the last item" is pool-file order rather than the
+            // weakest, and reading it that way is what the pipeline used to do.
+            // Older data carries neither, and falls back to the shape it was written
+            // under, which for those runs is what actually ran.
+            const replaced =
+              target.baseline.replaces ??
+              target.candidates[0]?.replaces ??
+              target.baseline.items.at(-1)
+            const kept = target.baseline.items.filter((id) => id !== replaced)
+            // Sorted here rather than taken off the head of `pool`, which arrives in
+            // whichever order chose the baseline — by best pair under the exhaustive
+            // rule. This column says "alone" and its Note defines the word, so it has
+            // to rank by that figure or it prints standalone numbers beside items
+            // picked by a different one. On MID2's finger sweep those two orders
+            // disagree on four builds of six.
+            const runnersUp = target.pool
+              .filter((entry) => !entry.chosen)
+              .slice()
+              .sort((a, b) => b.standaloneGain - a.standaloneGain)
+              .slice(0, 2)
+            const runnerSet = target.baseline.runnerUp
             return (
               <tr key={spec.id} className="border-b border-hairline/60 last:border-0">
                 <td className="py-2 pr-4 pl-5">
                   <BuildIdentity build={spec} />
                 </td>
                 <td className="py-2 pr-4 text-ink-secondary">
-                  {kept ? link(kept, target.baseline.ilevel) : '—'}
+                  {kept.length
+                    ? kept.map((id, index) => (
+                        <span key={id}>
+                          {index ? ' + ' : null}
+                          {link(id, target.baseline.ilevel)}
+                        </span>
+                      ))
+                    : '—'}
                 </td>
                 <td className="py-2 pr-4 text-ink-secondary">
                   {replaced ? link(replaced, target.baseline.ilevel) : '—'}
                 </td>
                 <td className="py-2 pr-4 text-right tabular-nums text-ink">
                   {fullNumber(target.baseline.dps)}
+                </td>
+                <td className="py-2 pr-4 text-ink-muted">
+                  {runnerSet ? (
+                    <>
+                      {runnerSet.items.map((item, index) => (
+                        <span key={item.id}>
+                          {index ? ' + ' : null}
+                          {link(item.id, item.ilevel)}
+                        </span>
+                      ))}{' '}
+                      ({runnerSet.tie ? 'tie' : signedPercent(-runnerSet.gap)})
+                    </>
+                  ) : (
+                    '—'
+                  )}
                 </td>
                 <td className="py-2 pr-5 text-ink-muted">
                   {runnersUp.length
