@@ -1,4 +1,8 @@
-import { chromium } from '/opt/node22/lib/node_modules/playwright/index.mjs'
+// Playwright is not a dependency of this package -- it is installed globally in the
+// sandbox. Resolve it either way rather than pinning one of the two.
+const { chromium } = await import('playwright').catch(
+  () => import('/opt/node22/lib/node_modules/playwright/index.mjs'),
+)
 import fs from 'node:fs'
 import path from 'node:path'
 
