@@ -1190,9 +1190,21 @@ Deathbringer, Beast Mastery Pack Leader, Marksmanship and Survival Sentinel, Sub
 Deathstalker -- and the three it could not resolve at all come out Trickster (Outlaw),
 Elune's Chosen (Balance) and Shado-Pan (Windwalker). Two independent derivations
 agreeing five of five is the same check `talenttree`'s docstring rests on, run the
-other way round. Live and PTR node tables gave **identical** resolutions for all 46
-MID2 profiles, so the table choice is not load-bearing here (the *name* table is --
-see below).
+other way round. Over MID2's 51 profiles (35 shipped plus 16 materialised) it names
+**47 and refuses 4**, and live and PTR give **identical** answers today.
+
+**"Identical today" is the whole of what that last clause promises**, and reading it
+as more cost a real bug. simc names the array `__trait_sub_tree_data` in the live
+file and `__ptr_trait_sub_tree_data` in the PTR one, and the first version of
+`parse_sub_tree_names` anchored on the live name -- so in PTR mode, which is the mode
+the current tier runs in, it found nothing, fell back to live, and logged that PTR
+ships no such table. False, and invisible, because the two tables' rows are
+byte-identical on 22b442e (only the array name and the build number above it differ,
+12.1.0.69382 against .69404). The moment they diverge a PTR-only tree comes back
+unnamed -- the `Default` regression, returned -- or a renamed tree publishes the
+stale live name. It matches the shared suffix now, exactly as `parse_spec_list` does
+for `class_spec_id`, and there is no fallback left to hide behind. Note the shape:
+there was a log line reporting the exact failure and nothing acted on it.
 
 It now names **every** build, not only the unnamed ones, because a profile name
 carries whatever abbreviation simc's file naming used and two of MID2's are not the
@@ -1222,6 +1234,24 @@ otherwise not be in the map; and **in the publish job**, because that is the job
 commits and because `spec-index` reads the names back. The trait table rides in the
 simc bundle (`bundle/engine/dbc/generated/trait_data*.inc`, 686 KB against a 30 MB
 binary) so a shard needs no second clone.
+
+Two things about that arrangement worth keeping:
+
+- **The publish job's simc checkout is pinned to the build job's revision.** It was an
+  unpinned `--depth 1` clone taken hours later, and simc merges through the night, so
+  `talent-trees`, `spec-index` and `hero-trees` could all describe a *newer* simc than
+  the spec files published beside them -- including a build the shards were never
+  handed. `git fetch --depth 1 origin <sha>` works against github.com (verified
+  2026-08-22 by fetching `22b442e` into a fresh shallow clone), and the step falls
+  back to HEAD **with a warning** rather than failing, because a one-revision drift is
+  a smaller harm than losing the night's simulations.
+- **`wowdps hero-trees` must not exit non-zero on "nothing resolved".** It runs in a
+  `for tier in ...; done` loop under `bash -e`, so a failure there aborts the publish
+  job *before the commit step* and discards the whole night -- over a file whose
+  absence costs only the canonical name. `--strict` is the gate for anyone who wants
+  one, and a tier simc no longer ships (a `tiers.json` entry outliving simc's profile
+  directory) is skipped rather than raised on, in `cmd_hero_trees` and in
+  `specindex.refused_profiles` alike.
 
 `heroTreeIconUrl` covers **40 of simc's 41 trees**, so once the tree is named the icon
 appears in every table -- the missing-icon rows were the unnamed builds, not a gap in
@@ -1349,18 +1379,19 @@ spec needs no edit.
   `"0"`, so the name used to come from a join: a build's decoded loadout gives the
   sub-tree id, and the build knows its tree name from `herotrees`. That named **24 of
   41 trees for MID2** and left every tree belonging to a spec nobody profiles blank
-  -- which is precisely the set a coverage panel has to be able to name. simc ships
-  `__trait_sub_tree_data` in the same generated file now (id, name, class, all 41),
-  so names are derived like everything else and the join survives only as a
-  cross-check: a build calling a tree something else is logged and the table wins.
-  Measured 2026-08-22, **41 of 41 named**.
+  -- which is precisely the set a coverage panel has to be able to name. **As of simc
+  `22b442e`, checked 2026-08-22**, simc ships the `trait_sub_tree_data` array in the
+  same generated file (id, name, class, all 41), so names are derived like everything
+  else and the join survives only as a cross-check: a build calling a tree something
+  else is logged and the table wins. Measured that day, **41 of 41 named**. That is a
+  dated fact in both directions -- the absence it replaces was recorded here without a
+  date and read as permanent for months.
 
-  **The PTR trait table does not carry it**, and this project reads the PTR table for
-  the current tier (`manifest.simc.ptr` is true on simc's Midnight branch). Taking the
-  empty answer would leave every tree unnamed for exactly the tier that matters, so
-  `parse_sub_tree_names` falls back to the live table **for names only** and says so.
-  That is narrower than the standing rule about never reading the wrong trait table,
-  which is about the node stream; nothing in that path reads nodes.
+  **The PTR file names the array `__ptr_trait_sub_tree_data`**, and this project reads
+  the PTR table for the current tier (`manifest.simc.ptr` is true on simc's Midnight
+  branch). Match the shared suffix, the way `parse_spec_list` does for
+  `class_spec_id`; anchoring on the live name reads the wrong file's names and cannot
+  tell you it did.
 
 ### Four states, all derived
 
@@ -1419,10 +1450,18 @@ Against MID2's 26 real hashes, with no API call:
 
 ### Two things it now answers that it did not
 
-- **What a hero tree is called.** `parse_sub_tree_names` reads
-  `__trait_sub_tree_data` -- `{id, "name", class id}` for all 41 trees. This did not
-  exist when the module was written, and its absence is recorded in three places in
-  this file as a fact. It is the whole reason `herotrees` no longer needs a compiled
+- **What a hero tree is called.** `parse_sub_tree_names` reads the
+  `trait_sub_tree_data` array -- `{id, "name", class id}` for all 41 trees.
+
+  **This is a dated fact, and its predecessor was one too.** Until some point between
+  2026-08-16 and **2026-08-22**, when it was first observed here on simc `22b442e`,
+  simc shipped no such table, and *that* absence was asserted in three places in this
+  file as though it were permanent -- "hero tree names are not in simc's data at all",
+  "`TraitSubTree` is not shipped", "the same absence as item source". Each of those is
+  now corrected in place with the date it stopped being true. Write every claim about
+  what simc's data does *not* contain with the revision and the day it was checked;
+  an undated absence is what let the 2026-08-15 coverage figure sit here misleading
+  people for a week. It is the whole reason `herotrees` no longer needs a compiled
   simc or a hand-written table.
 - **Whether simc will refuse a profile, and at which node.** `spec_rule_violation`
   applies simc's own rule -- a non-hero node whose `id_spec` excludes the player's
@@ -1774,6 +1813,17 @@ is where the trait table already is; each cell carries the state of its *spec* f
 the manifest's own coverage block, so the three reasons a spec can be absent are not
 re-derived and cannot drift from the panel above them. `SpecCoverage.tsx` takes the
 already-fetched `specIndex` and degrades to the spec-level lists without it.
+
+**Placing a build in a tree needs `talent-trees.json`, and without it the answer is
+nothing rather than zero.** `hero_tree_coverage` originally answered anyway, which
+over the real MID2 manifest returned `cells=53, covered=0` and listed all 34 shipped
+specs as having no build for *either* tree -- so the panel would have said "Arcane
+Mage: no Sunfury build, no Spellslinger build" directly above both of them in the
+ranking. It refuses now when the manifest carries builds and none of them can be
+placed, and the CLI says which happened. The general shape is this project's
+signature defect: the warning already said "coverage stays at the spec level" and the
+code did not do that. A message describing a fallback the code does not take is worse
+than no message.
 
 ### What the panel links to, and what it must not imply
 

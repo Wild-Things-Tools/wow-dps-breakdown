@@ -83,7 +83,6 @@ profiles, it does not write them.
 from __future__ import annotations
 
 import json
-import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -129,8 +128,14 @@ CLASS_IDS = {
 }
 
 _ROW = re.compile(r"^\s*\{\s*(.*?)\s*\}\s*,\s*$")
-#: ``__trait_sub_tree_data`` rows: ``{ <sub tree id>, "<name>", <class id> }``.
-_SUB_TREE_TABLE = re.compile(r"__trait_sub_tree_data\s*\{\s*\{(.*?)\}\s*\}\s*;", re.S)
+#: The hero tree name table, whose rows are ``{ <sub tree id>, "<name>", <class id> }``.
+#:
+#: Matched on the **shared suffix**, because the array is named
+#: ``__trait_sub_tree_data`` in the live file and ``__ptr_trait_sub_tree_data`` in the
+#: PTR one -- the same split ``parse_spec_list`` already handles for
+#: ``class_spec_id``. Anchoring on the live name found nothing in PTR mode, which is
+#: the mode the current tier runs in. See ``parse_sub_tree_names``.
+_SUB_TREE_TABLE = re.compile(r"trait_sub_tree_data\s*\{\s*\{(.*?)\}\s*\}\s*;", re.S)
 _SUB_TREE_ROW = re.compile(r'\{\s*(\d+)\s*,\s*"((?:[^"\\]|\\.)*)"\s*,\s*(\d+)\s*\}')
 _NAME = re.compile(r'"((?:[^"\\]|\\.)*)"')
 _ARRAY = re.compile(r"\{[^}]*\}")
@@ -248,33 +253,28 @@ def parse_sub_tree_names(simc_dir: Path, ptr: bool = False) -> dict[int, SubTree
     ships ``__trait_sub_tree_data`` -- ``{id, "name", class id}`` for all 41 trees --
     in the same generated file, so the name is derived like everything else here.
 
-    Measured on simc ``22b442e`` (2026-08-21): 41 rows, one per tree the trait table
-    places, including the sixteen no build in any tier plays.
+    Measured on simc ``22b442e`` (2026-08-21): 41 rows in each of the live and PTR
+    files, one per tree the trait table places, including the sixteen no build in any
+    tier plays.
 
-    **The PTR table does not carry it**, and this project reads the PTR trait table
-    for the current tier (``manifest.simc.ptr`` is true on simc's Midnight branch).
-    ``trait_data_ptr.inc`` has no ``__trait_sub_tree_data`` at all -- checked on the
-    same revision -- so asking for PTR names and taking the empty answer would leave
-    every tree unnamed for exactly the tier that matters. A *name* is not a tree
-    layout: the ids are the same ids, so falling back to the live table names them
-    correctly, and the fallback says so rather than happening quietly. That is
-    narrower than the standing rule about never reading the wrong trait table, which
-    is about the node stream, and nothing here reads nodes.
+    **The PTR file names the array ``__ptr_trait_sub_tree_data``**, and the first
+    version of this anchored on the live name, so it found nothing in PTR mode -- the
+    mode the current tier runs in (``manifest.simc.ptr`` is true on simc's Midnight
+    branch). It then fell back to the live table and logged that PTR shipped no such
+    table, which was simply false. That did no damage on 22b442e, because the two
+    tables' rows are byte-identical there -- checked; only the array name and the
+    build number in the comment above it differ, 12.1.0.69382 against .69404 -- and it
+    would have done real damage the moment they diverged: a PTR-only tree id comes
+    back unnamed, which is the "Default" regression this module exists to prevent, or
+    a renamed tree publishes the stale live name. Matching the shared suffix is what
+    ``parse_spec_list`` already does for ``class_spec_id``, and it reads either file
+    without a branch and without a fallback.
 
-    A file without the table in either place returns an empty map rather than
-    raising, so an older checkout degrades to the previous behaviour instead of
-    failing the run.
+    A file without the table returns an empty map rather than raising, so an older
+    checkout degrades to the previous behaviour instead of failing the run.
     """
     text = _generated(simc_dir, "trait_data", ptr).read_text(encoding="utf-8", errors="replace")
     table = _SUB_TREE_TABLE.search(text)
-    if not table and ptr:
-        logging.getLogger(__name__).info(
-            "trait_data_ptr.inc ships no hero tree name table; reading the live one for names only"
-        )
-        text = _generated(simc_dir, "trait_data", False).read_text(
-            encoding="utf-8", errors="replace"
-        )
-        table = _SUB_TREE_TABLE.search(text)
     if not table:
         return {}
     found: dict[int, SubTree] = {}

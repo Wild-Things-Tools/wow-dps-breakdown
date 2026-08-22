@@ -747,7 +747,9 @@ def cmd_spec_index(args: argparse.Namespace) -> int:
     else:
         logging.warning(
             "no %s, so no build can be placed in a hero tree and coverage stays at "
-            "the spec level -- run `wowdps talent-trees` first",
+            "the spec level -- run `wowdps talent-trees` first. That fallback is in "
+            "`hero_tree_coverage`, which publishes nothing rather than reporting "
+            "every shipped spec as uncovered",
             talents_path,
         )
 
@@ -779,6 +781,13 @@ def cmd_spec_index(args: argparse.Namespace) -> int:
         f"{len(document['heroTrees'])} hero trees of which {named} are named"
     )
     coverage = document.get("heroTreeCoverage")
+    if not coverage:
+        # Never silent: "no hero tree coverage" and "complete hero tree coverage" are
+        # the same empty block on the site if nobody says which happened.
+        print(
+            "  hero tree coverage: not published -- no build could be placed in a "
+            "tree, so the panel falls back to spec-level coverage"
+        )
     if coverage:
         print(
             f"  hero tree coverage: {coverage['covered']} of {coverage['cells']} "
@@ -1045,6 +1054,18 @@ def cmd_hero_trees(args: argparse.Namespace) -> int:
     profiles_dir = Path(args.profiles) if args.profiles else simc_dir / "profiles"
     tier = _resolve_tier(profiles_dir, args.tier)
 
+    # `tiers.json` outlives simc's profile directories -- the publish job loops over
+    # published tiers, and simc deletes an old tier's profiles eventually -- so a tier
+    # with nothing to read is a normal state and not an error. Same tolerance
+    # `build_index` already has.
+    if not (profiles_dir / tier).is_dir():
+        logging.warning(
+            "simc no longer ships %s under %s; leaving its recorded hero trees alone",
+            tier,
+            profiles_dir,
+        )
+        return 0
+
     # Which trait table -- live or PTR -- has to match the one the dataset was built
     # against, or the node stream desynchronises and the decode quietly describes a
     # different tree. The published manifest is where that is recorded, so it is read
@@ -1077,12 +1098,18 @@ def cmd_hero_trees(args: argparse.Namespace) -> int:
         logging.warning("could not name the hero tree of %s: %s", name, reason)
 
     if not result.resolved:
+        # Loud, and **not** a failure unless somebody is gating on it. This runs in a
+        # `for tier in ...; done` loop in the publish job under `bash -e`, so a
+        # non-zero exit here aborts that job before the commit step and discards a
+        # whole night's simulations -- over a data file whose absence costs only the
+        # canonical name, since every build keeps whatever its own profile said.
+        # `--strict` is the gate for anyone who wants one.
         logging.error(
             "%s: nothing resolved -- check that %s carries engine/dbc/generated",
             tier,
             simc_dir,
         )
-        return 1
+        return 1 if args.strict else 0
     if args.write:
         path = herotrees.write_overrides(tier, result.resolved)
         print(f"wrote {path}")

@@ -335,13 +335,24 @@ def test_the_hero_tree_names_come_out_of_simcs_own_table(tmp_path):
     assert names[65].class_id == 10
 
 
-def test_the_ptr_table_falls_back_to_the_live_one_for_names(tmp_path):
-    """Measured on simc 22b442e: trait_data_ptr.inc ships no hero tree name table,
-    and this project reads the PTR trait table for the current tier. Taking the empty
-    answer would leave every tree unnamed for exactly the tier that matters."""
+def test_the_ptr_file_names_the_array_differently_and_is_still_read(tmp_path):
+    """simc calls it `__ptr_trait_sub_tree_data` in the PTR file, and **the current
+    tier runs in PTR mode**. Anchoring on the live array name found nothing there, so
+    the PTR names were never read; it went unnoticed only because the two tables'
+    rows are byte-identical on 22b442e. A PTR-only or renamed tree would have come
+    back unnamed or stale -- the regression this module exists to prevent."""
     write_trait_file(tmp_path, "trait_data.inc", SUB_TREE_TABLE)
-    write_trait_file(tmp_path, "trait_data_ptr.inc", "// no sub tree table here\n")
-    assert parse_sub_tree_names(tmp_path, ptr=True)[51].name == "Trickster"
+    write_trait_file(
+        tmp_path,
+        "trait_data_ptr.inc",
+        SUB_TREE_TABLE.replace("__trait_sub_tree_data", "__ptr_trait_sub_tree_data").replace(
+            '"Trickster"', '"Trickster on PTR"'
+        ),
+    )
+    # The PTR name, not the live one: proof the PTR file was actually read rather
+    # than quietly fallen back from.
+    assert parse_sub_tree_names(tmp_path, ptr=True)[51].name == "Trickster on PTR"
+    assert parse_sub_tree_names(tmp_path)[51].name == "Trickster"
 
 
 def test_a_checkout_without_the_table_names_nothing_rather_than_raising(tmp_path):

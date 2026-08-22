@@ -254,10 +254,19 @@ def refused_profiles(
     simc actually ships pass. Those six are exactly the builds that produced nothing
     in the nightly run.
     """
+    try:
+        found = discover(simc_dir / "profiles", tier, dps_only=dps_only)
+    except FileNotFoundError:
+        # simc deletes an old tier's profiles while `tiers.json` still lists it, and
+        # `build_index` tolerates that already. Raising here would crash the publish
+        # loop on a stale tier instead of publishing it with nothing refused.
+        log.warning("simc no longer ships %s; no profile can be checked for refusal", tier)
+        return []
+
     traits = talenttree.parse_trait_data(simc_dir, ptr=ptr)
     nodes_by_class: dict[int, dict[int, list[talenttree.Trait]]] = {}
     refused: list[dict] = []
-    for profile in discover(simc_dir / "profiles", tier, dps_only=dps_only):
+    for profile in found:
         class_id = talenttree.CLASS_IDS.get(profile.wow_class)
         if class_id is None or not profile.talent_hash:
             continue
@@ -317,6 +326,24 @@ def hero_tree_coverage(
     """
     coverage = manifest.get("coverage") or {}
     if not coverage.get("damageSpecsKnown"):
+        return None
+
+    # Placing a build in a hero tree needs `talent-trees.json`, and without it every
+    # build is unplaceable. Answering anyway reported **cells=53, covered=0** and
+    # listed all 34 shipped specs as having no build for either tree -- so the panel
+    # would have said "Arcane Mage: no Sunfury build, no Spellslinger build" directly
+    # above both of them in the ranking. Refusing is the only honest answer: the
+    # caller then publishes null and the panel falls back to spec-level coverage,
+    # which is what its warning already promised.
+    builds = manifest.get("specs") or []
+    if builds and not any(build["id"] in build_sub_trees for build in builds):
+        log.warning(
+            "no build could be placed in a hero tree (%d builds, %d placements known)"
+            " -- publishing no hero tree coverage rather than reporting every spec as"
+            " uncovered",
+            len(builds),
+            len(build_sub_trees),
+        )
         return None
 
     state_of: dict[tuple[str, str], str] = {}

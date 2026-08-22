@@ -161,3 +161,35 @@ def test_the_shipped_map_names_every_mid2_build_that_used_to_read_default():
     assert resolved["MID2_Hunter_Marksmanship"] == "Sentinel"
     assert resolved["MID2_Hunter_Survival"] == "Sentinel"
     assert resolved["MID2_Rogue_Subtlety"] == "Deathstalker"
+
+
+# --------------------------------------------------------------------------------
+# The command's exit code, which decides whether a nightly survives
+# --------------------------------------------------------------------------------
+
+
+def run_cli(*argv: str) -> int:
+    from wowdps.cli import main
+
+    return main(["hero-trees", *argv])
+
+
+def test_resolving_nothing_is_reported_and_does_not_fail_the_run(tmp_path):
+    """This runs inside a `for tier in ...; done` loop in the publish job under
+    `bash -e`, so a non-zero exit aborts that job **before the commit step** and
+    discards a whole night's simulations -- over a data file whose absence costs only
+    the canonical name, since every build keeps whatever its own profile said."""
+    root = make_checkout(tmp_path, {"MID2_Rogue_Outlaw": rogue("MID2_Rogue_Outlaw")})
+    (root / "engine" / "dbc" / "generated" / "trait_data.inc").write_text(
+        "// an older checkout\n", encoding="utf-8"
+    )
+    assert run_cli("--tier", "MID2", "--simc-source", str(root), "--no-ptr") == 0
+    # `--strict` is the gate for anyone who wants one.
+    assert run_cli("--tier", "MID2", "--simc-source", str(root), "--no-ptr", "--strict") == 1
+
+
+def test_a_tier_simc_no_longer_ships_is_skipped_rather_than_raising(tmp_path):
+    """`tiers.json` outlives simc's profile directories: the publish job loops over
+    *published* tiers and simc deletes an old tier's profiles eventually."""
+    root = make_checkout(tmp_path, {"MID2_Rogue_Outlaw": rogue("MID2_Rogue_Outlaw")})
+    assert run_cli("--tier", "TWW3", "--simc-source", str(root), "--no-ptr") == 0

@@ -7,7 +7,12 @@ could only ever report the spec.
 
 from __future__ import annotations
 
-from wowdps.specindex import HeroTree, builds_by_sub_tree, hero_tree_coverage
+from wowdps.specindex import (
+    HeroTree,
+    builds_by_sub_tree,
+    hero_tree_coverage,
+    refused_profiles,
+)
 
 TREES = {
     42: HeroTree(sub_tree=42, wow_class="Hunter", spec_ids=[254, 255], name="Sentinel"),
@@ -58,14 +63,14 @@ def test_each_cell_carries_the_state_of_its_spec_rather_than_re_deriving_it():
     """Three reasons a spec can be absent, and only one of them is something a reader
     can help with. Re-deriving them here would let the two panels drift apart."""
     document = manifest(
-        [],
+        [build("hunter_marksmanship_default", "Marksmanship")],
         shipped=[],
         unvalidated=[{"class": "Hunter", "spec": "Marksmanship"}],
         missing=[{"class": "Hunter", "spec": "Survival"}],
         broken=[{"class": "Hunter", "spec": "Beast Mastery"}],
     )
-    coverage = hero_tree_coverage(document, TREES, SPEC_IDS, {})
-    assert coverage["covered"] == 0
+    coverage = hero_tree_coverage(document, TREES, SPEC_IDS, {"hunter_marksmanship_default": 42})
+    assert coverage["covered"] == 1
     assert coverage["cells"] == 6
     states = {(row["spec"], row["state"]) for row in coverage["uncovered"]}
     assert states == {
@@ -209,3 +214,31 @@ def test_a_refusal_naming_the_tree_beats_one_that_names_none():
     by_tree = {row["tree"]: row["reason"] for row in coverage["uncovered"]}
     assert by_tree["Sentinel"] == "node 81532"
     assert by_tree["Pack Leader"] == "node 81527"
+
+
+def test_no_hero_tree_coverage_at_all_rather_than_every_spec_reported_uncovered():
+    """Placing a build in a tree needs `talent-trees.json`. Without it every build is
+    unplaceable, and answering anyway reported cells=53, covered=0 over the real MID2
+    manifest -- all 34 shipped specs listed as having no build for either tree, with
+    both of Arcane Mage's sitting in the ranking directly above. The caller publishes
+    null and the panel falls back to spec-level coverage, which is exactly what its
+    own warning promised."""
+    document = manifest(
+        [build("hunter_survival_default", "Survival")],
+        shipped=[{"class": "Hunter", "spec": "Survival"}],
+    )
+    assert hero_tree_coverage(document, TREES, SPEC_IDS, {}) is None
+    # A tier that published no builds at all is not this case: there is nothing to
+    # misreport, and the spec-level lists already say the dataset is empty.
+    assert hero_tree_coverage(manifest([]), TREES, SPEC_IDS, {}) is not None
+
+
+def test_refused_profiles_tolerates_a_tier_simc_no_longer_ships(tmp_path):
+    """`build_index` already tolerates it, and `tiers.json` outlives simc's profile
+    directories -- so raising here crashes the publish loop on a stale tier."""
+    (tmp_path / "profiles" / "MID2").mkdir(parents=True)
+    (tmp_path / "engine" / "dbc" / "generated").mkdir(parents=True)
+    (tmp_path / "engine" / "dbc" / "generated" / "trait_data.inc").write_text(
+        "// nothing\n", encoding="utf-8"
+    )
+    assert refused_profiles(tmp_path, "TWW3") == []
