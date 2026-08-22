@@ -33,7 +33,17 @@ log = logging.getLogger(__name__)
 
 #: A commented profile opens with the player declaration and closes with the
 #: ``save=`` that names its file. Both forms are matched behind the comment mark.
-_OPEN = re.compile(r"^#\s*([a-z_]+)\s*=\s*\"([^\"]+)\"\s*$")
+#:
+#: **The quotes are optional, and requiring them published a false claim.** simc's
+#: generators write both forms -- ``# paladin="MID2_Paladin_Retribution_Herald"`` in
+#: most files and ``# paladin=MID2_Paladin_Retribution_Herald`` in
+#: ``MID2_Generate_Paladin.simc`` -- and a pattern that insisted on quotes found 14
+#: disabled blocks where 17 exist (measured 2026-08-22, simc 22b442e). The three it
+#: missed were both Retribution Paladin builds and Guardian Druid, so the coverage
+#: panel reported *"simc has no profile for Retribution at all"* while simc shipped
+#: two complete ones in the generator -- exactly the wrong answer that panel exists
+#: to prevent. Do not "simplify" the quotes back to mandatory.
+_OPEN = re.compile(r"^#\s*([a-z_]+)\s*=\s*\"?([^\"\s][^\"]*?)\"?\s*$")
 _SAVE = re.compile(r"^#\s*save\s*=\s*(\S+\.simc)\s*$")
 _COMMENT = re.compile(r"^#\s?")
 

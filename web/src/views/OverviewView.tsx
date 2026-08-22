@@ -50,7 +50,12 @@ import {
   samplingError,
 } from "../lib/format";
 import { classColor } from "../lib/palette";
-import type { Manifest, ScenarioMeta, SpecSummary } from "../lib/types";
+import type {
+  Manifest,
+  ScenarioMeta,
+  SpecIndex,
+  SpecSummary,
+} from "../lib/types";
 
 const SUMMARY_TARGETS = [1, 3, 5, 10];
 
@@ -72,11 +77,18 @@ interface Row {
 export function OverviewView({
   manifest,
   scenario,
+  specIndex,
   onScenarioChange,
   onOpenSpec,
 }: {
   manifest: Manifest;
   scenario: ScenarioMeta;
+  /**
+   * Already fetched at app level for the Spec detail picker, so the coverage panel
+   * costs no extra request. Null until it arrives, and on a tier built before
+   * `wowdps spec-index` existed -- the panel then falls back to spec-level coverage.
+   */
+  specIndex: SpecIndex | null;
   onScenarioChange: (id: string) => void;
   onOpenSpec: (id: string) => void;
 }) {
@@ -175,7 +187,7 @@ export function OverviewView({
         </Note>
       </Panel>
 
-      <SpecCoverage manifest={manifest} />
+      <SpecCoverage manifest={manifest} specIndex={specIndex} />
 
       <PatchState manifest={manifest} />
     </div>

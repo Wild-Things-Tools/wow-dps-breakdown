@@ -22,7 +22,9 @@ from wowdps.talenttree import (
     _BitReader,
     decode_loadout,
     nodes_for_class,
+    parse_sub_tree_names,
     parse_trait_data,
+    spec_rule_violation,
     tree_layout,
 )
 
@@ -296,3 +298,85 @@ def test_the_layout_drops_hero_trees_the_build_does_not_play():
         20: [trait(20, 200, tree=TREE_HERO, sub_tree=32)],
     }
     assert [node["id"] for node in tree_layout(nodes, 251, sub_tree=33)] == [10]
+
+
+# --------------------------------------------------------------------------------
+# Hero tree names, which simc did not always ship
+# --------------------------------------------------------------------------------
+
+SUB_TREE_TABLE = (
+    "#define MAX_HERO_TREES_PER_CLASS (4)\n"
+    "\n"
+    "// Hero trees, wow build 12.1.0.69404\n"
+    "static constexpr std::array<std::tuple<unsigned, const char*, unsigned>, 3> "
+    "__trait_sub_tree_data { {\n"
+    '  { 24, "Elune\'s Chosen", 11 },\n'
+    '  { 51, "Trickster", 4 },\n'
+    '  { 65, "Shado-Pan", 10 },\n'
+    "} };\n"
+)
+
+
+def write_trait_file(root: Path, name: str, body: str) -> None:
+    generated = root / "engine" / "dbc" / "generated"
+    generated.mkdir(parents=True, exist_ok=True)
+    (generated / name).write_text(body, encoding="utf-8")
+
+
+def test_the_hero_tree_names_come_out_of_simcs_own_table(tmp_path):
+    """The whole reason a tree nobody plays can be named at all."""
+    write_trait_file(tmp_path, "trait_data.inc", SUB_TREE_TABLE)
+    names = parse_sub_tree_names(tmp_path)
+    assert {key: entry.name for key, entry in names.items()} == {
+        24: "Elune's Chosen",
+        51: "Trickster",
+        65: "Shado-Pan",
+    }
+    assert names[65].class_id == 10
+
+
+def test_the_ptr_table_falls_back_to_the_live_one_for_names(tmp_path):
+    """Measured on simc 22b442e: trait_data_ptr.inc ships no hero tree name table,
+    and this project reads the PTR trait table for the current tier. Taking the empty
+    answer would leave every tree unnamed for exactly the tier that matters."""
+    write_trait_file(tmp_path, "trait_data.inc", SUB_TREE_TABLE)
+    write_trait_file(tmp_path, "trait_data_ptr.inc", "// no sub tree table here\n")
+    assert parse_sub_tree_names(tmp_path, ptr=True)[51].name == "Trickster"
+
+
+def test_a_checkout_without_the_table_names_nothing_rather_than_raising(tmp_path):
+    write_trait_file(tmp_path, "trait_data.inc", "// an older checkout\n")
+    assert parse_sub_tree_names(tmp_path) == {}
+
+
+# --------------------------------------------------------------------------------
+# simc's own refusal, reproduced offline
+# --------------------------------------------------------------------------------
+
+
+def test_a_node_the_spec_may_not_take_is_refused_in_simcs_own_words():
+    """The wording and the ids are simc's: its 2026-08-22 CI log says "Selected node
+    110203 entry 136735 is not available to player's spec" for Arms Warrior, and this
+    is what lets the site say *which* profile will not load without running simc."""
+    nodes = {
+        10: [trait(10, 100, spec_ids=(71,))],
+        20: [trait(20, 200, spec_ids=(72,))],
+    }
+    loadout = decode_loadout(encode(header_bits(71) + [1, 1, 0, 0, 1, 1, 0, 0]), nodes)
+    assert spec_rule_violation(loadout, nodes) == (
+        "Selected node 20 entry 200 is not available to player's spec"
+    )
+
+
+def test_a_node_with_no_spec_restriction_is_available_to_everyone():
+    nodes = {10: [trait(10, 100, spec_ids=())]}
+    loadout = decode_loadout(encode(header_bits(71) + [1, 1, 0, 0]), nodes)
+    assert spec_rule_violation(loadout, nodes) is None
+
+
+def test_the_spec_rule_does_not_apply_to_hero_nodes():
+    """simc exempts them, and it has to: a hero node can belong to two trees and
+    carries the specs of both."""
+    nodes = {10: [trait(10, 100, tree=TREE_HERO, sub_tree=33, spec_ids=(250,))]}
+    loadout = decode_loadout(encode(header_bits(251) + [1, 1, 0, 0]), nodes)
+    assert spec_rule_violation(loadout, nodes) is None

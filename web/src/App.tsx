@@ -403,6 +403,7 @@ export default function App() {
         <OverviewView
           manifest={manifest}
           scenario={scenario}
+          specIndex={specIndex}
           onScenarioChange={setScenarioId}
           onOpenSpec={openSpec}
         />

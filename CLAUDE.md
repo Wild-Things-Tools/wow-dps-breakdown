@@ -1167,12 +1167,40 @@ but ships a spec's *default* build unnamed (`MID2_Death_Knight_Frost`), which us
 surface as a build with no hero tree -- which cannot exist. It has one; the name just
 did not say so.
 
-`herotrees.py` + `wowdps hero-trees` resolve it: run each unnamed profile for one
-iteration and read which hero-tree-gated abilities fired (the APL branches on
-`hero_tree.<slug>`, so only the taken tree produces damage and buffs). The result is
-written per tier to `data/hero_trees.json` and read back by `profiles.discover`.
-Detected from simc, not hand-typed, so a new tier needs a re-run and not an edit; a
-spec whose signatures are missing stays unnamed and the run says which.
+`herotrees.py` + `wowdps hero-trees` resolve it, and **the method changed on
+2026-08-22 because simc started shipping the table it needed.** The old one ran each
+unnamed profile for one iteration and read which hero-tree-gated abilities fired,
+against a hand-written table of ability slugs per spec. It worked, and it had the two
+costs a hand table always has: a compiled simc plus a simulation per profile, and an
+answer only for the eight specs somebody had typed signatures for. When simc shipped
+MID2 profiles for Balance Druid, Windwalker Monk and Outlaw Rogue, all three arrived
+as `Default` and **nothing in the pipeline could resolve them** -- which is exactly
+the regression the owner reported.
+
+The replacement is a pure join and needs **no binary, no simulation and no hand
+table**: a profile's talent hash decodes to exactly one sub-tree id
+(`talenttree.Loadout.sub_tree`, the SELECTION node), and
+`trait_data.inc`'s `__trait_sub_tree_data` names all 41 trees. So a sparse checkout
+of `engine/dbc/generated` plus `profiles` is the whole input, and it answers for
+every spec rather than for a maintained list.
+
+**Verified against the method it replaces**, simc `22b442e`, 2026-08-22: all five
+builds the signature detector had resolved for MID2 resolve identically -- Frost DK
+Deathbringer, Beast Mastery Pack Leader, Marksmanship and Survival Sentinel, Subtlety
+Deathstalker -- and the three it could not resolve at all come out Trickster (Outlaw),
+Elune's Chosen (Balance) and Shado-Pan (Windwalker). Two independent derivations
+agreeing five of five is the same check `talenttree`'s docstring rests on, run the
+other way round. Live and PTR node tables gave **identical** resolutions for all 46
+MID2 profiles, so the table choice is not load-bearing here (the *name* table is --
+see below).
+
+It now names **every** build, not only the unnamed ones, because a profile name
+carries whatever abbreviation simc's file naming used and two of MID2's are not the
+tree's name: `SC` for Scalecommander and `Soulharvester` for Soul Harvester. Both are
+fixed on the site by this; the ids `evoker_devastation_sc` and
+`warlock_demonology_soulharvester` are untouched, so nothing that joins on a build id
+moves. A profile whose hash does not decode -- simc's two disabled Havoc builds, and
+15 of MID1's 51 -- stays on whatever its own name said and the run reports it.
 
 **The resolution feeds the *display*, never the id.** `SpecProfile.name_hero` is the
 suffix simc's profile name carried (None for an unnamed build) and the id is built
@@ -1180,15 +1208,34 @@ from that -- `death_knight_frost_default` stays `death_knight_frost_default`, so
 fights, logs and talents keep joining on it. `hero_talent` carries the resolved tree
 (`Deathbringer`), which is what `displayName`, the `heroTalent` field and every icon
 use. The id names simc's build *slot*; `hero_talent` names the *tree* it plays; both
-are true and neither moves the joins. MID2's five unnamed builds resolve to
-Deathbringer (Frost DK), Pack Leader (BM), Sentinel (MM and Survival) and Deathstalker
-(Sub Rogue).
+are true and neither moves the joins. MID2's eight unnamed builds resolve to
+Deathbringer (Frost DK), Pack Leader (BM), Sentinel (MM and Survival), Deathstalker
+(Sub Rogue), Trickster (Outlaw), Elune's Chosen (Balance) and Shado-Pan (Windwalker).
 
-`heroTreeIconUrl` returns a real atlas element for every one of the 39 trees, so once
-the tree is named the icon appears in every table -- the missing-icon rows were the
-unnamed builds, not a gap in the map. `heroTalent === 'Default'` therefore only
-appears now for a tier that has not been through `wowdps hero-trees` yet; the pill and
-prose still handle it as a fallback but it is no longer expected.
+**It has to be re-run, and until 2026-08-22 nothing re-ran it.** `hero_trees.json`
+was written once on 2026-08-16 and `sims.yml` never invoked the command, so the three
+profiles simc shipped afterwards sat as `Default` until somebody looked. It is in the
+nightly now, in two places and for two reasons: **in each sim shard**, after the
+disabled profiles are materialised and before `wowdps build`, because every shard
+reads the file through `profiles.discover` and a build materialised later would
+otherwise not be in the map; and **in the publish job**, because that is the job that
+commits and because `spec-index` reads the names back. The trait table rides in the
+simc bundle (`bundle/engine/dbc/generated/trait_data*.inc`, 686 KB against a 30 MB
+binary) so a shard needs no second clone.
+
+`heroTreeIconUrl` covers **40 of simc's 41 trees**, so once the tree is named the icon
+appears in every table -- the missing-icon rows were the unnamed builds, not a gap in
+the map. `heroTalent === 'Default'` therefore only appears now for a tier that has not
+been through `wowdps hero-trees` yet; the pill and prose still handle it as a fallback
+but it is no longer expected.
+
+The two Midnight Demon Hunter trees were the gap. **Annihilator was added by
+measurement** (`talents-heroclass-demonhunter-annihilator` returns 200 at 16,742
+bytes, checked 2026-08-22 against `felscarred` on the same run). **Void-Scarred is
+deliberately still absent**: eleven names a pattern suggests -- `voidscarred`,
+`void-scarred`, `thevoidscarred` and eight more -- all 404, and this file's own rule
+says the element name is `TraitSubTree.UiTextureAtlasElementID` and must not be
+guessed. That build wears the lettered tile, which is what the tile is for.
 
 ### Boss icons come from Warcraft Logs, and that is not laziness
 
@@ -1297,13 +1344,23 @@ spec needs no edit.
   ships no profile for this spec in any season" rather than claiming it is a
   healer, which is a fact this project cannot derive. Tanks *are* named, because
   simc profiles them.
-- **Hero tree names.** The SELECTION rows that identify a tree carry the literal
-  string `"0"` where a name would be, and `TraitSubTree` is not shipped -- the same
-  absence as item source and the Mythic+ rotation. The name comes from a join:
-  a build's decoded loadout gives the sub-tree id, and the build already knows its
-  tree name from `herotrees`. **18 of 41 trees are named for MID2**, and that is
-  exactly the set some build plays -- so an unnamed node is always one that could
-  not have been selected anyway.
+- **Hero tree names -- this absence has ended, and the note it replaces is worth
+  keeping.** The SELECTION rows that identify a tree still carry the literal string
+  `"0"`, so the name used to come from a join: a build's decoded loadout gives the
+  sub-tree id, and the build knows its tree name from `herotrees`. That named **24 of
+  41 trees for MID2** and left every tree belonging to a spec nobody profiles blank
+  -- which is precisely the set a coverage panel has to be able to name. simc ships
+  `__trait_sub_tree_data` in the same generated file now (id, name, class, all 41),
+  so names are derived like everything else and the join survives only as a
+  cross-check: a build calling a tree something else is logged and the table wins.
+  Measured 2026-08-22, **41 of 41 named**.
+
+  **The PTR trait table does not carry it**, and this project reads the PTR table for
+  the current tier (`manifest.simc.ptr` is true on simc's Midnight branch). Taking the
+  empty answer would leave every tree unnamed for exactly the tier that matters, so
+  `parse_sub_tree_names` falls back to the live table **for names only** and says so.
+  That is narrower than the standing rule about never reading the wrong trait table,
+  which is about the node stream; nothing in that path reads nodes.
 
 ### Four states, all derived
 
@@ -1359,6 +1416,24 @@ Against MID2's 26 real hashes, with no API call:
   right. simc models this the same way with `player_sub_trees`.
 - **`id_spec` is a 4-array padded with zeros.** Keep the zeros and "no spec
   restriction" stops being expressible as an empty tuple.
+
+### Two things it now answers that it did not
+
+- **What a hero tree is called.** `parse_sub_tree_names` reads
+  `__trait_sub_tree_data` -- `{id, "name", class id}` for all 41 trees. This did not
+  exist when the module was written, and its absence is recorded in three places in
+  this file as a fact. It is the whole reason `herotrees` no longer needs a compiled
+  simc or a hand-written table.
+- **Whether simc will refuse a profile, and at which node.** `spec_rule_violation`
+  applies simc's own rule -- a non-hero node whose `id_spec` excludes the player's
+  spec -- and returns simc's own wording. Together with the `TalentDecodeError` a
+  choice-index overflow raises, that is both of simc's two phrasings for a stale
+  talent hash, **decided offline**. Checked against simc's own 2026-08-22 CI output:
+  it names node 91020 for Havoc Aldrachi Reaver and node 110203 entry 136735 for Arms
+  Warrior, and this reproduces both ids exactly. Control: all 35 shipped MID2
+  profiles pass, so it is not simply refusing everything. `wowdps check-profiles`
+  remains the version that asks simc itself; this is the version a run with no binary
+  can afford, and it is what puts a *reason* on the coverage panel.
 
 ### What is not drawn, and why
 
@@ -1570,12 +1645,30 @@ patch panel. simc ships its tier profiles as they are written, so early in a sea
 the set is incomplete -- and a ranking can only draw what it has, so "no profile" and
 "ranks last" are indistinguishable on it. The second is a conclusion somebody acts on.
 
-Measured on 2026-08-15: **MID2 ships 15 of 26 damage specs**, against MID1's 26. Six
-whole classes are absent -- Demon Hunter (Devourer, Havoc), Druid (Balance, Feral),
-Evoker (Devastation), Monk (Windwalker), Paladin (Retribution), Rogue (Outlaw),
-Warlock (Demonology), Warrior (Arms, Fury). Note *31* profile files but *26* damage
-builds and only *15* distinct specs: files include tanks and healers, and several
-specs ship two hero-tree builds.
+**The figures here were stale by a week and are re-measured, not edited to a guess.**
+The line that stood was "MID2 ships 15 of 26 damage specs" from 2026-08-15. Measured
+again on **2026-08-22** against simc `22b442e`, and after the `unvalidated` regex fix
+below:
+
+| | 2026-08-15 | 2026-08-22 |
+|---|---|---|
+| damage specs with a shipped profile | 15 of 26 | **17 of 26** |
+| damage builds published | 26 | **36** |
+| profile files (incl. tanks) | 31 | 35 |
+| `unvalidated` (written, switched off) | -- | **9** |
+| `missing` (nothing anywhere) | 11 | **0** |
+
+Outlaw Rogue and Demonology Warlock now ship; **Balance Druid and Windwalker Monk
+arrived between 21 and 22 August** (a checkout at `69a46e1`, 2026-08-21, has 35 MID2
+profiles and neither of them; the 2026-08-22 nightly produced 36 builds including
+both). That is the argument for deriving this panel from what simc ships right now
+rather than copying anyone's list, stated as a date.
+
+The nine damage specs with no *shipped* MID2 profile are Devourer and Havoc Demon
+Hunter, Balance and Feral Druid, Devastation Evoker, Windwalker Monk, Retribution
+Paladin, Arms and Fury Warrior -- and every one of them has a profile written and
+switched off, so `missing` is now **empty**. Note the file counts: files include tanks
+and healers, and several specs ship two hero-tree builds.
 
 **The reference list is derived, never written down.** "All damage specs" is the union
 of what simc has shipped for *any* tier in the checkout. A hard-coded table would need
@@ -1626,6 +1719,100 @@ whole profiles directory, and has nothing to do with which slice a run simulated
 every shard computes the same answer and `merge_shards` keeping the newest manifest
 keeps a correct one. Do not confuse it with `manifest.specs`, which is what this run
 *simulated* -- the two differ when a spec fails.
+
+### The quotes in one regex published a spec as missing that simc had written twice
+
+`unvalidated._OPEN` required the commented player line to be **quoted**. simc's
+generators write both forms, and `MID2_Generate_Paladin.simc` writes it unquoted:
+
+```
+# paladin=MID2_Paladin_Retribution_Herald      <- found by nothing
+# paladin="MID2_Paladin_Retribution_Herald"    <- what every other generator writes
+```
+
+Measured 2026-08-22: **14 disabled blocks found where 17 exist**. The three missed
+were both Retribution Paladin builds and Guardian Druid, so the site said *"simc has
+no profile for Retribution at all"* while simc shipped two complete ones in the
+generator -- the exact wrong answer this panel exists to prevent, produced inside the
+coverage code. Fixing it empties the `missing` list entirely. Do not tighten the
+quotes back; a test pins the unquoted form.
+
+### The fourth state: written, and simc will not load it
+
+Six of MID2's seventeen disabled blocks carry a talent hash the current tree refuses
+-- both Havoc builds and both Retribution builds on choice-node overflow, Arms and
+Fury on simc's spec rule. Those are the four damage builds `wowdps list` offers and
+the nightly gets nothing out of ("no successful sims for <id>, skipping"), and they
+are not the same claim as "simc has not signed this off".
+
+`specindex.refused_profiles` decides it **offline** -- see `spec_rule_violation` in
+the talent-tree section for the check and its verification against simc's own CI
+output -- so the panel prints "simc will not load it: Selected node 110203 entry
+136735 is not available to player's spec" rather than an unexplained absence. The
+reason travels per (spec, hero tree) cell, and a refusal naming a tree beats one that
+names none: Retribution's two builds are refused at two different nodes and one of
+them is unnamed, so taking the first match printed the wrong node against the named
+build's tree.
+
+### Coverage is now per hero tree, which is the half a spec-level count hides
+
+A spec plays two hero trees and a tier routinely ships a build for one of them.
+Measured 2026-08-22: **35 of 53 (damage spec x hero tree) pairs have a build**, where
+the spec-level count reads 17 of 26. Survival Hunter is simulated and Pack Leader
+Survival is not, and only the finer number says so -- six specs are in that state
+(both Hunters and Survival for Dark Ranger/Pack Leader, both Rogues, Demonology).
+
+53 rather than 52 because the pairing is read out of the trait table rather than
+assumed: Havoc carries three trees there today (Fel-Scarred, Aldrachi Reaver and
+Midnight's Void-Scarred), so "every spec plays two" is a rule about the game that
+nothing here encodes. And one build plays a tree the table places on **no** spec --
+Annihilator carries no `id_spec` on any of its nodes -- which is reported as
+`unplaced` rather than counted or dropped.
+
+It lives in `spec-index.json` (`heroTreeCoverage`), not in the manifest, because that
+is where the trait table already is; each cell carries the state of its *spec* from
+the manifest's own coverage block, so the three reasons a spec can be absent are not
+re-derived and cannot drift from the panel above them. `SpecCoverage.tsx` takes the
+already-fetched `specIndex` and degrades to the spec-level lists without it.
+
+### What the panel links to, and what it must not imply
+
+The owner asked for links to simc. They are not the same target per state, and one of
+them would be wrong:
+
+| state | link | why |
+|---|---|---|
+| no profile at all | the tier's generator file for that class | that is where a profile is contributed |
+| written, switched off | the same file | as *evidence* that it exists, not as a call for help -- nobody outside simc can switch it on |
+| shipped, one tree missing | `profiles/<tier>` | the profile that exists, so the gap is visible |
+
+Both halves of the URL are derived rather than typed: the branch comes from
+`manifest.simc.gitBranch` (`midnight`, confirmed as simc's default branch by
+`git ls-remote --symref`), and the file naming -- capitalise the first letter, drop
+the space, so `Deathknight` and `Demonhunter` -- matched all thirteen generator files
+in the checkout. No link is drawn when the manifest names no branch. github.com is
+403 to curl through this sandbox's proxy, so that is how the URLs were checked rather
+than by fetching them.
+
+**The missing artefact is a character, not a rotation**, and the panel says so: simc
+maintains a current action list for these specs in the same checkout (a third-party
+sim input for Devourer carries an inline APL 151 of 153 lines identical to simc's own
+`devourer.simc`). What is missing is gear plus talents somebody has signed off.
+
+Two things that stay out of it, both deliberate. The disabled profiles are ~45 item
+levels behind **and** wear none of this season's tier set -- two systematic
+differences, not one, and an `ilevel` bump would close the first and leave the second
+looking fixed. And this project does not author profiles for the missing specs: the
+number would be our opinion about how a spec is geared and played, published on a
+site whose whole claim is that its numbers are derived from simc and
+byte-reproducible.
+
+**The derived reference list under-claims, and the note says so.** bloodmallet lists
+eleven missing MID2 specs where this derives nine. The two extras are Guardian Druid
+(a tank; this site filters tanks) and **Augmentation Evoker, which has never had a
+profile in any tier**, so the union-of-shipped-tiers reference cannot know it exists.
+That is `spec_coverage`'s documented under-claim firing for real. It is the right
+direction to fail and it is not a reason to hard-code a spec list.
 
 ## Patch state: two dates, and only one of them is the cutoff
 

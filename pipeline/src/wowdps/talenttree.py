@@ -83,6 +83,7 @@ profiles, it does not write them.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -128,6 +129,9 @@ CLASS_IDS = {
 }
 
 _ROW = re.compile(r"^\s*\{\s*(.*?)\s*\}\s*,\s*$")
+#: ``__trait_sub_tree_data`` rows: ``{ <sub tree id>, "<name>", <class id> }``.
+_SUB_TREE_TABLE = re.compile(r"__trait_sub_tree_data\s*\{\s*\{(.*?)\}\s*\}\s*;", re.S)
+_SUB_TREE_ROW = re.compile(r'\{\s*(\d+)\s*,\s*"((?:[^"\\]|\\.)*)"\s*,\s*(\d+)\s*\}')
 _NAME = re.compile(r'"((?:[^"\\]|\\.)*)"')
 _ARRAY = re.compile(r"\{[^}]*\}")
 
@@ -167,8 +171,7 @@ def parse_trait_data(simc_dir: Path, ptr: bool = False) -> list[Trait]:
     ``item_data.inc``: there is no simc command that lists traits. Fields are read
     positionally against ``struct trait_data_t`` in ``engine/dbc/trait_data.hpp``.
     """
-    name = "trait_data_ptr.inc" if ptr else "trait_data.inc"
-    path = simc_dir / "engine" / "dbc" / "generated" / name
+    path = _generated(simc_dir, "trait_data", ptr)
     found: list[Trait] = []
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         row = _ROW.match(line)
@@ -218,6 +221,65 @@ def parse_trait_data(simc_dir: Path, ptr: bool = False) -> list[Trait]:
             )
         except (ValueError, IndexError):
             continue
+    return found
+
+
+@dataclass(frozen=True)
+class SubTree:
+    """One hero talent tree, as simc's own data names it."""
+
+    sub_tree: int
+    name: str
+    class_id: int
+
+
+def _generated(simc_dir: Path, stem: str, ptr: bool) -> Path:
+    name = f"{stem}_ptr.inc" if ptr else f"{stem}.inc"
+    return simc_dir / "engine" / "dbc" / "generated" / name
+
+
+def parse_sub_tree_names(simc_dir: Path, ptr: bool = False) -> dict[int, SubTree]:
+    """Every hero tree's canonical name, keyed by sub-tree id.
+
+    **This table did not exist when the rest of this module was written**, and the
+    absence was recorded in three places as a fact: ``trait_data.inc`` stores the
+    SELECTION rows with the literal name ``"0"``, so a tree could only be named by a
+    build that played it, and a tree nobody played had no name anywhere. simc now
+    ships ``__trait_sub_tree_data`` -- ``{id, "name", class id}`` for all 41 trees --
+    in the same generated file, so the name is derived like everything else here.
+
+    Measured on simc ``22b442e`` (2026-08-21): 41 rows, one per tree the trait table
+    places, including the sixteen no build in any tier plays.
+
+    **The PTR table does not carry it**, and this project reads the PTR trait table
+    for the current tier (``manifest.simc.ptr`` is true on simc's Midnight branch).
+    ``trait_data_ptr.inc`` has no ``__trait_sub_tree_data`` at all -- checked on the
+    same revision -- so asking for PTR names and taking the empty answer would leave
+    every tree unnamed for exactly the tier that matters. A *name* is not a tree
+    layout: the ids are the same ids, so falling back to the live table names them
+    correctly, and the fallback says so rather than happening quietly. That is
+    narrower than the standing rule about never reading the wrong trait table, which
+    is about the node stream, and nothing here reads nodes.
+
+    A file without the table in either place returns an empty map rather than
+    raising, so an older checkout degrades to the previous behaviour instead of
+    failing the run.
+    """
+    text = _generated(simc_dir, "trait_data", ptr).read_text(encoding="utf-8", errors="replace")
+    table = _SUB_TREE_TABLE.search(text)
+    if not table and ptr:
+        logging.getLogger(__name__).info(
+            "trait_data_ptr.inc ships no hero tree name table; reading the live one for names only"
+        )
+        text = _generated(simc_dir, "trait_data", False).read_text(
+            encoding="utf-8", errors="replace"
+        )
+        table = _SUB_TREE_TABLE.search(text)
+    if not table:
+        return {}
+    found: dict[int, SubTree] = {}
+    for raw_id, name, raw_class in _SUB_TREE_ROW.findall(table.group(1)):
+        found[int(raw_id)] = SubTree(sub_tree=int(raw_id), name=name, class_id=int(raw_class))
     return found
 
 
@@ -378,6 +440,45 @@ def decode_loadout(loadout: str, nodes: dict[int, list[Trait]]) -> Loadout:
         selections=tuple(selections),
         spare_bits=reader.spare_bits,
     )
+
+
+def spec_rule_violation(loadout: Loadout, nodes: dict[int, list[Trait]]) -> str | None:
+    """simc's own refusal of a decoded loadout, in simc's own words, or None.
+
+    ``parse_traits_hash`` rejects a **non-hero** node whose ``id_spec`` does not
+    contain the player's spec, and says so as *"Selected node N entry M is not
+    available to player's spec"*. That is one of the two wordings a stale talent hash
+    produces; the other -- *"Node N is not a choice node but has index selection"* --
+    is a decode failure and comes out of ``decode_loadout`` as a
+    ``TalentDecodeError`` naming the same node.
+
+    Together those two are enough to say **which** of simc's shipped profiles will
+    not load, and why, **without running simc**. Checked against simc's own CI output
+    for 2026-08-22: it names node 91020 for Havoc Aldrachi Reaver and node 110203
+    entry 136735 for Arms Warrior, and this reproduces both ids exactly. The control
+    is that all 35 shipped MID2 profiles pass, so it is not simply refusing
+    everything. ``wowdps check-profiles`` remains the version that asks simc itself;
+    this is the version a run without a binary can afford.
+    """
+    for selection in loadout.selections:
+        if selection.tree_index in (TREE_HERO, TREE_SELECTION):
+            continue
+        entry = next(
+            (
+                candidate
+                for candidate in nodes.get(selection.node_id, [])
+                if candidate.entry_id == selection.entry_id
+            ),
+            None,
+        )
+        if entry is None or not entry.spec_ids:
+            continue
+        if loadout.spec_id not in entry.spec_ids:
+            return (
+                f"Selected node {selection.node_id} entry {selection.entry_id} "
+                f"is not available to player's spec"
+            )
+    return None
 
 
 def tree_layout(nodes: dict[int, list[Trait]], spec_id: int, sub_tree: int | None) -> list[dict]:

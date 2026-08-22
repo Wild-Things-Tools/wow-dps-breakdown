@@ -142,6 +142,10 @@ class SpecProfile:
     #: so it is carried through every dataset and labelled wherever it is drawn.
     #: See ``unvalidated``.
     unvalidated: bool = False
+    #: The name the profile declares *inside* the file (``MID2_Rogue_Outlaw``), which
+    #: is the key ``herotrees`` resolves against. Kept because it is not always the
+    #: filename: simc renames the build without renaming the file.
+    profile_name: str = ""
     #: The item level most of this profile's gear sits at, or None where no gear
     #: line states one. It is not decoration: **absolute DPS does not survive an
     #: item-level difference**, so two profiles at different item levels cannot be
@@ -211,12 +215,20 @@ def parse_profile(
     name_hero = _hero_from_name(profile_name, tier, class_filename_form, spec_token)
     if name_hero is None:
         name_hero = _hero_from_name(path.stem, tier, class_filename_form, spec_token)
-    # simc ships a spec's default build with no hero suffix, but it still plays a
-    # tree. The resolved name is detected from simc (`wowdps hero-trees`) and keyed
+    # What tree does this build actually play? `wowdps hero-trees` decodes it out of
+    # the profile's own talent hash and names it from simc's hero tree table, keyed
     # on the profile's internal name. It feeds the *display*, never the id.
+    #
+    # The resolved answer wins over the profile name where both exist, and that is
+    # deliberate: a profile name carries whatever abbreviation simc's file naming
+    # used, and two of MID2's are not the tree's name (`SC` for Scalecommander,
+    # `Soulharvester` for Soul Harvester). `name_hero` -- the id -- is untouched
+    # either way, so nothing that joins on a build id moves.
     hero_talent = name_hero
-    if hero_talent is None and hero_overrides:
-        hero_talent = hero_overrides.get(profile_name) or hero_overrides.get(path.stem)
+    if hero_overrides:
+        hero_talent = (
+            hero_overrides.get(profile_name) or hero_overrides.get(path.stem) or hero_talent
+        )
 
     return SpecProfile(
         path=path,
@@ -227,6 +239,7 @@ def parse_profile(
         role=role,
         talent_hash=talents.group(1) if talents else None,
         name_hero=name_hero,
+        profile_name=profile_name,
         unvalidated=text.startswith(unvalidated.MARKER),
         item_level=modal_item_level(text),
     )

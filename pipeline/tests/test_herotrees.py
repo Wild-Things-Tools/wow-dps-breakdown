@@ -1,63 +1,93 @@
-"""Every spec plays a hero tree, including the ones simc ships unnamed."""
+"""Every build plays a hero tree, and simc's own data now says which and what it is called.
+
+The decode is exercised in ``test_talenttree``; what is checked here is the join --
+profile to sub-tree id to name -- and the three refusals around it.
+"""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from wowdps.herotrees import (
-    active_ability_slugs,
-    detect_hero_tree,
-    load_overrides,
-    write_overrides,
-)
+from test_talenttree import encode, header_bits
+from wowdps.herotrees import load_overrides, resolve_tier, write_overrides
 from wowdps.profiles import parse_profile
 
+#: One class-4 hero node and the SELECTION node that names its tree, in the layout
+#: ``parse_trait_data`` reads positionally, plus simc's hero tree name table.
+TRAIT_FILE = (
+    "static constexpr std::array<trait_data_t, 2> __trait_data_data { {\n"
+    "  { 3,  4, 117659,  95062, 1,  1, 122671,  439843,      0,      0,  1,  3, 100, "
+    '"Unseen Blade", {  260,  261,    0,    0 }, {    0,    0,    0,    0 },  51, 0 },\n'
+    "  { 4,  4, 117660,  95063, 1,  1, 122672,  439844,      0,      0,  1,  1, 100, "
+    '"0", {  260,  261,    0,    0 }, {    0,    0,    0,    0 },  51, 3 },\n'
+    "} };\n"
+    "static constexpr std::array<std::tuple<unsigned, const char*, unsigned>, 2> "
+    "__trait_sub_tree_data { {\n"
+    '  { 51, "Trickster", 4 },\n'
+    '  { 52, "Fatebound", 4 },\n'
+    "} };\n"
+)
 
-def report_with(*ability_slugs):
-    return {
-        "sim": {
-            "players": [
-                {
-                    "buffs": [{"name": slug} for slug in ability_slugs],
-                    "stats": [{"name": "auto_attack", "actual_amount": {"mean": 100.0}}],
-                }
-            ]
-        }
-    }
-
-
-def test_the_active_abilities_pick_the_tree_apart():
-    frost = report_with("killing_machine", "exterminate", "reapers_mark")
-    assert detect_hero_tree(frost, "Death Knight", "Frost") == "Deathbringer"
-
-    mm = report_with("sentinels_mark", "precise_shots")
-    assert detect_hero_tree(mm, "Hunter", "Marksmanship") == "Sentinel"
+#: Both nodes selected and purchased: Outlaw (260), hero tree 51.
+TRICKSTER_HASH = encode(header_bits(260) + [1, 1, 0, 0] + [1, 1, 0, 0])
 
 
-def test_an_ability_that_never_fired_is_not_a_signature():
-    """Both trees' actions sit in the APL; only the taken one produces damage or a
-    buff. A stat with no damage must not count, or every build looks like both."""
-    player = {
-        "buffs": [{"name": "Heart of the Pack"}],
-        "stats": [
-            {"name": "black_arrow", "actual_amount": {"mean": 0.0}},  # in APL, never cast
-            {"name": "vicious_hunt", "actual_amount": {"mean": 500.0}},
-        ],
-    }
-    report = {"sim": {"players": [player]}}
-    assert "black_arrow" not in active_ability_slugs(report)
-    assert detect_hero_tree(report, "Hunter", "Beast Mastery") == "Pack Leader"
+def make_checkout(tmp_path: Path, profiles: dict[str, str]) -> Path:
+    generated = tmp_path / "engine" / "dbc" / "generated"
+    generated.mkdir(parents=True)
+    (generated / "trait_data.inc").write_text(TRAIT_FILE, encoding="utf-8")
+    tier = tmp_path / "profiles" / "MID2"
+    tier.mkdir(parents=True)
+    for name, body in profiles.items():
+        (tier / f"{name}.simc").write_text(body, encoding="utf-8")
+    return tmp_path
 
 
-def test_an_ambiguous_or_unknown_result_is_not_guessed():
-    # Signatures for both trees present -> the table has gone stale, so refuse.
-    both = report_with("exterminate", "apocalypse_now")
-    assert detect_hero_tree(both, "Death Knight", "Frost") is None
-    # A spec with no signature table -> None, and the caller keeps it unnamed.
-    assert detect_hero_tree(report_with("anything"), "Mage", "Arcane") is None
-    # Nothing matched.
-    assert detect_hero_tree(report_with("frostbolt"), "Rogue", "Subtlety") is None
+def rogue(name: str, talents: str = TRICKSTER_HASH) -> str:
+    return f'rogue="{name}"\nspec=outlaw\nrole=attack\ntalents={talents}\n'
+
+
+def test_a_build_simc_ships_unnamed_is_named_from_its_own_talent_hash(tmp_path):
+    """The regression this exists for: simc ships a spec's default build with no hero
+    suffix, and it used to surface as a build with no hero tree, which cannot exist.
+
+    Nothing here runs simc. The tree is the one the loadout's SELECTION node names,
+    and the name is the one simc's hero tree table gives that id.
+    """
+    root = make_checkout(tmp_path, {"MID2_Rogue_Outlaw": rogue("MID2_Rogue_Outlaw")})
+    result = resolve_tier(root / "profiles", "MID2", root)
+    assert result.resolved == {"MID2_Rogue_Outlaw": "Trickster"}
+    assert result.unresolved == []
+    assert result.renamed == []
+
+
+def test_the_table_names_the_tree_even_where_the_profile_name_abbreviates_it(tmp_path):
+    """MID2 spells Scalecommander ``SC`` and Soul Harvester ``Soulharvester``. Those
+    are file-naming, not the tree's name, and the disagreement is reported."""
+    root = make_checkout(tmp_path, {"MID2_Rogue_Outlaw_Trick": rogue("MID2_Rogue_Outlaw_Trick")})
+    result = resolve_tier(root / "profiles", "MID2", root)
+    assert result.resolved == {"MID2_Rogue_Outlaw_Trick": "Trickster"}
+    assert result.renamed == [("MID2_Rogue_Outlaw_Trick", "Trick", "Trickster")]
+
+
+def test_a_hash_that_does_not_decode_is_left_unresolved_rather_than_guessed(tmp_path):
+    """simc's disabled Havoc profiles are two of these today. The build keeps
+    whatever its own profile name said; nothing is invented."""
+    root = make_checkout(tmp_path, {"MID2_Rogue_Outlaw": rogue("MID2_Rogue_Outlaw", talents="!!!")})
+    result = resolve_tier(root / "profiles", "MID2", root)
+    assert result.resolved == {}
+    assert [name for name, _ in result.unresolved] == ["MID2_Rogue_Outlaw"]
+
+
+def test_a_checkout_with_no_hero_tree_table_resolves_nothing(tmp_path):
+    """Reading the table is the whole method, so its absence has to be loud rather
+    than a silently empty result that looks like a tier with no default builds."""
+    root = make_checkout(tmp_path, {"MID2_Rogue_Outlaw": rogue("MID2_Rogue_Outlaw")})
+    (root / "engine" / "dbc" / "generated" / "trait_data.inc").write_text(
+        TRAIT_FILE.split("__trait_sub_tree_data")[0], encoding="utf-8"
+    )
+    assert resolve_tier(root / "profiles", "MID2", root).resolved == {}
 
 
 def test_the_resolved_tree_feeds_the_display_and_never_the_id(tmp_path):
@@ -79,6 +109,20 @@ def test_the_resolved_tree_feeds_the_display_and_never_the_id(tmp_path):
     assert with_override.display_name == "Frost Death Knight (Deathbringer)"
 
 
+def test_the_resolved_name_wins_over_the_one_the_filename_carried(tmp_path):
+    """``evoker_devastation_sc`` keeps its id -- the joins depend on it -- while the
+    build is drawn as Scalecommander, which is what simc's table calls that tree."""
+    path = tmp_path / "MID2_Evoker_Devastation_SC.simc"
+    path.write_text(
+        'evoker="MID2_Evoker_Devastation_SC"\nspec=devastation\nrole=spell\ntalents=ABC\n',
+        encoding="utf-8",
+    )
+    profile = parse_profile(path, "MID2", {"MID2_Evoker_Devastation_SC": "Scalecommander"})
+    assert profile is not None
+    assert profile.id == "evoker_devastation_sc"
+    assert profile.hero_talent == "Scalecommander"
+
+
 def test_overrides_round_trip_per_tier(tmp_path):
     path = tmp_path / "hero_trees.json"
     write_overrides("MID2", {"MID2_Rogue_Subtlety": "Deathstalker"}, path)
@@ -91,17 +135,29 @@ def test_overrides_round_trip_per_tier(tmp_path):
     assert load_overrides("MID2", tmp_path / "absent.json") == {}
 
 
-def test_the_shipped_mid2_map_covers_every_default_build():
-    """The five builds simc ships unnamed in MID2 are all resolved, so the site
-    never shows a build without a hero tree."""
+def test_a_rerun_that_changes_nothing_leaves_the_file_alone(tmp_path):
+    """Same rule as the datasets: a quiet night must leave nothing to commit."""
+    path = tmp_path / "hero_trees.json"
+    write_overrides("MID2", {"MID2_Rogue_Outlaw": "Trickster"}, path)
+    before = path.stat().st_mtime_ns
+    write_overrides("MID2", {"MID2_Rogue_Outlaw": "Trickster"}, path)
+    assert path.stat().st_mtime_ns == before
+
+
+def test_the_shipped_map_names_every_mid2_build_that_used_to_read_default():
+    """The three builds the site drew as "Default" on 2026-08-22. They are simc's
+    unnamed default builds for specs the old ability-signature detector had no table
+    for, which is why nothing could resolve them."""
     data = json.loads(
         (Path(__file__).parent.parent / "src/wowdps/data/hero_trees.json").read_text()
     )
     resolved = data["tiers"]["MID2"]["resolved"]
-    assert resolved == {
-        "MID2_Death_Knight_Frost": "Deathbringer",
-        "MID2_Hunter_Beast_Mastery": "Pack Leader",
-        "MID2_Hunter_Marksmanship": "Sentinel",
-        "MID2_Hunter_Survival": "Sentinel",
-        "MID2_Rogue_Subtlety": "Deathstalker",
-    }
+    assert resolved["MID2_Druid_Balance"] == "Elune's Chosen"
+    assert resolved["MID2_Monk_Windwalker"] == "Shado-Pan"
+    assert resolved["MID2_Rogue_Outlaw"] == "Trickster"
+    # And the five the previous detector had resolved, unchanged by the new method.
+    assert resolved["MID2_Death_Knight_Frost"] == "Deathbringer"
+    assert resolved["MID2_Hunter_Beast_Mastery"] == "Pack Leader"
+    assert resolved["MID2_Hunter_Marksmanship"] == "Sentinel"
+    assert resolved["MID2_Hunter_Survival"] == "Sentinel"
+    assert resolved["MID2_Rogue_Subtlety"] == "Deathstalker"
