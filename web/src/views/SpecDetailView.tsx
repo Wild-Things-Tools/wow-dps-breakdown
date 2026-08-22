@@ -20,11 +20,13 @@ import {
   fullBuildName,
   type BuildLike,
 } from '../components/BuildIdentity'
+import { ClassSpecPicker } from '../components/ClassSpecPicker'
+import { GameLink } from '../components/GameLink'
 import { TalentList, TalentTree } from '../components/TalentTree'
 import { EmptyState, Note, Panel, PanelHeader, Select, StatTile, cx } from '../components/ui'
 import { describeBurst, describeFunnelGain, fullNumber, percent } from '../lib/format'
 import { classColor, classWash, sequentialStep } from '../lib/palette'
-import type { ScenarioMeta, SpecDetail, TalentTreeDataset } from '../lib/types'
+import type { ScenarioMeta, SpecDetail, SpecIndex, TalentTreeDataset } from '../lib/types'
 
 export function SpecDetailView({
   detail,
@@ -32,11 +34,14 @@ export function SpecDetailView({
   allSpecs,
   onSelectSpec,
   talentTrees,
+  specIndex,
 }: {
   detail: SpecDetail | null
   scenario: ScenarioMeta
   allSpecs: BuildLike[]
   onSelectSpec: (id: string) => void
+  /** Every class and spec in the game. Null on a tier built before it existed. */
+  specIndex: SpecIndex | null
   /** Null until the tier's decoded trees have loaded, or when it carries none. */
   talentTrees: TalentTreeDataset | null
 }) {
@@ -46,8 +51,52 @@ export function SpecDetailView({
   const effective = available.includes(targets) ? targets : (available[0] ?? 1)
   const cell = cells.find((entry) => entry.targets === effective)
 
+  // The picker draws the whole game; the strip is the fast path between builds of
+  // the spec already open. A tier with no spec index falls back to the strip alone,
+  // which is what every tier looked like before.
+  const [pickerOpen, setPickerOpen] = useState(false)
+
   return (
     <div className="space-y-4">
+      {specIndex ? (
+        <Panel>
+          <button
+            type="button"
+            onClick={() => setPickerOpen((open) => !open)}
+            aria-expanded={pickerOpen}
+            className="flex w-full items-center justify-between px-5 py-3 text-left"
+          >
+            <span>
+              <span className="block text-[13px] font-semibold text-ink-primary">
+                Every class and spec
+              </span>
+              <span className="block text-[12px] text-ink-tertiary">
+                {countSelectable(specIndex)} of {countSpecs(specIndex)} specs have a build this
+                season. Pick a spec, or a hero tree between the two specs that share it.
+              </span>
+            </span>
+            <span aria-hidden className="text-[12px] text-ink-tertiary">
+              {pickerOpen ? 'Hide' : 'Show'}
+            </span>
+          </button>
+          {pickerOpen ? (
+            <div className="px-5 pb-5">
+              <ClassSpecPicker
+                index={specIndex}
+                selectedSpecId={selectedSpecId(specIndex, detail?.id ?? null)}
+                onSelect={(selection) => {
+                  const first = selection.buildIds[0]
+                  if (first) {
+                    onSelectSpec(first)
+                    setPickerOpen(false)
+                  }
+                }}
+              />
+            </div>
+          ) : null}
+        </Panel>
+      ) : null}
+
       <BuildStrip builds={allSpecs} current={detail?.id ?? null} onSelect={onSelectSpec} />
 
       {!detail ? (
@@ -177,6 +226,30 @@ export function SpecDetailView({
  * recognisable and a hero-tree emblem certainly is not, so each chip says what it
  * is in words as well.
  */
+/** How many specs this tier can actually show something for. */
+function countSelectable(index: SpecIndex): number {
+  return index.classes.reduce(
+    (total, entry) =>
+      total + entry.specs.filter((spec) => spec.profiled && spec.builds.length > 0).length,
+    0,
+  )
+}
+
+function countSpecs(index: SpecIndex): number {
+  return index.classes.reduce((total, entry) => total + entry.specs.length, 0)
+}
+
+/** Which spec node to mark, from the build id currently open. */
+function selectedSpecId(index: SpecIndex, buildId: string | null): number | undefined {
+  if (!buildId) return undefined
+  for (const entry of index.classes) {
+    for (const spec of entry.specs) {
+      if (spec.builds.includes(buildId)) return spec.specId
+    }
+  }
+  return undefined
+}
+
 function BuildStrip({
   builds,
   current,
@@ -270,7 +343,22 @@ function AbilityBreakdown({
           <li key={`${ability.id ?? ability.name}`} className="grid grid-cols-[1fr_auto] gap-3">
             <div className="min-w-0">
               <div className="flex items-baseline justify-between gap-3">
-                <span className="truncate text-[13px] text-ink">{ability.name}</span>
+                {/* A spell link, so Wowhead's script paints the icon and the hover
+                    card. This is the payoff of GameLink already taking `kind`:
+                    simc gives every ability row its spell id, and there is no icon
+                    name anywhere in simc's data to put in the dataset instead. An
+                    ability with no id -- simc merges some rows by name -- stays
+                    plain text rather than becoming a link to nothing. */}
+                {ability.id ? (
+                  <GameLink
+                    kind="spell"
+                    id={ability.id}
+                    name={ability.name}
+                    className="truncate text-[13px]"
+                  />
+                ) : (
+                  <span className="truncate text-[13px] text-ink">{ability.name}</span>
+                )}
                 <span className="tnum shrink-0 text-[12.5px] text-ink-secondary">
                   {percent(ability.share)}
                 </span>

@@ -49,6 +49,12 @@ class SpecResult:
     #: scenario id -> target count -> cell
     cells: dict[str, dict[int, Cell]] = field(default_factory=dict)
     caveats: list[str] = field(default_factory=list)
+    #: Set when this build's gear could not be matched to the tier's. Kept beside the
+    #: caveat text rather than derived from it: the ranking reads the manifest and the
+    #: caveat lives in the spec file, so without a flag here the one place the gear
+    #: gap actually misleads -- a bar chart of absolute DPS -- is the one place that
+    #: cannot see it.
+    gear_comparable: bool = True
     errors: list[str] = field(default_factory=list)
 
     def add(self, scenario_id: str, cell: Cell) -> None:
@@ -91,6 +97,7 @@ class SpecResult:
             "displayName": self.profile.display_name,
             "role": self.profile.role,
             "talentHash": self.profile.talent_hash,
+            **({"unvalidated": True} if self.profile.unvalidated else {}),
             "caveats": self.caveats,
             "errors": self.errors,
             "scenarios": {
@@ -111,6 +118,15 @@ class SpecResult:
             "role": self.profile.role,
             "scenarios": {},
         }
+        if not self.gear_comparable:
+            # Only when false, so a tier whose builds all wear the tier's gear
+            # produces the bytes it did before this existed.
+            out["gearComparable"] = False
+        if self.profile.unvalidated:
+            # Emitted only when true, so a tier of shipped profiles produces the
+            # same bytes it did before this existed and a quiet night still has
+            # nothing to commit.
+            out["unvalidated"] = True
         if self.errors:
             out["errors"] = self.errors
 
@@ -134,16 +150,91 @@ class SpecResult:
         return out
 
 
+def shipped_item_levels(profiles: list[SpecProfile]) -> tuple[int, int] | None:
+    """The band of item levels the tier's *shipped* profiles wear, low to high.
+
+    A band rather than a single figure, because the tier genuinely spans one: MID2's
+    shipped profiles sit at 334 and 344, so comparing against the mode alone flags
+    seven of them as incomparable with themselves. The band is derived from the data
+    for the same reason the coverage reference list is -- a fixed tolerance is a
+    magic number that goes wrong in exactly the season nobody re-checks it.
+
+    Shard-safe, and it has to be: it reads what simc publishes for the tier, which
+    every shard sees identically, rather than the slice this run simulated. Disabled
+    profiles are excluded so one cannot drag the anchor toward itself and quietly
+    excuse its own gap.
+    """
+    levels = sorted(p.item_level for p in profiles if not p.unvalidated and p.item_level)
+    if not levels:
+        return None
+    return levels[0], levels[-1]
+
+
+def gear_caveat(profile: SpecProfile, band: tuple[int, int] | None) -> str | None:
+    """Say so when a build's gear, not its spec, is what puts it where it is.
+
+    **Absolute DPS does not survive an item-level difference.** This project already
+    states that for the tier axis -- a season-over-season comparison has to be
+    restricted to within-run ratios -- and the same thing happens *inside* one tier
+    the moment a profile simc did not ship is drawn beside ones it did.
+
+    Measured on the first run that included them: MID2's disabled generator profiles
+    wear item level 289 where its shipped profiles wear 334-344, and all eight
+    resulting builds landed below all twenty-eight shipped ones with no overlap. A
+    clean separation like that is the signature of a systematic difference, not of
+    eight underperforming specs, and without this caveat the ranking presents a gear
+    gap as a balance finding. One of them wears **723**, which is not a Midnight item
+    level at all, so the gap is not always downward either.
+    """
+    if band is None:
+        return None
+    low, high = band
+    written = f"{low}" if low == high else f"{low}-{high}"
+
+    if profile.item_level is None:
+        # Absence is not comparability. Five of MID2's disabled profiles state no
+        # item level on any gear line, so their gear sits at whatever base level the
+        # item ids carry -- which this cannot read, and which there is no reason to
+        # assume matches the tier. Saying nothing would let exactly the builds that
+        # *cannot* be checked pass as checked. Shipped profiles omit it routinely
+        # (eight of MID2's do), so this only fires for the ones simc did not ship.
+        if not profile.unvalidated:
+            return None
+        return (
+            "This profile states no item level on any gear line, so its gear could not "
+            f"be compared against the {written} the tier's shipped profiles wear. Its "
+            "position against those builds may be gear rather than spec."
+        )
+
+    if low <= profile.item_level <= high:
+        return None
+    gap = profile.item_level - (low if profile.item_level < low else high)
+    direction = "below" if gap < 0 else "above"
+    return (
+        f"This profile wears item level {profile.item_level}, {abs(gap)} {direction} the "
+        f"{written} the tier's shipped profiles wear. Absolute damage does not survive "
+        f"that difference, so its position against those builds is mostly gear."
+    )
+
+
 def run_spec(
     simc: Path,
     profile: SpecProfile,
     scenarios: list[Scenario],
     settings: SimSettings,
     timeout: int = 1800,
+    reference_item_level: int | None = None,
 ) -> SpecResult:
     """Run every scenario x target count for one spec."""
     result = SpecResult(profile=profile)
     seen_caveats: set[str] = set()
+
+    gear = gear_caveat(profile, reference_item_level)
+    if gear:
+        log.warning("  %s", gear)
+        seen_caveats.add(gear)
+        result.caveats.append(gear)
+        result.gear_comparable = False
 
     for scenario in scenarios:
         for targets in scenario.sims():
@@ -369,6 +460,65 @@ def _tier_sort_key(tier: str) -> tuple[str, int]:
     return (match.group(1), int(match.group(2))) if match else (tier, 0)
 
 
+def apply_simulated_coverage(manifest: dict) -> dict:
+    """Split "simc ships no profile" from "the profile no longer loads".
+
+    ``profiles.spec_coverage`` answers what simc *ships* for a tier, which is the
+    only question a single shard can answer -- it simulated one slice, so
+    subtracting that slice would report every other shard's specs as broken. Here
+    the whole run is on hand, so the third state can be worked out.
+
+    It is not a nicety. Measured on MID1 the day it was first published: simc ships
+    a profile for all 26 damage specs, so the panel read **26 of 26** and said the
+    coverage was complete -- over a dataset containing no Mage, no Hunter, no
+    Warrior, no Havoc, no Retribution and no Elemental Shaman, because 16 of MID1's
+    41 profiles no longer load. A reader then has exactly one reading available for
+    the missing classes, and it is the wrong one. That is the same "a missing spec
+    looks exactly like a bad one" failure the coverage panel was built to prevent,
+    one level deeper and stated with more confidence than before it existed.
+
+    Four states, and they are four different sentences on the site:
+
+    ``simulated``    simc ships it and it produced results
+    ``broken``       simc ships a profile and this run got nothing out of it
+    ``unvalidated``  simc wrote a profile and left it commented out; if this run
+                     materialised it, the spec has a number that is a weaker claim
+    ``missing``      simc has no profile for it at all
+
+    Mutates and returns ``manifest``. A manifest whose coverage predates ``shipped``
+    is left alone rather than guessed at: without knowing what the tier shipped,
+    "broken" and "missing" cannot be told apart, and inventing the split would be
+    the same error in the other direction.
+    """
+    coverage = dict(manifest.get("coverage") or {})
+    shipped = coverage.get("shipped")
+    if not shipped:
+        return manifest
+
+    simulated = {(spec.get("class"), spec.get("spec")) for spec in manifest.get("specs", [])}
+    broken = sorted(
+        (entry["class"], entry["spec"])
+        for entry in shipped
+        if (entry.get("class"), entry.get("spec")) not in simulated
+    )
+
+    coverage["simulated"] = len(shipped) - len(broken)
+    coverage["broken"] = [{"class": wow_class, "spec": spec} for wow_class, spec in broken]
+    # How many of the tier's unvalidated specs this run got a result out of. The
+    # list of them is what simc wrote and did not switch on; this is the subset
+    # that ran, which is the number a coverage panel can honestly show beside the
+    # shipped one.
+    coverage["unvalidatedSimulated"] = len(
+        {
+            (spec.get("class"), spec.get("spec"))
+            for spec in manifest.get("specs", [])
+            if spec.get("unvalidated")
+        }
+    )
+    manifest["coverage"] = coverage
+    return manifest
+
+
 def merge_shards(shard_dirs: list[Path], out_dir: Path) -> None:
     """Combine per-shard output directories into one dataset.
 
@@ -382,6 +532,7 @@ def merge_shards(shard_dirs: list[Path], out_dir: Path) -> None:
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     merged_gear = merge_gear_shards(shard_dirs, out_dir)
+    merged_buffs = merge_buff_shards(shard_dirs, out_dir)
 
     out_specs = out_dir / "specs"
     manifests: list[dict] = []
@@ -398,7 +549,7 @@ def merge_shards(shard_dirs: list[Path], out_dir: Path) -> None:
             )
 
     if not manifests:
-        if merged_gear:
+        if merged_gear or merged_buffs:
             return
         raise FileNotFoundError(f"no shard manifests found in {shard_dirs}")
 
@@ -418,10 +569,46 @@ def merge_shards(shard_dirs: list[Path], out_dir: Path) -> None:
     settings["medianDpsError"] = _median_dps_error_of_files(out_specs)
     merged["settings"] = settings
 
+    # Same class of correction as the line above, and for the same reason: a shard
+    # cannot know what the whole run produced. Which specs simc shipped a profile
+    # for and got nothing out of is only answerable here.
+    apply_simulated_coverage(merged)
+
     (out_dir / "index.json").write_text(
         json.dumps(merged, separators=(",", ":")) + "\n", encoding="utf-8"
     )
     log.info("merged %d shards -> %d specs", len(manifests), len(merged["specs"]))
+
+
+def merge_buff_shards(shard_dirs: list[Path], out_dir: Path) -> Path | None:
+    """Combine per-shard ``buffs.json`` files, if the run produced any.
+
+    A buff sweep shards by spec, so every shard writes the same header and a slice
+    of ``specs``; merging is the union of those slices, keyed by build id so a
+    re-run of one shard replaces rather than duplicates. Same shape as the gear
+    merge, and for the same reason: a shard that failed has to shrink the published
+    set rather than be papered over.
+    """
+    documents = []
+    for shard in shard_dirs:
+        path = shard / "buffs.json"
+        if path.is_file():
+            documents.append(json.loads(path.read_text(encoding="utf-8")))
+    if not documents:
+        return None
+
+    documents.sort(key=lambda doc: doc.get("generatedAt", ""))
+    merged = dict(documents[-1])
+    by_id: dict[str, dict] = {}
+    for document in documents:
+        for spec in document.get("specs", []):
+            by_id[spec["id"]] = spec
+    merged["specs"] = [by_id[key] for key in sorted(by_id)]
+
+    path = out_dir / "buffs.json"
+    path.write_text(json.dumps(merged, separators=(",", ":")) + "\n", encoding="utf-8")
+    log.info("merged %d buff shard(s) -> %d specs", len(documents), len(merged["specs"]))
+    return path
 
 
 def merge_gear_shards(shard_dirs: list[Path], out_dir: Path) -> Path | None:

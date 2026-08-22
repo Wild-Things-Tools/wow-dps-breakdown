@@ -188,3 +188,97 @@ def test_a_tier_that_ships_everything_reports_nothing_missing(tmp_path):
     coverage = spec_coverage(tmp_path, "MID2")
     assert coverage["missing"] == []
     assert coverage["damageSpecs"] == coverage["damageSpecsKnown"] == 1
+
+
+def test_coverage_publishes_what_the_tier_ships_so_broken_can_be_told_from_missing(tmp_path):
+    """``shipped`` is what makes the third coverage state computable later.
+
+    Without it, "simc ships no profile" and "the profile no longer loads" collapse
+    into one number, and an old tier reports as fully covered while its dataset is
+    missing whole classes.
+    """
+    from wowdps.profiles import spec_coverage
+
+    for tier, specs in (("MID1", ("arcane", "fury")), ("MID2", ("arcane",))):
+        directory = tmp_path / tier
+        directory.mkdir()
+        for spec in specs:
+            token = "mage" if spec == "arcane" else "warrior"
+            (directory / f"{tier}_{spec}.simc").write_text(
+                f'{token}="{tier}_{spec}"\nspec={spec}\nlevel=80\nrole=attack\n',
+                encoding="utf-8",
+            )
+
+    coverage = spec_coverage(tmp_path, "MID1")
+
+    assert coverage["shipped"] == [
+        {"class": "Mage", "spec": "Arcane"},
+        {"class": "Warrior", "spec": "Fury"},
+    ]
+    assert len(coverage["shipped"]) == coverage["damageSpecs"]
+    # Disjoint by construction: a spec cannot be both shipped for this tier and
+    # absent from it.
+    shipped = {(e["class"], e["spec"]) for e in coverage["shipped"]}
+    absent = {(e["class"], e["spec"]) for e in coverage["missing"]}
+    assert not shipped & absent
+
+
+def test_the_spec_list_covers_every_class_and_names_the_new_spec(tmp_path):
+    """Derived rather than typed, which is the whole argument in one line.
+
+    Midnight adds Demon Hunter Devourer (1480). A hand-written table would have to
+    be edited for it; reading simc's own `sc_spec_list.inc` picks it up for free,
+    and the row-count assertion means a class added to the game fails loudly here
+    instead of silently shifting every class by one.
+    """
+    from wowdps.specindex import _CLASS_ORDER, parse_spec_enum, parse_spec_list
+
+    generated = tmp_path / "engine" / "dbc" / "generated"
+    generated.mkdir(parents=True)
+    (generated / "sc_specialization_data.inc").write_text(
+        "enum specialization_e {\n  SPEC_NONE = 0,\n  WARRIOR_ARMS = 71,\n", encoding="utf-8"
+    )
+    rows = "\n".join(
+        "  {\n" + "".join(f"    SPEC_{i}_{j},\n" for j in range(3)) + "  },"
+        for i in range(len(_CLASS_ORDER))
+    )
+    (generated / "sc_spec_list.inc").write_text(
+        "static constexpr specialization_e __class_spec_id[14][4] =\n{\n" + rows + "\n};\n",
+        encoding="utf-8",
+    )
+
+    assert parse_spec_enum(tmp_path)["WARRIOR_ARMS"] == 71
+    groups = parse_spec_list(tmp_path)
+    assert len(groups) == len(_CLASS_ORDER)
+
+
+def test_a_changed_class_count_is_an_error_not_a_silent_shift(tmp_path):
+    from wowdps.specindex import parse_spec_list
+
+    generated = tmp_path / "engine" / "dbc" / "generated"
+    generated.mkdir(parents=True)
+    (generated / "sc_spec_list.inc").write_text(
+        "static constexpr specialization_e __class_spec_id[2][4] =\n{\n  {\n    A,\n  },\n};\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="class rows"):
+        parse_spec_list(tmp_path)
+
+
+def test_a_hero_tree_is_named_only_when_some_build_plays_it():
+    """simc ships no tree names at all -- the SELECTION rows carry the string "0"."""
+    from wowdps.specindex import tree_names_from_talents
+
+    names = tree_names_from_talents(
+        {
+            "builds": [
+                {"tree": "251-33", "heroTalent": "Deathbringer"},
+                {"tree": "62-27", "heroTalent": "Sunfury"},
+                # A build simc ships unnamed contributes nothing rather than
+                # naming a tree "Default".
+                {"tree": "72-60", "heroTalent": "Default"},
+                {"tree": "broken", "heroTalent": "Nope"},
+            ]
+        }
+    )
+    assert names == {33: "Deathbringer", 27: "Sunfury"}

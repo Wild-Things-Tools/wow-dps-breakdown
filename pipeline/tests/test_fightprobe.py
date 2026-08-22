@@ -19,6 +19,13 @@ from wowdps.fightextract import EncounterObservation, observe_fight
 from wowdps.fightprofile import load_profiles
 from wowdps.warcraftlogs import PointLedger
 
+# These nine encounters are The Voidspire, Midnight Season 1's raid. They were
+# filed under MID2 until 2026-08-17, when Warcraft Logs' own zone list settled
+# it -- see the "nine bosses filed under MID2" note in CLAUDE.md. MID2 now holds
+# The Venomous Abyss, whose bosses nobody has facts for yet.
+VOIDSPIRE_TIER = "MID1"
+
+
 START, END = 1_000_000, 1_300_000
 
 
@@ -281,7 +288,7 @@ def test_the_dump_says_that_an_aura_window_is_not_a_magnitude():
 def test_the_dump_puts_the_profile_next_to_the_measurement():
     observation = EncounterObservation(3180, "Lightblinded Vanguard", 5)
     observation.fights = [one_fight("r1"), one_fight("r2")]
-    text = "\n".join(fightprobe.render(observation, load_profiles("MID2").get(3180)))
+    text = "\n".join(fightprobe.render(observation, load_profiles(VOIDSPIRE_TIER).get(3180)))
     assert "profile vs measurement" in text
     assert "desired_targets=3" in text
     # And it says out loud which part of the encounter the scenario does not model.
@@ -346,13 +353,26 @@ def test_the_command_writes_a_dump_a_json_file_and_a_measured_cost(tmp_path, mon
     monkeypatch.setattr(fightprobe, "WarcraftLogsClient", lambda *a, **k: stub)
 
     args = cli.build_parser().parse_args(
-        ["fight-probe", "--encounter", "3180", "--reports", "1", "--out", str(tmp_path)]
+        # Encounter 3180 is Lightblinded Vanguard, which lives under MID1 since the
+        # re-file -- the dump pairs a measurement with its *profile*, so the tier has
+        # to be the one that holds it or there is nothing to pair with.
+        [
+            "fight-probe",
+            "--tier",
+            VOIDSPIRE_TIER,
+            "--encounter",
+            "3180",
+            "--reports",
+            "1",
+            "--out",
+            str(tmp_path),
+        ]
     )
     assert fightprobe.cmd_fight_probe(args) == 0
 
     import json
 
-    payload = json.loads((tmp_path / "fight-probe-MID2.json").read_text())
+    payload = json.loads((tmp_path / f"fight-probe-{VOIDSPIRE_TIER}.json").read_text())
     # The cost is the difference between the two bracketing readings, not a guess.
     assert payload["cost"]["pointsSpentThisRun"] == 40.0
     assert payload["encounters"][0]["peakTargets"]["median"] == 3
@@ -361,7 +381,7 @@ def test_the_command_writes_a_dump_a_json_file_and_a_measured_cost(tmp_path, mon
     assert payload["order"] == "first"
     assert "earliest kills" in payload["sampling"]
 
-    text = (tmp_path / "fight-probe-MID2.txt").read_text()
+    text = (tmp_path / f"fight-probe-{VOIDSPIRE_TIER}.txt").read_text()
     assert "Lightblinded Vanguard" in text and "profile vs measurement" in text
 
 
@@ -382,10 +402,13 @@ def test_first_kills_are_taken_by_date_across_gathered_pages():
     p2 = page(row("FIRST1", 1, 1000), row("FIRST2", 3, 1100), row("SPEED1", 9, 5000))
 
     first = select_report_fights([p1, p2], 2, order="first")
-    assert first == [("FIRST1", 1), ("FIRST2", 3)]
+    assert [(code, fight) for code, fight, _ in first] == [("FIRST1", 1), ("FIRST2", 3)]
+    # The kill time travels with the route: without it, nothing downstream can say
+    # whether "the earliest kills we gathered" were early in absolute terms.
+    assert [start for _, _, start in first] == [1000, 1100]
 
     top = select_report_fights([p1, p2], 2, order="top")
-    assert top == [("SPEED1", 1), ("SPEED2", 2)]
+    assert [(code, fight) for code, fight, _ in top] == [("SPEED1", 1), ("SPEED2", 2)]
 
 
 def test_one_fight_per_report_even_across_pages():
@@ -404,7 +427,8 @@ def test_one_fight_per_report_even_across_pages():
         },
     ]
     # Same report on two pages is one kill; the first-seen fight id is kept.
-    assert select_report_fights(pages, 5, order="first") == [("A", 1)]
+    selected = select_report_fights(pages, 5, order="first")
+    assert [(code, fight) for code, fight, _ in selected] == [("A", 1)]
 
 
 def test_a_row_without_a_timestamp_sorts_last_not_first():
@@ -421,7 +445,8 @@ def test_a_row_without_a_timestamp_sorts_last_not_first():
             }
         }
     ]
-    assert select_report_fights(pages, 2, order="first") == [("REAL", 2), ("NOTS", 1)]
+    selected = select_report_fights(pages, 2, order="first")
+    assert [(code, fight) for code, fight, _ in selected] == [("REAL", 2), ("NOTS", 1)]
 
 
 # --------------------------------------------------------------------------------
@@ -510,3 +535,295 @@ def test_the_fight_count_still_wins_regardless_of_budget():
     from wowdps.fightprobe import is_complete
 
     assert is_complete({"fightsSampled": 5, "eventBudget": 99999999}, 30, 10) is False
+
+
+class _ReportSearchClient:
+    """A client that answers the report-search queries and nothing else."""
+
+    def __init__(self, pages, kills, limit=100, starts=None):
+        self._pages = pages
+        self._kills = kills
+        self._starts = starts or {}
+        self._limit = limit
+        self.ledger = type("L", (), {"limit_per_hour": None, "last_reading": None})()
+        self.kills_asked = []
+
+    def encounter_zone(self, encounter_id):
+        return {"id": 7, "name": "The Voidspire", "frozen": False}
+
+    def reports_in_window(self, zone_id, start_ms, end_ms, page=1, limit=100):
+        self.window = (start_ms, end_ms)
+        rows = self._pages[page - 1] if page <= len(self._pages) else []
+        return {"data": rows}
+
+    def report_kills(self, code):
+        # Unfiltered by encounter, exactly as the real client now asks: one request
+        # per report for a whole zone rather than one per report per boss. Returns
+        # the report's own start time with the fights, because ReportFight.startTime
+        # is relative to it.
+        self.kills_asked.append(code)
+        return self._starts.get(code, 0.0), self._kills.get(code, [])
+
+
+def _settings(**over):
+    from wowdps.fightprobe import ProbeSettings
+
+    base = dict(
+        encounter_ids=(42,),
+        difficulty=5,
+        metric="dps",
+        reports=2,
+        rankings_page=1,
+        order="public",
+        rankings_pages=1,
+        streams=("damage",),
+        events_limit=10,
+        max_pages=1,
+        point_ceiling=0.8,
+        significant_share=0.01,
+        report_limit=2,
+        report_pages=5,
+    )
+    base.update(over)
+    return ProbeSettings(**base)
+
+
+def test_the_report_search_finds_a_kill_the_rankings_never_carried():
+    """The whole point of the route: a public log Warcraft Logs did not rank.
+
+    The anchor is the earliest *ranked* kill. A kill before it is one the ranking
+    route could not have returned at any window width.
+    """
+    from wowdps.fightprobe import _public_first_kills
+
+    # A real anchor, because kill times are epoch and are now compared as such.
+    anchor = 1_700_000_000_000.0
+    # ReportFight.startTime is relative to the report, so each report carries a base
+    # and the fight sits at a small offset inside it -- the real shape of the data.
+    base = 3_600_000.0
+
+    def kill(offset):
+        return [
+            {"id": 3, "encounterID": 42, "kill": True, "startTime": offset, "endTime": offset + 200}
+        ]
+
+    client = _ReportSearchClient(
+        pages=[[{"code": "EARLY"}, {"code": "LATE"}], [{"code": "EARLIER"}]],
+        kills={"EARLY": kill(base), "LATE": kill(base), "EARLIER": kill(base)},
+        starts={
+            "EARLY": anchor - 5_000 - base,
+            "LATE": anchor + 9_000 - base,
+            "EARLIER": anchor - 90_000 - base,
+        },
+    )
+
+    pairs, outcome = _public_first_kills(client, 42, anchor, _settings())
+
+    assert [code for code, _, _ in pairs] == ["EARLIER", "EARLY"]
+    assert outcome.beat_anchor == 2
+    assert outcome.reports_seen == 3
+    assert "2 earlier than the best-parse sample" in outcome.summary(anchor)
+
+
+def test_paging_stops_on_a_short_page_rather_than_on_an_unverified_field():
+    """`ReportPagination` could not be introspected, so `has_more_pages` is not trusted."""
+    from wowdps.fightprobe import _public_first_kills
+
+    client = _ReportSearchClient(pages=[[{"code": "A"}]], kills={})
+    _, outcome = _public_first_kills(client, 42, 1_700_000_000_000.0, _settings())
+
+    # One page returned fewer rows than the limit of 2, so no second page was asked for.
+    assert outcome.pages_read == 1
+
+
+def test_without_a_ranked_timestamp_there_is_nothing_to_anchor_on():
+    """Reported and refused, rather than searching from the epoch for every boss."""
+    from wowdps.fightprobe import _public_first_kills
+
+    client = _ReportSearchClient(pages=[], kills={})
+    pairs, outcome = _public_first_kills(client, 42, 0.0, _settings())
+
+    assert pairs == []
+    assert outcome.reports_seen == 0
+
+
+def test_the_window_is_anchored_on_the_earliest_ranked_kill():
+    from wowdps.fightprobe import _public_first_kills
+    from wowdps.firstkills import DAY_MS
+
+    anchor = 100.0 * DAY_MS
+    client = _ReportSearchClient(pages=[], kills={})
+    _public_first_kills(client, 42, anchor, _settings(lookback_days=10, forward_days=14))
+
+    assert client.window == (90 * DAY_MS, 114 * DAY_MS)
+
+
+def test_switching_order_re_opens_an_encounter_rather_than_counting_it_done():
+    """A different --order is a different sample, not more of the same one.
+
+    Without this the resume silently defeats the switch: everything collected at
+    `first` counts as done, the report search never runs, and the pass reports
+    success having changed nothing. That is how the max_pages default went inert,
+    and it cost a whole afternoon of hourly runs to notice.
+    """
+    from wowdps.fightprobe import is_complete
+
+    entry = {"fightsSampled": 30, "eventBudget": 200_000, "order": "first"}
+
+    assert is_complete(entry, 30, 200_000, "first") is True
+    assert is_complete(entry, 30, 200_000, "public") is False
+
+
+def test_an_entry_from_before_the_order_was_recorded_is_left_alone():
+    """Unknown is not 'wrong order' -- the same rule the event budget follows."""
+    from wowdps.fightprobe import is_complete
+
+    entry = {"fightsSampled": 30, "eventBudget": 200_000}
+    assert is_complete(entry, 30, 200_000, "public") is True
+
+
+def test_the_point_ceiling_returns_what_was_found_instead_of_losing_the_pass():
+    """A budget abort inside the report search must not escape.
+
+    It did on the first live run: 2880 of 3600 points spent, the exception
+    propagated out of probe_encounter, and the traceback threw away all nine
+    encounters instead of publishing the eight that were already read. The module's
+    own rule is that partial evidence comes back and says it is partial.
+    """
+    from wowdps.fightprobe import PointBudgetExhausted, _public_first_kills
+
+    anchor = 1_700_000_000_000.0
+
+    class _Ceiling(_ReportSearchClient):
+        def report_kills(self, code):
+            if code == "SECOND":
+                raise PointBudgetExhausted("2880 of 3600 points spent this hour")
+            return super().report_kills(code)
+
+    client = _Ceiling(
+        pages=[[{"code": "FIRST"}, {"code": "SECOND"}]],
+        kills={
+            "FIRST": [{"id": 1, "encounterID": 42, "kill": True, "startTime": 0, "endTime": 1_000}]
+        },
+        starts={"FIRST": anchor - 1_000},
+    )
+
+    pairs, outcome = _public_first_kills(client, 42, anchor, _settings())
+
+    # What was reached still comes back.
+    assert [code for code, _, _ in pairs] == ["FIRST"]
+    assert outcome.aborted is not None
+    assert outcome.truncated is True
+    # And the summary refuses to call a partial search a complete answer.
+    assert "did not finish" not in outcome.summary(anchor)
+    assert "STOPPED EARLY" in outcome.summary(anchor)
+
+
+def test_a_stopped_search_that_found_nothing_earlier_does_not_claim_there_is_nothing():
+    from wowdps.firstkills import SearchOutcome
+
+    outcome = SearchOutcome(reports_seen=5, pages_read=1, kills_found=2, aborted="ceiling")
+    assert "none earlier so far, but the search did not finish" in outcome.summary(1_000.0)
+
+
+def test_the_boss_list_comes_from_the_tier_not_the_newest_ranked_zone():
+    """Probing "the newest unfrozen zone" filed another raid's kills under MID2.
+
+    That shipped on 2026-08-17: the probe read The Voidspire's nine encounters and
+    published them under MID2, whose raid is The Venomous Abyss, leaving 17
+    encounters in a file that should hold eight. Same fault cmd_verify had, in a
+    second place.
+    """
+    from wowdps.fightprobe import _tier_encounters
+    from wowdps.fightprofile import FightProfile, TierProfiles
+
+    profiles = TierProfiles(
+        tier="MID2",
+        note="",
+        profiles={
+            53470: FightProfile(tier="MID2", encounter_id=53470, name="Nek'zali", difficulty=5),
+            53420: FightProfile(tier="MID2", encounter_id=53420, name="Sszorak", difficulty=5),
+        },
+    )
+    assert _tier_encounters(profiles) == [53420, 53470]
+
+
+def test_a_tier_with_no_fight_profiles_refuses_rather_than_borrowing_a_raid():
+    """A full set of real measurements filed under the wrong season is worse than none."""
+    from wowdps.fightprobe import _tier_encounters
+    from wowdps.fightprofile import TierProfiles
+    from wowdps.warcraftlogs import WarcraftLogsError
+
+    with pytest.raises(WarcraftLogsError, match="no fight profiles"):
+        _tier_encounters(TierProfiles(tier="MID9", note="", profiles={}))
+
+
+def test_a_search_that_saw_everything_counts_as_done_however_few_kills_it_found():
+    """Otherwise an encounter with genuinely few kills is re-opened forever.
+
+    MID2 stalled on exactly this for two days: every hourly run restarted at the
+    first encounter, spent the point ceiling re-reading the four it already had,
+    and never reached the other four -- which sat at `sampled: null` while the raid
+    was open.
+    """
+    from wowdps.fightprobe import is_complete
+
+    short = {"fightsSampled": 3, "eventBudget": 200_000, "order": "public"}
+    assert is_complete(short, 30, 200_000, "public") is False
+
+    short["searchExhausted"] = True
+    assert is_complete(short, 30, 200_000, "public") is True
+
+
+def test_a_truncated_search_is_not_exhausted():
+    """A page limit or the point ceiling stopping the walk means more may exist."""
+    from wowdps.firstkills import SearchOutcome
+
+    assert SearchOutcome(truncated=True).aborted is None
+    # The probe's rule, stated where it can be checked: exhausted means the walk
+    # ended because it ran out of reports, not because something stopped it.
+    for outcome in (
+        SearchOutcome(truncated=True),
+        SearchOutcome(aborted="ceiling"),
+        SearchOutcome(truncated=True, aborted="ceiling"),
+    ):
+        assert not (not outcome.truncated and outcome.aborted is None)
+    assert SearchOutcome().aborted is None and not SearchOutcome().truncated
+
+
+def test_the_search_counts_the_difficulties_it_saw():
+    """The diagnostic fires. Its guard was permanently False before this.
+
+    `seen_difficulties` was declared and never written to, so
+    `if not rows and seen_difficulties` could not be true on any run and the one
+    thing that explains an empty encounter never printed. Present, and inoperative
+    -- the same shape as a settle guard that misses a nested stamp.
+    """
+    from wowdps.fightprobe import _public_first_kills
+
+    base = 1_700_000_000_000.0
+
+    def heroic(fight_id):
+        return [
+            {
+                "id": fight_id,
+                "encounterID": 42,
+                "kill": True,
+                "startTime": 10_000,
+                "difficulty": 4,
+            }
+        ]
+
+    client = _ReportSearchClient(
+        pages=[[{"code": "AAA"}, {"code": "BBB"}]],
+        kills={"AAA": heroic(1), "BBB": heroic(2)},
+        starts={"AAA": base, "BBB": base},
+        limit=2,
+    )
+
+    pairs, outcome = _public_first_kills(client, 42, base, _settings(difficulty=5))
+
+    # Two Heroic kills exist and neither is the Mythic kill that was asked for, so
+    # "0 kills" would be true and useless. This is the number that names the fix.
+    assert pairs == []
+    assert outcome.difficulties_seen == {4: 2}

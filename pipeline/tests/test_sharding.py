@@ -72,3 +72,49 @@ def test_class_filter_is_case_and_separator_insensitive():
 
     assert len(_select(profiles, ["death_knight"], None, None)) == 1
     assert len(_select(profiles, ["Death Knight"], None, None)) == 1
+
+
+def test_buff_shards_merge_into_one_document(tmp_path):
+    """A buff sweep shards by spec, so merging is the union of those slices.
+
+    Without this the sweep produced six shard artifacts and nothing published --
+    the workflow uploaded them and there was no step that put them together.
+    """
+    import json
+
+    from wowdps.dataset import merge_buff_shards
+
+    shards = []
+    for index, spec_id in enumerate(("mage_fire", "mage_frost")):
+        shard = tmp_path / f"s{index}"
+        shard.mkdir()
+        (shard / "buffs.json").write_text(
+            json.dumps(
+                {
+                    "tier": "MID2",
+                    "generatedAt": f"2026-08-17T0{index}:00:00+00:00",
+                    "specs": [{"id": spec_id, "baseDps": 100.0 + index}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        shards.append(shard)
+
+    out = tmp_path / "out"
+    out.mkdir()
+    path = merge_buff_shards(shards, out)
+
+    assert path is not None
+    merged = json.loads(path.read_text(encoding="utf-8"))
+    assert [spec["id"] for spec in merged["specs"]] == ["mage_fire", "mage_frost"]
+    # The header comes from the newest shard, as it does for the gear merge.
+    assert merged["generatedAt"] == "2026-08-17T01:00:00+00:00"
+
+
+def test_a_run_with_no_buff_shards_merges_nothing_rather_than_writing_an_empty_file(tmp_path):
+    from wowdps.dataset import merge_buff_shards
+
+    out = tmp_path / "out"
+    out.mkdir()
+    assert merge_buff_shards([], out) is None
+    assert not (out / "buffs.json").exists()

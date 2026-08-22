@@ -1,26 +1,26 @@
 /** Shape of the JSON the pipeline writes. Mirrors pipeline/src/wowdps/dataset.py. */
 
 export interface Ability {
-  name: string
-  id?: number
+  name: string;
+  id?: number;
   /** Fraction of the spec's total damage, 0..1. Shares across a cell sum to 1. */
-  share: number
-  executes: number
+  share: number;
+  executes: number;
 }
 
 export interface Cell {
-  targets: number
-  dps: number
+  targets: number;
+  dps: number;
   /** Standard error of the DPS mean, in percent. */
-  dpsError: number
-  dpsStddev: number
-  iterations: number
-  fightLength: number
-  abilities: Ability[]
+  dpsError: number;
+  dpsStddev: number;
+  iterations: number;
+  fightLength: number;
+  abilities: Ability[];
   /** Damage per second landing on the main target. Absent at one target. */
-  priorityDps?: number
+  priorityDps?: number;
   /** priorityDps / dps, i.e. the fraction landing on the main target. */
-  priorityShare?: number
+  priorityShare?: number;
   /**
    * priorityShare x targets. 1.0 = damage spread evenly across all targets;
    * N = every point of damage lands on the main target.
@@ -28,101 +28,128 @@ export interface Cell {
    * Distribution only. A spec with no area damage scores N here without the extra
    * targets having helped it at all — for that question use funnelGain.
    */
-  concentration?: number
+  concentration?: number;
   /**
    * priorityDps at N targets / dps at one target. Above 1.0 the extra targets are
    * actively feeding the main target (resources from damage-over-time effects,
    * procs); below 1.0 the global cooldowns spent on area damage cost it damage.
    * This is what "funnel" means in play.
    */
-  funnelGain?: number
+  funnelGain?: number;
   /** Mean damage per second, one value per timelineBin seconds. */
-  timeline?: number[]
-  timelineBin?: number
+  timeline?: number[];
+  timelineBin?: number;
   /** Peak 20s window DPS relative to the fight average. 1.0 = perfectly flat. */
-  burstRatio?: number
+  burstRatio?: number;
 }
 
 export interface ScenarioCells {
-  targets: Cell[]
+  targets: Cell[];
 }
 
 export interface SpecDetail {
-  id: string
-  class: string
-  spec: string
-  heroTalent: string
-  specId: string
-  displayName: string
-  role: string
-  talentHash: string | null
-  caveats: string[]
-  errors: string[]
-  scenarios: Record<string, ScenarioCells>
+  id: string;
+  class: string;
+  spec: string;
+  heroTalent: string;
+  specId: string;
+  displayName: string;
+  role: string;
+  talentHash: string | null;
+  /**
+   * True when this build came from a profile simc wrote into its generator and left
+   * commented out -- complete, and not switched on for the tier. Absent, never
+   * false, so a tier of shipped profiles produces the bytes it did before this
+   * existed. "This is the character we had written down when we stopped" is a
+   * different claim from "this is the spec this season", so it is drawn with a
+   * label rather than folded into the ranking silently.
+   */
+  unvalidated?: boolean;
+  caveats: string[];
+  errors: string[];
+  scenarios: Record<string, ScenarioCells>;
 }
 
 export interface SpecSummaryScenario {
-  dps: Record<string, number>
+  dps: Record<string, number>;
   /** Measured at five targets. */
-  concentration?: number
-  priorityShare?: number
-  funnelGain?: number
-  burstRatio?: number
+  concentration?: number;
+  priorityShare?: number;
+  funnelGain?: number;
+  burstRatio?: number;
 }
 
 export interface SpecSummary {
-  id: string
-  class: string
-  spec: string
-  heroTalent: string
-  specId: string
-  displayName: string
-  role: string
-  scenarios: Record<string, SpecSummaryScenario>
-  errors?: string[]
+  id: string;
+  class: string;
+  spec: string;
+  heroTalent: string;
+  specId: string;
+  displayName: string;
+  role: string;
+  scenarios: Record<string, SpecSummaryScenario>;
+  errors?: string[];
+  /**
+   * False when this build's gear could not be matched to the tier's, so its place in
+   * a ranking of absolute DPS is partly gear rather than spec. Absent when it is
+   * comparable. simc's disabled profiles are routinely a whole tier behind its
+   * shipped ones -- MID2's wear item level 289 against a shipped 334-344 -- which
+   * puts every one of them below every shipped build for reasons that have nothing to
+   * do with the spec. The full sentence is in the build's own `caveats`.
+   */
+  gearComparable?: boolean;
+  /**
+   * True when this build came from a profile simc wrote into its generator and left
+   * commented out -- complete, and not switched on for the tier. Absent, never
+   * false, so a tier of shipped profiles produces the bytes it did before this
+   * existed. "This is the character we had written down when we stopped" is a
+   * different claim from "this is the spec this season", so it is drawn with a
+   * label rather than folded into the ranking silently.
+   */
+  unvalidated?: boolean;
 }
 
 export interface ScenarioMeta {
-  id: string
-  label: string
-  description: string
-  fightStyle: string | null
-  targetCounts: number[]
-  maxTime: number
-  supportsFunnel: boolean
+  id: string;
+  label: string;
+  description: string;
+  fightStyle: string | null;
+  targetCounts: number[];
+  maxTime: number;
+  supportsFunnel: boolean;
   /**
    * Scenario id whose single-target cell funnel gain divides by. "self" means this
    * scenario's own 1-target run; null means gain is not computable here.
    */
-  funnelBaseline?: string | null
+  funnelBaseline?: string | null;
   /** False when the scenario runs at one target count only. */
-  sweepsTargets?: boolean
+  sweepsTargets?: boolean;
 }
 
 export interface SimcMeta {
-  simcVersion?: string
-  buildDate?: string
-  gitRevision?: string
-  gitBranch?: string
-  ptr?: boolean
-  beta?: boolean
-  reportVersion?: string
+  simcVersion?: string;
+  buildDate?: string;
+  gitRevision?: string;
+  gitBranch?: string;
+  ptr?: boolean;
+  beta?: boolean;
+  reportVersion?: string;
   /** The WoW build simc modelled — the patch these numbers reflect. */
-  wowVersion?: string
-  wowBuild?: number
+  wowVersion?: string;
+  wowBuild?: number;
   /** The game-data hotfix date. Balance changes after it are not yet in the data. */
-  hotfixDate?: string
-  changes?: SimcChanges
+  hotfixDate?: string;
+  changes?: SimcChanges;
 }
 
 export interface TierMeta {
   /** simc's tier directory name, e.g. "MID2". */
-  id: string
+  id: string;
   /** Human form, e.g. "Midnight Season 2". */
-  label: string
-  generatedAt: string | null
-  specCount: number
-  simcVersion?: string | null
+  label: string;
+  generatedAt: string | null;
+  specCount: number;
+  simcVersion?: string | null;
 }
 
 /**
@@ -133,49 +160,49 @@ export interface TierMeta {
  * one tier at a time instead of mixing them into a single ranking.
  */
 export interface TierIndex {
-  current: string
-  tiers: TierMeta[]
+  current: string;
+  tiers: TierMeta[];
 }
 
 export interface RunSettings {
   /** Requested standard error in percent. 0 means the run was deterministic instead. */
-  targetError: number
+  targetError: number;
   /** Fixed iteration count in deterministic mode, ceiling in adaptive mode. */
-  maxIterations: number
+  maxIterations: number;
   /** True when simc ran a fixed, reproducibly seeded iteration count. */
-  deterministic?: boolean
+  deterministic?: boolean;
   /**
    * Median standard error actually measured across every cell of the run, in
    * percent. This is the honest figure: in deterministic mode nobody requests an
    * error, so `targetError` is 0 and says nothing about how precise the run is.
    */
-  medianDpsError?: number | null
+  medianDpsError?: number | null;
 }
 
 export interface Manifest {
-  schemaVersion: number
-  generatedAt: string
-  tier: string
-  simc: SimcMeta
-  settings: RunSettings
-  scenarios: ScenarioMeta[]
-  specs: SpecSummary[]
+  schemaVersion: number;
+  generatedAt: string;
+  tier: string;
+  simc: SimcMeta;
+  settings: RunSettings;
+  scenarios: ScenarioMeta[];
+  specs: SpecSummary[];
   /** Absent on datasets built before spec coverage was published. */
-  coverage?: SpecCoverage
+  coverage?: SpecCoverage;
 }
 
 export interface LogsComparison {
-  specId: string
-  displayName: string
-  encounterId: number
-  encounterName: string
-  sampleSize: number
-  median: number
+  specId: string;
+  displayName: string;
+  encounterId: number;
+  encounterName: string;
+  sampleSize: number;
+  median: number;
   /** Absent below twenty ranked parses: an extrapolation from the single best one. */
-  p95?: number
-  max: number
-  simDps: number
-  logsToSimRatio: number
+  p95?: number;
+  max: number;
+  simDps: number;
+  logsToSimRatio: number;
 }
 
 /**
@@ -186,13 +213,13 @@ export interface LogsComparison {
  * says nothing" and -1 is "it names them backwards". Null below the sample floor.
  */
 export interface LogsBossReading {
-  encounterId: number
-  encounterName: string
-  builds: number
-  median: number
-  min: number
-  max: number
-  rankAgreement: number | null
+  encounterId: number;
+  encounterName: string;
+  builds: number;
+  median: number;
+  min: number;
+  max: number;
+  rankAgreement: number | null;
 }
 
 /**
@@ -204,48 +231,48 @@ export interface LogsBossReading {
  * about the build rather than about the encounter.
  */
 export interface LogsBuildReading {
-  specId: string
-  displayName: string
-  bosses: number
-  median: number
-  vsField: number | null
-  vsFieldMin: number | null
-  vsFieldMax: number | null
+  specId: string;
+  displayName: string;
+  bosses: number;
+  median: number;
+  vsField: number | null;
+  vsFieldMin: number | null;
+  vsFieldMax: number | null;
   /** Median change in rank from the simulated ordering to the logged one. */
-  rankMove: number | null
-  sampleSize: number
+  rankMove: number | null;
+  sampleSize: number;
 }
 
 export interface LogsAnalysis {
-  builds: number
-  bosses: LogsBossReading[]
-  perBuild: LogsBuildReading[]
+  builds: number;
+  bosses: LogsBossReading[];
+  perBuild: LogsBuildReading[];
   /**
    * Share of the spread in the ratio that goes away once you know which boss (or
    * which build) a row came from. Not eta-squared: medians are subtracted, not
    * means. The point is that the two are computed identically and so comparable.
    */
-  varianceExplained: { boss: number | null; build: number | null }
+  varianceExplained: { boss: number | null; build: number | null };
   /** Rank agreement with the bosses pooled — low by construction, published as the
    * number somebody would reach for first. */
-  pooledRankAgreement: number | null
+  pooledRankAgreement: number | null;
   /** Correlation between a row's parse count and its `vsField`. Near zero means the
    * build ordering is not an artefact of how many people log the build. */
-  sampleSizeBias: number | null
-  minRankSample: number
-  minBossSample: number
+  sampleSizeBias: number | null;
+  minRankSample: number;
+  minBossSample: number;
 }
 
 export interface LogsVerification {
-  generatedAt: string
-  metric: string
-  difficulty: number
-  note: string
-  comparisons: LogsComparison[]
+  generatedAt: string;
+  metric: string;
+  difficulty: number;
+  note: string;
+  comparisons: LogsComparison[];
   /** Absent on files written before the readings existed. */
-  analysis?: LogsAnalysis | null
-  minSampleSize?: number
-  withheldForSmallSample?: number
+  analysis?: LogsAnalysis | null;
+  minSampleSize?: number;
+  withheldForSmallSample?: number;
 }
 
 /**
@@ -258,41 +285,41 @@ export interface LogsVerification {
  * right; on MID2 Arcane they differ by about 0.6 points out of 7.
  */
 export interface TalentBuild {
-  id: string
-  label: string
-  heroTalent: string
-  dps: number
-  dpsError: number
+  id: string;
+  label: string;
+  heroTalent: string;
+  dps: number;
+  dpsError: number;
   /** Damage per second to the priority target. Equals `dps` at one target. */
-  priorityDps: number | null
-  iterations: number
+  priorityDps: number | null;
+  iterations: number;
 }
 
 export interface TalentSpec {
-  specId: string
-  label: string
+  specId: string;
+  label: string;
   /** The class, for colour and icons. Published rather than derived from `specId`,
    * which would need string surgery that breaks on two-word class names. */
-  class: string
+  class: string;
   /** Whose gear and action list every build wore. Moves the absolute numbers, not
    * the comparison, so it is published rather than hidden. */
-  baseProfile: string
-  targets: number
-  builds: TalentBuild[]
-  bestByDps: string | null
-  bestByPriorityDps: string | null
+  baseProfile: string;
+  targets: number;
+  builds: TalentBuild[];
+  bestByDps: string | null;
+  bestByPriorityDps: string | null;
   /** The case worth naming: most damage overall is not most damage on the boss. */
-  rankingsDisagree: boolean
-  note: string
+  rankingsDisagree: boolean;
+  note: string;
 }
 
 export interface TalentDataset {
-  schemaVersion: number
-  generatedAt: string
-  tier: string
-  settings: { iterations: number; deterministic: boolean }
-  note: string
-  specs: TalentSpec[]
+  schemaVersion: number;
+  generatedAt: string;
+  tier: string;
+  settings: { iterations: number; deterministic: boolean };
+  note: string;
+  specs: TalentSpec[];
 }
 
 // --------------------------------------------------------------------------------
@@ -307,103 +334,186 @@ export interface TalentDataset {
  * evidence string says which, and the view shows it.
  */
 export interface GearItemLevel {
-  id: string
-  label: string
-  ilevel: number
-  evidence?: string
+  id: string;
+  label: string;
+  ilevel: number;
+  evidence?: string;
 }
 
 export interface GearItemMeta {
-  id: number
-  name: string
-  slug: string
+  id: number;
+  name: string;
+  slug: string;
   /** "raid" | "mythicplus". Asserted by the pipeline's pool file, not derived. */
-  source: string
+  source: string;
   /** null for trinkets that allocate no primary stat, which anyone can use. */
-  primaryStat: string | null
-  secondaryStat?: string
+  primaryStat: string | null;
+  secondaryStat?: string;
 }
 
 /** One baseline-pool item measured on its own, with every other socket empty. */
 export interface GearPoolEntry {
-  id: number
-  ilevel: number
-  dps: number
-  dpsError: number
+  id: number;
+  ilevel: number;
+  dps: number;
+  dpsError: number;
   /** DPS this item adds over wearing nothing at all in the slot. */
-  standaloneGain: number
+  standaloneGain: number;
+  /**
+   * The best full set containing this item, when the sweep enumerated them.
+   * Absent under the additive rule, and absent from data written before the
+   * exhaustive method existed — in both cases `standaloneGain` is the ranking.
+   */
+  bestCombinationDps?: number | null;
   /** True for the items that became the baseline. */
-  chosen: boolean
+  chosen: boolean;
+}
+
+/** One measured way of filling the slot, as a runner-up to something better. */
+export interface GearRunnerUp {
+  items: { id: number; ilevel: number }[];
+  dps: number;
+  /** How far the winner is ahead, as a fraction of this set's DPS. */
+  gap: number;
+  gapError: number;
+  /** A gap inside `gapError` is a tie: the winner did not measurably win. */
+  tie: boolean;
+}
+
+/**
+ * The best the slot can hold at one item level, drawn from the whole pool.
+ *
+ * Not the same answer as "the baseline plus its best single drop". That is a
+ * two-step search — fix the farmed pair, then swap one socket — and it cannot reach
+ * a set whose farmed half is not in the best farmed pair.
+ */
+export interface GearBestSet {
+  /** Matches a GearItemLevel id. */
+  level: string;
+  ilevel: number;
+  items: { id: number; ilevel: number }[];
+  dps: number;
+  dpsError: number;
+  /**
+   * Fraction of `baselineDps` gained. Zero when the ceiling *is* the baseline.
+   *
+   * Note the denominator: `baselineDps` is the winning farmed set as the
+   * *combination* invocation measured it, while `GearTargetResult.baseline.dps` is
+   * the same gear as the *candidate* invocation measured it. Dividing the two
+   * published DPS figures gives a third number; `baseline.drift` is how far apart
+   * the two runs were.
+   */
+  gain: number;
+  gainError: number;
+  /** The reference `gain` was taken against, spelled out rather than implied. */
+  baselineDps: number;
+  /** The project's tie rule, applied by the pipeline: `|gain| <= gainError`. */
+  isTie?: boolean;
+  /** True when nothing in the drop pool improves on what the build already wears. */
+  isBaseline: boolean;
+  runnerUp: GearRunnerUp | null;
 }
 
 export interface GearCandidate {
-  id: number
+  id: number;
   /** Matches a GearItemLevel id. */
-  level: string
-  ilevel: number
+  level: string;
+  ilevel: number;
   /** Item id this candidate was put in place of. */
-  replaces: number
-  dps: number
-  dpsError: number
+  replaces: number;
+  dps: number;
+  dpsError: number;
   /** Fraction of baseline DPS gained. Negative means the baseline is better. */
-  gain: number
+  gain: number;
   /**
    * The baseline's and the candidate's standard errors in quadrature. A gain
    * smaller than this is a tie, not a lead — the same rule the Builds view uses.
    */
-  gainError: number
-  priorityDps?: number
+  gainError: number;
+  priorityDps?: number;
 }
 
 export interface GearTargetResult {
-  targets: number
+  targets: number;
   /** DPS with every socket in the slot empty. The floor the pool is measured from. */
-  emptyDps: number
+  emptyDps: number;
   baseline: {
-    items: number[]
-    ilevel: number
-    dps: number
-    dpsError: number
-  }
-  pool: GearPoolEntry[]
-  candidates: GearCandidate[]
+    items: number[];
+    ilevel: number;
+    dps: number;
+    dpsError: number;
+    /**
+     * "exhaustive" — every combination was filled and run, and the baseline is the
+     * one that won. "additive" — the pool was too large for the budget, so the top
+     * items by standalone value were taken instead. The two disagree on half the
+     * tier and the numbers look identical either way, so this is recorded rather
+     * than assumed. Absent on data written before it was.
+     */
+    method?: string;
+    /** How many combinations the choice rests on. 0 under the additive rule. */
+    combinations?: number;
+    /**
+     * How far the same gear moved between the two invocations that both measured
+     * it, with the two errors in quadrature. Exactly zero on a deterministic run,
+     * which is the point — a reader can see it rather than assume it. Non-zero
+     * under `--target-error`, and then the ceiling gains and the candidate gains on
+     * one page are measured from references this far apart.
+     */
+    drift?: number;
+    driftError?: number;
+    /**
+     * Which of `items` the candidates displace: the measured weakest of the set.
+     * Never "the last one" — that is pool-file order, and reading it that way is
+     * the defect the pipeline carried. Absent on data written before it.
+     */
+    replaces?: number;
+    runnerUp?: GearRunnerUp;
+  };
+  pool: GearPoolEntry[];
+  candidates: GearCandidate[];
+  /**
+   * The ceiling, one entry per item level. Absent when the enumeration was over
+   * budget — which is not the same as "the baseline is the ceiling", so it is
+   * missing rather than equal to it.
+   */
+  bestSets?: GearBestSet[];
 }
 
 export interface GearSpecResult {
-  id: string
-  class: string
-  spec: string
-  heroTalent: string
-  specId: string
-  displayName: string
-  primaryStat: string
-  targets: GearTargetResult[]
-  errors?: string[]
+  id: string;
+  class: string;
+  spec: string;
+  heroTalent: string;
+  specId: string;
+  displayName: string;
+  primaryStat: string;
+  targets: GearTargetResult[];
+  errors?: string[];
 }
 
 export interface GearSlot {
-  id: string
-  label: string
-  sockets: string[]
-  baselineSource: string
-  baselineSourceLabel: string
-  candidateSource: string
-  candidateSourceLabel: string
-  note: string
-  itemLevels: GearItemLevel[]
-  items: GearItemMeta[]
-  specs: GearSpecResult[]
+  id: string;
+  label: string;
+  sockets: string[];
+  baselineSource: string;
+  baselineSourceLabel: string;
+  candidateSource: string;
+  candidateSourceLabel: string;
+  note: string;
+  itemLevels: GearItemLevel[];
+  items: GearItemMeta[];
+  specs: GearSpecResult[];
 }
 
 export interface GearDataset {
-  schemaVersion: number
-  generatedAt: string
-  tier: string
-  simc: SimcMeta
-  settings: RunSettings
+  schemaVersion: number;
+  generatedAt: string;
+  tier: string;
+  simc: SimcMeta;
+  settings: RunSettings;
   /** How much of the tier this run actually covered. Never inferred from length. */
-  coverage: { specs: number; specsAvailable: number }
-  slots: GearSlot[]
+  coverage: { specs: number; specsAvailable: number };
+  slots: GearSlot[];
 }
 
 // --------------------------------------------------------------------------------
@@ -412,11 +522,11 @@ export interface GearDataset {
 
 /** A pooled number with the range it was pooled from. Never a bare median. */
 export interface FightSpread {
-  median: number
-  low: number
-  high: number
+  median: number;
+  low: number;
+  high: number;
   /** How many fights it was pooled from. */
-  n: number
+  n: number;
 }
 
 /**
@@ -428,37 +538,37 @@ export interface FightSpread {
  * A `default` fact must never be rendered as a finding.
  */
 export interface FightFact {
-  key: string
-  label: string
-  source: 'hand' | 'logs' | 'default'
-  sourceLabel: string
-  summary: string
-  detail: string
-  statedBy: string | null
-  observedAt: string | null
-  sample: number | null
-  reports: string[]
-  value: unknown
+  key: string;
+  label: string;
+  source: "hand" | "logs" | "default";
+  sourceLabel: string;
+  summary: string;
+  detail: string;
+  statedBy: string | null;
+  observedAt: string | null;
+  sample: number | null;
+  reports: string[];
+  value: unknown;
 }
 
 export interface FightAddWave {
-  name: string
-  count: number
-  first: number
-  duration: number
+  name: string;
+  count: number;
+  first: number;
+  duration: number;
   /** Seconds between waves; null means it happens once. */
-  cadence: number | null
+  cadence: number | null;
 }
 
 export interface FightAmplification {
-  ability: string
-  abilityId: number | null
-  multiplier: number
-  first: number
-  duration: number
+  ability: string;
+  abilityId: number | null;
+  multiplier: number;
+  first: number;
+  duration: number;
   /** "priority" | "add" | "unknown". Only "priority" has a simc equivalent. */
-  target: string
-  magnitudeSource: string
+  target: string;
+  magnitudeSource: string;
   /**
    * Where `target` came from, separately from the fact's own provenance.
    *
@@ -466,24 +576,24 @@ export interface FightAmplification {
    * measured is the normal end state, so one source over the whole thing would
    * misdescribe both halves. Null means nobody has filled it in.
    */
-  targetSource: string | null
+  targetSource: string | null;
   /** Which enemy, in how many pulls, and why it was called priority or add. */
-  targetEvidence: string | null
+  targetEvidence: string | null;
   /** Always false: no field in the Warcraft Logs API says what an aura does. */
-  magnitudeMeasurable: boolean
+  magnitudeMeasurable: boolean;
   /** False when simc has nothing to express this with. */
-  representable: boolean
+  representable: boolean;
 }
 
 /** One enemy an aura landed on, pooled across the sampled pulls. */
 export interface AuraCarrier {
-  name: string
-  gameId: number | null
-  applications: number
-  instances: number
-  seenInFights: number
+  name: string;
+  gameId: number | null;
+  applications: number;
+  instances: number;
+  seenInFights: number;
   /** "priority" | "add" | "unknown" | "mixed". */
-  role: string
+  role: string;
 }
 
 /**
@@ -495,140 +605,140 @@ export interface AuraCarrier {
  * anybody runs the command.
  */
 export interface FightPromotion {
-  key: string
-  label: string
-  value: unknown
-  summary: string
-  evidence: string
-  sample: number
-  reports: string[]
-  eligible: boolean
-  reason: string
+  key: string;
+  label: string;
+  value: unknown;
+  summary: string;
+  evidence: string;
+  sample: number;
+  reports: string[];
+  eligible: boolean;
+  reason: string;
   /** "hand" when a person's statement is what holds it back. */
-  blockedBy: string | null
-  current: unknown
+  blockedBy: string | null;
+  current: unknown;
   /** True only for a real contradiction, never for a blank being filled. */
-  disagrees: boolean
+  disagrees: boolean;
 }
 
 export interface FightProfileBlock {
-  baselineTargets: number
+  baselineTargets: number;
   /** Null when no target count was asserted — not false. */
-  constantTargets: boolean | null
-  fightLengthSeconds: number | null
-  raidSize: number | null
-  addWaves: FightAddWave[]
-  amplifications: FightAmplification[]
-  phases: Array<Record<string, unknown>>
+  constantTargets: boolean | null;
+  fightLengthSeconds: number | null;
+  raidSize: number | null;
+  addWaves: FightAddWave[];
+  amplifications: FightAmplification[];
+  phases: Array<Record<string, unknown>>;
 }
 
 /** The simc scenario a profile produces, and what did not survive the trip. */
 export interface FightScenario {
-  encounterId: number
-  name: string
-  targets: number
-  maxTime: number
-  options: string[]
-  unrepresented: string[]
+  encounterId: number;
+  name: string;
+  targets: number;
+  maxTime: number;
+  options: string[];
+  unrepresented: string[];
   /** Fact keys whose value is somebody's word rather than a measurement. */
-  asserted: string[]
+  asserted: string[];
   /** Always null: naming a fight style makes simc clear the raid events. */
-  fightStyle: string | null
+  fightStyle: string | null;
   /** Target count over time, as [second, count] pairs. */
-  steps: Array<[number, number]>
+  steps: Array<[number, number]>;
 }
 
 export interface MeasuredAdd {
-  key: string | number
-  name: string
-  gameId: number | null
-  seenInFights: number
-  instances: FightSpread | null
-  firstSeen: FightSpread | null
-  lifetime: FightSpread | null
-  cadence: FightSpread | null
-  damageShare: FightSpread | null
-  presentAtPull: boolean
+  key: string | number;
+  name: string;
+  gameId: number | null;
+  seenInFights: number;
+  instances: FightSpread | null;
+  firstSeen: FightSpread | null;
+  lifetime: FightSpread | null;
+  cadence: FightSpread | null;
+  damageShare: FightSpread | null;
+  presentAtPull: boolean;
 }
 
 export interface MeasuredAura {
-  abilityId: number
-  ability: string
-  seenInFights: number
-  applications: number
-  start: FightSpread | null
-  duration: FightSpread | null
-  distinctTargets: number
+  abilityId: number;
+  ability: string;
+  seenInFights: number;
+  applications: number;
+  start: FightSpread | null;
+  duration: FightSpread | null;
+  distinctTargets: number;
   /** Which enemies carried it. Absent on a run made before this was extracted. */
-  carriedBy?: AuraCarrier[]
+  carriedBy?: AuraCarrier[];
   /** "priority" | "add" | "unknown" | "mixed" across every carrier. */
-  role?: string
-  roleEvidence?: string
-  anyTruncated: boolean
+  role?: string;
+  roleEvidence?: string;
+  anyTruncated: boolean;
 }
 
 export interface MeasuredPhase {
-  id: number
-  name: string
-  isIntermission: boolean
-  start: FightSpread | null
-  duration: FightSpread | null
-  seenInFights: number
+  id: number;
+  name: string;
+  isIntermission: boolean;
+  start: FightSpread | null;
+  duration: FightSpread | null;
+  seenInFights: number;
 }
 
 export interface FightPhaseWindow {
-  id: number
-  name: string
-  isIntermission: boolean
-  start: number
-  duration: number
+  id: number;
+  name: string;
+  isIntermission: boolean;
+  start: number;
+  duration: number;
 }
 
 export interface FightAuraWindow {
-  abilityId: number
-  ability: string
-  start: number
-  duration: number
+  abilityId: number;
+  ability: string;
+  start: number;
+  duration: number;
   /** No measured end: the window is a floor, not a value. */
-  truncated: boolean
-  instance: number | null
+  truncated: boolean;
+  instance: number | null;
   /** The enemy this window was on. Absent before the carrier extraction. */
-  actorName?: string | null
-  role?: string | null
+  actorName?: string | null;
+  role?: string | null;
 }
 
 /** One sampled pull, published whole. Never an average of pulls. */
 export interface RepresentativeFight {
-  reportCode: string
-  fightId: number
-  kill: boolean
-  durationSeconds: number
-  raidSize: number | null
-  steps: Array<[number, number]>
-  mean: number
-  peak: number
-  peakShare: number
-  constant: boolean
+  reportCode: string;
+  fightId: number;
+  kill: boolean;
+  durationSeconds: number;
+  raidSize: number | null;
+  steps: Array<[number, number]>;
+  mean: number;
+  peak: number;
+  peakShare: number;
+  constant: boolean;
   /** Every enemy that took a hit, including ones under the significance floor. */
-  allEnemySteps: Array<[number, number]>
-  allEnemyPeak: number
+  allEnemySteps: Array<[number, number]>;
+  allEnemyPeak: number;
   /** Seconds of this pull the event fetch reached, and that over its length. */
-  observed?: number | null
-  coverage?: number | null
-  phases: FightPhaseWindow[]
-  auras: FightAuraWindow[]
-  truncated: boolean
-  warnings: string[]
+  observed?: number | null;
+  coverage?: number | null;
+  phases: FightPhaseWindow[];
+  auras: FightAuraWindow[];
+  truncated: boolean;
+  warnings: string[];
 }
 
 /** One sampled pull as it is drawn behind the chosen curve. */
 export interface ContextPull {
-  reportCode: string
-  fightId: number
-  durationSeconds: number
-  kill: boolean
-  steps: Array<[number, number]>
-  coverage?: number | null
+  reportCode: string;
+  fightId: number;
+  durationSeconds: number;
+  kill: boolean;
+  steps: Array<[number, number]>;
+  coverage?: number | null;
 }
 
 /**
@@ -642,47 +752,47 @@ export interface ContextPull {
  * which is how the view knows to show no chooser.
  */
 export interface FightPattern {
-  id: string
+  id: string;
   /** How many sampled pulls had this shape, and that over all of them. */
-  pulls: number
-  share: number
+  pulls: number;
+  share: number;
   /** Factual, never an interpretation: "3 targets throughout", "peaks at 7". */
-  label: string
+  label: string;
   /**
    * The widest disagreement inside this pattern, as a share of the fight. A pattern
    * held together at 0.19 and one held together at 0.02 are different claims.
    */
-  spread: number
-  representative: RepresentativeFight
-  alsoInThisPattern: ContextPull[]
-  reportCodes: string[]
+  spread: number;
+  representative: RepresentativeFight;
+  alsoInThisPattern: ContextPull[];
+  reportCodes: string[];
   /** Sampled pulls this pattern does not contain. */
-  unmatched: ContextPull[]
+  unmatched: ContextPull[];
 }
 
 export interface FightTimeline {
   /** "representative" — one real pull, never a per-second average. */
-  pooling: string
-  why: string
-  chosenBecause: string
+  pooling: string;
+  why: string;
+  chosenBecause: string;
   /** Absent on files written before pulls were clustered. */
-  patterns?: FightPattern[]
-  representative: RepresentativeFight
-  others: ContextPull[]
+  patterns?: FightPattern[];
+  representative: RepresentativeFight;
+  others: ContextPull[];
 }
 
 /** One point of the aggregate distribution: how many targets were up here, across kills. */
 export interface TargetBandPoint {
   /** Normalised fight time, 0..1. */
-  t: number
+  t: number;
   /** That time in seconds at the median kill length, for labelling. */
-  second: number
-  median: number
+  second: number;
+  median: number;
   /** Inter-quartile range across kills. */
-  low: number
-  high: number
-  min: number
-  max: number
+  low: number;
+  high: number;
+  min: number;
+  max: number;
 }
 
 /**
@@ -692,25 +802,25 @@ export interface TargetBandPoint {
  * event fetch read in full.
  */
 export interface TargetBand {
-  fights: number
-  buckets: number
-  medianLengthSeconds: number
-  band: TargetBandPoint[]
-  why: string
+  fights: number;
+  buckets: number;
+  medianLengthSeconds: number;
+  band: TargetBandPoint[];
+  why: string;
 }
 
 export interface MeasuredFight {
-  fightsSampled: number
-  reports: string[]
-  durationSeconds?: FightSpread | null
-  raidSize?: FightSpread | null
-  playersListed?: FightSpread | null
-  meanTargets?: FightSpread | null
-  peakTargets?: FightSpread | null
-  peakTargetShare?: FightSpread | null
-  activeTimeFraction?: FightSpread | null
+  fightsSampled: number;
+  reports: string[];
+  durationSeconds?: FightSpread | null;
+  raidSize?: FightSpread | null;
+  playersListed?: FightSpread | null;
+  meanTargets?: FightSpread | null;
+  peakTargets?: FightSpread | null;
+  peakTargetShare?: FightSpread | null;
+  activeTimeFraction?: FightSpread | null;
   /** The aggregate distribution of concurrent targets over the fight. */
-  targetBand?: TargetBand | null
+  targetBand?: TargetBand | null;
   /**
    * How much of each sampled fight the event fetch actually reached.
    *
@@ -720,14 +830,23 @@ export interface MeasuredFight {
    * all of it. Absent on a run made before this was measured, which is itself a
    * reason not to trust a whole-fight claim from that run.
    */
-  eventCoverage?: FightSpread | null
-  adds?: MeasuredAdd[]
-  auras?: MeasuredAura[]
-  phases?: MeasuredPhase[]
-  truncated?: boolean
+  eventCoverage?: FightSpread | null;
+  /**
+   * When the sampled kills happened. `--order first` takes the earliest kills
+   * *among the ranking pages gathered*, and Warcraft Logs sorts those by damage —
+   * so a slow first-night kill can sit past the window and never be seen, while
+   * the sample is still truthfully "the earliest ones we saw". These dates are
+   * what let a reader tell the two apart. Absent on payloads written before the
+   * kill time was carried through.
+   */
+  killedBetween?: { first: string; last: string; spanDays: number } | null;
+  adds?: MeasuredAdd[];
+  auras?: MeasuredAura[];
+  phases?: MeasuredPhase[];
+  truncated?: boolean;
   /** Everything limiting how far these numbers can be read. Not a footnote. */
-  caveats: string[]
-  timeline: FightTimeline | null
+  caveats: string[];
+  timeline: FightTimeline | null;
 }
 
 /**
@@ -739,56 +858,56 @@ export interface MeasuredFight {
  * Both need a person.
  */
 export interface FightComparisonRow {
-  fact: string
-  profile: number | string | null
-  measured: number | string | null
-  provenance: string
-  note: string
-  delta: number | null
+  fact: string;
+  profile: number | string | null;
+  measured: number | string | null;
+  provenance: string;
+  note: string;
+  delta: number | null;
 }
 
 export interface FightEncounter {
-  encounterId: number
-  name: string
-  difficulty: number
+  encounterId: number;
+  name: string;
+  difficulty: number;
   /** True when anything at all has been asserted or measured about this boss. */
-  hasFacts: boolean
-  facts: FightFact[]
-  profile: FightProfileBlock
-  scenario: FightScenario
+  hasFacts: boolean;
+  facts: FightFact[];
+  profile: FightProfileBlock;
+  scenario: FightScenario;
   /** Null when no probe has ever looked. Present with 0 fights when one looked and found nothing. */
-  measured: MeasuredFight | null
-  comparison: FightComparisonRow[]
+  measured: MeasuredFight | null;
+  comparison: FightComparisonRow[];
   /** Absent on a dataset published before the promotion machinery existed. */
-  promotions?: FightPromotion[]
-  promoteCommand?: string
+  promotions?: FightPromotion[];
+  promoteCommand?: string;
 }
 
 export interface FightMeasurementRun {
-  generatedAt: string | null
-  difficulty: number | null
-  metric: string | null
-  reportsPerEncounter: number | null
+  generatedAt: string | null;
+  difficulty: number | null;
+  metric: string | null;
+  reportsPerEncounter: number | null;
   /** "first" (earliest kills, alike) or "top" (rankings damage order, speed kills). */
-  order?: string | null
+  order?: string | null;
   /** Page 1 is the world's best pulls, which are not shaped like a typical kill. */
-  rankingsPage: number | null
-  eventStreams: string[]
-  significantDamageShare: number | null
-  samplingBias: string | null
-  abortedBecause: string | null
-  cost: Record<string, unknown> | null
+  rankingsPage: number | null;
+  eventStreams: string[];
+  significantDamageShare: number | null;
+  samplingBias: string | null;
+  abortedBecause: string | null;
+  cost: Record<string, unknown> | null;
 }
 
 export interface FightsDataset {
-  schemaVersion: number
-  generatedAt: string
-  tier: string
-  note: string
+  schemaVersion: number;
+  generatedAt: string;
+  tier: string;
+  note: string;
   /** Null when the file was published from the profiles alone, with no probe run. */
-  measurement: FightMeasurementRun | null
-  coverage: { encounters: number; asserted: number; measured: number }
-  encounters: FightEncounter[]
+  measurement: FightMeasurementRun | null;
+  coverage: { encounters: number; asserted: number; measured: number };
+  encounters: FightEncounter[];
 }
 
 /**
@@ -798,47 +917,47 @@ export interface FightsDataset {
  * plays the same spec and hero tree.
  */
 export interface TalentTreeNodeEntry {
-  id: number
-  name: string
-  spellId: number
+  id: number;
+  name: string;
+  spellId: number;
 }
 
 export interface TalentTreeNode {
-  id: number
+  id: number;
   /** simc's `talent_tree`: 1 class, 2 specialisation, 3 hero. */
-  tree: number
-  row: number
-  col: number
+  tree: number;
+  row: number;
+  col: number;
   /** `trait_node_type_e`: 0 normal, 1 tiered, 2 choice. */
-  type: number
-  maxRanks: number
-  entries: TalentTreeNodeEntry[]
+  type: number;
+  maxRanks: number;
+  entries: TalentTreeNodeEntry[];
 }
 
 export interface TalentTreeLayout {
-  specId: number
-  subTree: number | null
-  nodes: TalentTreeNode[]
+  specId: number;
+  subTree: number | null;
+  nodes: TalentTreeNode[];
 }
 
 export interface TalentTreeBuild {
-  specId: string
-  displayName: string
-  tree: string
-  heroTalent: string | null
-  points: { class: number; spec: number; hero: number }
+  specId: string;
+  displayName: string;
+  tree: string;
+  heroTalent: string | null;
+  points: { class: number; spec: number; hero: number };
   /** Set when the profile's own loadout looks unfinished; shown beside the tree. */
-  caveat: string | null
-  selected: { id: number; entry: number; rank: number }[]
+  caveat: string | null;
+  selected: { id: number; entry: number; rank: number }[];
 }
 
 export interface TalentTreeDataset {
-  schemaVersion: number
-  tier: string
-  note: string
-  trees: Record<string, TalentTreeLayout>
-  builds: TalentTreeBuild[]
-  notes: string[]
+  schemaVersion: number;
+  tier: string;
+  note: string;
+  trees: Record<string, TalentTreeLayout>;
+  builds: TalentTreeBuild[];
+  notes: string[];
 }
 
 /**
@@ -848,12 +967,36 @@ export interface TalentTreeDataset {
  */
 export interface SpecCoverage {
   /** Damage specs this tier has a profile for. */
-  damageSpecs: number
+  damageSpecs: number;
   /** Damage specs simc has shipped for *some* tier, which is the reference. */
-  damageSpecsKnown: number
-  missing: { class: string; spec: string }[]
+  damageSpecsKnown: number;
+  /** Shipped by no tier-N profile at all: simc has not written one yet. */
+  missing: { class: string; spec: string }[];
   /** The tiers the reference list was drawn from. */
-  comparedWith: string[]
+  comparedWith: string[];
+  /** What this tier ships a profile for, which is what a complete run produces. */
+  shipped?: { class: string; spec: string }[];
+  /**
+   * Shipped by simc for this tier and yet absent from the dataset -- the profile
+   * no longer loads. Distinct from `missing`, and on an old tier it is the larger
+   * number: MID1 ships all 26 damage specs and 16 of its 41 profiles fail on
+   * current simc, so ten specs are broken where none are missing. Both are absent
+   * from the ranking and only one of them is simc's authors not having got to it
+   * yet. Undefined on a dataset built before the split existed.
+   */
+  broken?: { class: string; spec: string }[];
+  /** Specs this tier ships *and* produced results for. */
+  simulated?: number;
+  /**
+   * Specs simc wrote a complete profile for and left commented out in its
+   * generator. Neither shipped nor missing, and the reason MID2 looks as thin as
+   * it does: the profile exists, talent hash and every gear slot, with a warning
+   * on it. A number from one of these is a weaker claim than one off a shipped
+   * profile and is labelled that way wherever it is drawn.
+   */
+  unvalidated?: { class: string; spec: string }[];
+  /** How many of those this run actually got a result out of. */
+  unvalidatedSimulated?: number;
 }
 
 /**
@@ -864,16 +1007,185 @@ export interface SpecCoverage {
  */
 export interface SimcChanges {
   /** When the revision was committed — not when CI compiled it. */
-  revisionDate: string | null
+  revisionDate: string | null;
   /** The revision compared against, or null when nothing was published before. */
-  since: string | null
+  since: string | null;
   /** Present only when the comparison could actually be made. */
-  commits?: number
+  commits?: number;
   /** simc's own automated data dumps, counted rather than listed. */
-  generatedFiles?: number
-  byTag?: { tag: string; commits: number }[]
-  otherTags?: number
-  recent?: { revision: string; date: string; subject: string; tag?: string; pullRequest?: number }[]
+  generatedFiles?: number;
+  byTag?: { tag: string; commits: number }[];
+  otherTags?: number;
+  recent?: {
+    revision: string;
+    date: string;
+    subject: string;
+    tag?: string;
+    pullRequest?: number;
+  }[];
   /** Why there is no comparison, when there is none. */
-  why?: string
+  why?: string;
+}
+
+/**
+ * Every class and spec in the game, for the Spec detail picker.
+ *
+ * Derived from simc — see `specindex.py`. The picker draws the whole game rather
+ * than the tier's build list, so a spec's absence from the rankings reads as
+ * absence rather than as a bad result. That is the coverage panel's argument, one
+ * step closer to the reader.
+ */
+export interface SpecIndex {
+  tier: string;
+  classes: SpecIndexClass[];
+  heroTrees: SpecIndexHeroTree[];
+  /**
+   * Coverage one level finer than the spec: a spec plays two hero trees and a tier
+   * routinely ships a build for one of them. Absent on a dataset built before this
+   * existed, and null when the manifest carries no coverage block — an empty
+   * coverage claim would read as complete coverage.
+   */
+  heroTreeCoverage?: HeroTreeCoverage | null;
+  /**
+   * Profiles simc ships or wrote whose stored talent hash the current tree refuses,
+   * decided offline against simc's trait table rather than by running simc. Absent
+   * on a dataset built before this existed.
+   */
+  refusedProfiles?: RefusedProfile[] | null;
+  note: string;
+}
+
+export interface HeroTreeCoverage {
+  /** (damage spec x hero tree) pairs the trait table places. */
+  cells: number;
+  /** …of which this tier publishes a build. */
+  covered: number;
+  uncovered: UncoveredHeroTree[];
+  /**
+   * A build playing a tree simc's trait table places on no spec at all —
+   * Annihilator carries no `id_spec` on any of its nodes today. Reported rather
+   * than counted: counting it would invent a pairing, dropping it silently would
+   * lose the only evidence the table has a hole.
+   */
+  unplaced: { build: string; subTree: number; tree: string | null }[];
+}
+
+export interface UncoveredHeroTree {
+  class: string;
+  spec: string;
+  specId: number;
+  subTree: number;
+  /** null only on a checkout too old to ship simc's hero tree name table. */
+  tree: string | null;
+  /** `shipped` | `unvalidated` | `missing` | `broken`, from the manifest's own block. */
+  state: string;
+  /** simc's refusal of this profile's talent hash, with the node id, where there is one. */
+  reason: string | null;
+}
+
+export interface RefusedProfile {
+  class: string;
+  spec: string;
+  /** simc's internal profile name. */
+  profile: string;
+  heroTree: string | null;
+  unvalidated: boolean;
+  reason: string;
+}
+
+export interface SpecIndexClass {
+  class: string;
+  token: string | null;
+  specs: SpecIndexSpec[];
+}
+
+export interface SpecIndexSpec {
+  specId: number;
+  name: string;
+  class: string;
+  /**
+   * `damage` | `tank` | `healer` | `unknown`. Unknown is a real state, not a gap:
+   * role comes from a profile's `role=` line, and simc ships no healing profiles
+   * at all, so a healer is honestly "simc does not simulate this" rather than
+   * asserted to be a healer by a table this project would have to maintain.
+   */
+  role: string;
+  /** simc ships a profile for this spec in this tier. */
+  profiled: boolean;
+  /** …in any tier. The difference is "not this season" versus "never". */
+  profiledEver: boolean;
+  /** Dataset build ids this tier publishes for the spec. */
+  builds: string[];
+  subTrees: number[];
+}
+
+export interface SpecIndexHeroTree {
+  subTree: number;
+  class: string;
+  specIds: number[];
+  /**
+   * From simc's own `__trait_sub_tree_data`. null only on a checkout old enough not
+   * to ship that table, where a tree could be named only by a build that played it.
+   */
+  name: string | null;
+  /** Dataset build ids of this tier's builds that play it. */
+  builds?: string[];
+}
+
+/**
+ * What a tier set and an outside Power Infusion are worth, per spec.
+ *
+ * Every figure is a *difference* between two profilesets against the spec's own
+ * profile, not a level — see `buffsweep.py`. The four-piece value is what it adds
+ * over the two-piece, because that is the choice being made.
+ */
+export interface BuffDataset {
+  tier: string;
+  generatedAt: string;
+  settings: { deterministic: boolean; iterations: number };
+  note: string;
+  specs: BuffSpec[];
+}
+
+export interface BuffSpec {
+  id: string;
+  displayName: string;
+  class: string;
+  spec: string;
+  heroTalent: string;
+  baseDps: number;
+  dpsError: number;
+  /** Null when simc ships no set for this class in this tier. */
+  setName: string | null;
+  twoPieceGain: number | null;
+  twoPiecePercent: number | null;
+  /** Over the two-piece, not over nothing. */
+  fourPieceGain: number | null;
+  fourPiecePercent: number | null;
+  powerInfusionGain: number | null;
+  powerInfusionPercent: number | null;
+  /** The seconds Power Infusion lands at. The number means nothing without them. */
+  powerInfusionTimes: number[];
+  /** The season boundary, or null for a tier with no predecessor. */
+  crossover: BuffCrossover | null;
+  errors: string[];
+}
+
+/**
+ * The three set states a player chooses between when a season turns.
+ *
+ * Levels rather than gains, deliberately: they are alternatives to each other and
+ * there is no natural baseline among them — which one is the reference is the
+ * question being asked. `split` is the state a player passes *through*, when the
+ * first two new pieces have replaced the old four-piece and the third and fourth
+ * have not arrived.
+ */
+export interface BuffCrossover {
+  previousSetName: string | null;
+  previousFourDps: number;
+  splitDps: number | null;
+  currentFourDps: number;
+  splitOverPreviousFour: number | null;
+  currentFourOverSplit: number | null;
+  currentFourOverPreviousFour: number | null;
 }

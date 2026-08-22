@@ -55,7 +55,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import fightdataset, fightextract, fightprofile
+from . import fightdataset, fightextract, fightprofile, firstkills
 from .warcraftlogs import (
     Credentials,
     WarcraftLogsClient,
@@ -96,8 +96,11 @@ class ProbeSettings:
     metric: str
     reports: int
     rankings_page: int
-    #: How the sampled kills are chosen: "first" (earliest kills, alike and at the
-    #: intended tuning) or "top" (the rankings' own damage order, i.e. speed kills).
+    #: How the sampled kills are chosen. "first": earliest among the ranking pages
+    #: gathered -- alike and at the intended tuning, but ranked parses only, chosen
+    #: from a damage-sorted list. "public": the report search, which is bounded by
+    #: time and not restricted to ranked parses. "top": the rankings' own damage
+    #: order, i.e. speed kills.
     order: str
     #: How many ranking pages to gather before choosing, so the earliest kills are in
     #: the pool WCL sorts by damage rather than by date.
@@ -107,6 +110,14 @@ class ProbeSettings:
     max_pages: int
     point_ceiling: float
     significant_share: float
+    #: `--order public` only: how far back from the earliest ranked kill the report
+    #: search reaches, and how far forward, in days.
+    lookback_days: float = 10.0
+    forward_days: float = 14.0
+    #: `--order public` only: pages of the report search to read, at `limit` each.
+    #: The bound that keeps a zone's opening week from being an unbounded walk.
+    report_pages: int = 5
+    report_limit: int = 100
 
 
 def _check_budget(client: WarcraftLogsClient, ceiling: float) -> None:
@@ -136,7 +147,7 @@ def probe_encounter(
     # WCL sorts rankings by damage, so the first kills sit deep in the list, not on
     # page one. The pages are cheap -- the per-fight event streams are the cost -- so
     # one extra page than strictly needed is a rounding error against a probe run.
-    pages = settings.rankings_pages if settings.order == "first" else 1
+    pages = settings.rankings_pages if settings.order in ("first", "public") else 1
     gathered = []
     for page in range(settings.rankings_page, settings.rankings_page + max(pages, 1)):
         _check_budget(client, settings.point_ceiling)
@@ -149,20 +160,48 @@ def probe_encounter(
             )
         )
     encounter = gathered[0]
-    pairs = select_report_fights(gathered, settings.reports, order=settings.order)
+    ranked = select_report_fights(
+        gathered, settings.reports, order="first" if settings.order == "public" else settings.order
+    )
+    pairs = ranked
+    exhausted = False
+    difficulties: dict[int | None, int] = {}
+    if settings.order == "public":
+        # The rankings are used only to *anchor* the search: their earliest kill is
+        # an upper bound on the true first kill, and the report search runs from
+        # before it. What comes back can beat the anchor, which is the whole point,
+        # and a run that beats it by nothing is a real answer about this zone rather
+        # than a failure.
+        anchor = min((start for _, _, start in ranked if start), default=0.0)
+        found, outcome = _public_first_kills(client, encounter_id, anchor, settings)
+        log.info("  public-log search: %s", outcome.summary(anchor))
+        # The search saw everything only if it stopped because it ran out of
+        # reports, not because a page limit or the point ceiling stopped it. Set on
+        # the observation below, which does not exist yet at this point.
+        exhausted = not outcome.truncated and outcome.aborted is None
+        difficulties = outcome.difficulties_seen
+        if found:
+            pairs = found
+        else:
+            log.warning(
+                "  the report search found no kills; falling back to the ranked "
+                "sample so this encounter is still measured"
+            )
     observation = fightextract.EncounterObservation(
         encounter_id=encounter_id,
         encounter_name=str(encounter.get("name") or encounter_id),
         difficulty=settings.difficulty,
+        search_exhausted=exhausted,
+        difficulties_seen=difficulties,
     )
     if not pairs:
         log.warning("encounter %d: rankings carried no report codes", encounter_id)
         return observation, None
 
-    for code, fight_id in pairs:
+    for code, fight_id, started_at in pairs:
         try:
             _check_budget(client, settings.point_ceiling)
-            fight = _probe_fight(client, code, fight_id, encounter_id, settings)
+            fight = _probe_fight(client, code, fight_id, encounter_id, settings, started_at)
         except PointBudgetExhausted as exc:
             return observation, str(exc)
         except WarcraftLogsError as exc:
@@ -183,12 +222,137 @@ def probe_encounter(
     return observation, None
 
 
+def _public_first_kills(
+    client: WarcraftLogsClient,
+    encounter_id: int,
+    anchor_ms: float,
+    settings: ProbeSettings,
+) -> tuple[list[tuple[str, int, float]], firstkills.SearchOutcome]:
+    """The earliest kills of one encounter from the report search, not the rankings.
+
+    `reportData.reports` is bounded by time and is not restricted to ranked parses,
+    so this can see a public log Warcraft Logs never ranked -- which the ranking
+    route cannot, at any window width.
+
+    Nothing here assumes the order reports come back in: every kill found is sorted
+    locally by its own start time. Paging stops on a short page rather than on a
+    `has_more_pages` field, because the pagination envelope is the one part of this
+    route the server would not introspect.
+    """
+    outcome = firstkills.SearchOutcome()
+    if not anchor_ms:
+        # Not a failure: a PTR zone has no ranked parses at all, which is precisely
+        # why the report search exists. The window becomes the whole of time, which
+        # is cheap because such a zone has only existed for weeks. Refusing here is
+        # what left zone 54's eight bosses unmeasured while their reports sat there.
+        log.info(
+            "  no ranked kill to anchor on -- searching the zone from the beginning, "
+            "which is the case this route is for"
+        )
+
+    zone = client.encounter_zone(encounter_id)
+    zone_id = zone.get("id")
+    if not isinstance(zone_id, int):
+        log.warning("  encounter %d named no zone; using the ranked sample", encounter_id)
+        return [], outcome
+
+    start_ms, end_ms = firstkills.search_window(
+        anchor_ms, settings.lookback_days, settings.forward_days
+    )
+    rows: list[firstkills.KillRow] = []
+    seen_codes: set[str] = set()
+    seen_difficulties: dict[int | None, int] = {}
+
+    # The ceiling is caught here rather than allowed out. `probe_encounter` already
+    # treats a budget abort as "return what was read and say why" -- two fights read
+    # before the points ran out are two fights' worth of evidence, and re-raising
+    # would throw away the whole pass and pay for it again next hour. Letting it
+    # escape from this function is exactly what happened on the first `--order
+    # public` run: 2880 of 3600 points spent, and the traceback lost all nine
+    # encounters instead of publishing eight of them.
+    try:
+        for page in range(1, settings.report_pages + 1):
+            _check_budget(client, settings.point_ceiling)
+            payload = client.reports_in_window(
+                zone_id, start_ms, end_ms, page=page, limit=settings.report_limit
+            )
+            reports = firstkills.reports_from_payload(payload)
+            outcome.pages_read = page
+            if not reports:
+                break
+            for report in reports:
+                code = str(report["code"])
+                if code in seen_codes:
+                    continue
+                seen_codes.add(code)
+                outcome.reports_seen += 1
+                _check_budget(client, settings.point_ceiling)
+                try:
+                    report_start, fights = client.report_kills(code)
+                except WarcraftLogsError as exc:
+                    log.debug("  report %s: %s", code, exc)
+                    continue
+                # The difficulty filter belongs here, and omitting it was the second
+                # half of the same defect. The search query carries no difficulty on
+                # purpose -- one `report_kills` per report serves every boss, which
+                # is what makes it affordable -- so this call is the only filter
+                # between finding a kill and asking to open it. Without it the
+                # search hands back Heroic kills and `fight_structure`, which *is*
+                # filtered, answers "fight N not in the report's fights" once per
+                # kill: the exact symptom `kills_from_report`'s own docstring
+                # describes, with the parameter written for it never passed.
+                rows.extend(
+                    firstkills.kills_from_report(
+                        code, fights, encounter_id, report_start, settings.difficulty
+                    )
+                )
+                # Populated here, and this line is the whole of the fix: the dict
+                # below was declared and never written to, so the "0 at Mythic, 54
+                # at Heroic" diagnostic could not fire on any run. Its guard reads
+                # `if not rows and seen_difficulties`, which was permanently False
+                # -- present, and inoperative. The same shape as the settle guard
+                # that missed a nested stamp.
+                for level, count in firstkills.difficulties_seen(fights, encounter_id).items():
+                    seen_difficulties[level] = seen_difficulties.get(level, 0) + count
+            if len(reports) < settings.report_limit:
+                break
+        else:
+            outcome.truncated = True
+    except PointBudgetExhausted as exc:
+        # Partial by construction, and the caller is told so: the sample is the
+        # earliest of what was reached, not the earliest that exists.
+        outcome.truncated = True
+        outcome.aborted = str(exc)
+        log.warning("  report search stopped on the point ceiling: %s", exc)
+
+    # If the search found nothing at the requested difficulty, say what it *did*
+    # find. A run that reports "0 kills" and a run that reports "0 at Mythic, 54 at
+    # Heroic" are different problems, and only the second one names its own fix.
+    outcome.difficulties_seen = dict(seen_difficulties)
+    if not rows and seen_difficulties:
+        log.warning(
+            "  no kills at difficulty %s; the reports carry %s. Re-run with "
+            "--difficulty 0 to take any.",
+            settings.difficulty,
+            ", ".join(
+                f"{count} at {key if key is not None else 'no difficulty recorded'}"
+                for key, count in sorted(seen_difficulties.items(), key=lambda kv: -kv[1])
+            ),
+        )
+
+    outcome.kills_found = len(rows)
+    outcome.beat_anchor = sum(1 for row in rows if row.started_at < anchor_ms)
+    chosen = firstkills.earliest_kills(rows, settings.reports)
+    return [(row.report_code, row.fight_id, row.started_at) for row in chosen], outcome
+
+
 def _probe_fight(
     client: WarcraftLogsClient,
     code: str,
     fight_id: int,
     encounter_id: int,
     settings: ProbeSettings,
+    started_at: float = 0.0,
 ) -> fightextract.FightObservation | None:
     report = client.fight_structure(code, encounter_id, settings.difficulty)
     fights = report.get("fights") or []
@@ -256,6 +420,7 @@ def _probe_fight(
         truncated=truncated,
         friendly_ids=friendly_ids,
         significant_share=settings.significant_share,
+        started_at=started_at,
     )
 
 
@@ -468,16 +633,23 @@ def load_previous(path: Path) -> dict[int, dict]:
     }
 
 
-def is_complete(entry: dict, wanted: int, event_budget: int | None = None) -> bool:
+def is_complete(
+    entry: dict, wanted: int, event_budget: int | None = None, order: str | None = None
+) -> bool:
     """Has this encounter already got the sample the settings ask for?
 
     Two ways to be short of it, and both re-open the encounter, because both are
     somebody asking for *more* rather than asking to skip:
 
-    - **Fewer kills than `--reports`.** Compared against the requested number rather
-      than a fixed one. An encounter with genuinely fewer kills logged than requested
-      is re-fetched every run and costs nothing after the first, because every one of
-      its queries is already in the response cache.
+    - **Fewer kills than `--reports`, unless the search proved there are no more.**
+      An encounter that has genuinely fewer kills logged than requested can never
+      reach the number, and re-opening it forever is not free once the search is a
+      whole-zone walk: MID2 stalled for two days on exactly this. Every hourly run
+      restarted at the first encounter, spent the point ceiling on the four it had
+      already read, and never reached the other four at all -- which is why they sat
+      at `sampled: null` while the raid was open. So a search that ran to completion
+      records `searchExhausted`, and that counts as done however few kills it found.
+      A *truncated* or *aborted* search does not, because then more may exist.
     - **A smaller event budget than `--max-pages` now asks for.** This one is not
       cosmetic. The number of kills is only half of what the target-count band needs;
       the other half is reading each kill to the *end*, and a bounded event fetch
@@ -493,11 +665,22 @@ def is_complete(entry: dict, wanted: int, event_budget: int | None = None) -> bo
     zone on the next run for everybody. Use ``--no-resume`` once to rebuild such a
     payload; from then on the budget travels with it.
     """
-    if int(entry.get("fightsSampled") or 0) < wanted:
+    if int(entry.get("fightsSampled") or 0) < wanted and not entry.get("searchExhausted"):
         return False
     if event_budget is not None:
         recorded = entry.get("eventBudget")
         if isinstance(recorded, int) and recorded < event_budget:
+            return False
+    # A different --order is a different *sample*, not more of the same one, so an
+    # encounter collected under one is not the answer to a run asking for another.
+    # Without this the resume silently defeats the switch: everything already
+    # collected at `first` counts as done, the new route never runs, and the pass
+    # reports success having changed nothing -- exactly how the max_pages default
+    # went inert. An entry from before the order was recorded is left alone, on the
+    # same "unknown is not zero" rule as the budget above.
+    if order is not None:
+        collected_as = entry.get("order")
+        if isinstance(collected_as, str) and collected_as != order:
             return False
     return True
 
@@ -525,6 +708,10 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         rankings_page=args.page,
         order=args.order,
         rankings_pages=args.rankings_pages,
+        lookback_days=args.lookback_days,
+        forward_days=args.forward_days,
+        report_pages=args.report_pages,
+        report_limit=args.report_limit,
         streams=streams,
         events_limit=args.events_limit,
         max_pages=args.max_pages,
@@ -564,7 +751,7 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         )
 
         try:
-            encounter_ids = settings.encounter_ids or _current_zone_encounters(client)
+            encounter_ids = list(settings.encounter_ids) or _tier_encounters(profiles)
         except WarcraftLogsError as exc:
             log.error("%s", exc)
             return 1
@@ -572,7 +759,9 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         remaining: list[int] = []
         for encounter_id in encounter_ids:
             done = previous.get(encounter_id)
-            if done is not None and is_complete(done, settings.reports, event_budget):
+            if done is not None and is_complete(
+                done, settings.reports, event_budget, settings.order
+            ):
                 log.info(
                     "encounter %d already has %d fights; skipping",
                     encounter_id,
@@ -580,6 +769,15 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
                 )
                 continue
             remaining.append(encounter_id)
+
+        # Never-probed encounters first. The pass is bounded by the point ceiling
+        # and restarts from the top every hour, so a fixed order starves the tail:
+        # MID2 sat for two days with its last four bosses at `sampled: null` while
+        # the first four were re-read every run. An encounter with no data at all is
+        # worth more than one more kill on an encounter that already has some. The
+        # sort is stable, so within each group the encounter order is kept and a run
+        # is still reproducible.
+        remaining.sort(key=lambda eid: 0 if eid not in previous else 1)
 
         if previous and not remaining:
             log.info("every encounter already carries %d fights; nothing to do", settings.reports)
@@ -604,13 +802,21 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
     for observation in observations:
         entry = observation.to_json()
         entry["eventBudget"] = event_budget
+        entry["order"] = settings.order
+        # Whether the selection saw everything there was to see. Only the report
+        # search can say so -- a ranking page walk is always a window on a larger
+        # list -- so this is absent for the other orders and `is_complete` then
+        # falls back to the kill count.
+        if observation.search_exhausted:
+            entry["searchExhausted"] = True
         fresh[observation.encounter_id] = entry
     by_id = {**previous, **fresh}
     merged = [by_id[eid] for eid in encounter_ids if eid in by_id]
     incomplete = [
         eid
         for eid in encounter_ids
-        if eid not in by_id or not is_complete(by_id[eid], settings.reports, event_budget)
+        if eid not in by_id
+        or not is_complete(by_id[eid], settings.reports, event_budget, settings.order)
     ]
 
     payload = {
@@ -642,7 +848,7 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         # read nothing are different sentences.
         "encountersRequested": len(encounter_ids),
         "encountersCollected": sum(
-            1 for e in merged if is_complete(e, settings.reports, event_budget)
+            1 for e in merged if is_complete(e, settings.reports, event_budget, settings.order)
         ),
         "incomplete": sorted(incomplete),
     }
@@ -725,14 +931,32 @@ def _report_cost(ledger: dict, encounters: int) -> None:
     )
 
 
-def _current_zone_encounters(client: WarcraftLogsClient) -> list[int]:
-    """Every encounter in the newest unfrozen zone -- the same choice ``verify`` makes."""
-    live = [zone for zone in client.zones() if not zone.get("frozen")]
-    if not live:
-        raise WarcraftLogsError("no unfrozen zone found; pass --encounter explicitly")
-    newest = live[-1]
-    log.info("using zone %s", newest.get("name"))
-    return [e["id"] for e in newest.get("encounters", []) if isinstance(e.get("id"), int)]
+def _tier_encounters(profiles: fightprofile.TierProfiles) -> list[int]:
+    """The bosses this tier has, from its own fight profiles.
+
+    **Not "the newest unfrozen zone", which is what this used to do.** That is the
+    tier's raid for most of a season and a different raid for the week either side
+    of a turn -- and it shipped exactly that: a run on 2026-08-17 probed The
+    Voidspire's nine encounters and published them under MID2, whose raid is The
+    Venomous Abyss, leaving 17 encounters in a file that should hold eight. It is
+    the same fault `cmd_verify` had, in a second place, and the reason to fix it
+    the same way: `fight_profiles.json` is the one registry of which bosses a
+    season has, so the probe, the logs cross-check and the Fights view cannot
+    disagree about what a season is.
+
+    A tier with no fight profiles raises rather than falling back. Falling back was
+    the bug; probing another season's raid produces a full set of real measurements
+    filed under the wrong name, which is worse than probing nothing.
+    """
+    found = sorted(profiles.profiles)
+    if not found:
+        raise WarcraftLogsError(
+            f"no fight profiles for tier {profiles.tier}, so there is no boss list to "
+            f"probe. Seed one with `wowdps fight-zones --tier {profiles.tier} --seed "
+            f"<zone> --write`, or pass --encounter. Not falling back to the newest "
+            f"ranked zone: before a season opens that is the previous season's raid."
+        )
+    return found
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
@@ -740,7 +964,8 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         "--encounter",
         type=int,
         action="append",
-        help="encounter id to probe (repeatable); default is every boss in the newest zone",
+        help="encounter id to probe (repeatable); default is every boss the tier's "
+        "fight profiles list",
     )
     parser.add_argument("--tier", default="MID2", help="tier the fight profiles are read from")
     parser.add_argument(
@@ -766,12 +991,41 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--order",
-        choices=("first", "top"),
+        choices=("first", "top", "public"),
         default="first",
-        help="which kills to sample: 'first' (the earliest kills, alike and at the "
-        "intended tuning -- the default) or 'top' (the rankings' damage order, i.e. "
-        "speed kills)",
+        help="which kills to sample. 'first' takes the earliest kills among the "
+        "ranking pages gathered -- alike, at the intended tuning, but ranked parses "
+        "only and chosen from a damage-sorted list. 'public' searches the logs "
+        "uploaded for the zone in a time window instead (reportData.reports), which "
+        "is not restricted to ranked parses and so can see a public kill the "
+        "rankings never carried. 'top' is the rankings' own damage order, i.e. speed "
+        "kills",
     )
+    parser.add_argument(
+        "--lookback-days",
+        type=float,
+        default=10.0,
+        help="--order public: how far back from the earliest ranked kill the report "
+        "search reaches. Nothing in the schema says when a raid opened, so the "
+        "ranked sample anchors the window and the search runs from before it",
+    )
+    parser.add_argument(
+        "--forward-days",
+        type=float,
+        default=14.0,
+        help="--order public: how far forward from the anchor, to fill the sample "
+        "once the early kills are in hand",
+    )
+    parser.add_argument(
+        "--report-pages",
+        type=int,
+        default=5,
+        help="--order public: pages of the report search to read, at --report-limit "
+        "each. The bound that keeps a zone's opening week from being an unbounded "
+        "walk -- and this search is the first thing in the project to move the point "
+        "counter at all, so it is a real bound rather than a formality",
+    )
+    parser.add_argument("--report-limit", type=int, default=100)
     parser.add_argument(
         "--rankings-pages",
         type=int,

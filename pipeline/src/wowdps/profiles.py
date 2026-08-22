@@ -46,6 +46,17 @@ CLASS_TOKENS: dict[str, tuple[str, str]] = {
 # Hero-talent names that simc profiles shorten. Anything not listed here is used
 # verbatim (with underscores turned into spaces), so a newly added hero tree still
 # shows up correctly without a code change -- just less prettily.
+#
+# **This table renames build ids, so it is effectively frozen.** `SpecProfile.id` is
+# built from the prettified suffix, which means adding an entry moves the id of every
+# build whose profile carries that abbreviation -- and the joins that break are the
+# ones nothing re-runs nightly. Measured: MID2's generator spells Devastation's
+# Scalecommander `_SC` where the shipped profiles use `_SB`, so mapping SC would have
+# been correct about the tree and would have renamed MID1's published
+# `evoker_devastation_sc`, orphaning its rows in gear.json (a dispatch-only sweep)
+# from the spec file. An ugly abbreviation on one build is the cheaper of the two.
+# A tree whose *display* name is wrong belongs in `herotrees`, which resolves
+# `hero_talent` without touching `name_hero`.
 HERO_ALIASES: dict[str, str] = {
     "FS": "Flameshaper",
     "SB": "Scalecommander",
@@ -64,6 +75,7 @@ _PLAYER_LINE = re.compile(
 _SPEC_LINE = re.compile(r"^spec\s*=\s*(\S+)\s*$", re.MULTILINE)
 _ROLE_LINE = re.compile(r"^role\s*=\s*(\S+)\s*$", re.MULTILINE)
 _TALENTS_LINE = re.compile(r"^talents\s*=\s*(\S+)\s*$", re.MULTILINE)
+_ILEVEL = re.compile(r"\bilevel=(\d+)")
 
 
 def _titleize(token: str) -> str:
@@ -123,6 +135,25 @@ class SpecProfile:
     #: The id then names simc's build *slot* ("default") while ``hero_talent`` names
     #: the tree it plays ("Deathbringer"); both are true and neither moves the joins.
     name_hero: str | None = None
+    #: True for a profile simc wrote into its generator and left commented out --
+    #: complete, and not switched on for the tier. A number from one of these is a
+    #: different claim from a number off a shipped profile ("this is the character
+    #: we had written down when we stopped" against "this is the spec this season"),
+    #: so it is carried through every dataset and labelled wherever it is drawn.
+    #: See ``unvalidated``.
+    unvalidated: bool = False
+    #: The name the profile declares *inside* the file (``MID2_Rogue_Outlaw``), which
+    #: is the key ``herotrees`` resolves against. Kept because it is not always the
+    #: filename: simc renames the build without renaming the file.
+    profile_name: str = ""
+    #: The item level most of this profile's gear sits at, or None where no gear
+    #: line states one. It is not decoration: **absolute DPS does not survive an
+    #: item-level difference**, so two profiles at different item levels cannot be
+    #: ranked against each other as a balance statement. simc's *disabled* profiles
+    #: are routinely a whole tier behind its shipped ones -- MID2 ships 334/344 and
+    #: its generator entries carry 289 -- which puts every one of them below every
+    #: shipped build for reasons that have nothing to do with the spec.
+    item_level: int | None = None
 
     @property
     def id(self) -> str:
@@ -157,6 +188,8 @@ def parse_profile(
     ``hero_overrides`` maps a profile's internal name to the hero tree it actually
     plays, for the builds simc ships without a hero suffix. See ``herotrees``.
     """
+    from . import unvalidated
+
     text = path.read_text(encoding="utf-8", errors="replace")
 
     player = _PLAYER_LINE.search(text)
@@ -182,12 +215,20 @@ def parse_profile(
     name_hero = _hero_from_name(profile_name, tier, class_filename_form, spec_token)
     if name_hero is None:
         name_hero = _hero_from_name(path.stem, tier, class_filename_form, spec_token)
-    # simc ships a spec's default build with no hero suffix, but it still plays a
-    # tree. The resolved name is detected from simc (`wowdps hero-trees`) and keyed
+    # What tree does this build actually play? `wowdps hero-trees` decodes it out of
+    # the profile's own talent hash and names it from simc's hero tree table, keyed
     # on the profile's internal name. It feeds the *display*, never the id.
+    #
+    # The resolved answer wins over the profile name where both exist, and that is
+    # deliberate: a profile name carries whatever abbreviation simc's file naming
+    # used, and two of MID2's are not the tree's name (`SC` for Scalecommander,
+    # `Soulharvester` for Soul Harvester). `name_hero` -- the id -- is untouched
+    # either way, so nothing that joins on a build id moves.
     hero_talent = name_hero
-    if hero_talent is None and hero_overrides:
-        hero_talent = hero_overrides.get(profile_name) or hero_overrides.get(path.stem)
+    if hero_overrides:
+        hero_talent = (
+            hero_overrides.get(profile_name) or hero_overrides.get(path.stem) or hero_talent
+        )
 
     return SpecProfile(
         path=path,
@@ -198,7 +239,24 @@ def parse_profile(
         role=role,
         talent_hash=talents.group(1) if talents else None,
         name_hero=name_hero,
+        profile_name=profile_name,
+        unvalidated=text.startswith(unvalidated.MARKER),
+        item_level=modal_item_level(text),
     )
+
+
+def modal_item_level(text: str) -> int | None:
+    """The item level the most gear lines in a profile state, or None if none do.
+
+    The mode rather than the mean: a profile's weapon or its crafted back piece
+    sits a few levels off the rest, and a mean would report a level nothing is
+    actually at. What this is for is comparing one profile against another, and
+    "what most of it wears" is the honest summary for that.
+    """
+    levels = [int(match) for match in _ILEVEL.findall(text)]
+    if not levels:
+        return None
+    return max(set(levels), key=lambda level: (levels.count(level), level))
 
 
 def _hero_from_name(name: str, tier: str, class_filename_form: str, spec_token: str) -> str | None:
@@ -231,20 +289,59 @@ def spec_coverage(profiles_dir: Path, tier: str) -> dict:
     Consequence worth knowing: a spec that has *never* had a profile in any shipped
     tier cannot appear as missing, because nothing here knows it exists. That is the
     right failure -- it under-claims rather than inventing a spec list.
+
+    **Shipping a profile and producing a result are different things**, and on an old
+    tier they diverge badly. Measured on MID1 the day it was first published: simc
+    ships a profile for all 26 damage specs, so the count below reads 26 of 26 and
+    the panel says "complete" -- while 16 of its 41 profiles no longer load (their
+    stored talent hashes reference nodes current spell data does not offer the spec),
+    and the published dataset contains **no Mage, no Hunter, no Warrior, no Havoc,
+    no Retribution and no Elemental Shaman at all**. A reader then sees a complete
+    coverage claim over a ranking with no Mages in it, and the only reading available
+    is "Mages rank nowhere" -- precisely the conclusion this panel exists to prevent,
+    now stated with more confidence than before it existed.
+
+    A fourth state sits between shipped and missing, and it is the reason MID2 looks
+    as thin as it does: simc's generators carry a **complete** profile for most of
+    the specs the tier does not ship, with every line commented out. Those are
+    reported as ``unvalidated`` and are subtracted from both the shipped count and
+    the missing list -- calling them shipped would publish an unfinished profile as
+    this season's answer, and calling them missing would say the data does not exist
+    when it is sitting in the generator. See ``unvalidated``.
+
+    So ``shipped`` is emitted too, and the *broken* set -- shipped for this tier, no
+    build in the dataset -- is worked out where the whole run is known. It cannot be
+    computed here: this function is called from a shard, which simulated one slice,
+    and subtracting a slice would report every other shard's specs as broken. See
+    ``dataset.apply_simulated_coverage``.
     """
     covered: set[tuple[str, str]] = set()
+    unvalidated: set[tuple[str, str]] = set()
     known: set[tuple[str, str]] = set()
     for candidate in available_tiers(profiles_dir):
-        specs = {(p.wow_class, p.spec) for p in discover(profiles_dir, candidate, dps_only=True)}
-        known |= specs
+        found = discover(profiles_dir, candidate, dps_only=True)
+        known |= {(p.wow_class, p.spec) for p in found}
         if candidate == tier:
-            covered = specs
+            # A spec simc wrote and left commented out is neither shipped nor
+            # absent, so it is subtracted from both. Counting it as shipped would
+            # publish somebody else's unfinished profile as this season's answer;
+            # counting it as missing would say the data does not exist when it is
+            # sitting in the generator. See ``unvalidated``.
+            covered = {(p.wow_class, p.spec) for p in found if not p.unvalidated}
+            unvalidated = {(p.wow_class, p.spec) for p in found if p.unvalidated} - covered
 
-    missing = sorted(known - covered)
+    missing = sorted(known - covered - unvalidated)
     return {
         "damageSpecs": len(covered),
         "damageSpecsKnown": len(known),
         "missing": [{"class": wow_class, "spec": spec} for wow_class, spec in missing],
+        "unvalidated": [
+            {"class": wow_class, "spec": spec} for wow_class, spec in sorted(unvalidated)
+        ],
+        # What simc ships for *this* tier, which is what a completed run should have
+        # produced. Shard-safe for the same reason the counts above are: it describes
+        # the profiles directory, not this run's slice.
+        "shipped": [{"class": wow_class, "spec": spec} for wow_class, spec in sorted(covered)],
         "comparedWith": sorted(t for t in available_tiers(profiles_dir) if t != tier),
     }
 

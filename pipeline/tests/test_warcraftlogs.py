@@ -89,6 +89,11 @@ def ranking_entry(code: str, fight_id: int, amount: float = 100.0) -> dict:
     return {"amount": amount, "report": {"code": code, "fightID": fight_id, "startTime": 1}}
 
 
+def routes(selected) -> list[tuple[str, int]]:
+    """Drop the kill timestamp, which these cases are not about."""
+    return [(code, fight_id) for code, fight_id, _ in selected]
+
+
 def test_ranking_entries_carry_the_route_to_the_actual_log():
     """This is what makes a fight probe cheap: no report search is needed, because
     every ranking already names the report and fight it came from."""
@@ -96,7 +101,7 @@ def test_ranking_entries_carry_the_route_to_the_actual_log():
         "id": 3180,
         "characterRankings": {"rankings": [ranking_entry("aaa", 4), ranking_entry("bbb", 7)]},
     }
-    assert top_report_fights(encounter, 5) == [("aaa", 4), ("bbb", 7)]
+    assert routes(top_report_fights(encounter, 5)) == [("aaa", 4), ("bbb", 7)]
 
 
 def test_two_parses_from_one_pull_are_one_fight_not_two():
@@ -107,7 +112,7 @@ def test_two_parses_from_one_pull_are_one_fight_not_two():
             "rankings": [ranking_entry("aaa", 4), ranking_entry("aaa", 4), ranking_entry("bbb", 2)]
         }
     }
-    assert top_report_fights(encounter, 5) == [("aaa", 4), ("bbb", 2)]
+    assert routes(top_report_fights(encounter, 5)) == [("aaa", 4), ("bbb", 2)]
 
 
 def test_the_report_limit_is_the_cost_dial_and_is_respected():
@@ -119,7 +124,7 @@ def test_rankings_returned_as_a_json_string_are_still_read():
     """``characterRankings`` is an untyped JSON scalar in the schema, and the site
     has been seen to return it both ways."""
     encounter = {"characterRankings": json.dumps({"rankings": [ranking_entry("aaa", 1)]})}
-    assert top_report_fights(encounter, 5) == [("aaa", 1)]
+    assert routes(top_report_fights(encounter, 5)) == [("aaa", 1)]
 
 
 def test_entries_without_a_report_are_skipped_rather_than_crashing():
@@ -128,7 +133,7 @@ def test_entries_without_a_report_are_skipped_rather_than_crashing():
             "rankings": [{"amount": 1}, {"report": {"code": "aaa"}}, ranking_entry("bbb", 3)]
         }
     }
-    assert top_report_fights(encounter, 5) == [("bbb", 3)]
+    assert routes(top_report_fights(encounter, 5)) == [("bbb", 3)]
 
 
 # --------------------------------------------------------------------------------
@@ -168,3 +173,42 @@ def test_cache_hits_are_counted_apart_from_paid_queries():
     ledger.record("b", reading(10.0), cached=True)
     payload = ledger.to_json()
     assert payload["queries"] == 1 and payload["cacheHits"] == 1
+
+
+def test_the_boss_list_comes_from_the_tier_and_a_tier_with_none_is_a_refusal(
+    tmp_path, monkeypatch, caplog
+):
+    """A season whose raid has not opened yet must not borrow the last one's bosses.
+
+    The published MID2 comparison is what the old fallback ("the newest zone
+    Warcraft Logs is ranking") cost: 192 rows of Season 2 sim output against Season
+    1 kills, under a Season 2 heading. It is the failure shape this project keeps
+    running into -- a full set of plausible numbers answering a question nobody
+    asked -- so the fallback is gone and the empty case is an error rather than a
+    quiet substitution.
+    """
+    import argparse
+    import json as _json
+
+    from wowdps import warcraftlogs
+
+    root = tmp_path / "data"
+    (root / "MID9").mkdir(parents=True)
+    (root / "tiers.json").write_text(_json.dumps({"current": "MID9", "tiers": []}))
+    (root / "MID9" / "index.json").write_text(_json.dumps({"specs": []}))
+
+    monkeypatch.setenv("WCL_CLIENT_ID", "id")
+    monkeypatch.setenv("WCL_CLIENT_SECRET", "secret")
+
+    args = argparse.Namespace(
+        data=str(root), tier="MID9", encounter=None, difficulty=5, metric="dps"
+    )
+
+    with caplog.at_level("ERROR"):
+        assert warcraftlogs.cmd_verify(args) == 1
+
+    message = caplog.text
+    assert "no fight profiles for tier MID9" in message
+    # The way out is named, and so is the reason there is no fallback.
+    assert "fight-zones" in message
+    assert "previous" in message

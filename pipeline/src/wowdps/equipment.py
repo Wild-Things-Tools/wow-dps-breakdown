@@ -387,6 +387,20 @@ class SlotPool:
         """
         return min(self.item_levels, key=lambda level: level.ilevel)
 
+    def wearable_levels(self, item: GearItem) -> tuple[ItemLevel, ...]:
+        """Which item levels this pool is willing to run one item at.
+
+        The same policy ``baseline_ilevel`` states, applied per item rather than to
+        the baseline as a whole: an item the character already farms is worn at the
+        one level it tops out at, and a drop being judged is worn at each level it
+        can drop at. Without this the enumeration would price a Mythic+ ring at the
+        raid's top level, which is the flattery ``baseline_ilevel`` exists to avoid,
+        one layer down.
+        """
+        if item.source == self.baseline_source:
+            return (self.baseline_ilevel(),)
+        return self.item_levels
+
 
 @dataclass
 class GearPools:
