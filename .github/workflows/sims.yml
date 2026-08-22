@@ -115,6 +115,13 @@ jobs:
           strip bundle/simc || true
           cp -r simc/profiles bundle/profiles
 
+          # simc's generated trait table, which `wowdps hero-trees` needs and no
+          # compiled binary can supply. 686 KB against a 30 MB binary, and it means a
+          # shard can name every build's hero tree from the bundle alone rather than
+          # cloning simc again.
+          mkdir -p bundle/engine/dbc/generated
+          cp simc/engine/dbc/generated/trait_data*.inc bundle/engine/dbc/generated/
+
           # Smoke test: does the binary we just built run at all?
           #
           # It must not be pinned to one named profile. Profiles from a past tier can
@@ -203,6 +210,24 @@ jobs:
           wowdps -v unvalidated \
             --tier "${{ matrix.tier }}" \
             --simc-source bundle \
+            --write
+
+      # Which hero tree each build plays, decoded from its own talent hash against
+      # simc's trait table. Ordering is the whole point of putting it here: every
+      # shard reads `hero_trees.json` through `profiles.discover`, so it has to be
+      # written before `wowdps build` and after the disabled profiles are
+      # materialised -- a build materialised later would otherwise not be in the map.
+      # It runs in every shard over the same inputs, so all twelve write the same
+      # file, exactly like the materialisation above; only the publish job's copy is
+      # committed.
+      - name: Name every build's hero tree
+        run: |
+          wowdps -v hero-trees \
+            --tier "${{ matrix.tier }}" \
+            --simc-source bundle \
+            --profiles bundle/profiles \
+            --include-tanks \
+            --out web/public/data \
             --write
 
       - name: Run simulations
@@ -294,13 +319,29 @@ jobs:
       # against simc's own trait table -- no credentials, no external service, and no
       # compiled simc either, so a sparse clone of one directory is the whole cost.
       # It runs here rather than in a shard because it needs every spec file at once.
+      # Pinned to the revision the simulations actually ran against, not to whatever
+      # simc's HEAD is by the time this job starts. simc merges through the night, so
+      # an unpinned clone decodes the talent trees, indexes the specs and names the
+      # hero trees against a *different* trait table from the one that produced the
+      # spec files being published beside them -- and can name a build simc added
+      # after the shards were handed their bundle. Falls back to HEAD with a warning
+      # rather than failing: a one-revision drift is a smaller harm than losing the
+      # night's simulations, and the warning says which of the two happened.
       - name: Fetch simc trait table
+        env:
+          SIMC_SHA: ${{ needs.build-simc.outputs.simc-sha }}
         run: |
           git clone --depth 1 --filter=blob:none --sparse \
             https://github.com/simulationcraft/simc.git simc-src
           # `spec-index` needs the profiles too: role is the one field simc's
           # generated data does not carry, and it comes from a profile's role= line.
           git -C simc-src sparse-checkout set engine/dbc/generated profiles
+          if git -C simc-src fetch --depth 1 origin "$SIMC_SHA" \
+            && git -C simc-src checkout --force "$SIMC_SHA"; then
+            echo "::notice::pinned simc-src to $SIMC_SHA, the revision the shards simulated"
+          else
+            echo "::warning::could not pin simc-src to $SIMC_SHA; using simc HEAD, so the talent trees, spec index and hero trees may describe a newer simc than the spec files published beside them"
+          fi
 
       # The same materialisation the shards did, so `spec-index` sees the same set.
       # Without it a spec this run simulated from a disabled profile would be drawn
@@ -315,6 +356,24 @@ jobs:
           print(' '.join(t['id'] for t in index['tiers']))
           "); do
             wowdps -v unvalidated --tier "$tier" --simc-source simc-src --write
+          done
+
+      # Same step the shards ran, and -- because the checkout above is pinned to the
+      # build job's simc revision -- over the same inputs, so the committed file
+      # matches what the run simulated with. It is here as well as in the shards
+      # because this is the job that commits, and because `spec-index` reads the
+      # resolved names back through `profiles.discover`. If the pin failed, the
+      # warning from that step is what says the two may differ; the shards' answer is
+      # the one the published spec files were built from.
+      - name: Name every build's hero tree
+        run: |
+          for tier in $(python3 -c "
+          import json, pathlib
+          index = json.loads(pathlib.Path('web/public/data/tiers.json').read_text())
+          print(' '.join(t['id'] for t in index['tiers']))
+          "); do
+            wowdps -v hero-trees --tier "$tier" --simc-source simc-src \
+              --include-tanks --out web/public/data --write
           done
 
       - name: Decode talent trees
@@ -362,7 +421,9 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
-          git add web/public/data
+          # `hero_trees.json` is pipeline data rather than published output, and it
+          # is the one file outside web/public/data this run may rewrite.
+          git add web/public/data pipeline/src/wowdps/data/hero_trees.json
           if git diff --staged --quiet; then
             echo "dataset unchanged"
             exit 0

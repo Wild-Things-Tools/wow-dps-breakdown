@@ -1039,7 +1039,58 @@ export interface SpecIndex {
   tier: string;
   classes: SpecIndexClass[];
   heroTrees: SpecIndexHeroTree[];
+  /**
+   * Coverage one level finer than the spec: a spec plays two hero trees and a tier
+   * routinely ships a build for one of them. Absent on a dataset built before this
+   * existed, and null when the manifest carries no coverage block — an empty
+   * coverage claim would read as complete coverage.
+   */
+  heroTreeCoverage?: HeroTreeCoverage | null;
+  /**
+   * Profiles simc ships or wrote whose stored talent hash the current tree refuses,
+   * decided offline against simc's trait table rather than by running simc. Absent
+   * on a dataset built before this existed.
+   */
+  refusedProfiles?: RefusedProfile[] | null;
   note: string;
+}
+
+export interface HeroTreeCoverage {
+  /** (damage spec x hero tree) pairs the trait table places. */
+  cells: number;
+  /** …of which this tier publishes a build. */
+  covered: number;
+  uncovered: UncoveredHeroTree[];
+  /**
+   * A build playing a tree simc's trait table places on no spec at all —
+   * Annihilator carries no `id_spec` on any of its nodes today. Reported rather
+   * than counted: counting it would invent a pairing, dropping it silently would
+   * lose the only evidence the table has a hole.
+   */
+  unplaced: { build: string; subTree: number; tree: string | null }[];
+}
+
+export interface UncoveredHeroTree {
+  class: string;
+  spec: string;
+  specId: number;
+  subTree: number;
+  /** null only on a checkout too old to ship simc's hero tree name table. */
+  tree: string | null;
+  /** `shipped` | `unvalidated` | `missing` | `broken`, from the manifest's own block. */
+  state: string;
+  /** simc's refusal of this profile's talent hash, with the node id, where there is one. */
+  reason: string | null;
+}
+
+export interface RefusedProfile {
+  class: string;
+  spec: string;
+  /** simc's internal profile name. */
+  profile: string;
+  heroTree: string | null;
+  unvalidated: boolean;
+  reason: string;
 }
 
 export interface SpecIndexClass {
@@ -1072,8 +1123,13 @@ export interface SpecIndexHeroTree {
   subTree: number;
   class: string;
   specIds: number[];
-  /** null when no build in any tier plays it — simc ships no tree names. */
+  /**
+   * From simc's own `__trait_sub_tree_data`. null only on a checkout old enough not
+   * to ship that table, where a tree could be named only by a build that played it.
+   */
   name: string | null;
+  /** Dataset build ids of this tier's builds that play it. */
+  builds?: string[];
 }
 
 /**

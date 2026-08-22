@@ -739,18 +739,35 @@ def cmd_spec_index(args: argparse.Namespace) -> int:
 
     talents_path = out_root / tier / "talent-trees.json"
     tree_names: dict[int, str] = {}
+    build_sub_trees: dict[str, int] = {}
     if talents_path.is_file():
-        tree_names = specindex.tree_names_from_talents(
-            json.loads(talents_path.read_text(encoding="utf-8"))
-        )
+        talents = json.loads(talents_path.read_text(encoding="utf-8"))
+        tree_names = specindex.tree_names_from_talents(talents)
+        build_sub_trees = specindex.builds_by_sub_tree(talents)
     else:
         logging.warning(
-            "no %s, so no hero tree can be named -- run `wowdps talent-trees` first",
+            "no %s, so no build can be placed in a hero tree and coverage stays at "
+            "the spec level -- run `wowdps talent-trees` first. That fallback is in "
+            "`hero_tree_coverage`, which publishes nothing rather than reporting "
+            "every shipped spec as uncovered",
             talents_path,
         )
 
     ptr = bool((manifest or {}).get("simc", {}).get("ptr"))
-    document = specindex.build_index(simc_dir, tier, manifest, tree_names, ptr=ptr)
+    # Which of this tier's profiles simc will refuse, decided offline: the reason and
+    # the node id come out of the trait table without a binary. See
+    # `specindex.refused_profiles`; `wowdps check-profiles` is the version that asks
+    # simc itself.
+    refused = specindex.refused_profiles(simc_dir, tier, ptr=ptr)
+    document = specindex.build_index(
+        simc_dir,
+        tier,
+        manifest,
+        tree_names,
+        ptr=ptr,
+        build_sub_trees=build_sub_trees,
+        refused=refused,
+    )
     path = specindex.write_spec_index(out_root / tier, document)
 
     specs = [spec for entry in document["classes"] for spec in entry["specs"]]
@@ -763,6 +780,29 @@ def cmd_spec_index(args: argparse.Namespace) -> int:
         f"({', '.join(f'{count} {role}' for role, count in sorted(roles.items()))}), "
         f"{len(document['heroTrees'])} hero trees of which {named} are named"
     )
+    coverage = document.get("heroTreeCoverage")
+    if not coverage:
+        # Never silent: "no hero tree coverage" and "complete hero tree coverage" are
+        # the same empty block on the site if nobody says which happened.
+        print(
+            "  hero tree coverage: not published -- no build could be placed in a "
+            "tree, so the panel falls back to spec-level coverage"
+        )
+    if coverage:
+        print(
+            f"  hero tree coverage: {coverage['covered']} of {coverage['cells']} "
+            f"damage spec x hero tree pairs have a build"
+        )
+        for entry in refused:
+            print(f"  ! {entry['profile']:<44} will not load: {entry['reason']}")
+        for entry in coverage["unplaced"]:
+            logging.warning(
+                "%s plays %s (sub-tree %d), which simc's trait table places on no "
+                "spec -- the pair is not counted",
+                entry["build"],
+                entry["tree"],
+                entry["subTree"],
+            )
     return 0
 
 
@@ -996,58 +1036,94 @@ def cmd_talents(args: argparse.Namespace) -> int:
 
 
 def cmd_hero_trees(args: argparse.Namespace) -> int:
-    """Detect and record the hero tree of every build simc ships unnamed.
+    """Record which hero tree every build of a tier plays.
 
-    Every spec plays a hero tree; simc just omits it from the name of a spec's
-    default build. This runs each such profile for one iteration, reads which
-    hero-tree-gated abilities fired, and writes the resolved names to the
-    checked-in data file `profiles.discover` reads. Detected from simc rather than
-    hand-typed, so a new tier needs a re-run and not an edit.
+    Every spec plays a hero tree; simc's profile name states it for most builds and
+    abbreviates or omits it for the rest. This decodes each profile's talent hash
+    against simc's trait table and names the sub-tree it selects from simc's own
+    ``__trait_sub_tree_data``, then writes the result to the checked-in data file
+    `profiles.discover` reads.
+
+    Derived rather than hand-typed, and it needs no compiled simc -- a sparse
+    checkout of ``engine/dbc/generated`` and ``profiles`` is the whole input -- so a
+    new tier needs a re-run and not an edit.
     """
     from . import herotrees
 
-    profiles_dir = Path(args.profiles)
+    simc_dir = Path(args.simc_source)
+    profiles_dir = Path(args.profiles) if args.profiles else simc_dir / "profiles"
     tier = _resolve_tier(profiles_dir, args.tier)
-    simc = simc_runner.find_simc(args.simc)
 
-    found = profiles.discover(profiles_dir, tier, dps_only=not args.include_tanks)
-    # A build simc already named needs nothing; only the unnamed ones are resolved.
-    unnamed = [p for p in found if p.hero_talent is None]
-    if not unnamed:
-        logging.info("%s: every build already names its hero tree", tier)
+    # `tiers.json` outlives simc's profile directories -- the publish job loops over
+    # published tiers, and simc deletes an old tier's profiles eventually -- so a tier
+    # with nothing to read is a normal state and not an error. Same tolerance
+    # `build_index` already has.
+    if not (profiles_dir / tier).is_dir():
+        logging.warning(
+            "simc no longer ships %s under %s; leaving its recorded hero trees alone",
+            tier,
+            profiles_dir,
+        )
         return 0
 
-    resolved: dict[str, str] = dict(herotrees.load_overrides(tier))
-    unresolved: list[str] = []
-    for profile in unnamed:
-        text = profile.path.read_text(encoding="utf-8", errors="replace")
-        import re as _re
-
-        name_match = _re.search(r'="(MID\d+[^"]*)"', text) or _re.search(r'="([^"]+)"', text)
-        internal = name_match.group(1) if name_match else profile.path.stem
-        report = simc_runner.run(
-            simc,
-            simc_runner.SimRequest(profile=profile, scenario=scenarios.PATCHWERK, targets=1),
-            SimSettings(target_error=0, max_iterations=1),
-            timeout=args.timeout,
-        )
-        tree = herotrees.detect_hero_tree(report, profile.wow_class, profile.spec)
-        if tree is None:
-            unresolved.append(f"{profile.wow_class} {profile.spec} ({internal})")
-            logging.warning(
-                "could not resolve the hero tree for %s %s -- add a signature to "
-                "herotrees.HERO_TREE_SIGNATURES",
-                profile.wow_class,
-                profile.spec,
+    # Which trait table -- live or PTR -- has to match the one the dataset was built
+    # against, or the node stream desynchronises and the decode quietly describes a
+    # different tree. The published manifest is where that is recorded, so it is read
+    # from there rather than assumed; `--ptr/--no-ptr` overrides it for a tier that
+    # has never been published.
+    ptr = args.ptr
+    if ptr is None:
+        manifest_path = Path(args.out) / tier / "index.json"
+        if manifest_path.is_file():
+            ptr = bool(
+                json.loads(manifest_path.read_text(encoding="utf-8")).get("simc", {}).get("ptr")
             )
-            continue
-        resolved[internal] = tree
-        print(f"  {profile.wow_class} {profile.spec:<14} {internal:<34} -> {tree}")
+        else:
+            logging.info("no manifest at %s; reading simc's live trait table", manifest_path)
+            ptr = False
 
-    if resolved:
-        path = herotrees.write_overrides(tier, resolved)
-        logging.info("wrote %s (%d resolved)", path, len(resolved))
-    return 1 if unresolved else 0
+    result = herotrees.resolve_tier(
+        profiles_dir,
+        tier,
+        simc_dir,
+        ptr=ptr,
+        dps_only=not args.include_tanks,
+    )
+    for name, tree in sorted(result.resolved.items()):
+        print(f"  {name:<44} -> {tree}")
+    for name, carried, canonical in sorted(result.renamed):
+        # Expected for an abbreviation; a finding if the two name different trees.
+        print(f"  ! {name:<44} profile says {carried!r}, simc's table says {canonical!r}")
+    for name, reason in sorted(result.unresolved):
+        logging.warning("could not name the hero tree of %s: %s", name, reason)
+
+    if not result.resolved:
+        # Loud, and **not** a failure unless somebody is gating on it. This runs in a
+        # `for tier in ...; done` loop in the publish job under `bash -e`, so a
+        # non-zero exit here aborts that job before the commit step and discards a
+        # whole night's simulations -- over a data file whose absence costs only the
+        # canonical name, since every build keeps whatever its own profile said.
+        # `--strict` is the gate for anyone who wants one.
+        logging.error(
+            "%s: nothing resolved -- check that %s carries engine/dbc/generated",
+            tier,
+            simc_dir,
+        )
+        return 1 if args.strict else 0
+    if args.write:
+        path = herotrees.write_overrides(tier, result.resolved)
+        print(f"wrote {path}")
+    else:
+        print("(dry run; pass --write to record this)")
+    print(
+        f"{tier}: named {len(result.resolved)} builds, "
+        f"{len(result.unresolved)} unresolved, {len(result.renamed)} renamed"
+    )
+    # A profile whose talent hash no longer decodes is a fact about that profile --
+    # simc's disabled Havoc profiles are two of them today -- and it costs only the
+    # canonical name, since the build keeps whatever its own profile name said. So
+    # reporting is the point, and this is a failure only when used as a gate.
+    return 1 if result.unresolved and args.strict else 0
 
 
 def cmd_check_profiles(args: argparse.Namespace) -> int:
@@ -1538,12 +1614,36 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_hero = sub.add_parser(
         "hero-trees",
-        help="detect the hero tree of every build simc ships without one in its "
-        "name, and record it for the dataset",
+        help="name the hero tree every build of a tier plays, from its talent hash "
+        "and simc's own hero tree table, and record it for the dataset",
     )
     add_common(p_hero)
-    p_hero.add_argument("--simc", help="path to the simc binary (default: $PATH)")
-    p_hero.add_argument("--timeout", type=int, default=120, help="seconds per profile")
+    # A profiles path is optional here: the one input is a simc checkout, and its
+    # profiles directory is inside it.
+    p_hero.set_defaults(profiles=None)
+    p_hero.add_argument(
+        "--simc-source",
+        default="simc",
+        help="a simc checkout (profiles + engine/dbc/generated). No binary needed",
+    )
+    p_hero.add_argument(
+        "--ptr",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="read simc's PTR trait table (default: whatever the published manifest "
+        "for this tier says the dataset was built against)",
+    )
+    p_hero.add_argument(
+        "--out",
+        default=str(DEFAULT_OUT),
+        help="where the published dataset lives, for reading the live/PTR flag",
+    )
+    p_hero.add_argument(
+        "--write", action="store_true", help="record the result in the checked-in data file"
+    )
+    p_hero.add_argument(
+        "--strict", action="store_true", help="exit non-zero when any profile is unresolved"
+    )
     p_hero.set_defaults(func=cmd_hero_trees)
 
     p_check = sub.add_parser(

@@ -27,15 +27,19 @@ Four things go into it, and each has exactly one honest source:
     ``id_spec``. Two specs of a class share each tree, which is what lets the
     picker draw the trees between the specs that own them.
 
-**Hero tree *names* are not in simc.** The SELECTION rows that identify a tree
-carry the literal string ``"0"`` where a name would be, and ``TraitSubTree`` -- the
-table holding the name and the texture atlas element -- is not shipped. This is
-the same absence as item source and as the Mythic+ rotation: it is not hiding
-somewhere else in the checkout. What *is* available is a join: a build's decoded
-loadout yields the sub-tree id it plays, and the build already knows its tree name
-from ``herotrees``. So a tree is named exactly when some build plays it, which is
-also exactly when the picker has something to select -- the unnamed ones belong to
-specs that are greyed out anyway.
+**Hero tree names used to be absent, and are not any more.** The SELECTION rows
+that identify a tree still carry the literal string ``"0"`` where a name would be,
+which is why this module reported a tree as named only when some build played one
+-- 24 of 41 for MID2, so every tree belonging to a spec nobody profiles was drawn
+as a blank. simc ships ``__trait_sub_tree_data`` in the same file now: id, name and
+class for all 41. Names therefore come from simc's table, and a build playing a
+tree is kept only as a cross-check -- a build whose own name disagrees with the
+table is logged rather than resolved by picking one.
+
+That is what makes coverage answerable **per hero tree** rather than per spec.
+A spec plays two trees, this tier may ship a build for one of them, and until the
+trees could all be named there was no way to say which one was missing. See
+``hero_tree_coverage``.
 """
 
 from __future__ import annotations
@@ -119,8 +123,13 @@ class HeroTree:
     sub_tree: int
     wow_class: str
     spec_ids: list[int]
-    #: None when no build in any known tier plays it -- simc ships no name.
+    #: From simc's ``__trait_sub_tree_data``. None only on a checkout old enough not
+    #: to ship that table, where the previous behaviour (named by a build that plays
+    #: it) is what remains.
     name: str | None = None
+    #: Dataset ids of this tier's builds that play it. Empty is the whole point: a
+    #: tree with no build is a hole in the coverage, not a missing name.
+    builds: list[str] = field(default_factory=list)
 
     def to_json(self) -> dict:
         return {
@@ -128,6 +137,7 @@ class HeroTree:
             "class": self.wow_class,
             "specIds": self.spec_ids,
             "name": self.name,
+            "builds": self.builds,
         }
 
 
@@ -204,28 +214,258 @@ def hero_trees(simc_dir: Path, ptr: bool = False) -> dict[int, HeroTree]:
     return found
 
 
+def builds_by_sub_tree(document: dict) -> dict[str, int]:
+    """``{dataset build id: hero sub-tree id}``, from a published talent-trees file.
+
+    The sub-tree is the one thing that says *which* of a spec's two trees a build
+    plays, and it is already decoded: ``build["tree"]`` is ``<specId>-<subTree>``.
+    Note the key inside that file is called ``specId`` and holds the dataset's build
+    id, not a specialization id.
+    """
+    found: dict[str, int] = {}
+    for build in document.get("builds") or []:
+        tree = str(build.get("tree") or "")
+        build_id = build.get("specId")
+        if not build_id or "-" not in tree:
+            continue
+        try:
+            found[str(build_id)] = int(tree.rsplit("-", 1)[1])
+        except ValueError:
+            continue
+    return found
+
+
+def refused_profiles(
+    simc_dir: Path, tier: str, ptr: bool = False, dps_only: bool = True
+) -> list[dict]:
+    """Profiles simc ships or wrote whose stored talent hash the current tree refuses.
+
+    This is the state between "simc wrote a profile" and "there is a number": the
+    file is complete, and simc will not build an actor out of it. It has been visible
+    in this project before -- 15 of MID1's 41 damage profiles are in it -- but only
+    as a spec that quietly failed to appear, because establishing it meant running
+    simc over every profile (``wowdps check-profiles``).
+
+    It does not. ``talenttree`` decodes the hash and ``spec_rule_violation`` applies
+    simc's own spec rule, so the verdict *and the node id simc would name* come out
+    of a checkout with no binary in it. Measured on MID2 (2026-08-22, simc 22b442e):
+    **6 of 51 profiles refused, every one of them from the disabled generator set** --
+    both Havoc builds, both Retribution builds, Arms and Fury -- and all 35 profiles
+    simc actually ships pass. Those six are exactly the builds that produced nothing
+    in the nightly run.
+    """
+    try:
+        found = discover(simc_dir / "profiles", tier, dps_only=dps_only)
+    except FileNotFoundError:
+        # simc deletes an old tier's profiles while `tiers.json` still lists it, and
+        # `build_index` tolerates that already. Raising here would crash the publish
+        # loop on a stale tier instead of publishing it with nothing refused.
+        log.warning("simc no longer ships %s; no profile can be checked for refusal", tier)
+        return []
+
+    traits = talenttree.parse_trait_data(simc_dir, ptr=ptr)
+    nodes_by_class: dict[int, dict[int, list[talenttree.Trait]]] = {}
+    refused: list[dict] = []
+    for profile in found:
+        class_id = talenttree.CLASS_IDS.get(profile.wow_class)
+        if class_id is None or not profile.talent_hash:
+            continue
+        nodes = nodes_by_class.setdefault(class_id, talenttree.nodes_for_class(traits, class_id))
+        try:
+            loadout = talenttree.decode_loadout(profile.talent_hash, nodes)
+        except talenttree.TalentDecodeError as exc:
+            reason = str(exc)
+        else:
+            reason = talenttree.spec_rule_violation(loadout, nodes) or ""
+        if not reason:
+            continue
+        refused.append(
+            {
+                "class": profile.wow_class,
+                "spec": profile.spec,
+                "profile": profile.profile_name or profile.path.stem,
+                "heroTree": profile.hero_talent,
+                "unvalidated": profile.unvalidated,
+                "reason": reason,
+            }
+        )
+    return refused
+
+
+#: How a damage spec stands in this tier, in the manifest coverage block's own words.
+#: Order matters: a spec appearing in two lists takes the first that matches, and
+#: "shipped but produced nothing" is the stronger claim than "shipped".
+_COVERAGE_STATES = ("broken", "unvalidated", "shipped", "missing")
+
+
+def hero_tree_coverage(
+    manifest: dict,
+    trees: dict[int, HeroTree],
+    spec_ids: dict[tuple[str, str], int],
+    build_sub_trees: dict[str, int],
+    refused: list[dict] | None = None,
+) -> dict | None:
+    """Which (damage spec x hero tree) pairs this tier has a build for, and which not.
+
+    The coverage panel could only ever say "this spec is absent", because until every
+    tree had a name there was nothing to call the half of a spec that is missing. A
+    spec plays two hero trees and a tier routinely ships a build for one of them:
+    measured on MID2 (2026-08-22, simc 22b442e) **35 of 53 spec-and-hero-tree pairs
+    have a build**, where the spec-level count reads 17 of 26. Survival Hunter is
+    simulated and Pack Leader Survival is not, and only this number says so.
+
+    53 rather than 52 because the pairing is read out of the trait table rather than
+    assumed: Havoc carries three trees there today (Fel-Scarred, Aldrachi Reaver and
+    Midnight's new Void-Scarred), so "every spec plays two" is a rule about the game
+    that this does not encode.
+
+    Every cell carries the state of its *spec* from the manifest's own coverage
+    block, so the three reasons a spec can be absent are not re-derived here and
+    cannot drift from the panel above it. ``None`` when the manifest predates that
+    block: an empty coverage claim would read as complete coverage.
+    """
+    coverage = manifest.get("coverage") or {}
+    if not coverage.get("damageSpecsKnown"):
+        return None
+
+    # Placing a build in a hero tree needs `talent-trees.json`, and without it every
+    # build is unplaceable. Answering anyway reported **cells=53, covered=0** and
+    # listed all 34 shipped specs as having no build for either tree -- so the panel
+    # would have said "Arcane Mage: no Sunfury build, no Spellslinger build" directly
+    # above both of them in the ranking. Refusing is the only honest answer: the
+    # caller then publishes null and the panel falls back to spec-level coverage,
+    # which is what its warning already promised.
+    builds = manifest.get("specs") or []
+    if builds and not any(build["id"] in build_sub_trees for build in builds):
+        log.warning(
+            "no build could be placed in a hero tree (%d builds, %d placements known)"
+            " -- publishing no hero tree coverage rather than reporting every spec as"
+            " uncovered",
+            len(builds),
+            len(build_sub_trees),
+        )
+        return None
+
+    state_of: dict[tuple[str, str], str] = {}
+    for state in _COVERAGE_STATES:
+        for entry in coverage.get(state) or []:
+            state_of.setdefault((entry["class"], entry["spec"]), state)
+
+    plays: dict[tuple[str, str], set[int]] = {}
+    builds_of: dict[tuple[tuple[str, str], int], list[str]] = {}
+    unplaced: list[dict] = []
+    for build in manifest.get("specs") or []:
+        sub_tree = build_sub_trees.get(build["id"])
+        if sub_tree is None:
+            continue
+        key = (build["class"], build["spec"])
+        plays.setdefault(key, set()).add(sub_tree)
+        builds_of.setdefault((key, sub_tree), []).append(build["id"])
+        tree = trees.get(sub_tree)
+        spec_id = spec_ids.get(key)
+        if tree is not None and spec_id is not None and spec_id not in tree.spec_ids:
+            # simc's trait table places some trees on no spec at all (Annihilator
+            # carries no id_spec on any of its nodes today). A build plainly plays
+            # it, so the pairing is reported as a gap in the table rather than
+            # silently dropped from the count.
+            unplaced.append({"build": build["id"], "subTree": sub_tree, "tree": tree.name})
+
+    cells = 0
+    covered = 0
+    uncovered: list[dict] = []
+    for key in sorted(state_of):
+        spec_id = spec_ids.get(key)
+        if spec_id is None:
+            continue
+        for sub_tree in sorted(t.sub_tree for t in trees.values() if spec_id in t.spec_ids):
+            cells += 1
+            if sub_tree in plays.get(key, set()):
+                covered += 1
+                continue
+            tree_name = trees[sub_tree].name if sub_tree in trees else None
+            # A refusal names the profile that will not load. One that carries a hero
+            # tree answers for that cell only; one simc ships unnamed answers for the
+            # spec, because there is no second build to distinguish it from.
+            candidates = [
+                entry
+                for entry in (refused or [])
+                if (entry["class"], entry["spec"]) == key and entry["heroTree"] in (None, tree_name)
+            ]
+            # A refusal naming this very tree beats one that names none. Retribution
+            # ships two disabled builds refused at two different nodes, one of them
+            # unnamed, and taking the first match would print the unnamed build's
+            # node against the named build's tree.
+            candidates.sort(key=lambda entry: entry["heroTree"] != tree_name)
+            reason = candidates[0]["reason"] if candidates else None
+            uncovered.append(
+                {
+                    "class": key[0],
+                    "spec": key[1],
+                    "specId": spec_id,
+                    "subTree": sub_tree,
+                    "tree": tree_name,
+                    "state": state_of[key],
+                    "reason": reason,
+                }
+            )
+
+    for (_key, sub_tree), ids in builds_of.items():
+        tree = trees.get(sub_tree)
+        if tree is not None:
+            tree.builds = sorted(set(tree.builds) | set(ids))
+
+    return {
+        "cells": cells,
+        "covered": covered,
+        "uncovered": uncovered,
+        "unplaced": unplaced,
+    }
+
+
 def build_index(
     simc_dir: Path,
     tier: str,
     manifest: dict | None = None,
     tree_names: dict[int, str] | None = None,
     ptr: bool = False,
+    build_sub_trees: dict[str, int] | None = None,
+    refused: list[dict] | None = None,
 ) -> dict:
     """The whole picker's data: every class, every spec, every hero tree.
 
     ``manifest`` is this tier's ``index.json``; its ``specs`` array says which
     builds exist and is what turns a spec from "simc ships a profile" into "this
-    dataset has something to show". ``tree_names`` maps sub-tree id to name for the
-    trees some build plays -- see the module docstring on why that join is the only
-    source of a name.
+    dataset has something to show". ``build_sub_trees`` maps a build id to the hero
+    tree it plays, from ``builds_by_sub_tree`` -- that is what makes coverage
+    answerable per hero tree rather than per spec.
+
+    ``tree_names`` is no longer the source of a name -- simc's own table is -- and
+    is kept as a cross-check: a tree that some build calls something other than what
+    simc's table calls it is logged and the table wins.
     """
     enum = parse_spec_enum(simc_dir, ptr=ptr)
     groups = parse_spec_list(simc_dir, ptr=ptr)
     trees = hero_trees(simc_dir, ptr=ptr)
-    names = tree_names or {}
-    for sub_tree, name in names.items():
-        if sub_tree in trees:
-            trees[sub_tree].name = name
+    for sub_tree, entry in talenttree.parse_sub_tree_names(simc_dir, ptr=ptr).items():
+        # A tree simc names but whose nodes place it on no spec still belongs in the
+        # index: the picker draws it, and dropping it would hide the gap.
+        class_name = (
+            _CLASS_ORDER[entry.class_id - 1] if 1 <= entry.class_id <= len(_CLASS_ORDER) else "?"
+        )
+        trees.setdefault(sub_tree, HeroTree(sub_tree=sub_tree, wow_class=class_name, spec_ids=[]))
+        trees[sub_tree].name = entry.name
+    for sub_tree, name in (tree_names or {}).items():
+        played = trees.get(sub_tree)
+        if played is not None and played.name and played.name != name:
+            log.warning(
+                "sub-tree %d is called %r by simc's table and %r by a build that "
+                "plays it; the table wins",
+                sub_tree,
+                played.name,
+                name,
+            )
+        elif played is not None and not played.name:
+            played.name = name
 
     # Role and "has a profile" come from the profiles directory, for this tier and
     # for every tier simc ships -- the two answer different questions and the
@@ -286,16 +526,25 @@ def build_index(
             }
         )
 
+    spec_ids = {
+        (spec["class"], spec["name"]): spec["specId"]
+        for entry in classes
+        for spec in entry["specs"]
+    }
+    coverage = hero_tree_coverage(manifest or {}, trees, spec_ids, build_sub_trees or {}, refused)
+
     return {
         "tier": tier,
         "classes": classes,
         "heroTrees": [trees[key].to_json() for key in sorted(trees)],
+        "heroTreeCoverage": coverage,
+        "refusedProfiles": refused if refused is not None else None,
         "note": (
             "Every class and spec simc knows, from sc_spec_list.inc and "
             "sc_specialization_data.inc. Role comes from the profiles' role= line, "
             "so a spec no tier has ever shipped has role 'unknown' rather than an "
-            "assumed one. Hero tree names are not in simc's data at all -- a tree is "
-            "named only when some build plays it."
+            "assumed one. Hero tree names and the specs that can play them come from "
+            "trait_data.inc -- __trait_sub_tree_data and the hero nodes' own id_spec."
         ),
     }
 

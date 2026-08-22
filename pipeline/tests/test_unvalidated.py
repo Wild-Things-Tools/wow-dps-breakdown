@@ -158,3 +158,36 @@ def test_coverage_counts_an_unvalidated_spec_as_neither_shipped_nor_missing(tmp_
     assert coverage["shipped"] == [{"class": "Mage", "spec": "Arcane"}]
     assert coverage["unvalidated"] == [{"class": "Warrior", "spec": "Fury"}]
     assert coverage["missing"] == []
+
+
+#: Verbatim shape of ``profiles/generators/MID2/MID2_Generate_Paladin.simc``: simc
+#: writes this one generator's player line **without quotes**, where every other
+#: generator quotes it.
+UNQUOTED_BLOCK = """# paladin=MID2_Paladin_Retribution_Herald
+# level=80
+# race=blood_elf
+# role=attack
+# spec=retribution
+# talents=CkEAe0BdEP5UdSN8Uy7QGHISLA
+
+# main_hand=,id=249007,ilevel=289
+
+# save=MID2_Paladin_Retribution_Herald.simc
+"""
+
+
+def test_the_player_line_does_not_have_to_be_quoted(tmp_path):
+    """Requiring quotes cost a whole spec its state. simc's Paladin generator writes
+    the line unquoted, so `wowdps unvalidated` found 14 disabled blocks where 17
+    exist, and Retribution Paladin was published as "simc has no profile for it at
+    all" while simc shipped two complete ones in the generator (measured 2026-08-22,
+    simc 22b442e). That is the exact wrong answer the coverage panel exists to
+    prevent, produced inside the coverage code."""
+    path = tmp_path / "MID2_Generate_Paladin.simc"
+    path.write_text(UNQUOTED_BLOCK, encoding="utf-8")
+
+    found = unvalidated.extract(path)
+    assert [entry.filename for entry in found] == ["MID2_Paladin_Retribution_Herald.simc"]
+    # The quotes are put back when the profile is materialised, so what simc left
+    # unquoted still parses as a profile.
+    assert found[0].body.splitlines()[0] == 'paladin="MID2_Paladin_Retribution_Herald"'
