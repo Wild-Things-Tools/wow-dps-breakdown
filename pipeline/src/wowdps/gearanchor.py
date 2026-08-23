@@ -49,9 +49,19 @@ bonus ids would be making a claim about every slot from a measurement taken on t
 same reason as ``buffsweep.set_variants``: a kit that already wears the set would
 otherwise carry it into the anchor silently, and a kit that wears last season's would
 carry *that*. Neither is a property of the build being computed. The current tier's
-token is written at the state derived below -- typically 1/1 -- and every other
-numbered tier of the same expansion is written to 0/0, so the anchor *states* the
-set state rather than inheriting it.
+token is written at the state derived below, and **every other set token the class
+can wear** is written to zero, so the anchor *states* the set state rather than
+inheriting it. Not just the other seasons of this expansion: measured on 69a46e1, ten
+of MID2's forty damage profiles wear two or more pieces of some other set, one of
+them a full four-piece from the expansion before. See ``other_set_tokens``.
+
+**Every slot is written, including the ones the kit has nothing in.** A profileset's
+options apply *on top of* the base profile, so a slot the kit is silent about keeps
+the base actor's item at the base actor's item level. Measured on Arcane Mage, 1000
+deterministic iterations, one target: a bare ``off_hand=`` on an otherwise inert
+profileset moved 176,582.7 to 158,651.4, and emptying two slots the profile does not
+use returned 176,582.7 unchanged. So the empty lines are worth 10% where they bite
+and nothing where they do not.
 
 **Nothing else is touched.** Race, consumables, level and the action list stay as the
 source profile has them. Those are not gear, and a module called "gear anchor" that
@@ -78,22 +88,41 @@ needs no edit. Two derivations, one for each half:
   all share ``midnight_season_2`` -- but *which* state to enforce is a separate
   question and the answer is not "whatever the kit had".
 
-  **Measured on MID2 at simc 69a46e1: the tier's shipped profiles disagree with each
-  other.** Counting set pieces by ``dbc_item_data_t::id_set`` against the set table's
-  ``set_id`` -- which is exactly what ``set_bonus_t::initialize`` does -- 24 of the 28
-  shipped damage profiles wear four or five pieces and **four wear none**: both Arcane
-  Mage builds and both Frost Mage builds. That gap is already in the published
-  ranking and nothing flags it. Its size, measured profileset against profileset at
-  1000 deterministic iterations, one target: forcing the four-piece onto Arcane is
-  **+13.13%**, and forcing it onto Shadow Priest -- which already wears it -- is
-  **bit-identical**, while removing it costs Shadow **-11.22%**. So the piece count
-  read out of simc's item table and simc's own behaviour agree on both sides, which
-  is what makes the offline count usable.
+  **The tier's shipped profiles disagree with each other**, and *how many* disagree
+  is a fact with a date on it. Counting set pieces by ``dbc_item_data_t::id_set``
+  against the set table's ``set_id`` -- which is exactly what
+  ``set_bonus_t::initialize`` does -- over MID2's 28 shipped damage profiles:
 
-  A per-kit inheritance rule would therefore hand two Mage builds a kit 13% behind
+      simc 69a46e1, 2026-08-21   24 wear four or five, 4 wear none
+                                 (both Arcane and both Frost Mage builds)
+      simc 22b442e, 2026-08-22   26 wear four or five, 2 wear none
+                                 (both Arcane builds)
+
+  Both are true at their own revision: simc gave Frost Mage the set between the two.
+  **22b442e is the revision that matters**, because the published dataset was
+  generated on 2026-08-22, so only the two Arcane builds lack it today.
+
+  Its size, measured profileset against profileset at 1000 deterministic iterations,
+  one target: forcing the four-piece onto Arcane is **+13.13%**, and forcing it onto
+  Shadow Priest -- which already wears it -- is **bit-identical**, while removing it
+  costs Shadow **-11.22%**. So the piece count read out of simc's item table and
+  simc's own behaviour agree on both sides, which is what makes the offline count
+  usable. Note that Shadow Priest states no ``set_bonus=`` line at all; it wears the
+  set by equipping the pieces, which is precisely why the count is taken from the
+  items rather than from the profile's options.
+
+  A per-kit inheritance rule would therefore hand the Arcane builds a kit 13% behind
   every other spec's, and an unconditional four-piece would be a hard-coded guess
   that a tier shipping no set would silently invert. The modal state across the
   tier's shipped profiles is neither.
+
+  Worth knowing where that Arcane gap comes from, because it is not an oversight in
+  the count: **Arcane's shipped profile has its ``set_bonus=`` lines commented out**
+  (``# set_bonus=midnight_season_2_2pc=1`` and ``_4pc=1``, lines 105-106 of both
+  builds on 22b442e) while its action list branches on
+  ``set_bonus.midnight_season_2_4pc`` twice. That is a property of simc's profile,
+  not of this repository, and it is the kind of gap ``dataset.gear_caveat`` exists to
+  flag.
 
 Both are published in the anchor's description rather than assumed, because the
 anchor moves numbers and a reader has to be able to see it rather than trust it.
