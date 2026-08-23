@@ -7,7 +7,7 @@ from, and what the run may publish.
 
 Where a seed comes from, in the order they are preferred
 --------------------------------------------------------
-Four sources, and the differences between them are differences of *claim*, so they are
+Three sources, and the differences between them are differences of *claim*, so they are
 labelled rather than pooled:
 
 1. **simc's own build** (``origin: simc``) -- the tier's shipped hash. Used as the seed
@@ -21,18 +21,26 @@ labelled rather than pooled:
    that it is optimal, and the display contract keeps the two apart. **No such document
    exists in this repository today**, so this path is wired and unexercised, and a run
    says which of those it was.
-4. **A hero-tree transplant** (``origin: search``) -- for a (spec, hero tree) cell simc
-   ships no build for, the spec's own shipped build moved onto the missing tree with the
-   hero spend of a *donor*: another build of the same class that plays that tree. Only
-   attempted where a donor exists in the tier, because ``swap_hero_tree`` without one
-   leaves the hero tree empty and fourteen points unspent, and filling it is a search
-   over node sets that this project cannot check for legality.
+**A fourth source is not built, and is described here rather than half-shipped.** Six of
+MID2's uncovered (spec, hero tree) cells are specs simc ships a build for on one of
+their two trees -- Dark Ranger for both Hunters, Pack Leader for Survival, Fatebound for
+Outlaw, Trickster for Subtlety, Diabolist for Demonology. ``talentedit.swap_hero_tree``
+moves a build onto another tree, so a transplant looks like a few lines.
 
-The legality argument is weakest here and it is stated where it is weakest: a
-transplant changes the node set, so the module docstring's proof in ``buildsearch`` does
-**not** cover it. What can be said is narrower and is said instead -- the hero nodes come
-from a build simc's authors wrote for that tree, so they are as internally legal as that
-build, and the join between them and the new class and spec trees is unverified.
+It is not, for two measured reasons. It needs a **donor** -- another build of the same
+class already playing the target tree -- because ``swap_hero_tree`` without one leaves
+the hero tree empty and fourteen points unspent, and filling it is a search over node
+*sets*, which is exactly what this project cannot check for legality. Measured against
+MID2: donors exist for four of the six cells and **none at all for Dark Ranger**, which
+no shipped build plays. And a transplant changes the node set, so ``buildsearch``'s
+legality proof does not cover it -- the honest claim would be narrower (the hero nodes
+come from a build simc's authors wrote, so they are as legal as that build; the join
+with the new class and spec trees is unverified) and would need its own label.
+
+An earlier revision of this module shipped a ``transplant_seeds`` function that nothing
+called, while this docstring described transplants as one of four seed sources. That is
+the defect this file is otherwise careful about -- a described behaviour the code never
+grew into -- so the function is gone and the gap is stated instead.
 """
 
 from __future__ import annotations
@@ -216,42 +224,6 @@ def read_harvested(path: Path) -> dict[str, list[dict]]:
             continue
         grouped.setdefault(spec_id, []).extend(row.get("builds") or [])
     return grouped
-
-
-def transplant_seeds(
-    profile: SpecProfile,
-    nodes: dict[int, list[tt.Trait]],
-    sub_tree: int,
-    donors: list[tt.Loadout],
-    *,
-    key: str,
-) -> Candidate | None:
-    """The spec's build moved onto a hero tree it ships no build for.
-
-    Refuses without a donor rather than producing a build with fourteen hero points
-    unspent: ``swap_hero_tree``'s own docstring says filling the new tree is a search
-    and not an edit, and a search over which hero nodes to take is a search over node
-    sets -- the one thing this project cannot check for legality.
-    """
-    if not donors:
-        return None
-    if not profile.talent_hash:
-        return None
-    try:
-        loadout = tt.decode_loadout(profile.talent_hash, nodes)
-        moved = talentedit.swap_hero_tree(loadout, nodes, sub_tree, donor=donors[0])
-        talent_hash = tt.encode_loadout(moved, nodes, preserve_framing=False)
-    except (tt.TalentDecodeError, tt.TalentEncodeError, talentedit.TalentEditError) as error:
-        log.warning("%s cannot be moved onto sub tree %d: %s", profile.id, sub_tree, error)
-        return None
-    return Candidate(
-        key=key,
-        label=f"{profile.display_name} moved onto sub tree {sub_tree}",
-        origin=buildsearch.ORIGIN_SEARCH,
-        loadout=moved,
-        talent_hash=talent_hash,
-        lineage=(f"hero tree -> {sub_tree}",),
-    )
 
 
 def measure(
