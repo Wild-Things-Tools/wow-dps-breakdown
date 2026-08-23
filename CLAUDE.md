@@ -949,13 +949,43 @@ rather than folded into the item-level one. Of the tier's 28 *shipped* damage bu
 only the two Arcane ones are flagged. MID1 flags nothing shipped -- all 50 of its
 profiles wear four pieces -- so no published byte moves there.
 
-**The dataset states it; the view does not draw it yet.** `web/` renders
-`gearComparable === false` as a faded bar, a "gear differs" mark and a caption
-sentence, and the new field is simply unknown to it -- harmless, and invisible. What a
-follow-up needs is named in the pull request: `BuildLike`/`types.ts` gain the field,
-`UnvalidatedMark` gains a third `Mark` with its own wording, and if `buildOpacity` is
-widened to cover it then `OverviewView`'s caption has to stop saying "a different item
-level", because it would then be describing two different claims with one sentence.
+**The view draws it now**, and the three edits the pull request named are done:
+`BuildLike`/`types.ts` carry the field, `UnvalidatedMark` draws a third `Mark`, and
+`buildOpacity` fades on either flag with `OverviewView`'s caption rewritten so the
+fade no longer claims an item-level gap it may not have.
+
+Two decisions in that follow-up are not the obvious ones and are worth keeping:
+
+- **The mark reads "tier set differs", not "wears no tier set"**, which is what the
+  pull request suggested and what MID2's two builds actually do. The flag is
+  *symmetric* and multi-state -- it fires on any build whose state is not the tier's,
+  so a build wearing the set where the tier does not carries the identical boolean.
+  Naming a direction the boolean does not carry is the `inRotation` failure exactly: a
+  label promising more than its computation delivers, wrong in the direction nobody
+  checks. The direction is a sentence and it is in the build's own `caveats`, which
+  the spec page already renders. The parallel wording with "gear differs" is a bonus
+  rather than the reason -- same shape, different subject, so the two-flag split reads
+  at a glance.
+- **`buildOpacity` covers both flags, and that is not a merge of the two claims.** It
+  answers the one question they share -- *can this bar be ranked against the ones
+  beside it* -- which both answer no to. A second visual channel would have to be a
+  colour, and class colour is the primary encoding with no slot free. Without the
+  widening the two Arcane builds are flagged everywhere except the place the flag
+  matters: the Overview opens on the chart, so the first thing a reader sees would
+  draw a 13-14% set deficit as an ordinary bar. The caption then names each reason in
+  its own clause, drawn only when a row on screen carries that flag.
+
+  It names them rather than counting them, on purpose. The reasons **overlap** -- the
+  disabled profiles are behind on item level *and* wear no set -- so on MID2 the counts
+  are 8 and 10 over 10 faded bars, and a reader who added them would get 18.
+
+**Nothing on the site changes until a run regenerates the data.** Measured
+2026-08-23 against the committed dataset at `f02f23b`: `tierSetComparable` appears on
+**zero of MID2's 36 rows** and in none of the spec files. PR #35 landed the pipeline
+and no `wowdps build` has run since, so the finding is invisible for a second reason
+underneath the one this follow-up fixes -- the field is not published yet. The view was
+verified against a locally injected copy of the ten rows the pipeline would flag; the
+committed data was restored untouched.
 
 ### What the anchor actually did
 

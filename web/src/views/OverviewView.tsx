@@ -111,6 +111,19 @@ export function OverviewView({
 
   const best = rows[0]?.dps ?? 0;
 
+  // Counted over the rows actually on screen rather than over the tier, so a
+  // scenario that happens to contain no flagged build says nothing at all. The two
+  // reasons overlap by design -- simc's disabled profiles are behind on item level
+  // *and* wear no set -- so these are counts of the faded builds carrying each
+  // property, not a partition of them, and the caption is worded that way.
+  const ilevelGap = rows.filter(
+    (row) => row.build.gearComparable === false,
+  ).length;
+  const setGap = rows.filter(
+    (row) => row.build.tierSetComparable === false,
+  ).length;
+  const faded = rows.filter((row) => buildOpacity(row.build) < 1).length;
+
   return (
     <div className="space-y-4">
       <Panel>
@@ -171,15 +184,39 @@ export function OverviewView({
           under a few percent as a tie — the sampling error alone is around{" "}
           {samplingError(manifest.settings)}. Bars carry each build's class
           colour; the icon and the name beside it are what identify it.
-          {rows.some((row) => row.build.gearComparable === false) ? (
+          {faded > 0 ? (
             <>
               {" "}
               <strong className="font-medium text-ink-secondary">
-                Faded bars wear gear at a different item level from the tier's.
+                Faded bars carry gear the rest of the tier does not, so where
+                they sit against the others is partly gear rather than spec.
               </strong>{" "}
-              Absolute damage does not survive that difference, so where those
-              builds sit against the rest is partly gear rather than spec — each
-              one&rsquo;s own page states the gap. They are drawn rather than
+              {/*
+                The reasons are named, never counted. They overlap -- simc's disabled
+                profiles are behind on item level *and* wear no set, so on MID2 the
+                two counts would be 8 and 10 over 10 faded bars and a reader who added
+                them would get 18. Naming them costs no arithmetic and degrades
+                correctly: a tier with one kind of gap prints one clause.
+
+                Each clause is drawn only when a row on screen carries that flag,
+                because a single sentence covering every fade would attribute the
+                Arcane deficit to item level -- exactly what the two-flag split in the
+                dataset exists to prevent.
+
+                Deliberately unquantified, too. The measured four-piece gain for MID2's
+                Arcane builds is +13.13% and +14.42%, but this caption renders for any
+                tier and this project's own buff sweep puts a full tier set anywhere
+                between 5.96% and 23.19% depending on the build. One number here would
+                look more precise than it is, which this project counts as a bug, so
+                the size stays where it can carry its measurement: the build's page.
+              */}
+              {ilevelGap > 0 && setGap > 0
+                ? "Two things put a bar here — gear at a different item level from the tier's, and a different amount of this season's tier set."
+                : ilevelGap > 0
+                  ? "What puts a bar here is gear at a different item level from the tier's."
+                  : "What puts a bar here is a different amount of this season's tier set."}{" "}
+              The table beside this chart names which, on each build, and the
+              build&rsquo;s own page states the gap. They are drawn rather than
               dropped because a spec that is absent reads as a spec that ranks
               badly, which is the thing this page most has to avoid.
             </>
