@@ -2030,7 +2030,13 @@ def cmd_harvest_builds(args) -> int:
     if args.probe:
         # The whole point of a probe is what it decoded, so it says so -- but it
         # writes nothing, because one kill is not a dataset.
-        for observation in observations[:5]:
+        #
+        # **Every player, not the first five.** A probe reads one kill, so this is
+        # at most a raid's worth of lines, and which specs a kill contained is the
+        # question a reader brings to it: the specs this command exists for are the
+        # ones least likely to be in a top guild's roster, and "the sample did not
+        # contain one" is a finding that a truncated list cannot state.
+        for observation in observations:
             verdict = validate(observation, tables)
             transcript.append(
                 f"  {observation.spec_key}: {verdict.reason}"
@@ -2056,6 +2062,22 @@ def cmd_harvest_builds(args) -> int:
     )
     path = write_harvested_builds(Path(args.out) / args.tier, document)
     coverage = document["coverage"]
+    # Which specs a pass actually got a usable build for, printed rather than left
+    # to be read out of the file. A harvested hash is current and legal by
+    # construction, so this list is the answer to "which specs can be published from
+    # real characters" -- including the ones simc's own talent parser refuses to
+    # load, which have no number at all without it. A spec with kills and no build
+    # is listed too: that is a rejection to read, not an absence.
+    transcript.append(
+        f"specs: {coverage['specsWithABuild']} with a usable build, "
+        f"{coverage['specsSeen']} seen in the sampled kills"
+    )
+    for row in document["specs"]:
+        transcript.append(
+            f"  {row['specId']}: {row['distinctBuilds']} distinct build(s) from "
+            f"{row['killsUsable']} of {row['killsHarvested']} kill(s)"
+            + (f", {len(row['rejected'])} rejected" if row["rejected"] else "")
+        )
     log.info(
         "%s: %d build(s) across %d spec(s) from %d kill(s); %d observation(s) rejected",
         path,
