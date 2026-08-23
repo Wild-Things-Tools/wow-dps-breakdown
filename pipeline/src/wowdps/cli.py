@@ -216,14 +216,13 @@ def _tier_set_reference(
 
     **And the manifest could not have answered it anyway.** ``manifest.simc.ptr`` is
     ``report["ptr_enabled"]``, which is ``SC_USE_PTR`` -- a compile-time constant,
-    ``#define``\ d to 1 in ``engine/config.hpp`` on simc's midnight branch, so it says
+    defined as 1 in ``engine/config.hpp`` on simc's midnight branch, so it says
     the binary *carries* PTR data and not that anything used it. What the run used is
     ``dbc.version_used``, and measured on simc 625a591 on 2026-08-23 against the exact
     argv ``simc_runner.build_command`` produces, it is **Live**: this pipeline never
-    passes ``ptr=1``, and the option has to precede the profile to take effect at all
-    (passed after it, the actor is already built -- 169,135 DPS against 188,911 on
-    MID2 Arcane at one iteration, so it is not a cosmetic difference). Hence the
-    default here is the live table, which is what the sims read.
+    passes ``ptr=1``, and the option has to precede the profile to take effect at all,
+    because simc copies the sim's dbc into the player while parsing the profile. Hence
+    the default here is the live table, which is what the sims read.
     ``test_build_command_never_enables_ptr_data`` is what stops that going stale.
 
     Live and PTR agree today in both tables -- 12,260 items carry an ``id_set`` in

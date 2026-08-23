@@ -638,12 +638,11 @@ def test_which_item_table_the_check_reads_is_stated_and_not_found_in_a_directory
 def test_build_command_never_enables_ptr_data():
     """``USES_PTR_DATA`` is the default the tier-set check inherits. Pin it.
 
-    ``ptr=1`` before the profile takes MID2 Arcane from 169,135 to 188,911 DPS at one
-    iteration, so this is the difference between two games and not a label. Nothing
-    here passes it, simc's own report agrees (``dbc.version_used == "Live"`` on
-    625a591), and ``cli._tier_set_reference`` therefore reads the live tables by
-    default. If a scenario ever starts asking for PTR data, this test is where the
-    tier-set check finds out.
+    Nothing here passes ``ptr=1``, and simc's own report agrees --
+    ``dbc.version_used == "Live"`` on 625a591 against this exact argv -- so
+    ``cli._tier_set_reference`` reads the live tables by default. If a scenario ever
+    starts asking for PTR data, this test is where the tier-set check finds out,
+    rather than a shard quietly measuring one game against the other's table.
     """
     from wowdps import scenarios, simc_runner
     from wowdps.cli import build_parser

@@ -56,14 +56,17 @@ def find_simc(explicit: str | None = None) -> Path:
 #:
 #: **This is not the same thing as ``report["ptr_enabled"]``**, which the manifest
 #: publishes as ``simc.ptr``. That is ``SC_USE_PTR``, a compile-time constant
-#: ``#define``\ d to 1 in ``engine/config.hpp`` on simc's midnight branch, so it is
+#: defined as 1 in ``engine/config.hpp`` on simc's midnight branch, so it is
 #: true of every binary this project builds and says nothing about which data a run
 #: used. Anything choosing between simc's ``*_ptr.inc`` and ``*.inc`` generated tables
 #: to match the sims wants *this* answer -- see ``cli._tier_set_reference``.
 #:
-#: Measured, in case anyone reads the difference as academic: ``ptr=1`` before the
-#: profile takes MID2 Arcane from 169,135 to 188,911 DPS at one iteration. After the
-#: profile it does nothing at all, because the actor has already been built.
+#: Placement matters and is easy to get wrong: ``ptr=1`` only bites *before* the
+#: profile path, because simc copies the sim's dbc into the player while parsing the
+#: profile. Measured on MID2 Arcane at 1000 deterministic iterations, ``version_used``
+#: comes back Live / Live / PTR for no option / after / before -- and the DPS is
+#: 176,364.3 in all three, since simc's two tables agree on 625a591. So this is about
+#: reading the table the sims read, not about a number that would move today.
 #: ``test_build_command_never_enables_ptr_data`` fails if this stops being true.
 USES_PTR_DATA = False
 
