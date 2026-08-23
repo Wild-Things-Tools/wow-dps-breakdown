@@ -83,6 +83,12 @@ class TierSet:
     option: str
     tier: str
     class_id: int
+    #: ``item_set_bonus_t::set_id``, which is what ``dbc_item_data_t::id_set`` on an
+    #: equipped item is matched against (``set_bonus_t::initialize``,
+    #: ``engine/player/set_bonus.cpp``). Carried so that *whether a kit already wears
+    #: the set* can be answered offline; nothing in this module needs it, and
+    #: ``to_json`` deliberately does not emit it, so no published byte moves.
+    set_id: int = 0
 
     def to_json(self) -> dict:
         return {"name": self.name, "option": self.option, "tier": self.tier}
@@ -101,10 +107,17 @@ def parse_tier_sets(simc_dir: Path, ptr: bool = False) -> list[TierSet]:
         row = _SET_ROW.search(line)
         if not row:
             continue
-        set_name, option, tier, _enum, _set_id, _bonus, class_id, _spec = row.groups()
+        set_name, option, tier, _enum, set_id, _bonus, class_id, _spec = row.groups()
         key = (option, tier, int(class_id))
         found.setdefault(
-            key, TierSet(name=set_name, option=option, tier=tier, class_id=int(class_id))
+            key,
+            TierSet(
+                name=set_name,
+                option=option,
+                tier=tier,
+                class_id=int(class_id),
+                set_id=int(set_id),
+            ),
         )
     return sorted(found.values(), key=lambda entry: (entry.tier, entry.class_id, entry.name))
 
