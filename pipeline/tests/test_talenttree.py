@@ -29,6 +29,7 @@ from wowdps.talenttree import (
     _generated,
     decode_loadout,
     encode_loadout,
+    max_ranks_of,
     nodes_for_class,
     parse_sub_tree_names,
     parse_trait_data,
@@ -298,6 +299,23 @@ def test_the_layout_drops_another_specs_branch():
     }
     layout = tree_layout(nodes, spec_id=62, sub_tree=None)
     assert [node["id"] for node in layout] == [10]
+
+
+def test_the_layout_counts_a_tiered_nodes_ranks_the_way_the_decoder_does():
+    """One rule, one expression. ``max_ranks_of`` says in its own docstring that getting
+    the tiered case wrong moves the partially ranked bit and desynchronises everything
+    after it, and every other reader of the rule routes through it; the layout kept an
+    inline copy, on the one path the site actually draws."""
+    nodes = {
+        10: [
+            trait(10, 100, node_type=1, max_ranks=1, name="Tier A"),
+            trait(10, 101, node_type=1, max_ranks=2, name="Tier B"),
+        ],
+        20: [trait(20, 200, node_type=2, max_ranks=1), trait(20, 201, node_type=2, max_ranks=1)],
+    }
+    layout = {node["id"]: node["maxRanks"] for node in tree_layout(nodes, 62, sub_tree=None)}
+    assert layout == {10: 3, 20: 1}
+    assert layout[10] == max_ranks_of(nodes[10])
 
 
 def test_the_layout_drops_hero_trees_the_build_does_not_play():

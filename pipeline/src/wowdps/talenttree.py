@@ -789,11 +789,11 @@ def tree_layout(nodes: dict[int, list[Trait]], spec_id: int, sub_tree: int | Non
                 "row": first.row,
                 "col": first.col,
                 "type": first.node_type,
-                "maxRanks": (
-                    sum(entry.max_ranks for entry in entries)
-                    if first.node_type == NODE_TIERED
-                    else first.max_ranks
-                ),
+                # `max_ranks_of`, not a second copy of the tiered rule. Its own
+                # docstring says getting this wrong moves the partially ranked bit and
+                # desynchronises everything after it -- and this was the one expression
+                # of the four that did not route through it, on the path the site draws.
+                "maxRanks": max_ranks_of(entries),
                 "entries": [
                     {"id": entry.entry_id, "name": entry.name, "spellId": entry.spell_id}
                     for entry in entries

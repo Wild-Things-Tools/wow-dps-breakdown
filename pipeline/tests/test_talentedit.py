@@ -239,9 +239,10 @@ def test_the_selection_node_is_the_mutating_specs_own():
 
 
 def test_a_hero_swap_routes_through_the_players_own_selection_node():
-    """The whole point of the primitive. Both specs here can play sub tree 52, so a
-    naive implementation that picked *any* selection node offering it would take node
-    41 -- the other spec's -- which simc refuses outright."""
+    """The whole point of the primitive. Both specs here can play sub tree 52, and node
+    **40** -- the *other* spec's selection node -- sorts first and offers it, so a naive
+    implementation picking any selection node that offers the tree takes 40, which simc
+    refuses outright. Node 41 is this spec's own and is the right answer."""
     nodes = sample_nodes()
     build = swap_hero_tree(empty(), nodes, 52)
     assert selected(build, 41) is not None
