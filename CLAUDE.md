@@ -1527,7 +1527,7 @@ here so nobody re-derives it as a bug.
 `player's spec.`; `spec_rule_violation` returns it without the period, and a test pins
 the shorter form. Not corrected, because the string is published in `spec-index.json`
 and rewriting it churns data for one character -- but it means the published reason is
-not byte-comparable with simc's own output. `talentedit._simc_refusals` uses simc's
+not byte-comparable with simc's own output. `talentedit._hash_findings` uses simc's
 exact wording, so the two differ by that period until somebody decides.
 
 ### The encoder, and what round-trips
