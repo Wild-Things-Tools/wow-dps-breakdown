@@ -477,6 +477,11 @@ class SearchOutcome:
     seed_value: int | None = None
     blind: bool = False
     notes: list[str] = field(default_factory=list)
+    #: How many rounds the opening climb ran, and at what precision. Published in
+    #: ``method`` because a run that took nine steps and one that took none are very
+    #: different runs and the halving rounds look identical either way.
+    climb_rounds: int = 0
+    climb_iterations: int = 0
 
     @property
     def best(self) -> tuple[Candidate, Measurement] | None:
@@ -499,12 +504,24 @@ class SearchOutcome:
         return separated(best[1], second[1])
 
     def method(self) -> str:
-        rounds = len(self.rounds)
+        """How the winner was found, in one line a reader could reproduce from.
+
+        **The climb is named.** An earlier version reported only the halving rounds --
+        "2 round(s) from 1200 to 3000" -- which omits the phase that does most of the
+        work on a blind run and would leave anyone trying to reproduce the result
+        wondering how a build nine edits from its seed was reached.
+        """
+        opening = (
+            f"a {self.climb_rounds}-round climb at {self.climb_iterations} iterations, then "
+            if self.climb_rounds
+            else ""
+        )
+        low = self.rounds[0].iterations if self.rounds else 0
+        high = self.rounds[-1].iterations if self.rounds else 0
         return (
-            f"Successive halving over node-set-preserving talent edits, "
-            f"{rounds} round(s) from {self.rounds[0].iterations if self.rounds else 0} to "
-            f"{self.rounds[-1].iterations if self.rounds else 0} deterministic iterations, "
-            f"pruning on the tie rule"
+            f"Node-set-preserving talent edits: {opening}"
+            f"{len(self.rounds)} halving round(s) from {low} to {high} deterministic "
+            f"iterations, pruning on the tie rule"
         )
 
     def description(self) -> str:
@@ -747,10 +764,12 @@ def _climb(
     re-measuring a deterministic run at the precision it already ran at returns the same
     numbers for nothing.
     """
+    outcome.climb_iterations = iterations
     measured = _measure_in_batches(runner, list(field.values()), iterations)
     rows = list(measured.values())
     if not rows:
         return []
+    outcome.climb_rounds += 1
     outcome.variants_evaluated += len(rows)
     leader_key = min(rows, key=lambda m: (-m.dps, m.key)).key
     leader = measured[leader_key]
@@ -785,6 +804,7 @@ def _climb(
         got = _measure_in_batches(runner, challengers, iterations)
         if not got:
             break
+        outcome.climb_rounds += 1
         outcome.variants_evaluated += len(got)
         for candidate in challengers:
             field[candidate.key] = candidate

@@ -552,6 +552,31 @@ def test_a_build_with_one_choice_node_survives_the_replan():
     assert not outcome.notes or all("stopped there" not in n for n in outcome.notes)
 
 
+def test_the_published_method_names_the_climb():
+    """The climb does most of the work on a blind run, and a reader trying to reproduce
+    a winner nine edits from its seed has to be told it happened."""
+    nodes = sample_nodes()
+    seed = seed_from(key="s00", label="s", origin="simc", loadout=sample_build(), nodes=nodes)
+    counter = {"n": 0}
+
+    def ever_better(candidate):
+        counter["n"] += 1
+        return 100.0 + counter["n"]
+
+    outcome = search(
+        spec_id="x",
+        build_id="x",
+        seeds=[seed],
+        nodes=nodes,
+        runner=_runner(ever_better),
+        breadth=6,
+        climb_steps=3,
+    )
+    assert outcome.climb_rounds > 0
+    assert "climb" in outcome.method()
+    assert str(outcome.climb_iterations) in outcome.method()
+
+
 def test_the_climb_refuses_a_step_the_tie_rule_calls_noise():
     """Without this the climb walks uphill on Monte Carlo noise and reports the walk."""
     nodes = sample_nodes()
