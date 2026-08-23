@@ -104,6 +104,32 @@ def sample_build() -> Loadout:
     return build
 
 
+def wide_nodes():
+    """A class with ten choice nodes, so a tied field is wide enough to size a round.
+
+    ``sample_nodes`` has four, which happens to make ``plan_rounds`` give the same
+    answer whether it is planned before or after the climb -- so a test built on it
+    cannot see the difference between the two.
+    """
+    nodes = {
+        1000 + i: [
+            trait(1000 + i, 9000 + i * 2, node_type=2, name=f"Left {i}"),
+            trait(1000 + i, 9001 + i * 2, node_type=2, name=f"Right {i}"),
+        ]
+        for i in range(10)
+    }
+    nodes[41] = sample_nodes()[41]
+    return nodes
+
+
+def wide_build() -> Loadout:
+    nodes = wide_nodes()
+    build = Loadout(version=2, spec_id=SPEC, selections=(), spare_bits=0)
+    for node_id in sorted(n for n in nodes if n != 41):
+        build = select_node(build, nodes, node_id, choice_index=0)
+    return select_node(build, nodes, 41, rank=1, choice_index=0)
+
+
 def measurement(key, dps, error=0.05, iterations=3000):
     return Measurement(key=key, dps=dps, dps_error=error, iterations=iterations)
 
@@ -367,14 +393,23 @@ def test_the_search_runs_every_round_and_narrows_the_field():
         breadth=12,
     )
     # The halving rounds are the tail of the call log; the climb's calls sit ahead of
-    # them and all run at the opening precision.
+    # them and all run at the opening precision. The halving rounds start at the *next*
+    # precision, because the climb has already covered the opening one -- re-measuring a
+    # deterministic run at the precision it already ran at buys nothing.
     schedule = [r.iterations for r in outcome.rounds]
     assert [c[0] for c in calls][-len(schedule) :] == schedule
-    assert all(c[0] == schedule[0] for c in calls[: -len(schedule)])
+    assert all(c[0] == buildsearch.START_ITERATIONS for c in calls[: -len(schedule)])
+    assert schedule[0] > buildsearch.START_ITERATIONS
+    assert schedule[-1] == buildsearch.FINAL_ITERATIONS
     assert outcome.best is not None
     assert outcome.best[0].key.endswith("v000")
-    assert outcome.rounds[0].pruned > 0
     assert outcome.variants_evaluated > 0
+    # The field narrowed: many builds were measured at the opening precision and one
+    # reaches the last round. Where the narrowing happened -- in the climb or in a
+    # halving round -- depends on how far the winner separates, so the assertion is on
+    # the narrowing rather than on which round did it.
+    assert sum(len(c[1]) for c in calls if c[0] == buildsearch.START_ITERATIONS) > 1
+    assert outcome.rounds[-1].entered <= buildsearch.FINAL_KEEP
 
 
 # --------------------------------------------------------------------------------
@@ -419,6 +454,68 @@ def test_the_climb_walks_several_edits_away_from_a_blind_seed():
     assert score(outcome.best[0]) >= score(blind), "the climb must not end below its seed"
     # And it really moved: the winner is not the seed it started from.
     assert len(outcome.rounds) >= 1
+
+
+def test_the_halving_rounds_carry_the_climb_s_survivors_not_its_whole_path():
+    """Two flaws that were invisible from any single round's output.
+
+    The climb measures each step's whole neighbourhood at the opening precision. Carried
+    forward whole, the first halving round re-measured the same builds at the same
+    precision -- deterministic, so the same numbers for nothing -- and the schedule's
+    ``keep`` had been planned from the *pre-climb* field, so a field of two hundred was
+    truncated to five and the halving had stopped halving anything.
+    """
+    nodes = sample_nodes()
+    seed = seed_from(key="s00", label="s", origin="simc", loadout=sample_build(), nodes=nodes)
+    calls: list = []
+    counter = {"n": 0}
+
+    def ever_better(candidate):
+        counter["n"] += 1
+        return 100.0 + counter["n"]
+
+    outcome = search(
+        spec_id="x",
+        build_id="x",
+        seeds=[seed],
+        nodes=nodes,
+        runner=_runner(ever_better, calls),
+        breadth=8,
+        climb_steps=4,
+    )
+    opening = [c for c in calls if c[0] == buildsearch.START_ITERATIONS]
+    halving = [c for c in calls if c[0] > buildsearch.START_ITERATIONS]
+    assert opening, "the climb must have run"
+    assert halving, "the halving rounds must have run"
+    assert [r.iterations for r in outcome.rounds] == [c[0] for c in halving]
+    # The field entering the first halving round is far smaller than everything the
+    # climb visited, and no bigger than the tie rule's survivors.
+    assert len(halving[0][1]) < sum(len(c[1]) for c in opening)
+    assert len(halving[0][1]) <= buildsearch.MAX_VARIANTS_PER_ROUND
+
+
+def test_the_halving_rounds_size_themselves_to_the_field_the_climb_hands_them():
+    """``keep`` has to come from the field that actually enters the round.
+
+    Planned from the *pre-climb* field it was half of nine while the field arriving was
+    twenty, so the round dropped most of a tied field "for budget" and the halving had
+    stopped halving anything. Everything ties here, so the climb hands on a wide field
+    and the first halving round must carry more than the floor.
+    """
+    nodes = wide_nodes()
+    seed = seed_from(key="s00", label="s", origin="simc", loadout=wide_build(), nodes=nodes)
+    outcome = search(
+        spec_id="x",
+        build_id="x",
+        seeds=[seed],
+        nodes=nodes,
+        runner=_runner(lambda c: 100.0),
+        breadth=12,
+        climb_steps=2,
+    )
+    assert outcome.rounds
+    assert outcome.rounds[0].entered > buildsearch.FINAL_KEEP
+    assert outcome.rounds[0].survived > buildsearch.FINAL_KEEP
 
 
 def test_the_climb_refuses_a_step_the_tie_rule_calls_noise():

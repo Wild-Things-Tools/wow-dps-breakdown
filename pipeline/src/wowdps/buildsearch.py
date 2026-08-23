@@ -613,9 +613,10 @@ def search(
             )
 
     schedule = tuple(rounds) if rounds else plan_rounds(len(field_by_key))
+    alive: list[str] = list(field_by_key)
 
     if climb_steps > 0 and schedule:
-        _climb(
+        survivors = _climb(
             outcome,
             field_by_key,
             nodes,
@@ -625,8 +626,29 @@ def search(
             breadth=breadth,
             steps=climb_steps,
         )
+        if survivors:
+            # Two things had to move together here, and both were wrong in a way that
+            # is invisible from any single round's output.
+            #
+            # **The climb's survivors, not everything it visited.** The climb measures
+            # each step's whole neighbourhood at the opening precision; carrying all of
+            # it forward means the first halving round re-measures the same builds at
+            # the same precision, which is deterministic and therefore returns the same
+            # numbers for nothing. What has to survive is what the *tie rule* kept --
+            # which is everything that could still win, so no leader is being trusted
+            # at 300 iterations either.
+            #
+            # **And the schedule has to be planned after the climb, not before.** It was
+            # planned from the pre-climb field, so ``keep`` was half of (say) 10 while
+            # the field entering the round was 200 -- a 95% truncation reported honestly
+            # as "dropped for budget" and meaning the halving had stopped being a
+            # halving of anything.
+            alive = survivors
+            if not rounds:
+                schedule = plan_rounds(len(alive), start=schedule[0].iterations * ITERATION_FACTOR)
+            elif len(schedule) > 1:
+                schedule = schedule[1:]
 
-    alive: list[str] = list(field_by_key)
     measured_last: dict[str, Measurement] = {}
 
     for step in schedule:
@@ -697,7 +719,7 @@ def _climb(
     iterations: int,
     breadth: int,
     steps: int,
-) -> None:
+) -> list[str]:
     """Steepest ascent over one-edit neighbourhoods, at the opening precision.
 
     Cheap where it needs to be and honest about when to stop. ``breadth`` at its default
@@ -710,17 +732,21 @@ def _climb(
     the ones the tie rule refuses to take, and those are what the halving rounds below
     are for.
 
-    Mutates ``field`` and ``outcome`` in place: every build the climb visits stays in
-    the field, so the halving rounds re-measure the whole path at full precision rather
-    than trusting a leader chosen at 300 iterations.
+    Mutates ``field`` and ``outcome`` in place and returns the keys the halving rounds
+    should carry: the **tie-rule survivors** of the last measurement it took. That is
+    everything the opening precision cannot separate from the leader, so nothing is
+    being trusted at 300 iterations -- and it is not the whole path, because
+    re-measuring a deterministic run at the precision it already ran at returns the same
+    numbers for nothing.
     """
     measured = _measure_in_batches(runner, list(field.values()), iterations)
-    rows = [m for m in measured.values()]
+    rows = list(measured.values())
     if not rows:
-        return
+        return []
     outcome.variants_evaluated += len(rows)
     leader_key = min(rows, key=lambda m: (-m.dps, m.key)).key
     leader = measured[leader_key]
+    last_round = rows
 
     for step in range(steps):
         challengers: list[Candidate] = []
@@ -752,6 +778,11 @@ def _climb(
         if not got:
             break
         outcome.variants_evaluated += len(got)
+        for candidate in challengers:
+            field[candidate.key] = candidate
+        # The leader is in the running too: a step that improves on nothing must leave
+        # the leader as a survivor rather than dropping it for its own challengers.
+        last_round = [*got.values(), leader]
         best = min(got.values(), key=lambda m: (-m.dps, m.key))
         # The tie rule decides whether a step was real. Without it the climb walks
         # uphill on Monte Carlo noise and reports the walk as a finding.
@@ -761,14 +792,15 @@ def _climb(
                 f"the leader at {iterations} iterations."
             )
             break
-        for candidate in challengers:
-            field[candidate.key] = candidate
         leader_key, leader = best.key, best
     else:
         outcome.notes.append(
             f"The climb used all {steps} of its steps, so a longer climb might have "
             f"found more. The step limit bounds how far this search travelled."
         )
+
+    survivors, _, _ = prune(last_round, MAX_VARIANTS_PER_ROUND)
+    return survivors
 
 
 def _measure_in_batches(
