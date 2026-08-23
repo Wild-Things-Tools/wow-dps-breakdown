@@ -343,10 +343,17 @@ class Selection:
 
     #: Whether the *purchased* bit was set. A node the game **grants** carries
     #: ``selected`` without ``purchased`` and sits at one rank, which is a different
-    #: wire record from a node bought up to rank one. 277 of the 6,422 selected
-    #: records in the 85 shipped MID1+MID2 profiles are granted ones, so this is not a
-    #: corner case, and deriving the bit from ``rank == 1`` would be wrong for every
-    #: granted node whose ``max_ranks`` is greater than one.
+    #: wire record from a node bought up to rank one -- so the bit cannot be derived
+    #: from ``rank == 1``, which is what most single-rank talents hold. Measured on
+    #: 69a46e1, 2026-08-23: **232 of the 5,433 selected records** in the 72 MID1+MID2
+    #: profiles that decode are granted, spread over every one of them.
+    #:
+    #: A **granted node cannot say which entry it is**: the record ends at this bit, so
+    #: the format writes no choice index and simc reads the node's first entry. That is
+    #: why ``encode_loadout`` refuses a granted selection carrying one rather than
+    #: dropping it -- dropped, the mutant encodes to the *unmutated build's own hash*.
+    #: No shipped profile is in that state (0 of the 232 granted records sit on a
+    #: multi-entry node), which is why nothing caught it.
     purchased: bool = True
 
     #: Whether the *partially ranked* bit was set, or ``None`` to derive it as
@@ -355,14 +362,27 @@ class Selection:
     #: ``None`` is the right default for anything built by hand or by a mutation:
     #: the bit then always agrees with the rank. It is recorded explicitly by
     #: ``decode_loadout`` so that a string whose bit *disagrees* with its rank still
-    #: re-encodes byte-identically -- one MID1 profile is in exactly that state, and
-    #: simc refuses it ("Partial rank for node N but all N ranks are allocated.").
+    #: re-encodes byte-identically. One MID1 hash is in exactly that state and simc
+    #: refuses it ("Partial rank for node N but all N ranks are allocated."), but note
+    #: what it took to see: that hash is one of the 13 that do not decode, so the record
+    #: only appears when the stream is read past the point ``decode_loadout`` raises.
+    #: No profile that decodes carries a partial bit at full rank.
     partial: bool | None = None
 
     #: The choice index if the *choice* bit was written, otherwise ``None``. Not
-    #: derivable from ``node_type``: 78 records in MID1's rotted profiles are choice
-    #: nodes written **without** the bit and 89 are plain nodes written **with** it,
-    #: so the encoder has to be told rather than to infer.
+    #: derivable from ``node_type``, and the evidence needs its provenance stated
+    #: because the two available readings differ by an order of magnitude (69a46e1,
+    #: 2026-08-23):
+    #:
+    #: * over the **72 profiles that decode**: 10 choice nodes written *without* the
+    #:   bit and 3 plain nodes written *with* it, all in MID1;
+    #: * reading all 85 hashes and **ignoring the choice-index bound** that stops
+    #:   ``decode_loadout`` on the 13 rotted MID1 ones: 78 and 89.
+    #:
+    #: The larger pair is mostly the rotted streams describing themselves after they
+    #: have lost sync, so it is not 85 profiles' worth of evidence for anything. Either
+    #: way the bit is recorded and never inferred: 13 real cases is 13 too many, and a
+    #: build that comes back with a different entry is not a build that came back.
     choice_index: int | None = None
 
 

@@ -1545,23 +1545,36 @@ as a choice index pointing past a single-entry node. The check lives in
 `test_every_shipped_profile_round_trips_byte_identically` and is skipped unless
 `WOWDPS_SIMC_DIR` names a checkout, because the 686 KB trait table is not committed.
 
-Four wire facts the encoder cannot derive, each measured over those 85 hashes:
+Four wire facts the encoder cannot derive. **Two readings of the corpus exist and they
+differ by an order of magnitude, so each figure says which one produced it** -- a
+*complete* decode covers only the 72 hashes that decode, while reading all 85 means
+reading the 13 rotted MID1 ones past the point `decode_loadout` raises, where the stream
+has lost sync and is describing itself. Both are below, measured on 69a46e1, 2026-08-23:
 
 - **The purchased bit is not "rank > 1".** A node the game *grants* is selected without
-  being purchased and sits at one rank. **277 of the 6,422 selected records** are
-  granted, so this is the common case; writing the bit anyway adds a partial-rank bit
-  and a choice bit behind it and desynchronises everything after.
-- **The choice bit is not "is this a choice node".** MID1's rotted profiles carry 89
-  records with the bit on a plain node and 78 choice nodes written without it. The
-  encoder is told, never infers -- `Selection.choice_index` is `None` when no bit was
-  written.
+  being purchased and sits at one rank, which is where most single-rank talents sit too.
+  **232 of the 5,433 selected records** in the 72 decodable profiles are granted, spread
+  over every one of them (277 of 6,422 reading all 85). Writing the bit anyway adds a
+  partial-rank bit and a choice bit behind it and desynchronises everything after.
+- **The choice bit is not "is this a choice node".** Ten choice nodes written *without*
+  the bit and three plain nodes written *with* it, all in MID1, over the decodable
+  corpus -- 78 and 89 reading all 85, which is mostly the desynced streams and not
+  evidence about profiles. Thirteen real cases is enough: the encoder is told, never
+  infers, and `Selection.choice_index` is `None` when no bit was written.
 - **The partial bit is derived from the rank, except when it disagrees.** simc's
   exporter writes `rank == max_rank -> 0`, so `partial=None` (derive) is right for
-  anything built by hand. One MID1 profile sets the bit on a node holding all its ranks
-  -- refusal 9 above -- and reproducing that needs the recorded bit.
+  anything built by hand. One MID1 hash sets the bit on a node holding all its ranks --
+  refusal 9 above -- and it is one of the 13, so that record is only visible past the
+  raise. Reproducing it still needs the recorded bit.
 - **The 128-bit tree hash is zeros.** simc's own exporter does `put_bit( tree_bits, 0 )`,
   commented "0-filled to bypass validation, as GetTreeHash() is unavailable externally".
   Zero in all 85 hashes, so writing zeros loses nothing.
+
+The corrected figures are the ones a reader gets by re-running the corpus test's own
+route (`profiles.discover` plus `decode_loadout`); the larger pair needs a decoder that
+ignores the choice-index bound, which nothing here ships. That is the whole reason for
+stating the method: the numbers had been carried as "the 85 shipped profiles", which no
+complete decode can produce, and a re-measurement would have read as data that moved.
 
 **Framing is the fifth, and it is not padding pedantry.** The format has no length
 field, so a string can be longer or shorter than the shortest one carrying its loadout,
@@ -1573,13 +1586,82 @@ without it those four are the only hashes that do not round-trip. The replay tri
 to the source length **only when the trimmed bits are zero**, so a mutation that selects
 a node late in the tree gets a longer string rather than a silently truncated one.
 
+### The mutation whose hash is the build it started from
+
+**The worst failure available to this module, and it is not a crash.** A node the game
+*grants* is written selected-but-not-purchased and its record **ends there**: the format
+writes it no rank and no choice index, and simc reads it back as the node's **first
+entry at one rank**. So a granted choice node flipped to its other entry encoded to a
+string byte-identical to the unmutated build's. `decode` read the original entry back,
+`validate_loadout` returned legal with zero findings, and a talent search would have
+attributed the base build's DPS to a variant it never simulated. Nothing downstream
+could see it, because there is nothing wrong with the hash.
+
+Both layers refuse it now -- `_selection` will not build a granted selection carrying an
+entry or a rank, `encode_loadout` will not write one -- and the escape is to *purchase*
+the node, which is a different edit and spends a point. The property is stated as a test
+over 600 seeded mutations rather than examples, because every example anybody wrote
+passed: mutate, encode, decode, assert the round trip takes what the mutant takes and
+that a mutant taking something different encodes differently.
+
+**No shipped profile is in this state**, which is why nothing caught it: over both tiers
+232 selected records are granted and **none of them is a multi-entry node**. The
+end-to-end run below constructs one, because a state simc accepts and no profile happens
+to occupy is exactly where a search goes first.
+
+The same rule covers the smaller cases: `encode_loadout` bounds the choice index against
+the node's entry count (the bound `decode_loadout` already enforced inbound), and
+`_with` no longer carries the donor string's `spare_bits` onto a mutation. `framing` *is*
+carried, deliberately -- the encoder replays it and that is what makes an unchanged build
+come back byte-identical -- and the two fields look alike and are opposite.
+
+**A rank move preserves each tree's total, asserted rather than trusted.** `move_rank`
+broke that promise two ways at once: on the diagonal (`source == target`) it read the
+target's rank before deselecting the source and the tree *gained* points, and across two
+hero sub-trees the same-tree guard passed on `tree_index` while the rank landed outside
+`in_tree(TREE_HERO)` and a point was *destroyed*. Both produced builds `validate_loadout`
+called legal, and the budget check cannot catch the first because `derive_point_budget`
+is a ceiling from the observed maximum -- 35 class points becoming 36 clears it. Both are
+now refused by name, and `_totals_preserved` asserts the arithmetic afterwards: the named
+guards are a list of the cases somebody thought of.
+
 ### What the validator checks, because simc does not
 
 simc validates the eleven things above and **nothing else** -- no unlock edges, no point
 gates, no point budget. It will simulate for ten minutes a build that cannot exist. So
-`validate_loadout` splits the question in two: `Finding.simc_refuses` names a hash not
-worth spending a simulation on, and everything else names a build simc will happily run
-and a player could not have.
+`validate_loadout` splits the question **three** ways, and the split is the honesty rule
+rather than taxonomy:
+
+| flag | claim | whose words the `message` is |
+|---|---|---|
+| `simc_refuses` | simc will not load this hash | **simc's**, punctuation included, so it can be grepped out of a run's stderr |
+| `unencodable` | `encode_loadout` will not write it, so simc is never asked | **ours** -- there is no simc line to quote |
+| neither | a build simc runs happily and a player could not have | ours |
+
+They are independent, not exclusive: a choice index past the node's last entry is both.
+The two-way split shipped three findings carrying `simc_refuses` with wordings simc
+**never emits** -- "Node N is not a node of this class." among them, which
+`parse_traits_hash` cannot say at all because `generate_tree_nodes` hands it the class's
+own nodes. A caller matching real stderr against the prediction then finds nothing and
+cannot tell its own misprediction from a simc version change.
+
+Two more things the validator has to say and did not. The **serialization version** is
+checked: it is the cheapest of the eleven to predict and the only one this encoder can
+introduce by itself, and a `Loadout(version=1, ...)` produced a well-formed hash that
+`validate_loadout` called legal. And a **rank the hash never carries** -- an over-max
+rank with the partial bit clear -- is reported once, as `rank_not_written`, and is *not*
+a simc refusal: simc reads a legal build at full rank and refuses nothing, so a search
+skipping `simc_refusals` was discarding builds simc accepts.
+
+**The hero sub-tree can be indeterminate, and that is not the same as legal.**
+`Loadout.in_tree(TREE_HERO)` narrows hero nodes to the tree the SELECTION node names and
+falls back to keeping *everything* when no node names one, or two disagree. Right for the
+tree view, wrong for a gate or a budget, which then measure a spend pooled from two
+trees. Measured on `MID2_Rogue_Outlaw`: dropping its selection node takes the hero spend
+from **14 to 15**, pooled over sub-trees 51 and 52 -- the build carries a node the
+narrowing was correctly excluding. Neither check can say which tree it should have used
+and neither is worth refusing over (a build with no selection node is an intermediate
+state of a hero swap), so it goes in `Validation.unchecked` beside the unlock edges.
 
 **`req_points` was parsed all along and never read.** Column 6 of `trait_data.inc`,
 values 0/1/8/20/23 in MID2. Run over the 35 shipped MID2 profiles: 1,614 selections sit
@@ -1628,13 +1710,35 @@ findings" and "nothing was looked at" are different answers and only one of them
 honest about an unreachable capstone. Populating it is a mapping of node id to unlocked
 nodes plus a `source` string; nothing else changes.
 
-**Verified against simc end to end**, not only by unit test. Seven builds generated
-through these primitives from `MID2_Rogue_Outlaw`, run at `iterations=1`: the five the
-validator called legal were accepted (exit 0) and produced five different DPS figures,
-the hero swap reading back as Fatebound; the naive hero swap through the donor's
-selection node was refused with **exit 81** and refusal 6 verbatim; and the gate breach
--- 12 class points under a 23-point gate -- was **accepted by simc and simulated**,
-which is the whole argument for the validator existing.
+**Verified against simc end to end**, not only by unit test. Builds generated through
+these primitives from `MID2_Rogue_Outlaw`, each run as `simc PROFILE.simc talents=HASH
+iterations=1000 threads=4 deterministic=1` on simc 1210-01 (`69a46e1`), 2026-08-23:
+
+| case | validator | simc | DPS |
+|---|---|---|---|
+| base (unmutated) | legal | exit 0 | 256,698 |
+| node 90638 written as **granted** at entry 0 (Echoing Reprimand) | legal | exit 0 | 248,722 |
+| the same node **bought** at entry 0 -- the control | legal | exit 0 | 248,722 |
+| the same node **bought** at entry 1 (Forced Induction) | legal | exit 0 | **256,698** |
+| choice flip, node 90655 | legal | exit 0 | 244,636 |
+| rank move 90644 -> 90641 | legal | exit 0 | 243,924 |
+| deselect 90645, select 90643 | legal | exit 0 | 241,932 |
+| hero swap -> Fatebound, own selection node | legal | exit 0 | 197,838 |
+| hero swap via the **donor's** selection node | simc refuses | **exit 81** | -- |
+| gate breach: 12 class points under a 23 gate | illegal | exit 0 | 163,007 |
+
+Every build the validator called legal was accepted, and the refused one printed
+`Hero tree selection node 99844 entry 123375 is not for the player's spec, ignoring.` --
+**verbatim what the validator predicted**, punctuation included, and exit 81 rather than
+the "ignoring" the wording promises. The gate breach is a build no player could have,
+accepted and simulated, which is the whole argument for the validator existing.
+
+The four granted-node rows are the severe finding above, demonstrated: flipping that node
+is now **refused by the editor**, and the string the old encoder produced for the flip is
+byte-identical to the granted build's own hash -- checked in the run, not asserted. The
+control matters as much as the mutation: buying entry 0 changes the *record* and returns
+248,722 to the DPS, so the number moves with the entry and not with the purchased bit.
+Buying entry 1 gives a different hash, reads back as entry 112523, and returns 256,698.
 
 ### What is not drawn, and why
 
