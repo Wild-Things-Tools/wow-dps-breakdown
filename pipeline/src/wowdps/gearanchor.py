@@ -296,21 +296,59 @@ def read_kit(path: Path) -> list[GearLine]:
     return parse_gear_lines(path.read_text(encoding="utf-8", errors="replace"))
 
 
-#: Piece counts that turn a set on. simc has exactly two thresholds per set and
-#: ``item_set_bonus.inc`` states them per row, but every set in the table is 2/4, so
-#: the mapping is written rather than derived. A set with different thresholds would
-#: need this to become a lookup -- it would not be silently wrong, it would enforce
-#: the wrong pair and the description would say which pair it enforced.
+#: The piece counts a raid tier's set turns on at, and the default when a caller has
+#: no set in hand. Named because they are what the tally and the tests read, not
+#: because they are true of every set: **thresholds are per set and are read out of
+#: the table**. Enumerated on simc 69a46e1, of the 29 sets in ``item_set_bonus.inc``
+#: 17 carry a 2-piece alone, ``MID_UWP`` carries 2 and 3, and ``DF_RT`` carries 2, 4
+#: and 6. Both Midnight raid tiers are 2/4, which is why writing 2/4 down was
+#: correct for MID2 and wrong as a justification.
 SET_NONE, SET_TWO, SET_FOUR = 0, 2, 4
+DEFAULT_THRESHOLDS: tuple[int, ...] = (SET_TWO, SET_FOUR)
 
 
-def set_state(pieces: int) -> int:
-    """Which bonus state a piece count puts an actor in."""
-    if pieces >= SET_FOUR:
-        return SET_FOUR
-    if pieces >= SET_TWO:
-        return SET_TWO
-    return SET_NONE
+def set_state(pieces: int, thresholds: tuple[int, ...] = DEFAULT_THRESHOLDS) -> int:
+    """Which bonus state a piece count puts an actor in: the highest threshold met."""
+    met = [threshold for threshold in thresholds if pieces >= threshold]
+    return max(met) if met else SET_NONE
+
+
+@dataclass(frozen=True)
+class SetToken:
+    """One set's option name and the piece counts it ships a bonus for.
+
+    Carried together so every ``(token, threshold)`` pair written is one simc has.
+    **Cross-checked against simc rather than reasoned about**, on 69a46e1: the
+    vocabulary ``generate_set_bonus_options()`` prints when an option is rejected
+    holds 42 entries, and the 42 this emits for MID2's Arcane Mage are the same 42.
+
+    Where simc's tolerance actually ends, measured the same day, because guessing it
+    the pessimistic way is still guessing:
+
+    * ``bite_of_zuljan_4pc=0`` on a set with no four-piece is **accepted** and the
+      sim runs. ``parse_set_bonus_option`` validates the token and only bounds the
+      index by ``B_MAX``.
+    * ``bite_of_zuljan_9pc=0`` is rejected, as is any token no set carries.
+    * A token belonging to a set the actor's **class** has no row for is rejected:
+      ``shadowlands_season_3_2pc=0`` on MID2's Devastation Evoker exits **80** with
+      no DPS, because ``SL3`` ships for twelve classes and not that one.
+
+    So the threshold is about writing what exists; the *class* is what avoids the
+    failure. And do not take the printed vocabulary as the class-safe list --
+    measured, it is **byte-identical for Mage and Evoker**, so it advertises the very
+    option simc then refuses. simc's error message is a list of what the table holds,
+    not of what this actor may pass.
+    """
+
+    option: str
+    thresholds: tuple[int, ...] = DEFAULT_THRESHOLDS
+
+    def options(self, pieces: int) -> tuple[str, ...]:
+        """``set_bonus=`` lines putting this set at ``pieces``, one per threshold."""
+        return tuple(
+            f"set_bonus={self.option}_{threshold}pc={1 if pieces >= threshold else 0}"
+            for threshold in self.thresholds
+        )
 
 
 _ITEM_ROW = re.compile(r'^\s*\{ "((?:[^"\\]|\\.)*)", (.*) \},\s*$')
@@ -383,6 +421,7 @@ def derive_set_pieces(
     tier: str,
     sets: list[TierSet],
     item_sets: dict[int, int],
+    thresholds: tuple[int, ...] = DEFAULT_THRESHOLDS,
 ) -> tuple[int, dict[int, int]]:
     """The set state most of the tier's shipped profiles are in, and the tally.
 
@@ -405,7 +444,7 @@ def derive_set_pieces(
         ids = set_ids_for(sets, tier, profile.wow_class)
         if not ids:
             continue
-        state = set_state(count_set_pieces(read_kit(profile.path), ids, item_sets))
+        state = set_state(count_set_pieces(read_kit(profile.path), ids, item_sets), thresholds)
         tally[state] = tally.get(state, 0) + 1
     if not tally:
         return SET_NONE, tally
@@ -430,6 +469,9 @@ class AnchorTarget:
     band: tuple[int, int]
     #: simc's option token for this tier's set, or ``None`` for a tier shipping none.
     set_option: str | None
+    #: The piece counts that token ships a bonus for, read off simc's table rather
+    #: than assumed to be 2 and 4. See ``SetToken``.
+    set_thresholds: tuple[int, ...] = DEFAULT_THRESHOLDS
     #: The set's name for the class being anchored, when one was asked for. Display
     #: only -- the token is what enables the bonus.
     set_name: str = ""
@@ -441,9 +483,11 @@ class AnchorTarget:
     #: How the tier voted: state -> how many shipped profiles are in it. Published, so
     #: a split tier reads as split rather than as a verdict.
     set_tally: tuple[tuple[int, int], ...] = ()
-    #: Tokens written to zero: every other numbered tier of the same expansion. A kit
-    #: still wearing last season's four-piece would otherwise carry it in silently.
-    zeroed_options: tuple[str, ...] = ()
+    #: Written to zero: every other set token the class can wear, each at its own
+    #: thresholds. A kit still wearing last season's four-piece -- or one of this
+    #: expansion's crafted 2-pieces, which ten of MID2's forty damage profiles do --
+    #: would otherwise carry it into the anchor silently.
+    zeroed: tuple[SetToken, ...] = ()
 
     @property
     def ilevel_evidence(self) -> str:
@@ -467,8 +511,13 @@ class AnchorTarget:
         low, high = self.band
         return f"{low}" if low == high else f"{low}-{high}"
 
+    @property
+    def zeroed_options(self) -> tuple[str, ...]:
+        """The tokens written to zero, for display and for the published description."""
+        return tuple(token.option for token in self.zeroed)
+
     def set_options(self) -> tuple[str, ...]:
-        """``set_bonus=`` lines: this tier's set on, every other tier's set off.
+        """``set_bonus=`` lines: this tier's set on, every other set off.
 
         Written in both directions for the reason ``buffsweep.crossover_variants``
         writes its zeroes: a profile already wearing either set would otherwise carry
@@ -477,13 +526,9 @@ class AnchorTarget:
         """
         options: list[str] = []
         if self.set_option:
-            two = 1 if self.set_pieces >= SET_TWO else 0
-            four = 1 if self.set_pieces >= SET_FOUR else 0
-            options.append(f"set_bonus={self.set_option}_2pc={two}")
-            options.append(f"set_bonus={self.set_option}_4pc={four}")
-        for token in self.zeroed_options:
-            options.append(f"set_bonus={token}_2pc=0")
-            options.append(f"set_bonus={token}_4pc=0")
+            options.extend(SetToken(self.set_option, self.set_thresholds).options(self.set_pieces))
+        for token in self.zeroed:
+            options.extend(token.options(SET_NONE))
         return tuple(options)
 
     def to_json(self) -> dict:
@@ -545,9 +590,17 @@ def derive_target(
 
     option: str | None = None
     name = ""
-    zeroed: list[str] = []
+    zeroed: tuple[SetToken, ...] = ()
+    thresholds = DEFAULT_THRESHOLDS
     pieces = SET_NONE
     tally: dict[int, int] = {}
+    class_id = CLASS_IDS.get(wow_class) if wow_class else None
+    if wow_class and class_id is None:
+        raise AnchorError(
+            f"simc knows no class named {wow_class!r}; its own token spelling is "
+            f"'deathknight' where this table is keyed on 'Death Knight'. Pass a name "
+            f"from talenttree.CLASS_IDS, or None to leave the anchor class-agnostic."
+        )
     if sets is not None:
         if item_sets is None:
             raise AnchorError(
@@ -567,51 +620,78 @@ def derive_target(
                 f"tier {tier} carries more than one set bonus token ({', '.join(options)}); "
                 f"which one a computed build wears is a decision, not a default"
             )
-        if option and wow_class:
-            class_id = CLASS_IDS.get(wow_class)
-            named = [entry.name for entry in current if entry.class_id == class_id]
-            name = named[0] if named else ""
         if option:
-            pieces, tally = derive_set_pieces(profiles, tier, sets, item_sets)
-        zeroed = sorted(_other_tier_options(sets, tier, option))
+            named = [entry for entry in current if entry.class_id == class_id]
+            name = named[0].name if named else ""
+            for entry in current:
+                if entry.thresholds:
+                    thresholds = entry.thresholds
+                    break
+            pieces, tally = derive_set_pieces(profiles, tier, sets, item_sets, thresholds)
+        zeroed = other_set_tokens(sets, option, class_id)
 
     return AnchorTarget(
         tier=tier,
         ilevel=band[0],
         band=band,
         set_option=option,
+        set_thresholds=thresholds,
         set_name=name,
         set_pieces=pieces,
         set_tally=tuple(sorted(tally.items())),
-        zeroed_options=tuple(zeroed),
+        zeroed=zeroed,
     )
 
 
-_TIER_NAME = re.compile(r"([A-Za-z]+)(\d+)")
+def other_set_tokens(
+    sets: list[TierSet], current: str | None, class_id: int | None
+) -> tuple[SetToken, ...]:
+    """Every set token but the anchor's own that the class being anchored can wear.
 
+    **This used to be bounded to other *numbered* tiers of the same expansion**, on
+    the argument that zeroing everything would be a wall of no-op options and that a
+    previous season's set is the only one a real character might still be wearing.
+    Both halves were wrong, and measured wrong on MID2's own profiles at simc
+    69a46e1:
 
-def _other_tier_options(sets: list[TierSet], tier: str, current: str | None) -> set[str]:
-    """Set tokens belonging to other numbered tiers of the same expansion.
+    * The bound was expressed as ``fullmatch("([A-Za-z]+)(\\d+)")`` on the tier label,
+      which the eight un-numbered Midnight tiers fail on the underscore. ``MID_BOZ``,
+      ``MID_VB`` and six more are real 2-piece bonuses of this very expansion, and
+      **ten of MID2's forty damage profiles wear two or more pieces of one** -- all
+      four Frost and Unholy Death Knight builds carry ``bite_of_zuljan``, Balance
+      Druid carries ``voidlight_bindings``. So the anchor left an unstated set bonus
+      standing on a quarter of the tier.
+    * "Other seasons of this expansion" is not the set a character might still be
+      wearing either. MID2's Havoc profile wears a full ``thewarwithin_season_3``
+      four-piece, from the expansion before.
 
-    Bounded on purpose. Zeroing every token simc ships would be a wall of no-op
-    options on every variant; zeroing none would let a kit carry a previous season's
-    four-piece into a build that is supposed to be wearing this one's. The
-    expansion's own other seasons are the set a real character might still be wearing,
-    and the prefix is read off the tier name with the same expression
-    ``profiles.available_tiers`` uses to decide what a tier name is.
+    Zeroing everything is the only bound that cannot let an unstated bonus through,
+    which is this module's whole thesis applied to itself. The cost is measured and
+    small: 41 option lines for a Mage on 69a46e1, parsed once per actor.
+
+    Scoped by class because the option is only valid for a class the set exists for
+    -- ``set_bonus_t::parse_set_bonus_option`` skips rows of another class and then
+    rejects the whole option. Measured on 69a46e1: ``SL3`` ships for twelve classes
+    and not for Evoker, and ``set_bonus=shadowlands_season_3_2pc=0`` on MID2's
+    Devastation profile exits **80** with no DPS at all. With no class in hand only
+    the tokens *every* class in the table can wear are returned, which is the
+    conservative direction: an option nobody can reach costs a line, one nobody can
+    parse costs the run.
     """
-    match = _TIER_NAME.fullmatch(tier)
-    if not match:
-        return set()
-    prefix = match.group(1)
-    found: set[str] = set()
+    by_option: dict[str, tuple[set[int], set[int]]] = {}
     for entry in sets:
-        other = _TIER_NAME.fullmatch(entry.tier)
-        if not other or other.group(1) != prefix or entry.tier == tier:
+        if not entry.option or entry.option == current:
             continue
-        if entry.option and entry.option != current:
-            found.add(entry.option)
-    return found
+        classes, thresholds = by_option.setdefault(entry.option, (set(), set()))
+        classes.add(entry.class_id)
+        thresholds.update(entry.thresholds or DEFAULT_THRESHOLDS)
+    every_class = {entry.class_id for entry in sets}
+    found: list[SetToken] = []
+    for option, (classes, thresholds) in by_option.items():
+        wearable = class_id in classes if class_id is not None else classes >= every_class
+        if wearable:
+            found.append(SetToken(option=option, thresholds=tuple(sorted(thresholds))))
+    return tuple(sorted(found, key=lambda token: token.option))
 
 
 @dataclass(frozen=True)

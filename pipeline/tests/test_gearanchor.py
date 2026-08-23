@@ -33,9 +33,35 @@ static const std::array<dbc_item_data_t, 4> __item_data_chunk0 { {
 """
 
 MID2_SETS = [
-    TierSet(name="Primal Attire", option="midnight_season_2", tier="MID2", class_id=8, set_id=2060),
-    TierSet(name="Old Attire", option="midnight_season_1", tier="MID1", class_id=8, set_id=1900),
+    TierSet(
+        name="Primal Attire",
+        option="midnight_season_2",
+        tier="MID2",
+        class_id=8,
+        set_id=2060,
+        thresholds=(2, 4),
+    ),
+    TierSet(
+        name="Old Attire",
+        option="midnight_season_1",
+        tier="MID1",
+        class_id=8,
+        set_id=1900,
+        thresholds=(2, 4),
+    ),
 ]
+
+#: The shape the old tier-label bound could not see: a set of this expansion whose
+#: label carries no season number, with a 2-piece and nothing above it. Both halves
+#: are real -- simc ships eight such Midnight sets, all 2-piece only.
+CRAFTED_SET = TierSet(
+    name="Bite of Zul'jan",
+    option="bite_of_zuljan",
+    tier="MID_BOZ",
+    class_id=8,
+    set_id=1970,
+    thresholds=(2,),
+)
 
 
 def write_items(tmp_path):
@@ -327,6 +353,66 @@ def test_last_seasons_set_is_written_to_zero(tmp_path):
     assert target.zeroed_options == ("midnight_season_1",)
     assert "set_bonus=midnight_season_1_2pc=0" in target.set_options()
     assert "set_bonus=midnight_season_1_4pc=0" in target.set_options()
+
+
+def test_an_unnumbered_set_of_this_expansion_is_zeroed_too(tmp_path):
+    """The tier-label bound skipped every Midnight set whose label has no number.
+
+    ``MID_BOZ``, ``MID_VB`` and six more are real 2-piece bonuses, and measured on
+    simc 69a46e1 **ten of MID2's forty damage profiles wear two or more pieces of
+    one** -- all four Frost and Unholy Death Knight builds carry ``bite_of_zuljan``.
+    Two kits anchored to the same target therefore differed by an unstated set bonus,
+    which is the second variable this module exists to remove.
+    """
+    item_sets = gearanchor.parse_item_sets(write_items(tmp_path))
+    profiles = [profile(tmp_path, "a", FOUR_PIECE, item_level=334)]
+    target = gearanchor.derive_target(
+        profiles, "MID2", [*MID2_SETS, CRAFTED_SET], item_sets, wow_class="Mage"
+    )
+
+    assert "bite_of_zuljan" in target.zeroed_options
+    assert "set_bonus=bite_of_zuljan_2pc=0" in target.set_options()
+
+
+def test_a_set_is_zeroed_only_at_the_piece_counts_it_actually_has(tmp_path):
+    """The emitted list has to be simc's own option vocabulary, not a guess at it.
+
+    Enumerated on simc 69a46e1: of 29 sets, 17 are 2-piece only, ``MID_UWP`` is 2/3
+    and ``DF_RT`` is 2/4/6. Reading the thresholds is what makes the 42 lines this
+    emits for MID2's Arcane Mage the same 42 simc's own ``generate_set_bonus_options``
+    prints. simc does tolerate ``_4pc`` on a 2-piece set today -- measured, it runs --
+    so this is about writing what exists rather than about a crash.
+    """
+    item_sets = gearanchor.parse_item_sets(write_items(tmp_path))
+    profiles = [profile(tmp_path, "a", FOUR_PIECE, item_level=334)]
+    target = gearanchor.derive_target(
+        profiles, "MID2", [*MID2_SETS, CRAFTED_SET], item_sets, wow_class="Mage"
+    )
+
+    assert "set_bonus=bite_of_zuljan_4pc=0" not in target.set_options()
+    # The thresholds are read per set, so the raid tier beside it keeps both.
+    assert "set_bonus=midnight_season_1_4pc=0" in target.set_options()
+
+
+def test_a_set_the_class_cannot_wear_is_not_written_at_all(tmp_path):
+    """The option is invalid for a class the set has no row for, not merely useless.
+
+    ``parse_set_bonus_option`` skips rows of another class and then rejects the whole
+    option. Measured on simc 69a46e1: ``SL3`` ships for twelve classes and not for
+    Evoker, and ``set_bonus=shadowlands_season_3_2pc=0`` on MID2's Devastation
+    profile exits **80** with no DPS. A token list that ignored the class would take
+    every Evoker anchor down.
+    """
+    item_sets = gearanchor.parse_item_sets(write_items(tmp_path))
+    profiles = [profile(tmp_path, "a", FOUR_PIECE, item_level=334)]
+    warrior_only = TierSet(
+        name="Warrior Only", option="warriors_own", tier="MID_WO", class_id=1, thresholds=(2,)
+    )
+    target = gearanchor.derive_target(
+        profiles, "MID2", [*MID2_SETS, warrior_only], item_sets, wow_class="Mage"
+    )
+
+    assert "warriors_own" not in target.zeroed_options
 
 
 # --------------------------------------------------------------------------------
