@@ -16,6 +16,7 @@ from wowdps.talentedit import (
     PointBudget,
     TalentEditError,
     UnlockEdges,
+    _totals_preserved,
     derive_point_budget,
     deselect_node,
     move_rank,
@@ -674,3 +675,45 @@ def _replaced(loadout: Loadout, selection) -> Loadout:
             selection if s.node_id == selection.node_id else s for s in loadout.selections
         ),
     )
+
+
+def test_a_rank_move_onto_the_same_node_is_refused():
+    """The diagonal a sweep over (source, target) pairs hits on every node it visits.
+    The target's rank was read before the source was deselected, so the node came back
+    holding its own rank *plus* the ranks moved and the tree gained them -- an
+    over-budget build ``validate_loadout`` called legal, because the derived budget is
+    a ceiling from the observed maximum and 35 class points becoming 36 clears it."""
+    nodes = sample_nodes()
+    build = select_node(empty(), nodes, 20, rank=1)
+    with pytest.raises(TalentEditError, match="itself"):
+        move_rank(build, nodes, source_node=20, target_node=20)
+    assert build.points(TREE_SPEC) == 1
+
+
+def test_a_rank_move_across_two_hero_sub_trees_is_refused():
+    """Every hero node of every hero tree carries ``TREE_HERO``, so the same-tree guard
+    passed and the rank landed in the tree the build does not play. It then fell outside
+    ``Loadout.in_tree(TREE_HERO)`` and the hero total silently *dropped* by one."""
+    nodes = sample_nodes()
+    build = select_node(swap_hero_tree(empty(), nodes, 51), nodes, 30)
+    assert build.sub_tree == 51 and build.points(TREE_HERO) == 1
+    with pytest.raises(TalentEditError, match="sub tree"):
+        move_rank(build, nodes, source_node=30, target_node=31)
+
+
+def test_the_point_total_invariant_is_asserted_and_not_only_trusted():
+    """The backstop behind both of the above, driven directly.
+
+    Through the public API no rank move can change a tree's total today -- the two
+    named guards cover both ways anybody has found -- so a test that went through
+    ``move_rank`` would pass with the assertion deleted, which is a test that proves
+    nothing. It is called with two loadouts that differ instead, which is what the
+    assertion is for: the named guards are a list of the cases somebody thought of, and
+    this one says the arithmetic came out whatever the case was.
+    """
+    nodes = sample_nodes()
+    before = select_node(empty(), nodes, 20, rank=1)
+    after = select_node(empty(), nodes, 20, rank=2)
+    with pytest.raises(TalentEditError, match="from 1 to 2 points"):
+        _totals_preserved(before, after, what="a test")
+    assert _totals_preserved(before, before, what="a test") is before

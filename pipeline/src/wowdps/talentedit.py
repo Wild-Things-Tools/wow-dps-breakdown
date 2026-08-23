@@ -273,9 +273,30 @@ def move_rank(
     A source emptied by the move is dropped; a target not yet taken is taken. Both are
     the same edit seen from the two ends, and making the caller special-case them is
     how an off-by-one point appears in a sweep.
+
+    Two ways of leaving the total alone that this did not, both found by reading the
+    code rather than by a failing test, and both producing a build ``validate_loadout``
+    called legal:
+
+    * **the diagonal.** ``source_node == target_node`` read the target's rank before the
+      source was deselected, so the node came back holding its own rank plus the ranks
+      "moved", and the tree gained them. A sweep enumerating (source, target) pairs hits
+      the diagonal on every node it visits.
+    * **two hero sub-trees.** The same-tree guard compared ``tree_index``, and every
+      hero node of every hero tree carries ``TREE_HERO``. Moving a rank to a node of the
+      tree the build does not play spends the point outside
+      ``Loadout.in_tree(TREE_HERO)``, so the hero total silently *dropped* by one.
+
+    Both are refused by name below, and the invariant is then asserted centrally by
+    ``_totals_preserved`` -- see there for why the assertion is worth keeping alongside
+    the named guards.
     """
     if ranks < 1:
         raise TalentEditError("a rank move must move at least one rank")
+    if source_node == target_node:
+        raise TalentEditError(
+            f"node {source_node} cannot give ranks to itself; a rank move needs two nodes"
+        )
     source = selected(loadout, source_node)
     if source is None:
         raise TalentEditError(f"node {source_node} is not selected, so it has no rank to give")
@@ -292,17 +313,62 @@ def move_rank(
         )
 
     target = selected(loadout, target_node)
+    if source_tree == TREE_HERO:
+        landing = _landing_entry(nodes, target_node, target)
+        if landing.sub_tree != source.sub_tree:
+            raise TalentEditError(
+                f"node {source_node} is in hero sub tree {source.sub_tree} and node "
+                f"{target_node} in sub tree {landing.sub_tree}; a build plays one hero tree, "
+                f"so a rank moved across the two leaves the one it plays"
+            )
+
     target_rank = (target.rank if target else 0) + ranks
     moved = deselect_node(loadout, source_node)
     if source.rank > ranks:
         moved = select_node(moved, nodes, source_node, rank=source.rank - ranks)
-    return select_node(
+    moved = select_node(
         moved,
         nodes,
         target_node,
         rank=target_rank,
         choice_index=target.choice_index if target else None,
     )
+    return _totals_preserved(
+        loadout,
+        moved,
+        what=f"moving {ranks} rank(s) from node {source_node} to node {target_node}",
+    )
+
+
+def _landing_entry(nodes: dict[int, list[Trait]], node_id: int, current: Selection | None) -> Trait:
+    """The entry ``select_node`` will land this node on, which is what a hero move has
+    to judge: a hero *node* can belong to two sub-trees, so the node id alone does not
+    say which tree a rank ends up in."""
+    entries = _entries(nodes, node_id)
+    index = current.choice_index if current and current.choice_index is not None else 0
+    return entries[index] if index < len(entries) else entries[0]
+
+
+def _totals_preserved(before: Loadout, after: Loadout, *, what: str) -> Loadout:
+    """Refuse an edit that claims to move points and does not.
+
+    The invariant asserted centrally rather than trusted per function, because both
+    ways of breaking it shipped at once and neither was visible from the mutation that
+    caused it -- an over-budget build and an under-budget one, both of which
+    ``validate_loadout`` called legal (``derive_point_budget`` is a ceiling from the
+    observed maximum, so 35 class points becoming 36 does not trip it either).
+
+    A named guard says *why* an edit is refused; this says *that* the arithmetic came
+    out. Keep both: the guards are a list of the cases somebody thought of.
+    """
+    for tree in POINT_TREES:
+        spent_before, spent_after = before.points(tree), after.points(tree)
+        if spent_before != spent_after:
+            raise TalentEditError(
+                f"{what} took the {_TREE_NAMES[tree]} tree from {spent_before} to "
+                f"{spent_after} points; a rank move leaves every tree's total alone"
+            )
+    return after
 
 
 def selection_node_for_spec(nodes: dict[int, list[Trait]], spec_id: int) -> int:
