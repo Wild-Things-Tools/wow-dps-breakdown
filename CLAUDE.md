@@ -931,11 +931,79 @@ Tanks are discovered too, which makes the answer independent of `--include-tanks
 well as of the shard: measured on 22b442e, MID2 tallies 33 at the four-piece against 2
 at none with tanks and 26 against 2 without -- the same verdict from a wider base.
 
-**Which of simc's two item tables** is the question `talent-trees` already answers, and
-it is answered the same way: from the published manifest's `simc.ptr`. Measured on
-22b442e on 2026-08-23 the live and PTR tables give byte-identical tallies for MID2
-(12,260 items carry an `id_set` in both), so it changes nothing today -- which is
-exactly the kind of agreement that stops being true without announcing itself.
+**Which of simc's two item tables is stated on the command line** (`wowdps build
+--ptr/--no-ptr`), the way `gear-anchor` states it. It used to be read out of
+`<--out>/<tier>/index.json`, and that is the first of the two defects below.
+
+### It worked locally and could not work in CI, twice over
+
+Both found on 2026-08-23, the day after the flag shipped, and neither ever raised.
+The published MID2 dataset carried `tierSetComparable` on **0 of 36** rows while a
+local run over the same profiles flagged two -- which is the signature of this class
+of defect: the feature is not broken, it is simply never reached.
+
+**The shard bundle carried none of the tables.** `_tier_set_reference` derives the
+simc checkout as `profiles_dir.parent`, and the nightly runs `wowdps build --profiles
+bundle/profiles`, so it looks in `bundle/engine/dbc/generated` -- where `sims.yml`
+copied `trait_data*.inc` and nothing else. `parse_tier_sets` then raised
+`FileNotFoundError`, the function warned and returned `None` (correctly: a missing
+table must never cost a night of simulations), and no build was flagged anywhere.
+`sims.yml` copies `item_set_bonus*.inc` and `item_data*.inc` too now.
+
+**Both variants, and the cost is not the raw size.** Measured on 625a591:
+`item_data.inc` and `item_data_ptr.inc` are 52.5 MB raw, which roughly triples a
+bundle already holding a ~30 MB stripped binary -- but the tables are text and
+deflate 11.4:1, so the *artifact*, which is what twelve shards actually download,
+grows by **4.64 MB** (`item_set_bonus*` adds 28 KB). Carrying one variant would save
+2.3 MB and reintroduce the failure: which one is read is a run-time choice, and a
+bundle holding only the other fails by warning and flagging nothing. Same glob shape
+as `trait_data*.inc`, for the same reason. Copying the whole of
+`engine/dbc/generated`, as `gear.yml` and `buffs.yml` do, is 157 MB raw and 15 MB
+compressed -- so the targeted copy is the cheap option, not the expensive one.
+
+**The PTR flag was read from a file that cannot exist.** `<--out>/<tier>/index.json`,
+where the nightly passes `--out shard`, a fresh empty directory -- so `ptr` was never
+anything but `False`. The docstring called this *"the same question `talent-trees`
+answers, and it is answered the same way"*, and it is not: `cmd_talent_trees` takes an
+explicit `--ptr` and falls back to a manifest under an `--out` that **is** the
+published dataset, while `cmd_build`'s `--out` is where this run writes. A docstring
+describing a mechanism the code does not implement, again.
+
+### `manifest.simc.ptr` does not mean "built against PTR data"
+
+The deeper reason that manifest could not have answered it, and it is worth knowing
+before anything else reaches for the field. Measured on simc 625a591, 2026-08-23:
+
+- `simc.ptr` is `report["ptr_enabled"]`, which `engine/report/json/report_json.cpp`
+  sets to **`SC_USE_PTR`** -- a compile-time constant, defined as 1 in
+  `engine/config.hpp` on simc's midnight branch. It is true of every binary this
+  project builds and says only that the binary *carries* PTR data.
+- What a run *used* is `sim.players[].dbc.version_used`, and against the exact argv
+  `simc_runner.build_command` produces it is **`Live`**. Nothing here passes `ptr=1`.
+- And the option only bites **before** the profile path: simc copies the sim's dbc
+  into the player while parsing the profile, so `simc PROFILE ptr=1` is silently a
+  no-op. Measured on MID2 Arcane, 1000 deterministic iterations, Patchwerk at one
+  target: `version_used` is `Live`, `Live`, `PTR` for no option / after / before --
+  and the DPS is **176,364.3 in all three**, because the two tables agree today.
+  A first attempt at this line quoted 169,135 against 188,911 from *one-iteration*
+  runs and read it as "a different game"; that was Monte Carlo noise, and it is the
+  exact mistake this file's own convention about uncertainty exists to prevent.
+
+So the tier-set check reads the **live** tables, which is what the sims read, and the
+default follows `simc_runner.USES_PTR_DATA` rather than being written down twice.
+`test_build_command_never_enables_ptr_data` fails if a scenario ever starts asking for
+PTR data. The accidental old default happened to be the right table; it just was not
+chosen, and the next person to reach for `simc.ptr` would have "fixed" it to the
+wrong one.
+
+**Two things deliberately not changed.** `simc_metadata` still publishes `ptr: true`
+and reads the tier's `wowVersion`/`hotfixDate` out of the report's **PTR** dbc block
+(69382) while the actor used the Live one (69404, hotfix 2026-08-22) -- so the patch
+panel is naming a build the numbers were not produced against. And `talent-trees`
+still picks its trait table from that same field. Both are findings for a human, not
+changes made in passing: correcting either moves published data, and simc's live and
+PTR tables agree today in all three places (12,260 items with an `id_set` and 376 set
+rows, equal maps, on both 22b442e and 625a591).
 
 **What it flags today**, MID2 at 22b442e: 14 of the 40 damage builds simc ships or has
 written down -- the two Arcane ones, plus all twelve disabled profiles, which wear no
@@ -949,13 +1017,43 @@ rather than folded into the item-level one. Of the tier's 28 *shipped* damage bu
 only the two Arcane ones are flagged. MID1 flags nothing shipped -- all 50 of its
 profiles wear four pieces -- so no published byte moves there.
 
-**The dataset states it; the view does not draw it yet.** `web/` renders
-`gearComparable === false` as a faded bar, a "gear differs" mark and a caption
-sentence, and the new field is simply unknown to it -- harmless, and invisible. What a
-follow-up needs is named in the pull request: `BuildLike`/`types.ts` gain the field,
-`UnvalidatedMark` gains a third `Mark` with its own wording, and if `buildOpacity` is
-widened to cover it then `OverviewView`'s caption has to stop saying "a different item
-level", because it would then be describing two different claims with one sentence.
+**The view draws it now**, and the three edits the pull request named are done:
+`BuildLike`/`types.ts` carry the field, `UnvalidatedMark` draws a third `Mark`, and
+`buildOpacity` fades on either flag with `OverviewView`'s caption rewritten so the
+fade no longer claims an item-level gap it may not have.
+
+Two decisions in that follow-up are not the obvious ones and are worth keeping:
+
+- **The mark reads "tier set differs", not "wears no tier set"**, which is what the
+  pull request suggested and what MID2's two builds actually do. The flag is
+  *symmetric* and multi-state -- it fires on any build whose state is not the tier's,
+  so a build wearing the set where the tier does not carries the identical boolean.
+  Naming a direction the boolean does not carry is the `inRotation` failure exactly: a
+  label promising more than its computation delivers, wrong in the direction nobody
+  checks. The direction is a sentence and it is in the build's own `caveats`, which
+  the spec page already renders. The parallel wording with "gear differs" is a bonus
+  rather than the reason -- same shape, different subject, so the two-flag split reads
+  at a glance.
+- **`buildOpacity` covers both flags, and that is not a merge of the two claims.** It
+  answers the one question they share -- *can this bar be ranked against the ones
+  beside it* -- which both answer no to. A second visual channel would have to be a
+  colour, and class colour is the primary encoding with no slot free. Without the
+  widening the two Arcane builds are flagged everywhere except the place the flag
+  matters: the Overview opens on the chart, so the first thing a reader sees would
+  draw a 13-14% set deficit as an ordinary bar. The caption then names each reason in
+  its own clause, drawn only when a row on screen carries that flag.
+
+  It names them rather than counting them, on purpose. The reasons **overlap** -- the
+  disabled profiles are behind on item level *and* wear no set -- so on MID2 the counts
+  are 8 and 10 over 10 faded bars, and a reader who added them would get 18.
+
+**Nothing on the site changes until a run regenerates the data.** Measured
+2026-08-23 against the committed dataset at `f02f23b`: `tierSetComparable` appears on
+**zero of MID2's 36 rows** and in none of the spec files. PR #35 landed the pipeline
+and no `wowdps build` has run since, so the finding is invisible for a second reason
+underneath the one this follow-up fixes -- the field is not published yet. The view was
+verified against a locally injected copy of the ten rows the pipeline would flag; the
+committed data was restored untouched.
 
 ### What the anchor actually did
 

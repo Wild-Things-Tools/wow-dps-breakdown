@@ -122,6 +122,27 @@ jobs:
           mkdir -p bundle/engine/dbc/generated
           cp simc/engine/dbc/generated/trait_data*.inc bundle/engine/dbc/generated/
 
+          # And the two tables `wowdps build` needs to say which builds wear the
+          # tier set: `item_set_bonus` for the sets, `item_data` for the `id_set` on
+          # each equipped piece. Without them `cli._tier_set_reference` warns and
+          # returns None -- correctly, since a missing table must never cost a night
+          # of simulations -- and no build is flagged anywhere in the published
+          # dataset. That is how it stood from the day the flag was added: it worked
+          # from a full checkout and could not work here.
+          #
+          # `item_data.inc` is 26 MB and there are two of it, which is the whole of
+          # the cost question. Measured on simc 625a591: 52.5 MB raw, but the tables
+          # are text and deflate 11.4:1, so the artifact -- which is what actually
+          # crosses the wire, twelve times -- grows by 4.6 MB. Both variants rather
+          # than one, for 2.3 MB more: which of the two the pipeline reads is a
+          # run-time choice (`wowdps build --ptr`), and a bundle carrying only the
+          # other one fails by warning and flagging nothing, which is precisely the
+          # silent failure being fixed here. Same glob as trait_data above, for the
+          # same reason. Copying the whole of engine/dbc/generated, as gear.yml and
+          # buffs.yml do, would be 157 MB raw and 15 MB compressed.
+          cp simc/engine/dbc/generated/item_set_bonus*.inc bundle/engine/dbc/generated/
+          cp simc/engine/dbc/generated/item_data*.inc bundle/engine/dbc/generated/
+
           # Smoke test: does the binary we just built run at all?
           #
           # It must not be pinned to one named profile. Profiles from a past tier can

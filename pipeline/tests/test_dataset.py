@@ -471,3 +471,204 @@ def test_an_item_level_gap_and_a_set_gap_are_two_flags_because_a_build_can_have_
     )
     both = disabled.summary()
     assert both["gearComparable"] is False and both["tierSetComparable"] is False
+
+
+# --- The reference has to survive the trip into CI ------------------------------
+#
+# It did not. `tierSetComparable` worked from a full simc checkout and could not work
+# in the nightly, for two independent reasons, and neither raised: the shard bundle
+# carried none of the tables the check reads, and the live/PTR choice was read out of
+# a manifest under `--out`, which a sharded run points at a fresh empty directory.
+# Measured against the published MID2 dataset before the fix: the flag appears on
+# **0 of 36** rows, while a local run over the same profiles flags two.
+
+
+def _bundle_globs():
+    """The `engine/dbc/generated` files `sims.yml` actually packages, as globs.
+
+    Read out of the workflow rather than written down again. The point of the test
+    below is that the bundle is *sufficient*, and a second copy of the file list
+    here would let the two drift in exactly the direction that went unnoticed.
+    """
+    import re
+
+    workflow = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "sims.yml"
+    return re.findall(
+        r"cp\s+simc/engine/dbc/generated/(\S+)\s+bundle/engine/dbc/generated/",
+        workflow.read_text(encoding="utf-8"),
+    )
+
+
+def _simc_checkout(tmp_path, *, ptr_set_id=None, tables=True):
+    """A simc source tree: profiles plus the whole of `engine/dbc/generated`.
+
+    ``ptr_set_id`` writes the ``*_ptr.inc`` variants with a different set id, so the
+    live and PTR tables give measurably different answers. simc's real ones agree
+    today -- 12,260 items carry an ``id_set`` in each and the two maps are equal on
+    625a591 -- which is why a fixture has to manufacture the disagreement.
+    """
+    from test_gearanchor import FOUR_PIECE, ITEM_DATA_INC, NO_PIECE, SET_BONUS_INC
+
+    simc_dir = tmp_path / "simc"
+    generated = simc_dir / "engine" / "dbc" / "generated"
+    generated.mkdir(parents=True)
+    (generated / "trait_data.inc").write_text("", encoding="utf-8")
+    (generated / "trait_data_ptr.inc").write_text("", encoding="utf-8")
+    if tables:
+        for name, text in (
+            ("item_data.inc", ITEM_DATA_INC),
+            ("item_data_ptr.inc", ITEM_DATA_INC),
+            ("item_set_bonus.inc", SET_BONUS_INC),
+            (
+                "item_set_bonus_ptr.inc",
+                SET_BONUS_INC.replace("2060", str(ptr_set_id)) if ptr_set_id else SET_BONUS_INC,
+            ),
+        ):
+            (generated / name).write_text(text, encoding="utf-8")
+
+    tier_dir = simc_dir / "profiles" / "MID2"
+    tier_dir.mkdir(parents=True)
+    for name, body in (
+        ("MID2_Mage_Arcane_Wearing", FOUR_PIECE),
+        ("MID2_Mage_Arcane_Also", FOUR_PIECE),
+        ("MID2_Mage_Arcane_Bare", NO_PIECE),
+    ):
+        (tier_dir / f"{name}.simc").write_text(
+            f'mage="{name}"\nspec=arcane\nlevel=80\nrole=spell\n'
+            + body.split("\n", 2)[2],  # drop the fixture's own name/spec lines
+            encoding="utf-8",
+        )
+    return simc_dir
+
+
+def _package_bundle(simc_dir, bundle):
+    """Reproduce `sims.yml`'s bundle packaging: profiles plus the copied globs."""
+    import shutil
+
+    shutil.copytree(simc_dir / "profiles", bundle / "profiles")
+    generated = bundle / "engine" / "dbc" / "generated"
+    generated.mkdir(parents=True)
+    for glob in _bundle_globs():
+        for found in sorted((simc_dir / "engine" / "dbc" / "generated").glob(glob)):
+            shutil.copy(found, generated / found.name)
+    return bundle
+
+
+def test_the_nightly_bundle_carries_every_table_the_tier_set_check_reads(tmp_path):
+    """The shard's simc directory is the bundle, and the bundle has to be enough.
+
+    `wowdps build --profiles bundle/profiles` makes `_tier_set_reference` look in
+    `bundle/engine/dbc/generated`, and `sims.yml` copied only `trait_data*.inc`
+    there. So the tables were absent in every shard, the function warned and
+    returned ``None``, and no build was flagged in the published dataset -- the
+    feature worked locally and could not work in CI.
+
+    Driven through the workflow's own copy list rather than a second copy of it, and
+    end to end through the real function, so it fails if either side moves.
+    """
+    from wowdps import cli
+
+    simc_dir = _simc_checkout(tmp_path)
+    bundle = _package_bundle(simc_dir, tmp_path / "bundle")
+
+    reference = cli._tier_set_reference(bundle / "profiles", "MID2")
+
+    assert reference is not None, f"the bundle {_bundle_globs()} is not enough to answer"
+    assert reference.state == 4
+    assert reference.tally == ((0, 1), (4, 2))
+
+
+def test_a_bundle_without_the_tables_still_costs_only_the_flag(tmp_path, caplog):
+    """A missing table must never fail a night of simulations, and does not.
+
+    This is the behaviour the defect above hid behind, and it is correct: the run
+    continues, nothing is flagged, and the dataset is the one it was before the flag
+    existed. Kept legible on purpose -- the warning names the path, the errno and
+    what is lost -- because that line is how anybody notices.
+    """
+    import logging
+
+    from wowdps import cli
+
+    simc_dir = _simc_checkout(tmp_path, tables=False)
+    bundle = _package_bundle(simc_dir, tmp_path / "bundle")
+
+    with caplog.at_level(logging.WARNING):
+        assert cli._tier_set_reference(bundle / "profiles", "MID2") is None
+    said = caplog.text
+    assert "item_set_bonus" in said and "No such file" in said
+    assert "no build will be checked" in said
+
+
+def test_which_item_table_the_check_reads_is_stated_and_not_found_in_a_directory(tmp_path):
+    """Live or PTR is an argument now, because the manifest could not answer it.
+
+    Two failures in one line. The manifest was read from ``<--out>/<tier>/index.json``
+    and the nightly passes ``--out shard``, a fresh empty directory, so ``ptr`` was
+    never anything but ``False`` -- and the flag it would have read, ``simc.ptr``, is
+    ``report["ptr_enabled"]``, i.e. ``SC_USE_PTR``, a compile constant that is 1 for
+    every binary this project builds. What the sims actually read is ``Live``.
+
+    So the answer is stated. The fixture manufactures a disagreement between the two
+    tables that simc's real ones do not have, or neither branch would prove anything.
+    """
+    from wowdps import cli
+
+    simc_dir = _simc_checkout(tmp_path, ptr_set_id=9999)
+    bundle = _package_bundle(simc_dir, tmp_path / "bundle")
+    profiles_dir = bundle / "profiles"
+
+    live = cli._tier_set_reference(profiles_dir, "MID2", ptr=False)
+    ptr = cli._tier_set_reference(profiles_dir, "MID2", ptr=True)
+
+    assert live is not None and ptr is not None
+    # The PTR table names a set nothing in the item table belongs to, so every build
+    # counts zero pieces there and the whole tier reads as wearing nothing.
+    assert (live.state, ptr.state) == (4, 0)
+    assert live.tally == ((0, 1), (4, 2)) and ptr.tally == ((0, 3),)
+
+    # And it is an argument rather than something discovered: there is no directory
+    # left whose contents could change the answer.
+    import inspect
+
+    taken = set(inspect.signature(cli._tier_set_reference).parameters)
+    assert taken == {"profiles_dir", "tier", "ptr"}
+
+
+def test_build_command_never_enables_ptr_data():
+    """``USES_PTR_DATA`` is the default the tier-set check inherits. Pin it.
+
+    Nothing here passes ``ptr=1``, and simc's own report agrees --
+    ``dbc.version_used == "Live"`` on 625a591 against this exact argv -- so
+    ``cli._tier_set_reference`` reads the live tables by default. If a scenario ever
+    starts asking for PTR data, this test is where the tier-set check finds out,
+    rather than a shard quietly measuring one game against the other's table.
+    """
+    from wowdps import scenarios, simc_runner
+    from wowdps.cli import build_parser
+    from wowdps.profiles import SpecProfile
+    from wowdps.simc_runner import SimRequest, SimSettings
+
+    profile = SpecProfile(
+        path=Path("MID2_Mage_Arcane.simc"),
+        tier="MID2",
+        wow_class="Mage",
+        spec="Arcane",
+        hero_talent="Spellslinger",
+        name_hero="Spellslinger",
+        role="spell",
+        talent_hash=None,
+    )
+    for scenario in scenarios.ALL_SCENARIOS:
+        command = simc_runner.build_command(
+            Path("simc"),
+            SimRequest(profile=profile, scenario=scenario, targets=1),
+            SimSettings(target_error=0, max_iterations=100),
+            Path("out.json"),
+        )
+        assert not any(part.startswith("ptr=") for part in command), command
+
+    assert simc_runner.USES_PTR_DATA is False
+    # The CLI default follows the constant rather than repeating it.
+    parsed = build_parser().parse_args(["build"])
+    assert parsed.ptr is simc_runner.USES_PTR_DATA is False
