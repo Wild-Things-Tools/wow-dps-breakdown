@@ -277,6 +277,11 @@ _ITEM_ROW = re.compile(r'^\s*\{ "((?:[^"\\]|\\.)*)", (.*) \},\s*$')
 #: counting the name out separately as the row regex does. Read positionally for the
 #: same reason ``equipment.discover_items`` reads its fields positionally: the table
 #: is a plain C array and there is no simc command that lists items.
+#:
+#: **This is the second place that parses that array**, and the duplication is worth
+#: knowing about: ``equipment.discover_items`` reads different columns of the same
+#: rows for the gear pools. A simc struct change breaks both, and loudly -- both
+#: check the field count -- but both have to be fixed.
 _ID_SET_FIELD = 23
 _FIELD_COUNT = 27
 
@@ -314,10 +319,12 @@ def parse_item_sets(simc_dir: Path, ptr: bool = False) -> dict[int, int]:
 def count_set_pieces(
     kit: list[GearLine], set_ids: frozenset[int], item_sets: dict[int, int]
 ) -> int:
-    """How many pieces of one set a kit is wearing."""
-    return sum(
-        1 for line in kit if line.item_id and item_sets.get(line.item_id) in set_ids and set_ids
-    )
+    """How many pieces of one set a kit is wearing.
+
+    An empty ``set_ids`` counts nothing, which is the right answer for a class the
+    tier ships no set for rather than something to guard against.
+    """
+    return sum(1 for line in kit if line.item_id and item_sets.get(line.item_id) in set_ids)
 
 
 def set_ids_for(sets: list[TierSet], tier: str, wow_class: str | None) -> frozenset[int]:
