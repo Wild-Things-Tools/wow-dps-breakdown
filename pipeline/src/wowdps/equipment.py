@@ -687,3 +687,78 @@ def discover_items(simc_dir: Path, inventory_type: int) -> list[DiscoveredItem]:
 
     found.sort(key=lambda item: (-item.base_ilevel, item.base_quality, item.name))
     return found
+
+
+#: simc's ``inventory_type`` for every slot a harvested character can wear, mapped to
+#: the option name a simc profile uses for it. Read off ``engine/dbc/item_data.hpp``
+#: and cross-checked against the tier's own profiles -- MID2's Arcane Mage equips
+#: ``head=``, ``finger1=``, ``trinket1=`` and the rest of these names, so the right
+#: hand side is what a profile actually consumes rather than a guess at one.
+#:
+#: The paired slots deliberately carry no number here. Which ring is ``finger1`` is
+#: not a property of the ring, and nothing in an item table can say it; the harvest
+#: numbers them by order of appearance instead. See ``resolve_slots``.
+INVENTORY_TYPE_SLOTS: dict[int, str] = {
+    1: "head",
+    2: "neck",
+    3: "shoulders",
+    4: "shirt",
+    5: "chest",
+    6: "waist",
+    7: "legs",
+    8: "feet",
+    9: "wrists",
+    10: "hands",
+    11: "finger",
+    12: "trinket",
+    13: "main_hand",  # one-hand
+    14: "off_hand",  # shield
+    15: "main_hand",  # ranged (bows are the main hand slot in modern WoW)
+    16: "back",
+    17: "main_hand",  # two-hand
+    19: "tabard",
+    20: "chest",  # robe
+    21: "main_hand",
+    22: "off_hand",
+    23: "off_hand",  # held in off-hand
+    26: "main_hand",  # ranged right
+}
+
+#: Slots a character wears two of. Ordered numbering is applied to these and to
+#: nothing else, because everywhere else the item's own inventory type is the answer.
+PAIRED_SLOTS: tuple[str, ...] = ("finger", "trinket")
+
+
+def inventory_types(simc_dir: Path) -> dict[int, int]:
+    """``item id -> inventory_type`` for every item in simc's generated table.
+
+    The reason this exists rather than a hand-written table of slot positions:
+    Warcraft Logs hands back a character's gear as a *positional array*, and the
+    meaning of each position is not stated anywhere in its schema. A table of
+    "index 12 is the first trinket" would be an assertion about somebody else's
+    payload, and the failure mode is the quiet one -- a ring published as a neck
+    still looks like a plausible row.
+
+    An item's slot is a property of the item, and simc already ships it. So the
+    slot is *derived* per item and the array index is kept only as evidence. An
+    item simc has never heard of resolves to nothing and is reported, the same
+    refusal ``gearpool`` makes for an item it cannot simulate.
+    """
+    generated = simc_dir / "engine" / "dbc" / "generated"
+    text = (generated / "item_data.inc").read_text(encoding="utf-8", errors="replace")
+
+    found: dict[int, int] = {}
+    for line in text.splitlines():
+        match = _ITEM_ROW.match(line)
+        if not match:
+            continue
+        rest = re.sub(r"\{[^}]*\}", "SOCKETS", match.group(2))
+        rest = re.sub(r"&__item_stats_data\[(\d+)\]", r"STATS\1", rest)
+        fields = [part.strip() for part in rest.split(",")]
+        if len(fields) < 27:
+            continue
+        try:
+            found[int(fields[0])] = int(fields[9])
+        except ValueError:
+            continue
+    return found

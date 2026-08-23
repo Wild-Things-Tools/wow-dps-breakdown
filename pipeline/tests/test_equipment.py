@@ -541,3 +541,25 @@ def test_adorn_leaves_an_item_alone_when_the_profile_wears_nothing():
     assert adorn(item, SlotAdornment()) is item
     adorned = adorn(item, SlotAdornment(gem_ids=(1,), enchant_id=2))
     assert adorned.gem_ids == (1,) and adorned.enchant_id == 2
+
+
+def test_inventory_types_reads_every_item_not_one_slots_worth(tmp_path):
+    """The lookup a harvested character's gear is named from.
+
+    ``discover_items`` answers "every item of this slot", which is the gear sweep's
+    question. Naming the slot of an item somebody already wears is the other
+    direction, and it has to cover the whole table -- a per-slot call would need the
+    answer before it could ask.
+    """
+    found = equipment.inventory_types(fake_simc(tmp_path))
+    assert found == {270161: 12, 271874: 1}
+    assert equipment.INVENTORY_TYPE_SLOTS[found[270161]] == "trinket"
+    assert equipment.INVENTORY_TYPE_SLOTS[found[271874]] == "head"
+
+
+def test_a_slot_a_character_wears_two_of_is_named_without_a_number(tmp_path):
+    """Which ring is ``finger1`` is not a property of the ring, and nothing in an
+    item table can say it. The harvest numbers them by order of appearance."""
+    for slot in equipment.PAIRED_SLOTS:
+        assert slot in equipment.INVENTORY_TYPE_SLOTS.values()
+        assert not slot[-1].isdigit()
