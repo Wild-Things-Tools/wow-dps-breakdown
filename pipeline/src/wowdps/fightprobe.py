@@ -120,7 +120,7 @@ class ProbeSettings:
     report_limit: int = 100
 
 
-def _check_budget(client: WarcraftLogsClient, ceiling: float) -> None:
+def check_budget(client: WarcraftLogsClient, ceiling: float) -> None:
     ledger = client.ledger
     if not ledger.limit_per_hour or ledger.last_reading is None:
         return
@@ -150,7 +150,7 @@ def probe_encounter(
     pages = settings.rankings_pages if settings.order in ("first", "public") else 1
     gathered = []
     for page in range(settings.rankings_page, settings.rankings_page + max(pages, 1)):
-        _check_budget(client, settings.point_ceiling)
+        check_budget(client, settings.point_ceiling)
         gathered.append(
             client.encounter_rankings(
                 encounter_id,
@@ -200,7 +200,7 @@ def probe_encounter(
 
     for code, fight_id, started_at in pairs:
         try:
-            _check_budget(client, settings.point_ceiling)
+            check_budget(client, settings.point_ceiling)
             fight = _probe_fight(client, code, fight_id, encounter_id, settings, started_at)
         except PointBudgetExhausted as exc:
             return observation, str(exc)
@@ -272,7 +272,7 @@ def _public_first_kills(
     # encounters instead of publishing eight of them.
     try:
         for page in range(1, settings.report_pages + 1):
-            _check_budget(client, settings.point_ceiling)
+            check_budget(client, settings.point_ceiling)
             payload = client.reports_in_window(
                 zone_id, start_ms, end_ms, page=page, limit=settings.report_limit
             )
@@ -286,7 +286,7 @@ def _public_first_kills(
                     continue
                 seen_codes.add(code)
                 outcome.reports_seen += 1
-                _check_budget(client, settings.point_ceiling)
+                check_budget(client, settings.point_ceiling)
                 try:
                     report_start, fights = client.report_kills(code)
                 except WarcraftLogsError as exc:
@@ -384,7 +384,7 @@ def _probe_fight(
     truncated = False
     for stream in settings.streams:
         data_type, _ = EVENT_STREAMS[stream]
-        _check_budget(client, settings.point_ceiling)
+        check_budget(client, settings.point_ceiling)
         events, cut = client.fight_events(
             code,
             fight_id,
@@ -401,7 +401,7 @@ def _probe_fight(
     presence = collected.get("damage") or collected.get("casts") or []
     aura_events = (collected.get("buffs") or []) + (collected.get("debuffs") or [])
 
-    _check_budget(client, settings.point_ceiling)
+    check_budget(client, settings.point_ceiling)
     damage_table = client.fight_table(code, fight_id, "DamageDone", view_by="Target")
     player_table = client.fight_table(code, fight_id, "DamageDone", view_by="Source")
 

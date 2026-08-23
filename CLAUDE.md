@@ -809,6 +809,12 @@ Three things it has to get right, all tested:
   is what keeps that out, and it is reported as `legacy` rather than dropped silently.
 - **Only gear lines count.** `id=` appears in other profile options too, and reading
   those would place items nobody wears.
+- **The slot list has to carry every alias simc accepts.** It did not: `_EQUIP_LINE`
+  listed `shoulder` and `wrist` where simc's shipped profiles write `shoulders=` and
+  `wrists=`, so `equipped_item_ids` matched 14 of MID2 Arcane Mage's 16 gear lines and
+  had been dropping two slots of every profile since it was written. Measured
+  2026-08-23; see "simc accepts two spellings of five slot names" in the harvest
+  section for the whole alias list and which side writes which.
 
 Two labels that are not the same thing, and the Fights view currently shows this:
 the *gear* side of MID2 is the upcoming tier, while the *fights* side is the raid
@@ -1801,6 +1807,318 @@ Two things that would otherwise bite:
   the same as "nothing changed". `describe` says which of the two it is; the summary
   step therefore clones `--filter=blob:none --no-checkout --depth 400`, which is
   metadata only and takes seconds.
+
+## Harvesting the missing characters from Warcraft Logs
+
+`harvest.py` + `wowdps harvest-builds` + `.github/workflows/harvest-builds.yml`.
+
+The section below says the missing artefact for the nine unprofiled damage specs is a
+**character** -- gear plus talents somebody has signed off -- and that this project
+will not author one, because an invented profile would be our opinion published on a
+site whose whole claim is that its numbers come from simc. Top players already run
+good characters and Warcraft Logs exposes them, which turns "which of the billions of
+talent arrangements is good" into "rank what real players actually ran".
+
+### The three fields, and where they were read
+
+Read out of the published v2 schema as mirrored by three independent third-party
+clients on **2026-08-23** -- `ToppleTheNun/mchammer`, `svenliebig/wcl-blame`,
+`math280h/go-wcl` -- which agree word for word:
+
+| Field | On | What it gives |
+|---|---|---|
+| `talentImportCode(actorID: Int!): String` | `ReportFight` | *"The import/export code for a Retail Dragonflight talent build"* -- exactly what `talents=` consumes and `talenttree.decode_loadout` reads |
+| `playerDetails(fightIDs: [Int], ...): JSON` | `Report` | *"specs, talents, gear, etc. This data is not considered frozen"* -- untyped, read defensively |
+| `characterRankings` | `Encounter` | boss -> `(report code, fight id)`, already used by `fightprobe` |
+
+**Nothing here has been sent to the live service.** There were no Warcraft Logs
+credentials in the environment this was written in, so the first CI run is a schema
+check as much as a harvest -- the same position `fightprobe` and `lootsources` were in.
+What *was* checked offline: both new documents validate against all three mirrors
+(`graphql-core`), and so do three queries this repo has already run live
+(`RANKINGS_QUERY`, `REPORT_KILLS_QUERY`, `FIGHT_STRUCTURE_QUERY`), which is the control
+showing the mirrors are a fair judge.
+
+### Two queries per kill, not two per player
+
+The cost shape is the whole design. `playerDetails` returns **every player in the
+pull**, and every actor's talent code is fetched in **one** request by aliasing
+`talentImportCode` once per actor inside a single `fights` selection. So:
+
+```
+queries = 2 (bracketing rate-limit readings) + rankings pages + 2 per sampled kill
+```
+
+A sampled kill costs the same whether one spec is wanted out of it or twenty, which is
+what makes harvesting for nine missing specs affordable at all.
+
+**`--spec` does not only narrow the file, and reading it that way was a real gap.**
+Kills come from `characterRankings`, i.e. the top *overall* damage parses, and the
+specs this command exists for -- Havoc, Arms, Fury, Feral, Devourer -- are the ones
+least likely to be in a top guild's roster. A filter applied after the rows are built
+can only narrow what those kills happened to contain, so `--spec havoc_demon_hunter`
+over ten kills could come back with zero observations and an empty `specs` array with
+nothing saying why. It now asks `spec_rankings` for *that spec's* parses, which costs
+one extra ranking query per spec -- the cheap kind -- and nothing per kill.
+
+The claim decays silently -- move the talent fetch one loop deeper and it becomes one
+request per player, the sweep still works, and the cost goes up twentyfold with
+nothing to show for it. `test_the_sweep_runs_end_to_end_and_costs_two_report_queries_per_kill`
+asserts the exact call sequence for that reason.
+
+**What that costs in points is unmeasured and this code does not guess it.** Warcraft
+Logs publishes no cost formula; the repo's rule is to read `rateLimitData`. So
+`--probe` is a first-class mode and the **workflow's default**: one kill of one
+encounter, prints the payload shapes and what the counter did, writes nothing. A
+counter that did not move is reported as **UNMEASURED**, never as zero -- the exact
+mistake that shipped here once. A per-kill figure, when one exists, is labelled
+`(measured)` and anything multiplied out of it is labelled `EXTRAPOLATION`.
+
+### The gear slot is derived, never read off the array index
+
+Warcraft Logs hands gear back as a **positional array whose meaning is stated nowhere
+in its schema**. A table saying "index 12 is the first trinket" would be an assertion
+about somebody else's payload, and the failure mode is the quiet one: a ring published
+as a neck still looks like a plausible row.
+
+An item's slot is a property of the item and simc already ships it, so
+`equipment.inventory_types` reads `item_data.inc` and the index is kept only as
+evidence. Measured on simc `22b442e`: **115,470 items parsed in 2.2 s**, and against
+the journal-derived pools in `gear_pools.json` -- **2,885 distinct item ids, zero
+disagreements** (1,253 trinkets to `trinket`, 707 necks to `neck`, 925 fingers to
+`finger`). An item simc has never heard of gets **no slot** and is published in
+`coverage.itemsWithoutASlot` rather than guessed at.
+
+The one thing the item table genuinely cannot answer is *which* of two interchangeable
+items goes in the first socket -- which ring is `finger1`, which of a dual-wielder's
+two one-handers is the main hand. That is not a property of either item, so those are
+settled by order of appearance, which is the only orderable fact available.
+
+**The hands are two sockets and were one.** Most modern one-handers are
+`INVTYPE_WEAPON` (13) for *both* copies a character carries, so a table mapping an
+inventory type to a single option name emitted `main_hand=` twice and the second
+overwrote the first in the profile -- a Rogue, Havoc, Fury, Enhancement or Frost DK
+build published wearing its off-hand as its main hand, which is exactly the "a ring
+published as a neck still looks plausible" failure this design is for. 15/17/21/26
+collapsed the same way. `INVENTORY_TYPE_SLOTS` therefore maps a type to the *sockets*
+it can occupy and `resolve_slots` allocates: constrained items first (a shield or a
+main-hand-only weapon names one socket; a one-hander names two, and a two-hander names
+two because Fury carries two), stable order within a freedom class, and a third weapon
+is reported as unplaced rather than overwriting a hand.
+
+### simc accepts two spellings of five slot names, and this repo has used both
+
+Measured **2026-08-23** against simc's `midnight` branch, because two modules here got
+this wrong in opposite directions within a day of each other:
+
+- `engine/player/player.cpp:13276-13286` registers **both** spellings of five slots:
+  `shoulders` and `shoulder`, `wrists` and `wrist`, `hands`/`hand`, `legs`/`leg`,
+  `feet`/`foot` -- plus `ring1`/`ring2` beside `finger1`/`finger2`. simc rejects
+  neither.
+- Every shipped MID2 profile writes the **plural**: `shoulders=ornaments_of_the_
+  eternal_coil,...`, `wrists=martyrs_bindings,...`, checked in five class profiles.
+
+So the rule is: **a reader accepts every alias, an emitter writes the one simc ships.**
+Both halves had been got wrong. `gearpool._EQUIP_LINE` listed only the singular and
+therefore matched **14 of the 16** gear lines of `MID2_Mage_Arcane.simc`, silently
+dropping every profile's shoulders and wrists from `equipped_item_ids` -- which is the
+authority for which raid a tier belongs to. And a slot table that omits the singular
+aliases cannot read a hand-written profile that uses them. Neither failure is loud:
+one under-collects and one mis-reads, and both produce a plausible-looking result.
+
+The emitted simc line carries `ilevel`, `gem_id` and `enchant_id` and **not** bonus
+ids. That split is this file's own measurement applied, not a style choice: bonus ids
+are inert for rings and trinkets alike, while the enchant is worth twelve times a ten
+item level step.
+
+### What a harvested build is evidence of
+
+**That a real player killed that boss at that difficulty with it.** Nothing more. Four
+things travel with every row so the claim cannot be read as larger than it is: the
+encounter, the difficulty, the date range of the sampled kills, and the report code
+plus fight id so any row can be re-opened. `characterRankings` holds **ranked parses
+only** -- a privately logged kill is invisible at any depth, which is Warcraft Logs'
+rule and not a bound of this code -- and that sentence is written into the document
+rather than left to be rediscovered.
+
+**One difficulty per run, and a foreign one is a refusal rather than a filter.** The
+rankings query is already scoped, so a fight arriving with another difficulty means the
+scoping did not hold; dropping it quietly would hide that while still producing a
+plausible file. A fight stating *no* difficulty is allowed through -- unknown is not
+the same as wrong, the same three-way rule `firstkills.kills_from_report` uses.
+
+**Character and server names are never collected.** The artefact is a build, not a
+person; report + fight + actor id identifies the observation completely. They are
+dropped at extraction rather than filtered at publication, so they never reach disk.
+
+### Dedup is on the decoded loadout, and the count is the finding
+
+simc writes the 128-bit tree hash as zeros and skips it on parse, so two exports of one
+build need not be the same string. `loadout_key` hashes the decoded content -- spec id
+plus every `(node, entry, rank)` -- because keying on the string would report thirty
+copies of one build as thirty builds, which is precisely the number this command exists
+to produce. `distinctBuilds` per spec is the headline: one means a settled spec, ten
+over ten kills means there is no consensus to harvest.
+
+**A hash that does not decode is published, never dropped.** It is the most valuable
+thing a harvest can turn up -- either the loadout format moved or the bit reader is
+desynchronised -- and a silent drop would present a thin harvest as a complete one.
+Four rejection reasons, each a different finding: no code returned, will not decode,
+the hash's spec id disagrees with the log's spec name, and simc's own spec rule (via
+`talenttree.spec_rule_violation`, so a build simc would refuse is caught **offline**
+rather than after a downstream sweep has paid for it).
+
+### Verified against real hashes, since real harvested ones do not exist yet
+
+A shipped talent hash and a harvested one are the same kind of object, so MID2's own
+committed builds are the only real corpus available without credentials. Measured on
+simc `22b442e` against the dataset at `453049d`:
+
+- **36 of 36 committed MID2 hashes pass all four checks**, across 22 distinct
+  (class, spec) pairs.
+- The hero tree the harvest names agrees with the dataset's own `heroTalent` on
+  **36 of 36** -- an independent cross-check, since those names came from
+  `herotrees.py` by a different route.
+- Control, so this is not simply saying yes: an Arcane hash labelled Fire comes back
+  `spec_mismatch | hash states spec 62, the log says Fire (63)`.
+
+`test_every_committed_build_hash_survives_the_harvest_validator` keeps that repeatable;
+it skips unless `WOWDPS_SIMC_SOURCE` names a checkout, because the pinned tests above it
+are hermetic on purpose.
+
+### Warcraft Logs spells a class and a spec without spaces. simc spells them with.
+
+**This is the one that decided whether the feature worked at all, and it is not
+visible from any angle except running it.** WCL sends `DeathKnight`, `DemonHunter`,
+`BeastMastery`; `talenttree.CLASS_IDS` is keyed on `Death Knight` and simc's spec
+table says `Beast Mastery`. Executed against the first version:
+
+```
+talenttree.CLASS_IDS.get("DeathKnight")          -> None
+talenttree.CLASS_IDS.get("DemonHunter")          -> None
+spec_ids.get(("Hunter", "BeastMastery"))         -> None
+```
+
+So **every** Death Knight and Demon Hunter observation came back `unknown_class` and
+every Beast Mastery one `unknown_spec` -- Havoc and Devourer being two of the nine
+specs the harvest exists for -- and `Observation.spec_key` emitted
+`deathknight_frost`, an id nothing else in this repository has ever written, so the
+file could not be joined to the dataset and `--spec death_knight_frost` matched
+nothing. This repo already knew: `warcraftlogs.spec_rankings` does
+`class_name.replace(" ", "")` before sending, and `profiles.CLASS_TOKENS` carries
+exactly the reverse mapping and was unused.
+
+The join runs through a fold (`harvest.fold_name`: lowercase, drop everything
+non-alphanumeric) and nothing is *stored* folded -- an observation carries simc's
+spelling, because that is what the ids are built from. It is applied at extraction
+**and** inside `validate`, so an observation built by hand downstream cannot lose it.
+
+**The fixtures are why nobody noticed**: the default `playerDetails` row said
+`"type": "Mage"`, where both spellings are the same string. The default row is a
+multi-word *class* now (`DeathKnight`/Frost) and the second standard row a multi-word
+*spec* (`Hunter`/`BeastMastery`). Any fixture in this file that is single-word on both
+axes is not testing the join.
+
+### Two things to know before extending it
+
+- **`spec_ids` is derived, not written down.** Warcraft Logs names a spec in English
+  and the hash states a number, so `sc_spec_list` + `sc_specialization_data` are joined
+  the same way the picker does it. Midnight adds a Demon Hunter spec; a hand table
+  would go stale in the patch where it matters most. Measured: **40 specs joined, 41
+  hero trees named**.
+- **`fightprobe._check_budget` is now `fightprobe.check_budget`.** The harvest enforces
+  the same point ceiling and a second copy of that rule is exactly what this file warns
+  about elsewhere.
+
+### What a stopped pass keeps, and what the probe says about itself
+
+Three failures of the same family -- a thing computed, documented, and then discarded
+one frame up -- all of which shipped in the first version:
+
+- **A budget abort discarded the encounter it stopped in.** `PointBudgetExhausted`
+  escaped `harvest_encounter` rather than returning what it had, so kills 1-8 of the
+  ninth encounter were lost after being paid for and the encounter got no summary --
+  the opposite of `fightprobe.probe_encounter`, which that function's own docstring
+  cited as the contract it followed. The reason now travels on the summary as
+  `stoppedBy`, deliberately not as a fourth return value.
+- **`DifficultyMixed` was caught nowhere.** It went through a loop handling only
+  `PointBudgetExhausted` and `WarcraftLogsError` and out of `cli.main`, which has no
+  handler, so a pass eight encounters in printed a traceback and wrote no file. It is
+  a refusal, so the run stops -- but every encounter that ran clean is written (all at
+  the difficulty that was asked for, so nothing is pooled) and the exit code says a
+  person has to read it.
+- **The probe re-fetched what the sweep had already paid for.** Rankings, player
+  details and talent codes again: eight client calls while printing "queries sent: 5",
+  so measured points were attributed to five queries and one kill and the extrapolation
+  came out ~1.6x too large -- enough to call an affordable pass unaffordable, which is
+  the one decision the probe informs. `ProbeCapture` keeps the responses. It also fixes
+  *what* it prints: handed the parsed result it said the least in exactly the case it
+  exists to diagnose, and a `--spec` probe that filtered its one kill out read as a
+  failed schema check.
+
+**Exit codes**: 0 clean, 1 the one-difficulty refusal (the workflow fails the step, so
+nothing is committed), 2 the point ceiling (a warning, as in `fight-probe.yml`). The
+step needs `set -o pipefail`, because `| tee` otherwise makes tee's status the
+pipeline's and a refusal reports as a clean run.
+
+### Workflow inputs are bound in `env:`, never interpolated into `run:`
+
+`${{ inputs.x }}` is substituted into the script **before bash parses it**, so a
+dispatched value carrying a quote and a semicolon becomes script -- in a job holding
+`contents: write` and `WCL_CLIENT_SECRET`. `harvest-builds.yml` had six such
+substitutions in its command line and three more in Summary and Commit.
+`fight-probe.yml` already does the opposite and says why; there is one pattern here,
+not two. An environment variable is data to bash however it is spelled.
+
+### `rate_limit()` must never go through the response cache
+
+`RATE_LIMIT_QUERY` takes no variables, so both bracketing readings hash to the same
+`(query, {})`. Cached, the second is served from the first one's response, the two
+readings are equal **by construction**, and `pointsSpentThisRun` is 0.0 for any pass at
+any size -- which `describe_cost` correctly reports as UNMEASURED. Measured against a
+stub whose counter moved 100 -> 118: one HTTP call, both readings 109.0.
+
+Two things make that worse than it sounds. `harvest-builds.yml` always passes
+`--cache`, so the **default probe mode could never produce the number it exists for**;
+and the cache is an `actions/cache` restored between runs, so the *first* reading would
+be a number the API returned hours ago and the delta would be wrong rather than merely
+zero. `WarcraftLogsClient.query` takes a `cache` flag and `rate_limit` is the one
+caller passing False: a cached response is a record of *then* and this query asks about
+*now*.
+
+**There are then two kinds of UNMEASURED and the output says which.** The readings are
+honest, but if the pass *between* them was served from the response cache it really did
+spend nothing, and no re-run against that cache will say more. `harvest-builds.yml`
+restores a previous run's cache, so the second probe dispatch is exactly when this
+happens; `describe_cost` prints how many queries were cache hits and that an empty
+`--cache` directory is what takes the measurement.
+
+### What is unverified
+
+Everything that needs the live service, and it is a longer list than usual because
+nothing has been sent:
+
+- **Every field name and payload shape.** In particular the *shape* of `playerDetails`
+  -- the role buckets, `combatantInfo.gear`, and the `id`/`itemLevel`/`gems`/
+  `permanentEnchant` keys the gear reader looks for. Warcraft Logs documents this table
+  as not frozen. `--probe` prints the key sets so the first run names anything that
+  moved instead of surfacing as an empty harvest.
+- **Whether `characterRankings` rows already carry gear or talents.** If they do, a
+  whole query per kill is unnecessary. `--probe` reports it; it cannot be answered
+  offline.
+- **The point cost.** Unknown. Do not read "two queries per kill" as "cheap" -- the
+  first `--order public` run in this repo moved the counter from nothing to 2880 of
+  3600 on report-level queries, which is the family `playerDetails` belongs to. If the
+  probe says a full pass is unaffordable, that is the finding.
+
+**What a probe run will now report, so the next reading can be judged.** It sends
+exactly five requests -- two uncached rate-limit readings, one rankings page, one
+`playerDetails`, one aliased talent-code query -- and `queries sent:` prints that same
+five. If the counter moves it prints the delta, the per-kill figure marked `(measured)`
+and a 240-kill figure marked `EXTRAPOLATION`. If it still prints UNMEASURED after this,
+the cause is no longer the cache: it is either that the readings genuinely did not move
+(Warcraft Logs' counter behaving as it did for the fight probe, which is itself the
+finding) or that `rateLimitData` came back absent, which prints as a different line.
 
 ## Why specs are missing: simc wrote the profiles and switched them off
 

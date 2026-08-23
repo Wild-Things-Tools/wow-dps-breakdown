@@ -199,12 +199,12 @@ def test_the_point_ceiling_stops_a_pass_before_the_api_does():
         "x", {"rateLimitData": {"limitPerHour": 3600, "pointsSpentThisHour": 3400}}
     )
     with pytest.raises(fightprobe.PointBudgetExhausted):
-        fightprobe._check_budget(client, 0.8)
+        fightprobe.check_budget(client, 0.8)
 
 
 def test_a_budget_with_no_reading_yet_does_not_stop_anything():
     client = FakeClient(structure=structure_payload(), events={}, tables={})
-    fightprobe._check_budget(client, 0.8)  # must not raise
+    fightprobe.check_budget(client, 0.8)  # must not raise
 
 
 def test_running_out_of_budget_keeps_the_fights_already_paid_for():
