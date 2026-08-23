@@ -168,6 +168,74 @@ query EncounterZone($encounterId: Int!) {
 }
 """
 
+# The gear and specialisation of every player in one pull, in one request.
+#
+# `playerDetails` is documented as "a table of information for the players of a
+# report, including their specs, talents, gear, etc. This data is not considered
+# frozen, and it can change without notice" -- so it is an untyped `JSON` scalar
+# and `harvest.player_detail_rows` reads it defensively, exactly as
+# `_ranking_entries` reads `characterRankings`.
+#
+# Scoped to one fight by `fightIDs`, which is the whole reason this is affordable:
+# unscoped it returns the players of every pull in the report. It is also what makes
+# a sampled kill cost the same whether one spec is wanted out of it or twenty --
+# the response carries the entire raid.
+#
+# `killType` is passed explicitly. Its default is `All`, and this project has
+# already paid once for the general lesson that an omitted argument is a *default*
+# rather than nothing: the server answers helpfully with a wider set and nothing
+# says so.
+PLAYER_DETAILS_QUERY = """
+query PlayerDetails($code: String!, $fightId: Int!) {
+  rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
+  reportData {
+    report(code: $code) {
+      code
+      startTime
+      playerDetails(fightIDs: [$fightId], killType: Kills, translate: true)
+    }
+  }
+}
+"""
+
+
+def talent_codes_query(actor_ids: list[int]) -> str:
+    """One query that asks for every actor's talent code in a single request.
+
+    ``ReportFight.talentImportCode`` takes one ``actorID`` and returns one string,
+    so the obvious reading is one request per player -- twenty per sampled kill, on
+    the field this project has measured to be the expensive kind. GraphQL aliases
+    collapse that to one: the same field is selected once per actor under a
+    distinct name, and the server resolves them all against a fight it has already
+    loaded.
+
+    The actor ids are written into the document rather than passed as variables
+    because the *number* of them varies per fight, and a variable list cannot
+    produce a variable number of selections. They are therefore forced through
+    ``int`` first -- an id that is not an integer is a bug in the actor extraction,
+    and letting one reach the query text would be the one place in this module
+    where a payload value becomes executable syntax.
+    """
+    if not actor_ids:
+        raise ValueError("no actor ids to ask for")
+    aliases = "\n        ".join(
+        f"a{int(actor)}: talentImportCode(actorID: {int(actor)})" for actor in actor_ids
+    )
+    return f"""
+query TalentCodes($code: String!, $fightId: Int!) {{
+  rateLimitData {{ limitPerHour pointsSpentThisHour pointsResetIn }}
+  reportData {{
+    report(code: $code) {{
+      fights(fightIDs: [$fightId]) {{
+        id
+        {aliases}
+      }}
+    }}
+  }}
+}}
+"""
+
+
 RATE_LIMIT_QUERY = """
 query RateLimit {
   rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
@@ -532,6 +600,48 @@ class WarcraftLogsClient:
         if isinstance(table, str):
             table = json.loads(table)
         return table if isinstance(table, dict) else None
+
+    def player_details(self, code: str, fight_id: int) -> object:
+        """The raw ``playerDetails`` payload for one fight.
+
+        Returned untouched rather than parsed here: the field is an untyped JSON
+        scalar whose shape Warcraft Logs explicitly declines to freeze, so reading
+        it is ``harvest.player_detail_rows``' job and an unexpected shape has to be
+        visible there rather than swallowed in the client. Same arrangement as
+        ``reports_in_window``.
+        """
+        data = self.query(
+            PLAYER_DETAILS_QUERY,
+            {"code": code, "fightId": fight_id},
+            label=f"player-details:{code}:{fight_id}",
+        )
+        return ((data.get("reportData") or {}).get("report") or {}).get("playerDetails")
+
+    def talent_import_codes(self, code: str, fight_id: int, actor_ids: list[int]) -> dict[int, str]:
+        """``actor id -> talent loadout string`` for a whole pull, in one request.
+
+        An actor the server answers ``null`` for is *absent from the result* rather
+        than present with an empty string. The field is documented to return null
+        for a non-player actor and for a pre-Dragonflight fight, and those are two
+        different findings from "this player ran no talents", which is not a state
+        that exists. ``harvest.validate`` reports the missing code as its own
+        rejection reason.
+        """
+        query = talent_codes_query(actor_ids)
+        data = self.query(
+            query,
+            {"code": code, "fightId": fight_id},
+            label=f"talent-codes:{code}:{fight_id}",
+        )
+        fights = ((data.get("reportData") or {}).get("report") or {}).get("fights") or []
+        codes: dict[int, str] = {}
+        for fight in fights:
+            if not isinstance(fight, dict):
+                continue
+            for key, value in fight.items():
+                if key.startswith("a") and key[1:].isdigit() and isinstance(value, str) and value:
+                    codes[int(key[1:])] = value
+        return codes
 
     def encounter_zone(self, encounter_id: int) -> dict:
         """The zone one encounter belongs to. `reports` is keyed on zone, not boss."""
