@@ -688,3 +688,19 @@ def test_the_tier_tally_is_derived_once_per_class_not_once_per_profile(tmp_path,
     monkeypatch.setattr(gearanchor, "derive_set_pieces", counted)
     assert anchor_tier(tmp_path, profiles_count=3) == 0
     assert calls == 1
+
+
+def test_the_description_does_not_claim_a_vote_that_never_happened(tmp_path):
+    """ "Most of the tier's shipped profiles wear none" is a tally, not a default.
+
+    A target built without deriving the state has no tally behind it, and saying so
+    is the same discipline as defaulting ``set_pieces`` to SET_NONE rather than to the
+    four-piece: no claim without the evidence for it.
+    """
+    bare = gearanchor.AnchorTarget(
+        tier="MID2", ilevel=334, band=(334, 344), set_option="midnight_season_2"
+    )
+    described = gearanchor.describe(gearanchor.apply(bare, gearanchor.parse_gear_lines(NO_PIECE)))
+
+    assert "stated without a tally" in described
+    assert "most of the tier" not in described

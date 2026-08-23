@@ -949,14 +949,15 @@ def describe(anchor: GearAnchor) -> str:
     elif target.set_pieces:
         set_part = f", wearing the {target.set_pieces}-piece {target.set_name or target.set_option}"
     else:
-        set_part = (
-            f", with no {target.set_name or target.set_option} "
-            f"(most of the tier's shipped profiles wear none)"
-        )
+        # ``set_evidence`` rather than a sentence of its own, because a target built
+        # without a tally would otherwise announce a vote that never happened -- the
+        # same claim-without-evidence the SET_NONE default exists to prevent.
+        set_part = f", with no {target.set_name or target.set_option} ({target.set_evidence})"
+    emptied = f", {len(anchor.emptied)} emptied" if anchor.emptied else ""
     return (
         f"Gear anchored to item level {target.ilevel}, the floor of the "
         f"{target.band_label} band {target.tier}'s shipped profiles state: "
         f"{moved} slot(s) normalized{from_part}, "
-        f"{len(anchor.unchanged)} already there{set_part}. "
+        f"{len(anchor.unchanged)} already there{emptied}{set_part}. "
         f"Gems, enchants and crafted stats preserved."
     )
