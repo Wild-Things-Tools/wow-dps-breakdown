@@ -312,6 +312,27 @@ def test_set_pieces_are_counted_the_way_simc_counts_them(tmp_path):
     assert gearanchor.count_set_pieces(none, set_ids, item_sets) == 0
 
 
+def test_a_class_name_simc_does_not_know_is_a_refusal(tmp_path):
+    """It used to widen to *every* class's sets, which is the worst possible answer.
+
+    ``CLASS_IDS.get(wow_class or "")`` yields None for a misspelling exactly as it
+    does for "no class asked for", and the guard then admitted all thirteen. Verified
+    on the real MID2 table: ``set_ids_for(sets, 'MID2', 'Deathknight')`` -- simc's own
+    token spelling -- returned all thirteen set ids rather than the one, so a Mage's
+    robes would have counted as Death Knight tier.
+    """
+    with pytest.raises(gearanchor.AnchorError, match="no class named"):
+        gearanchor.set_ids_for(MID2_SETS, "MID2", "Deathknight")
+
+    # None still means every class's, which is a different question, not an absence.
+    assert gearanchor.set_ids_for(MID2_SETS, "MID2", None) == frozenset({2060})
+
+    item_sets = gearanchor.parse_item_sets(write_items(tmp_path))
+    profiles = [profile(tmp_path, "a", FOUR_PIECE, item_level=334)]
+    with pytest.raises(gearanchor.AnchorError, match="no class named"):
+        gearanchor.derive_target(profiles, "MID2", MID2_SETS, item_sets, wow_class="Deathknight")
+
+
 def test_the_set_state_comes_from_the_tier_not_from_the_kit(tmp_path):
     """MID2's four Mage builds wear no set where the other twenty-four wear four.
 

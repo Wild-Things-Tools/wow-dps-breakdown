@@ -438,8 +438,25 @@ def count_set_pieces(
 
 
 def set_ids_for(sets: list[TierSet], tier: str, wow_class: str | None) -> frozenset[int]:
-    """The item-set ids of one tier's set for one class."""
-    class_id = CLASS_IDS.get(wow_class or "")
+    """The item-set ids of one tier's set for one class.
+
+    ``wow_class=None`` means every class's, which is what a caller asking about the
+    tier rather than about an actor wants. **A name this table does not know is a
+    refusal, not that.** It used to fall through the same ``None`` branch, so
+    ``set_ids_for(sets, 'MID2', 'Deathknight')`` -- simc's own token spelling against
+    a table keyed on ``'Death Knight'`` -- returned all thirteen MID2 set ids instead
+    of the one, and ``count_set_pieces`` would then have counted a Mage's robes as
+    Death Knight tier. A misspelling has to be told apart from an absence.
+    """
+    class_id: int | None = None
+    if wow_class:
+        class_id = CLASS_IDS.get(wow_class)
+        if class_id is None:
+            raise AnchorError(
+                f"simc knows no class named {wow_class!r}; its own token spelling is "
+                f"'deathknight' where this table is keyed on 'Death Knight'. Pass a "
+                f"name from talenttree.CLASS_IDS, or None for every class's."
+            )
     return frozenset(
         entry.set_id
         for entry in sets_for_tier(sets, tier)
