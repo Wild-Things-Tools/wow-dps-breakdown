@@ -441,6 +441,10 @@ def test_the_probe_reads_every_gear_entry_not_the_first():
     )
     assert "first gear entry keys:" in printed
     assert "union over 3 entries" in printed
+    # And that the reader gets them out. A key present in the payload and read
+    # under a name Warcraft Logs does not use fails exactly as silently as a key
+    # that is never sent, so the union alone does not close this.
+    assert "parsed pieces: 3, of which 1 carry a gem and 2 an enchant" in printed
 
 
 def test_an_empty_slot_is_counted_rather_than_ignored():

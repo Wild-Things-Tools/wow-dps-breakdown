@@ -1844,6 +1844,15 @@ def probe_shapes(details: object, codes: dict[int, str], rankings: dict | None) 
         # And every other entry, because the first one is the head slot and cannot
         # answer whether the gem and enchant keys are ever sent.
         lines.extend(describe_gear_keys(rows))
+        # Then the same question one layer up: a payload carrying a key proves
+        # nothing about whether *this* reader gets it out, since a key read under a
+        # name Warcraft Logs does not use fails exactly as silently as a key that is
+        # never sent. These two counts come from the parsed `GearPiece`s.
+        parsed = [piece for row in rows for piece in gear_from_row(row)[0]]
+        lines.append(
+            f"  parsed pieces: {len(parsed)}, of which {sum(1 for p in parsed if p.gem_ids)} "
+            f"carry a gem and {sum(1 for p in parsed if p.enchant_id)} an enchant"
+        )
 
     lines.append(f"talentImportCode: {len(codes)} of the fight's actors returned a code")
     if codes:
