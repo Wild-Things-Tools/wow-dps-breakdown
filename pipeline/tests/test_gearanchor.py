@@ -353,6 +353,23 @@ def test_a_tier_whose_profiles_wear_no_set_anchors_without_one(tmp_path):
     assert "set_bonus=midnight_season_2_4pc=0" in target.set_options()
 
 
+def test_an_undeclared_set_state_is_none_rather_than_the_four_piece(tmp_path):
+    """The default cannot be the thing the module exists to stop anyone hard-coding.
+
+    An ``AnchorTarget`` built without deriving the state used to emit ``_2pc=1`` and
+    ``_4pc=1`` and publish "stated without a tally" beside it. Forcing a four-piece
+    onto a kit that has none is measured at **+13.13%** on Arcane Mage, so that
+    default silently handed out the largest single effect in this module.
+    """
+    bare = gearanchor.AnchorTarget(
+        tier="MID2", ilevel=334, band=(334, 344), set_option="midnight_season_2"
+    )
+
+    assert bare.set_pieces == gearanchor.SET_NONE
+    assert "set_bonus=midnight_season_2_2pc=0" in bare.set_options()
+    assert "set_bonus=midnight_season_2_4pc=0" in bare.set_options()
+
+
 def test_a_split_tier_takes_the_lower_state(tmp_path):
     """No comparable answer exists, so take the direction that cannot flatter."""
     item_sets = gearanchor.parse_item_sets(write_items(tmp_path))

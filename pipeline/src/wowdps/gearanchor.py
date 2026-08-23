@@ -506,11 +506,18 @@ class AnchorTarget:
     #: The set's name for the class being anchored, when one was asked for. Display
     #: only -- the token is what enables the bonus.
     set_name: str = ""
-    #: How many pieces the anchor states: 4, 2 or 0. Derived from what the tier's own
-    #: shipped profiles wear -- never inherited from the kit being anchored, and never
-    #: assumed. MID2's four Mage builds wear none where the other twenty-four wear
-    #: four or five, so inheriting would put those two specs 13% behind the field.
-    set_pieces: int = SET_FOUR
+    #: How many pieces the anchor states. Derived from what the tier's own shipped
+    #: profiles wear -- never inherited from the kit being anchored, and never
+    #: assumed. MID2's Arcane builds wear none where the rest of the tier wears four
+    #: or five, so inheriting would put those specs 13% behind the field.
+    #:
+    #: **The default is no set**, and the default is the part worth stating: it used
+    #: to be the four-piece, so an ``AnchorTarget`` built without deriving the state
+    #: emitted ``_2pc=1``/``_4pc=1`` and published *"stated without a tally"* beside
+    #: it -- hard-coding the exact thing the field docstring above forbids. Nothing
+    #: undeclared can manufacture a win from here, which is the same direction the
+    #: item level's band floor and the tally's tie rule already take.
+    set_pieces: int = SET_NONE
     #: How the tier voted: state -> how many shipped profiles are in it. Published, so
     #: a split tier reads as split rather than as a verdict.
     set_tally: tuple[tuple[int, int], ...] = ()
