@@ -23,9 +23,13 @@ What is *not* in simc's data, and is not invented here:
   render as Wowhead spell links, and Wowhead's own script draws the icon -- the same
   arrangement the Loot view already uses, and the reason the tree is HTML rather than
   SVG (``power.js`` skips anything whose ``nodeName`` is not ``A`` or ``AREA``).
-- **Connector lines.** Blizzard's API has an ``unlocks`` edge list; simc has no edge
-  table at all. The grid is drawn from ``row``/``col`` without the lines rather than
-  guessing which node feeds which, because a wrong edge is a claim about the tree.
+- **Connector lines.** Blizzard's API has an ``unlocks`` edge list; simc ships no edge
+  table -- checked on ``69a46e1``, 2026-08-23, ``engine/dbc/generated/`` carries three
+  trait arrays and none of them is one, and ``trait_data_t`` has no edge field. (Its
+  *extractor* knows the DB2 table: ``dbc_extract3`` declares ``TraitEdge``. Same shape
+  as the item-source absence, so re-check rather than assume.) The grid is drawn from
+  ``row``/``col`` without the lines rather than guessing which node feeds which,
+  because a wrong edge is a claim about the tree.
 - **Hero tree names.** ``trait_data.inc`` stores the SELECTION rows with the literal
   name ``"0"``. The id is what it carries, so the id is what this module reports, and
   ``herotrees.py`` remains the thing that names a tree.

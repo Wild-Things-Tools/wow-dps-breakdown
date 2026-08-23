@@ -1598,8 +1598,25 @@ spec: 34 on all 35; hero: 14 on 33, 11 on 1, 12 on 1). It is a ceiling, delibera
 a floor -- the minimum would enshrine the two 10-point Frost Death Knight trees as the
 rule.
 
-**Unlock edges are absent and are reported as absent.** simc ships no edge table, which
-is why the tree is drawn without connector lines. The sibling `wtt-backend` has them
+**Unlock edges are absent and are reported as absent.** Checked on simc `69a46e1` on
+**2026-08-23**: `engine/dbc/generated/` ships three trait arrays -- `__trait_data_data`,
+`__trait_definition_effect_data` and `__trait_sub_tree_data` -- and no edge table, and
+`trait_data_t` in `engine/dbc/trait_data.hpp` carries no edge field. That is why the
+tree is drawn without connector lines. **The date is not decoration**: this file's own
+rule says an absence in simc's data is written with the revision and the day it was
+checked, and it records having been wrong three times about `trait_sub_tree_data`
+because nobody dated it.
+
+The absence has the same *shape* as the item-source one, one level further in, and that
+is the thing to re-check rather than the sentence above: the DB2 table exists and simc's
+**extraction toolchain knows its schema** -- `dbc_extract3/formats/12.1.0.68209.json`
+declares `TraitEdge` with `id_left_trait_node` / `id_right_trait_node`, and
+`dbc_extract3/dbc/__init__.py` names it -- but nothing generates it into the shipped
+data. So a simc release could start shipping edges without any announcement, exactly as
+it started shipping hero tree names between 2026-08-16 and 2026-08-22. Re-check
+`engine/dbc/generated/` before believing this paragraph.
+
+The sibling `wtt-backend` has them
 from Blizzard's talent-tree API (`TalentTree.tree_data`, per-node `unlocks`), but the
 only copy reachable as a *file* rather than a live credentialed call is
 `docs/api_structure/game_data_api/talent_api/talent_tree_nodes.json`: **one tree (786,

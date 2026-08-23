@@ -45,8 +45,18 @@ are the same two builds ``talenttree._THIN_CLASS_TREE`` already flags by a compl
 different route, so the gate check reproduces a known finding rather than inventing
 one, which is the strongest control available for it offline.
 
-**Unlock edges are not in simc's data at all** -- there is no edge table, which is why
-``tree_layout`` draws the grid without connector lines. They exist in Blizzard's
+**Unlock edges are not in simc's data** -- checked on simc ``69a46e1``, 2026-08-23:
+``engine/dbc/generated/`` ships three trait arrays (``__trait_data_data``,
+``__trait_definition_effect_data``, ``__trait_sub_tree_data``) and no edge table, and
+``trait_data_t`` carries no edge field. That is why ``tree_layout`` draws the grid
+without connector lines. The date belongs to the claim: simc's *extraction* toolchain
+knows the DB2 table (``dbc_extract3/formats/12.1.0.68209.json`` declares ``TraitEdge``
+with ``id_left_trait_node``/``id_right_trait_node``) and simply does not generate it, so
+this is a shipping decision that can change without notice -- which is precisely how
+``trait_sub_tree_data`` appeared, after this project had recorded its absence as
+permanent in three places.
+
+The edges exist in Blizzard's
 talent-tree API as a per-node ``unlocks`` list, and the sibling ``wtt-backend``
 repository stores them (``TalentTree.tree_data``, trimmed by
 ``apps/bnetapi/services/game_data/talent_tree.py``). They are **not wired in here**,
