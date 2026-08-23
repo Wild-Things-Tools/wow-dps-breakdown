@@ -185,6 +185,33 @@ query EncounterZone($encounterId: Int!) {
 # already paid once for the general lesson that an omitted argument is a *default*
 # rather than nothing: the server answers helpfully with a wider set and nothing
 # says so.
+#
+# **`includeCombatantInfo: true` is the whole reason this query returns gear**, and
+# it is the same lesson a second time. It was omitted; its default is `false`; and
+# the server then answers with every row's `combatantInfo` present and **empty** --
+# serialised as `[]`, not as an absent key, so nothing downstream reads as broken.
+# The first live probe (CI run 32660348582, 2026-08-23) accordingly reported
+# `combatantInfo keys: list` and `gear entries: 0 readable, 0 skipped` over fourteen
+# real players, which reads like a payload shape this code failed to parse and was
+# an argument it failed to send.
+#
+# Read from the server rather than from a mirror: `wowdps wcl-schema --type Report`
+# on 2026-08-23 (CI run 32660759853) returns
+#
+#     playerDetails: JSON
+#         difficulty: Int = 0
+#         encounterID: Int = 0
+#         endTime: Float = 0
+#         fightIDs: [Int] = []
+#         killType: KillType = All
+#         startTime: Float = 0
+#         translate: Boolean = true
+#         includeCombatantInfo: Boolean = false
+#
+# Every argument this query passes is therefore stated, and no argument it does not
+# pass is load-bearing. `Encounter.characterRankings` carries an argument of the
+# same name and the same default; nothing here uses it, because the gear has to come
+# from the sampled kill rather than from whichever pull a ranking row happens to be.
 PLAYER_DETAILS_QUERY = """
 query PlayerDetails($code: String!, $fightId: Int!) {
   rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
@@ -192,7 +219,31 @@ query PlayerDetails($code: String!, $fightId: Int!) {
     report(code: $code) {
       code
       startTime
-      playerDetails(fightIDs: [$fightId], killType: Kills, translate: true)
+      playerDetails(
+        fightIDs: [$fightId]
+        killType: Kills
+        translate: true
+        includeCombatantInfo: true
+      )
+    }
+  }
+}
+"""
+
+# One encounter's name, which is what verifies a PTR id's live twin before anything
+# is harvested from it. `Encounter.name` is `String!` -- introspected on 2026-08-23,
+# CI run 32660759853 -- so a name that comes back absent means the *encounter* is
+# absent, which is a real answer and the one `harvest.choose_encounter_id` refuses on.
+#
+# Deliberately not `ENCOUNTER_ZONE_QUERY`, which would answer as well and asks for a
+# zone nothing needs: this query is sent for an id nobody has established exists.
+ENCOUNTER_NAME_QUERY = """
+query EncounterName($encounterId: Int!) {
+  rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
+  worldData {
+    encounter(id: $encounterId) {
+      id
+      name
     }
   }
 }
@@ -668,6 +719,23 @@ class WarcraftLogsClient:
                 if key.startswith("a") and key[1:].isdigit() and isinstance(value, str) and value:
                     codes[int(key[1:])] = value
         return codes
+
+    def encounter_name(self, encounter_id: int) -> str | None:
+        """One encounter's name, or ``None`` when the schema has no such encounter.
+
+        The two answers are different and must stay different: a name is what lets
+        ``harvest.choose_encounter_id`` accept a PTR id's live twin, and ``None``
+        is what makes it refuse. ``Encounter.name`` is `String!`, so a missing name
+        can only mean a missing encounter.
+        """
+        data = self.query(
+            ENCOUNTER_NAME_QUERY,
+            {"encounterId": encounter_id},
+            label=f"encounter-name:{encounter_id}",
+        )
+        encounter = ((data.get("worldData") or {}).get("encounter")) or {}
+        name = encounter.get("name")
+        return name if isinstance(name, str) and name.strip() else None
 
     def encounter_zone(self, encounter_id: int) -> dict:
         """The zone one encounter belongs to. `reports` is keyed on zone, not boss."""

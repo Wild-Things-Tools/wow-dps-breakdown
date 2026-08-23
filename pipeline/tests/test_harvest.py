@@ -319,6 +319,61 @@ def test_gear_keeps_the_gem_and_the_enchant_and_the_simc_line_omits_bonus_ids():
     assert "bonus_id" not in line
 
 
+#: A `playerDetails` dps row exactly as the live service returned it when
+#: `includeCombatantInfo` was left at its default. Not invented: `combatantInfo` is
+#: an **empty list**, and this is what fourteen of fourteen players looked like in CI
+#: run 32660348582 on 2026-08-23.
+NO_COMBATANT_INFO_ROW = dict(DPS_ROW, combatantInfo=[])
+
+
+def test_an_empty_combatant_info_is_named_rather_than_printed_as_a_type():
+    """`combatantInfo keys: list` is a type name standing where keys belong.
+
+    That one line is why the first live probe was diagnosed as a shape this code
+    could not parse, when it was an argument this code had not sent. The probe now
+    has to say which of the two it is, in words.
+    """
+    described = harvest.describe_combatant_info(NO_COMBATANT_INFO_ROW)
+    assert "empty list" in described
+    assert "includeCombatantInfo" in described
+    assert described != "list"
+
+    # The control: a row that really does carry the block is described by its keys,
+    # so the sentence above is about the empty case and not about every case.
+    assert harvest.describe_combatant_info(DPS_ROW) == "dict, keys ['gear']"
+
+
+def test_a_non_empty_combatant_info_list_is_described_and_not_parsed():
+    """Nobody has ever seen one. A branch that read it would be a guess with the
+    authority of code, so it is reported as unobserved instead."""
+    row = dict(DPS_ROW, combatantInfo=[{"gear": [GEAR_ENTRY]}])
+    described = harvest.describe_combatant_info(row)
+    assert "never observed" in described
+    assert harvest.gear_from_row(row) == ([], 0)
+
+
+def test_a_row_with_no_gear_array_is_a_different_answer_from_a_bare_one():
+    """`([], 0)` meant both "this player wears nothing" and "no gear was requested".
+
+    `gear_entries_skipped` cannot tell them apart -- there were no entries to skip --
+    so the whole failure published as builds with `simcGear: []` and every count in
+    the file reading healthy.
+    """
+    assert harvest.gear_array(NO_COMBATANT_INFO_ROW) is None
+    assert harvest.gear_array(DPS_ROW) == [GEAR_ENTRY]
+    assert harvest.gear_array(dict(DPS_ROW, combatantInfo={"gear": []})) == []
+
+
+def test_the_probe_says_how_many_rows_carried_no_gear_at_all():
+    """The number that would have named blocker 1 in its own run output."""
+    lines = harvest.probe_shapes(
+        {"data": {"dps": [NO_COMBATANT_INFO_ROW, NO_COMBATANT_INFO_ROW], "healers": []}}, {}, None
+    )
+    printed = "\n".join(lines)
+    assert "2 of 2 dps row(s) carry no gear array at all" in printed
+    assert "includeCombatantInfo" in printed
+
+
 def test_an_empty_slot_is_counted_rather_than_ignored():
     row = {"combatantInfo": {"gear": [{"id": 0}, GEAR_ENTRY, "nonsense"]}}
     pieces, skipped = harvest.gear_from_row(row)
@@ -846,13 +901,25 @@ def test_the_query_plan_counts_requests_and_says_they_are_not_points():
 # The queries against the shape they assume
 # --------------------------------------------------------------------------------
 
-#: The fields these two queries touch, transcribed from the published v2 schema as
-#: mirrored by three independent third-party clients on 2026-08-23. It is **not**
-#: the live schema and this test is not a verification against Warcraft Logs -- the
-#: first live run is still the schema check, exactly as it was for every other query
-#: in this repository. What it does pin is the shape this code assumes: a query that
-#: grows a field nobody has established exists fails here rather than in CI an hour
-#: into a pass.
+#: The fields and arguments these queries touch.
+#:
+#: **`Report.playerDetails`, `WorldData.encounter` and `Encounter` are now
+#: introspected from the live service** rather than transcribed from a mirror:
+#: `wowdps wcl-schema --type Report --type Encounter`, CI run 32660759853,
+#: 2026-08-23. That is what settled blocker 1 -- the mirrors this file was written
+#: against do not carry `includeCombatantInfo` at all, so no amount of reading them
+#: would have found it, and the live server states it with its default:
+#:
+#:     playerDetails: JSON
+#:         ... killType: KillType = All
+#:         translate: Boolean = true
+#:         includeCombatantInfo: Boolean = false
+#:
+#: `ReportFight.talentImportCode` is still the mirrored shape and says so.
+#: What this test pins either way is the shape the code assumes: a query that grows
+#: an argument nobody has established exists fails here rather than in CI an hour
+#: into a pass. It failed here when `includeCombatantInfo` was added, which is the
+#: reason this comment could be written from a measurement.
 SCHEMA_EXCERPT = """
 scalar JSON
 enum KillType { All Encounters Kills Wipes Trash }
@@ -864,25 +931,54 @@ type Report {
   code: String!
   startTime: Float!
   fights(fightIDs: [Int]): [ReportFight]
-  playerDetails(fightIDs: [Int], killType: KillType, translate: Boolean): JSON
+  playerDetails(
+    difficulty: Int
+    encounterID: Int
+    endTime: Float
+    fightIDs: [Int]
+    killType: KillType
+    startTime: Float
+    translate: Boolean
+    includeCombatantInfo: Boolean
+  ): JSON
 }
+type Encounter { id: Int! name: String! }
+type WorldData { encounter(id: Int): Encounter }
 type ReportData { report(code: String!): Report }
 type RateLimitData { limitPerHour: Int! pointsSpentThisHour: Float! pointsResetIn: Int! }
-type Query { reportData: ReportData rateLimitData: RateLimitData }
+type Query { reportData: ReportData worldData: WorldData rateLimitData: RateLimitData }
 """
 
 
 def test_the_harvest_queries_match_the_schema_shape_they_assume():
     graphql = pytest.importorskip("graphql")
-    from wowdps.warcraftlogs import PLAYER_DETAILS_QUERY
+    from wowdps.warcraftlogs import ENCOUNTER_NAME_QUERY, PLAYER_DETAILS_QUERY
 
     schema = graphql.build_schema(SCHEMA_EXCERPT)
     for label, document in (
         ("playerDetails", PLAYER_DETAILS_QUERY),
+        ("encounterName", ENCOUNTER_NAME_QUERY),
         ("talentImportCode", talent_codes_query([12, 7])),
     ):
         errors = graphql.validate(schema, graphql.parse(document))
         assert not errors, f"{label}: {[str(error) for error in errors]}"
+
+
+def test_the_gear_query_asks_for_the_combatant_info_it_then_reads():
+    """The argument, not the parse, was blocker 1.
+
+    `includeCombatantInfo` defaults to **false** -- introspected, see above -- and
+    the server then answers with every row's `combatantInfo` present and empty
+    rather than absent. So the harvest read fourteen real players and published no
+    gear at all, with every other number in the run healthy: 14 dps rows, 14 talent
+    codes, "0 readable, 0 skipped" (CI run 32660348582, 2026-08-23).
+
+    Asserted against the query text because that is where the defect was. A test of
+    the parser cannot see this: the parser was right.
+    """
+    from wowdps.warcraftlogs import PLAYER_DETAILS_QUERY
+
+    assert "includeCombatantInfo: true" in PLAYER_DETAILS_QUERY
 
 
 # --------------------------------------------------------------------------------
@@ -952,15 +1048,27 @@ class StubClient:
     goes up twentyfold with nothing to show for it.
     """
 
-    def __init__(self, kills, roster):
+    def __init__(self, kills, roster, names=None, ranked_ids=None):
         self.kills = kills
         self.roster = roster
         self.calls: list[str] = []
+        #: ``id -> name``. The default answers one name for every id, which is what
+        #: every test written before PTR ids existed assumes.
+        self.names = names
+        #: The ids that have ranked parses. ``None`` means all of them, again so the
+        #: older tests read unchanged.
+        self.ranked_ids = ranked_ids
+
+    def _name(self, encounter_id):
+        if self.names is None:
+            return "Nek'zali the Soulcoiler"
+        return self.names.get(encounter_id)
 
     def _page(self, encounter_id):
+        ranked = self.ranked_ids is None or encounter_id in self.ranked_ids
         return {
             "id": encounter_id,
-            "name": "Nek'zali the Soulcoiler",
+            "name": self._name(encounter_id),
             "characterRankings": {
                 "rankings": [
                     {
@@ -969,8 +1077,14 @@ class StubClient:
                     }
                     for index, (code, fight) in enumerate(self.kills)
                 ]
+                if ranked
+                else []
             },
         }
+
+    def encounter_name(self, encounter_id):
+        self.calls.append(f"encounter-name:{encounter_id}")
+        return self._name(encounter_id)
 
     def player_details(self, code, fight_id):
         self.calls.append(f"player-details:{code}:{fight_id}")
@@ -1063,6 +1177,202 @@ def test_a_kill_whose_roster_is_empty_costs_no_talent_query():
     assert found == []
     assert plan.player_details == 1
     assert plan.talent_codes == 0
+
+
+# --------------------------------------------------------------------------------
+# Which encounter id the kills are actually under
+# --------------------------------------------------------------------------------
+
+#: MID2's own filed ids and the live twins CI measured them against.
+SSZORAK_PTR = 53420
+NEKZALI_PTR, NEKZALI_LIVE = 53470, 3470
+NEKZALI = "Nek'zali the Soulcoiler"
+
+
+def test_a_ptr_id_is_its_live_id_with_a_five_in_front():
+    """The rule CLAUDE.md records from two independent zone pairs. Purely the shape
+    of the number: nothing acts on it without checking the name."""
+    assert harvest.live_twin_id(NEKZALI_PTR) == NEKZALI_LIVE
+    assert harvest.live_twin_id(SSZORAK_PTR) == 3420
+    assert harvest.live_twin_id(53176) == 3176
+
+    # A live id is not a PTR id of something else.
+    assert harvest.live_twin_id(NEKZALI_LIVE) is None
+    assert harvest.live_twin_id(3176) is None
+    # And a remainder with a leading zero is not a live id at all, so 50123 is not
+    # "the PTR copy of 123" -- reading it as one would address a different boss.
+    assert harvest.live_twin_id(50123) is None
+    assert harvest.live_twin_id(5) is None
+    assert harvest.live_twin_id(0) is None
+
+
+def test_an_id_with_ranked_parses_is_harvested_as_filed_and_asks_nothing():
+    """The ordinary case must cost no extra query, or every encounter pays for the
+    PTR ones."""
+
+    def never(encounter_id):
+        raise AssertionError(f"no lookup should be sent, got {encounter_id}")
+
+    choice = harvest.choose_encounter_id(NEKZALI_LIVE, NEKZALI, True, never)
+    assert (choice.used, choice.substituted, choice.refused) == (NEKZALI_LIVE, False, False)
+    assert "as filed" in choice.reason
+
+
+def test_a_ptr_id_with_no_parses_is_read_as_its_live_twin_when_the_name_agrees():
+    """Measured in CI on 2026-08-23: 53420 returns 0 kills and 0 characterRankings,
+    3470 returns 1 kill, 100 characterRankings, 14 dps rows and 14 talent codes."""
+    choice = harvest.choose_encounter_id(NEKZALI_PTR, NEKZALI, False, {NEKZALI_LIVE: NEKZALI}.get)
+    assert choice.used == NEKZALI_LIVE
+    assert choice.substituted is True
+    assert str(NEKZALI_LIVE) in choice.reason and NEKZALI in choice.reason
+    assert choice.to_json() == {
+        "requested": NEKZALI_PTR,
+        "used": NEKZALI_LIVE,
+        "substituted": True,
+        "reason": choice.reason,
+    }
+
+
+def test_a_twin_that_names_another_boss_is_refused_rather_than_harvested():
+    """The failure this check exists for is not an empty file. It is a **full** set
+    of real builds filed under the wrong fight, which nothing downstream could
+    detect."""
+    choice = harvest.choose_encounter_id(
+        NEKZALI_PTR, NEKZALI, False, {NEKZALI_LIVE: "Somebody Else Entirely"}.get
+    )
+    assert choice.refused and choice.used is None
+    assert "different boss" in choice.reason
+    assert NEKZALI in choice.reason and "Somebody Else Entirely" in choice.reason
+
+
+def test_a_twin_the_schema_does_not_know_is_refused_with_that_reason():
+    choice = harvest.choose_encounter_id(NEKZALI_PTR, NEKZALI, False, lambda _: None)
+    assert choice.refused
+    assert "not an encounter Warcraft Logs knows" in choice.reason
+
+
+def test_an_unnamed_requested_encounter_can_never_verify_a_twin():
+    """Nothing to compare against is not the same as a match, and the flattering
+    reading of it would substitute an unverified id."""
+    choice = harvest.choose_encounter_id(NEKZALI_PTR, None, False, {NEKZALI_LIVE: NEKZALI}.get)
+    assert choice.refused
+    assert harvest.names_agree(None, NEKZALI) is False
+    assert harvest.names_agree(NEKZALI, NEKZALI) is True
+    # Two rows of one table differing in case or trailing space are one boss.
+    assert harvest.names_agree(" nek'zali the soulcoiler ", NEKZALI) is True
+
+
+def test_a_live_id_with_no_parses_has_no_twin_to_try():
+    """A boss nobody has killed yet is an ordinary state, and it is reported as
+    itself rather than as a resolution failure."""
+    choice = harvest.choose_encounter_id(NEKZALI_LIVE, NEKZALI, False, lambda _: None)
+    assert choice.refused
+    assert "not a PTR id" in choice.reason
+
+
+def test_the_sweep_harvests_the_live_twin_and_publishes_which_id_it_read():
+    """End to end, and the whole of blocker 2: MID2 files this boss under 53470,
+    that id has no ranked parses, and the kills are under 3470."""
+    client = StubClient(
+        [("aBcD1234", 7)],
+        [DPS_ROW],
+        names={NEKZALI_PTR: NEKZALI, NEKZALI_LIVE: NEKZALI},
+        ranked_ids={NEKZALI_LIVE},
+    )
+    plan = harvest.QueryPlan()
+    settings = harvest.HarvestSettings(encounter_ids=(NEKZALI_PTR,), difficulty=5, reports=1)
+
+    found, summary, _ = harvest.harvest_encounter(client, NEKZALI_PTR, settings, {}, plan, tables())
+
+    assert summary["killsRead"] == 1
+    assert found and {o.encounter_id for o in found} == {NEKZALI_LIVE}
+    # The tier's own id is still what the encounter is filed under, so
+    # fight_profiles.json keeps joining.
+    assert summary["id"] == NEKZALI_PTR
+    assert summary["idResolution"]["used"] == NEKZALI_LIVE
+    assert summary["idResolution"]["substituted"] is True
+
+    # One name lookup, and the ranking query on both ids -- the empty one and the
+    # one that answered. Nothing per kill.
+    assert plan.encounter_names == 1
+    assert client.calls == [
+        f"rankings:{NEKZALI_PTR}:1",
+        f"encounter-name:{NEKZALI_LIVE}",
+        f"rankings:{NEKZALI_LIVE}:1",
+        "player-details:aBcD1234:7",
+        "talent-codes:aBcD1234:7:1",
+    ]
+
+
+def test_a_refused_id_reads_no_kills_and_still_appears_in_the_document():
+    """An encounter nobody could harvest and an encounter nobody tried are different
+    answers, so the refusal keeps its row rather than vanishing from the file."""
+    client = StubClient(
+        [("aBcD1234", 7)],
+        [DPS_ROW],
+        names={NEKZALI_PTR: NEKZALI, NEKZALI_LIVE: "A Different Boss"},
+        ranked_ids={NEKZALI_LIVE},
+    )
+    plan = harvest.QueryPlan()
+    settings = harvest.HarvestSettings(encounter_ids=(NEKZALI_PTR,), difficulty=5, reports=1)
+
+    found, summary, _ = harvest.harvest_encounter(client, NEKZALI_PTR, settings, {}, plan, tables())
+
+    assert found == []
+    assert summary["killsRead"] == 0
+    assert summary["idResolution"]["used"] is None
+    assert "different boss" in summary["idResolution"]["reason"]
+    # Nothing report-level was paid for, and "fewer kills than requested" is not
+    # claimed about an encounter that was never read.
+    assert plan.player_details == 0
+    assert summary["fewerKillsThanRequested"] is False
+
+    document = harvest.build_document("MID2", 5, found, tables(), [summary])
+    assert document["source"]["encounters"][0]["idResolution"]["used"] is None
+
+
+def test_the_gear_of_a_harvested_kill_reaches_the_document():
+    """The other half of blocker 1, past the query: a real payload with combatant
+    info produces gear, and one without it says how many rows had none."""
+    with_gear = StubClient([("aBcD1234", 7)], [DPS_ROW])
+    without = StubClient([("aBcD1234", 7)], [NO_COMBATANT_INFO_ROW])
+    inventory = {250215: equipment.INVENTORY_TYPES["trinket"]}
+    settings = harvest.HarvestSettings(encounter_ids=(NEKZALI_LIVE,), difficulty=5, reports=1)
+
+    found, summary, _ = harvest.harvest_encounter(
+        with_gear, NEKZALI_LIVE, settings, inventory, harvest.QueryPlan(), tables()
+    )
+    assert [piece.item_id for piece in found[0].gear] == [250215]
+    assert summary["playersWithoutCombatantInfo"] == 0
+
+    blind, blind_summary, _ = harvest.harvest_encounter(
+        without, NEKZALI_LIVE, settings, inventory, harvest.QueryPlan(), tables()
+    )
+    assert blind[0].gear == ()
+    assert blind_summary["playersWithoutCombatantInfo"] == 1
+    document = harvest.build_document("MID2", 5, blind, tables(), [blind_summary])
+    assert document["coverage"]["playersWithoutCombatantInfo"] == 1
+
+
+def test_a_published_candidate_says_which_boss_and_difficulty_it_came_from():
+    """Held on the observation and not emitted, so a consumer had to join back to
+    `fights.json` -- a file a tier may not have. The document's own
+    `source.encounters[]` carries `{id, name}` and is the better of the two
+    fallbacks; neither replaces the row saying so itself."""
+    client = StubClient([("aBcD1234", 7)], [DPS_ROW])
+    settings = harvest.HarvestSettings(encounter_ids=(NEKZALI_LIVE,), difficulty=5, reports=1)
+    found, summary, _ = harvest.harvest_encounter(
+        client, NEKZALI_LIVE, settings, {}, harvest.QueryPlan(), tables()
+    )
+    document = harvest.build_document("MID2", 5, found, tables(), [summary])
+
+    source = document["specs"][0]["builds"][0]["sources"][0]
+    assert source["encounterID"] == NEKZALI_LIVE
+    assert source["encounterName"] == NEKZALI
+    assert source["difficulty"] == 5
+
+    encounter = document["source"]["encounters"][0]
+    assert (encounter["id"], encounter["name"]) == (NEKZALI_LIVE, NEKZALI)
 
 
 # --------------------------------------------------------------------------------
