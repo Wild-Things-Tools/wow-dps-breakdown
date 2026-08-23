@@ -724,10 +724,12 @@ Two things to carry away from that table:
 ### Two refusals
 
 - **A tier whose shipped profiles state no item level anywhere gets no anchor.**
-  Some profiles being silent is ordinary -- six of MID2's twenty-eight damage profiles
-  state none, including three shipped ones. Every profile being silent means the tier
-  cannot say what comparable means, and inventing a number would put every computed
-  build at a level nobody chose.
+  Some profiles being silent is ordinary: six of MID2's twenty-eight shipped damage
+  profiles state none on any gear line -- both Assassination Rogue builds, both
+  Elemental and both Enhancement Shaman builds -- and simc resolves their gear from
+  the bonus ids regardless. Every profile being silent is a different thing: the tier
+  cannot then say what comparable means, and inventing a number would put every
+  computed build at a level nobody chose.
 - **A set token without simc's item table gets no anchor either.** The token says
   which set exists; it does not say which state is comparable, and those two answers
   are 13.13% apart on a real MID2 build. `derive_target` names the fix

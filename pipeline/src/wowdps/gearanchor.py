@@ -471,11 +471,12 @@ def derive_target(
     and quietly excuse it.
 
     A tier whose shipped profiles state no item level at all is a **refusal**, not a
-    default. Six of MID2's twenty-eight damage profiles state none on any gear line
-    and three of its shipped profiles state none either, so "some profiles are
-    silent" is ordinary; "every profile is silent" means the tier cannot say what
-    comparable means, and inventing a number there would put every computed build at
-    an item level nobody chose.
+    default. Silence on some profiles is ordinary: measured on 2026-08-23, six of
+    MID2's twenty-eight shipped damage profiles state none on any gear line -- both
+    Assassination Rogue builds, both Elemental and both Enhancement Shaman builds --
+    and simc resolves their gear from the bonus ids anyway. Silence on *every*
+    profile is different: the tier then cannot say what comparable means, and
+    inventing a number would put every computed build at an item level nobody chose.
 
     ``sets`` without ``item_sets`` is a refusal for the same reason. The set token
     alone says *which* set exists, not which state a comparable build is in, and the
