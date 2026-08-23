@@ -1466,13 +1466,158 @@ Against MID2's 26 real hashes, with no API call:
 - **Whether simc will refuse a profile, and at which node.** `spec_rule_violation`
   applies simc's own rule -- a non-hero node whose `id_spec` excludes the player's
   spec -- and returns simc's own wording. Together with the `TalentDecodeError` a
-  choice-index overflow raises, that is both of simc's two phrasings for a stale
-  talent hash, **decided offline**. Checked against simc's own 2026-08-22 CI output:
+  choice-index overflow raises, that covers the two phrasings a *stale profile*
+  produces, **decided offline** -- but see the refusal table below: those two are not
+  all of them, and this file said they were. Checked against simc's own 2026-08-22 CI
+  output:
   it names node 91020 for Havoc Aldrachi Reaver and node 110203 entry 136735 for Arms
   Warrior, and this reproduces both ids exactly. Control: all 35 shipped MID2
   profiles pass, so it is not simply refusing everything. `wowdps check-profiles`
   remains the version that asks simc itself; this is the version a run with no binary
   can afford, and it is what puts a *reason* on the coverage panel.
+
+### simc's refusals, all eleven, read out of its parser
+
+**"Both of simc's two phrasings" was wrong**, and it is worth naming the shape of the
+error rather than just fixing the count. Two phrasings are what a *stale shipped
+profile* produces, which is the only thing anybody had generated when that sentence was
+written; they are not what `parse_traits_hash` can say. A hash this project *builds*
+can reach nine more. Read out of `engine/player/player.cpp` at simc **`69a46e1`**, on
+**2026-08-23**, with the exact punctuation, because these are matched against a run's
+stderr:
+
+| # | wording | when |
+|---|---|---|
+| 1 | `Invalid character '{}' found.` | outside the base64 alphabet |
+| 2 | `Not enough characters.` | shorter than the 152-bit header |
+| 3 | `Invalid serialization version.` | version is not 2 |
+| 4 | `Wrong specialization.` | header spec id is not the player's |
+| 5 | `Selected node {} entry {} is not available to player's spec.` | a non-hero node another spec owns |
+| 6 | `Hero tree selection node {} entry {} is not for the player's spec, ignoring.` | **the selection node of a different spec** |
+| 7 | `Non-choice node {} has multiple entries.` | a partial rank on a multi-entry non-tiered node |
+| 8 | `{} ranks selected for node {}, {} ranks max.` | rank above `max_ranks` |
+| 9 | `Partial rank for node {} but all {} ranks are allocated.` | the partial bit with nothing partial about it |
+| 10 | `Node {} is not a choice node but has index selection.` | the choice bit on a plain node |
+| 11 | `Index {} for choice node {} out of bounds.` | choice index past the last entry |
+
+Three things in that table are traps.
+
+**Number 6 says "ignoring" and does not ignore.** `do_error` is
+`throw std::invalid_argument`, so every one of these aborts the parse and the
+`throwaway = true` branch below it is unreachable. Measured, not inferred: a hash
+carrying another spec's selection node exits **81** with exactly that line. It is the
+one a hero-tree swap hits, because the obvious way to move a build onto another tree is
+to copy the hero records out of a build that already plays it -- and those records name
+the *donor's* selection node. A class has one selection node **per spec**: Rogue's are
+99842 (Subtlety, 261), 99843 (Outlaw, 260) and 99844 (Assassination, 259), and all 80
+selection-node entries in the table carry exactly one spec id. `swap_hero_tree` routes
+through `selection_node_for_spec` for this reason, and the test that pins it uses a
+fixture where the *wrong* node sorts first -- the first version of that test passed
+against a broken implementation because the right node happened to sort first, which is
+the same accident the real Rogue data does not grant you.
+
+**Number 5 tests the node's first entry, not the chosen one.** simc reads
+`node.front().first` before it has read the choice index, so a choice node is judged on
+entry 0 whichever entry the loadout ends up on. `spec_rule_violation` tests the *chosen*
+entry instead. The two agree on everything shipped and would disagree on a choice node
+whose entries differ in spec; left alone rather than changed in passing, and recorded
+here so nobody re-derives it as a bug.
+
+**Number 5's wording here is missing simc's final full stop.** simc's format string ends
+`player's spec.`; `spec_rule_violation` returns it without the period, and a test pins
+the shorter form. Not corrected, because the string is published in `spec-index.json`
+and rewriting it churns data for one character -- but it means the published reason is
+not byte-comparable with simc's own output. `talentedit._simc_refusals` uses simc's
+exact wording, so the two differ by that period until somebody decides.
+
+### The encoder, and what round-trips
+
+`encode_loadout` in `talenttree.py` is the inverse of `decode_loadout`; `talentedit.py`
+is the layer above it -- the mutations a talent search makes and the legality check that
+says whether the result is a build a player could have.
+
+**The bar is byte-identity, and it is met.** Measured on simc `69a46e1`, 2026-08-23,
+against every talent hash in both tiers: **72 of 72 decodable hashes come back byte for
+byte** -- all 35 MID2 profiles and 37 of MID1's 50. The other 13 MID1 hashes raise
+`TalentDecodeError` and so have no round trip to test; they are the tier rot this file
+already documents, a stored hash that no longer fits the tree, and the desync surfaces
+as a choice index pointing past a single-entry node. The check lives in
+`test_every_shipped_profile_round_trips_byte_identically` and is skipped unless
+`WOWDPS_SIMC_DIR` names a checkout, because the 686 KB trait table is not committed.
+
+Four wire facts the encoder cannot derive, each measured over those 85 hashes:
+
+- **The purchased bit is not "rank > 1".** A node the game *grants* is selected without
+  being purchased and sits at one rank. **277 of the 6,422 selected records** are
+  granted, so this is the common case; writing the bit anyway adds a partial-rank bit
+  and a choice bit behind it and desynchronises everything after.
+- **The choice bit is not "is this a choice node".** MID1's rotted profiles carry 89
+  records with the bit on a plain node and 78 choice nodes written without it. The
+  encoder is told, never infers -- `Selection.choice_index` is `None` when no bit was
+  written.
+- **The partial bit is derived from the rank, except when it disagrees.** simc's
+  exporter writes `rank == max_rank -> 0`, so `partial=None` (derive) is right for
+  anything built by hand. One MID1 profile sets the bit on a node holding all its ranks
+  -- refusal 9 above -- and reproducing that needs the recorded bit.
+- **The 128-bit tree hash is zeros.** simc's own exporter does `put_bit( tree_bits, 0 )`,
+  commented "0-filled to bypass validation, as GetTreeHash() is unavailable externally".
+  Zero in all 85 hashes, so writing zeros loses nothing.
+
+**Framing is the fifth, and it is not padding pedantry.** The format has no length
+field, so a string can be longer or shorter than the shortest one carrying its loadout,
+and both occur: **three MID2 profiles -- all three Hunters -- carry a whole extra
+character of zeros** (the exporter knew nodes simc's table does not), and one MID1
+profile ends one bit *before* its node stream does, relying on the reader returning
+zeros. `Framing` records the source's length and tail and the encoder replays them;
+without it those four are the only hashes that do not round-trip. The replay trims back
+to the source length **only when the trimmed bits are zero**, so a mutation that selects
+a node late in the tree gets a longer string rather than a silently truncated one.
+
+### What the validator checks, because simc does not
+
+simc validates the eleven things above and **nothing else** -- no unlock edges, no point
+gates, no point budget. It will simulate for ten minutes a build that cannot exist. So
+`validate_loadout` splits the question in two: `Finding.simc_refuses` names a hash not
+worth spending a simulation on, and everything else names a build simc will happily run
+and a player could not have.
+
+**`req_points` was parsed all along and never read.** Column 6 of `trait_data.inc`,
+values 0/1/8/20/23 in MID2. Run over the 35 shipped MID2 profiles: 1,614 selections sit
+behind a non-zero gate and exactly **2** violate it -- both `Rune Mastery` (gate 23) in
+the two Frost Death Knight profiles that spend **10** class points. Those are the same
+two builds `_THIN_CLASS_TREE` flags by a completely different route, so the gate check
+reproduces a known finding rather than inventing one, and the other 33 profiles pass.
+Counting the tree's spend *including* the gated node is the weaker of the two readings;
+both were measured and both flag the same two builds, so the weaker one is taken because
+it under-claims.
+
+**Point budgets are derived, never typed.** `derive_point_budget` takes the largest
+spend observed in builds somebody trusts. Over the 35 shipped MID2 profiles that is
+**37 class / 34 spec / 14 hero** (class: 35 on 27 builds, 36 on 4, 37 on 2, 10 on 2;
+spec: 34 on all 35; hero: 14 on 33, 11 on 1, 12 on 1). It is a ceiling, deliberately not
+a floor -- the minimum would enshrine the two 10-point Frost Death Knight trees as the
+rule.
+
+**Unlock edges are absent and are reported as absent.** simc ships no edge table, which
+is why the tree is drawn without connector lines. The sibling `wtt-backend` has them
+from Blizzard's talent-tree API (`TalentTree.tree_data`, per-node `unlocks`), but the
+only copy reachable as a *file* rather than a live credentialed call is
+`docs/api_structure/game_data_api/talent_api/talent_tree_nodes.json`: **one tree (786,
+Shaman) of thirteen classes, 209 nodes of which 30 carry unlocks, captured 2026-01-14**.
+Its node ids do join to simc's (183 of 209 are in simc's player-node set), so the join
+key is sound and this is a coverage problem, not a schema one. `UnlockEdges` is
+therefore shipped **unpopulated** and `Validation.unchecked` says so, because "no
+findings" and "nothing was looked at" are different answers and only one of them is
+honest about an unreachable capstone. Populating it is a mapping of node id to unlocked
+nodes plus a `source` string; nothing else changes.
+
+**Verified against simc end to end**, not only by unit test. Seven builds generated
+through these primitives from `MID2_Rogue_Outlaw`, run at `iterations=1`: the five the
+validator called legal were accepted (exit 0) and produced five different DPS figures,
+the hero swap reading back as Fatebound; the naive hero swap through the donor's
+selection node was refused with **exit 81** and refusal 6 verbatim; and the gate breach
+-- 12 class points under a 23-point gate -- was **accepted by simc and simulated**,
+which is the whole argument for the validator existing.
 
 ### What is not drawn, and why
 
