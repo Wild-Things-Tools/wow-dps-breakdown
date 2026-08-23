@@ -222,6 +222,13 @@ class Observation:
     #: file reads as "these builds wear nothing worth writing down" rather than "the
     #: gear payload moved". Only the count tells those two apart.
     gear_entries_skipped: int = 0
+    #: The row carried no gear array at all -- as opposed to one that was empty or
+    #: one whose entries could not be read. That is what an omitted
+    #: ``includeCombatantInfo: true`` produces, and the first live probe produced it
+    #: for fourteen players out of fourteen while every other number in the run
+    #: looked healthy. ``gear_entries_skipped`` cannot see it: there were no entries
+    #: to skip.
+    combatant_info_missing: bool = False
 
     @property
     def spec_key(self) -> str:
@@ -234,11 +241,25 @@ class Observation:
         return f"{_slug(self.wow_class)}_{_slug(self.spec)}"
 
     def source_json(self) -> dict:
+        """Everything needed to re-open this observation, and to say what it is of.
+
+        ``encounterName`` and ``difficulty`` were held on this dataclass and not
+        emitted, which left a consumer of a *candidate* having to join back to
+        ``fights.json`` to find out which boss and which difficulty it came from --
+        a file a tier may not have at all. The document's own
+        ``source.encounters[]`` carries ``{id, name}`` and is the better fallback of
+        the two, but neither is a substitute for the row saying so itself.
+
+        ``difficulty`` is the run's, always: a run takes one and ``DifficultyMixed``
+        refuses to pool two, so this is a denormalisation and never a second answer.
+        """
         return {
             "report": self.report,
             "fightID": self.fight_id,
             "actorID": self.actor_id,
             "encounterID": self.encounter_id,
+            "encounterName": self.encounter_name,
+            "difficulty": self.difficulty,
             "killedAt": _iso(self.killed_at_ms),
         }
 
@@ -384,16 +405,65 @@ def _ints(value: object) -> tuple[int, ...]:
     return tuple(out)
 
 
+def gear_array(row: dict) -> list | None:
+    """The gear entries of one ``playerDetails`` row, or ``None`` when it carries none.
+
+    ``None`` and ``[]`` are different answers and the whole of blocker 1 was the two
+    being indistinguishable from outside: a row whose combatant info was never
+    requested has no gear array at all, and a row that has one and is empty is a
+    player wearing nothing. Both used to leave ``gear_from_row`` returning
+    ``([], 0)``.
+    """
+    info = row.get("combatantInfo")
+    gear = info.get("gear") if isinstance(info, dict) else row.get("gear")
+    return gear if isinstance(gear, list) else None
+
+
+def describe_combatant_info(row: dict) -> str:
+    """What a row's ``combatantInfo`` *is*, in words rather than as a type name.
+
+    The probe printed ``combatantInfo keys: list``, which is the type name standing
+    where a reader expects keys -- so an argument that was never sent read exactly
+    like a payload shape this code had failed to parse, and the first live run was
+    diagnosed as the wrong problem. Measured on that run (CI 32660348582,
+    2026-08-23): fourteen real players, every one of them carrying ``[]``.
+
+    The empty list is named for what it means, because Warcraft Logs has a documented
+    reason to send it and this code has a documented way to stop it. A **non-empty**
+    list is deliberately described and not parsed: nobody has seen one, and a branch
+    written for an unobserved shape is a guess with the authority of code.
+    """
+    info = row.get("combatantInfo")
+    if isinstance(info, dict):
+        return f"dict, keys {sorted(info)}"
+    if isinstance(info, list):
+        if not info:
+            return (
+                "empty list (no combatant info in the response -- playerDetails was "
+                "asked without includeCombatantInfo: true)"
+            )
+        return (
+            f"list of {len(info)} entry/entries -- a shape this code has never "
+            f"observed and does not parse; first entry is "
+            f"{sorted(info[0]) if isinstance(info[0], dict) else type(info[0]).__name__}"
+        )
+    if info is None:
+        return "absent from the row"
+    return type(info).__name__
+
+
 def gear_from_row(row: dict) -> tuple[list[GearPiece], int]:
     """``(pieces, entries skipped)`` from a ``playerDetails`` row's combatant info.
 
     Skipped entries are counted rather than ignored: an empty slot is an ordinary
     zero-id entry and a row of them is a payload this code did not understand, and
     only the count tells those two apart from outside.
+
+    A row with **no** gear array is a third state again, and ``combatant_info_missing``
+    on the observation is what publishes it -- see ``gear_array``.
     """
-    info = row.get("combatantInfo")
-    gear = info.get("gear") if isinstance(info, dict) else row.get("gear")
-    if not isinstance(gear, list):
+    gear = gear_array(row)
+    if gear is None:
         return [], 0
 
     pieces: list[GearPiece] = []
@@ -485,6 +555,153 @@ def resolve_slots(
 # --------------------------------------------------------------------------------
 # Validating what came back
 # --------------------------------------------------------------------------------
+
+
+# --------------------------------------------------------------------------------
+# Which encounter id a boss's kills are actually under
+# --------------------------------------------------------------------------------
+
+#: A Warcraft Logs PTR encounter id is its live id **with a 5 written in front**.
+#: CLAUDE.md establishes it from two independent zone pairs -- zone 48 carries 53176
+#: where zone 46 carries 3176, and zone 54 carries 53470 where zone 53 carries 3470
+#: -- and treats it as a *feature* rather than a nuisance: "a measurement taken
+#: against 53470 cannot be mistaken for one taken against 3470", so the PTR-ness
+#: rides in the id and needs no separate flag.
+#:
+#: That is why ``fight_profiles.json`` is not rewritten to fix this. MID2 was seeded
+#: from zone 54 and its eight encounters are PTR ids on purpose; renumbering them
+#: would relabel every PTR fight measurement filed under them as a live one. The
+#: harvest's *addressing* is what has to move, and only for the harvest.
+_PTR_ID_PREFIX = "5"
+
+
+def live_twin_id(encounter_id: int) -> int | None:
+    """The live encounter id a PTR id is the twin of, or ``None``.
+
+    Purely the shape of the number -- it says nothing about whether either id
+    exists, and nothing here acts on it without checking the name. A remainder with
+    a leading zero is refused: no live id is written ``0123``, so ``50123`` is not a
+    PTR id of 123 and reading it as one would silently address a different boss.
+    """
+    if encounter_id <= 0:
+        return None
+    digits = str(encounter_id)
+    if not digits.startswith(_PTR_ID_PREFIX) or len(digits) < 2:
+        return None
+    rest = digits[1:]
+    if rest.startswith("0"):
+        return None
+    return int(rest)
+
+
+def names_agree(left: str | None, right: str | None) -> bool:
+    """Do two encounter names name the same boss?
+
+    Compared on a strip-and-casefold rather than byte-identically, because the two
+    ids are two rows of the same table and a difference in trailing space or case is
+    not a difference in boss. Nothing more forgiving than that: the point of the
+    check is that a wrong twin has to be caught, and every loosening of it is a way
+    for one to pass. A missing name never agrees with anything.
+    """
+    if not left or not right:
+        return False
+    return left.strip().casefold() == right.strip().casefold()
+
+
+@dataclass(frozen=True)
+class IdChoice:
+    """Which encounter id a harvest actually read, and why.
+
+    Published per encounter rather than logged, because the substitution changes
+    *which fight* the builds came from. A file that quietly harvested another id
+    than the one it is filed under would be a full set of real builds under the
+    wrong boss's name -- which is the one failure mode worse than harvesting none.
+    """
+
+    requested: int
+    used: int | None
+    reason: str
+    substituted: bool = False
+
+    @property
+    def refused(self) -> bool:
+        return self.used is None
+
+    def to_json(self) -> dict:
+        return {
+            "requested": self.requested,
+            "used": self.used,
+            "substituted": self.substituted,
+            "reason": self.reason,
+        }
+
+
+def choose_encounter_id(
+    requested: int,
+    requested_name: str | None,
+    has_ranked_parses: bool,
+    lookup_name,
+) -> IdChoice:
+    """Decide which encounter id to harvest, verifying any substitution by name.
+
+    Measured in CI on 2026-08-23: encounter **53420 returns 0 kills and 0
+    characterRankings**, while **3470 returns 1 kill, 100 characterRankings, 14 dps
+    rows and 14 talent codes**. MID2's fight profiles carry the 53xxx ids because
+    the tier was seeded from the PTR zone, so a harvest addressed at them reads
+    nothing at all and says nothing about why.
+
+    The rule, and each step of it is a refusal rather than a fallback:
+
+    * an id with **ranked parses** is harvested as filed. No lookup is sent, so the
+      ordinary case costs nothing;
+    * an id with none, whose number is not ``<5><live id>``, has no twin to try;
+    * a twin the schema does not name does not exist, and an id that names a
+      *different boss* is a different boss. Both refuse, with the names printed.
+
+    ``lookup_name`` is a callable rather than a fetched value so that the query is
+    sent only on the branch that needs it -- and so this whole decision is testable
+    with a dict.
+    """
+    if has_ranked_parses:
+        return IdChoice(
+            requested,
+            requested,
+            f"harvested as filed: encounter {requested} has ranked parses at this difficulty",
+        )
+
+    twin = live_twin_id(requested)
+    if twin is None:
+        return IdChoice(
+            requested,
+            None,
+            f"refused: encounter {requested} has no ranked parses at this difficulty, "
+            f"and its id is not a PTR id (a PTR id is a live id with a 5 in front), "
+            f"so there is no live twin to try",
+        )
+
+    twin_name = lookup_name(twin)
+    if twin_name is None:
+        return IdChoice(
+            requested,
+            None,
+            f"refused: encounter {requested} has no ranked parses and the live twin "
+            f"{twin} is not an encounter Warcraft Logs knows",
+        )
+    if not names_agree(requested_name, twin_name):
+        return IdChoice(
+            requested,
+            None,
+            f"refused: encounter {requested} has no ranked parses, and its live twin "
+            f"{twin} is a different boss -- {requested_name!r} against {twin_name!r}. "
+            f"Harvesting it would file real builds under the wrong fight",
+        )
+    return IdChoice(
+        requested,
+        twin,
+        f"read as {twin}: encounter {requested} is a PTR id with no ranked parses, "
+        f"and its live twin {twin} carries the same name {twin_name!r}",
+        substituted=True,
+    )
 
 
 @dataclass
@@ -860,6 +1077,11 @@ def build_document(
             # publishes builds with `simcGear: []` and reads as "these builds wear
             # nothing worth writing down".
             "gearEntriesSkipped": sum(o.gear_entries_skipped for o in observations),
+            # And the third state: a row that carried no gear array at all, which is
+            # what `playerDetails` returns when it is asked without
+            # `includeCombatantInfo: true`. It read as an empty harvest with healthy
+            # numbers everywhere else on the first live probe.
+            "playersWithoutCombatantInfo": sum(1 for o in observations if o.combatant_info_missing),
         },
     }
     if query_plan:
@@ -984,10 +1206,19 @@ class QueryPlan:
     player_details: int = 0
     talent_codes: int = 0
     rate_limit: int = 2
+    #: One per encounter that had to check a live twin's name before harvesting it,
+    #: which is at most one per encounter and none at all for an id with parses.
+    encounter_names: int = 0
 
     @property
     def total(self) -> int:
-        return self.rankings + self.player_details + self.talent_codes + self.rate_limit
+        return (
+            self.rankings
+            + self.player_details
+            + self.talent_codes
+            + self.rate_limit
+            + self.encounter_names
+        )
 
     def to_json(self) -> dict:
         return {
@@ -995,6 +1226,7 @@ class QueryPlan:
             "playerDetails": self.player_details,
             "talentCodes": self.talent_codes,
             "rateLimit": self.rate_limit,
+            "encounterNames": self.encounter_names,
             "total": self.total,
             "note": (
                 "Request counts, not points. Two report-level queries per sampled "
@@ -1046,6 +1278,7 @@ def observations_from_fight(
         pieces, skipped = gear_from_row(row)
         gear, missing = resolve_slots(pieces, inventory)
         unresolved.extend(missing)
+        no_combatant_info = gear_array(row) is None
 
         level = row.get("maxItemLevel")
         if not isinstance(level, (int, float)):
@@ -1066,6 +1299,7 @@ def observations_from_fight(
             talent_hash=codes.get(actor_id),
             gear=gear,
             gear_entries_skipped=skipped,
+            combatant_info_missing=no_combatant_info,
         )
         if only_specs and observation.spec_key not in only_specs:
             continue
@@ -1140,6 +1374,16 @@ class ProbeCapture:
     def keep_rankings(self, page: dict) -> None:
         if self.rankings is None:
             self.rankings = page
+
+    def forget_rankings(self) -> None:
+        """Drop the kept page when the harvest moves to another encounter id.
+
+        The page kept from a PTR id with no ranked parses describes the id that was
+        *not* read. Printed as the probe's payload shape it would say
+        "characterRankings: 0 row(s)" about a run that then read a hundred of them,
+        which is the probe reporting a schema problem it does not have.
+        """
+        self.rankings = None
 
     def keep_fight(self, details: object, codes: dict[int, str]) -> None:
         if not self.seen_a_fight:
@@ -1234,9 +1478,36 @@ def harvest_encounter(
     read = 0
     stopped: str | None = None
 
+    def lookup_name(other_id: int) -> str | None:
+        fightprobe.check_budget(client, settings.point_ceiling)
+        plan.encounter_names += 1
+        return client.encounter_name(other_id)
+
+    # The value that survives a budget abort during the very first ranking query,
+    # where nothing has been resolved yet and saying "harvested as filed" would be a
+    # claim about a query that never came back.
+    choice = IdChoice(encounter_id, encounter_id, "the pass stopped before this id was resolved")
     try:
         pages = gather_rankings(client, encounter_id, settings, plan, capture)
         name = next((page.get("name") for page in pages if page.get("name")), name)
+
+        # Which id the kills are actually under. MID2's fight profiles carry PTR
+        # encounter ids on purpose, and a PTR id has no ranked parses -- measured,
+        # 53420 returns nothing where 3470 returns a hundred rows. The substitution
+        # is verified by name and refused otherwise; see `choose_encounter_id`.
+        choice = choose_encounter_id(
+            encounter_id,
+            next((page.get("name") for page in pages if page.get("name")), None),
+            any(_ranking_entries(page) for page in pages),
+            lookup_name,
+        )
+        if choice.refused:
+            return [], _encounter_summary(settings, choice, name, 0, [], [], None), []
+        if choice.substituted:
+            if capture is not None:
+                capture.forget_rankings()
+            pages = gather_rankings(client, choice.used, settings, plan, capture)
+            name = next((page.get("name") for page in pages if page.get("name")), name)
 
         # The rankings query is already scoped to one difficulty, so this can only
         # fire when that scoping did not hold -- which is exactly why it is a refusal
@@ -1248,7 +1519,7 @@ def harvest_encounter(
                 check_difficulty(
                     stated_difficulty(entry),
                     settings.difficulty,
-                    f"a ranking row of encounter {encounter_id}",
+                    f"a ranking row of encounter {choice.used}",
                 )
 
         for code, fight_id, started in warcraftlogs_select(pages, settings.reports, settings.order):
@@ -1276,7 +1547,10 @@ def harvest_encounter(
                 codes,
                 report=code,
                 fight_id=fight_id,
-                encounter_id=encounter_id,
+                # The id the kills are *under*, which is the live twin when one was
+                # substituted. `summary["idResolution"]` carries the mapping back to
+                # the id the tier files this boss under, so neither is lost.
+                encounter_id=choice.used or encounter_id,
                 encounter_name=name,
                 difficulty=settings.difficulty,
                 killed_at_ms=started,
@@ -1290,9 +1564,35 @@ def harvest_encounter(
     except fightprobe.PointBudgetExhausted as exc:
         stopped = str(exc)
 
-    summary = {
-        "id": encounter_id,
+    summary = _encounter_summary(settings, choice, name, read, observations, unresolved, stopped)
+    return observations, summary, sorted(set(buckets))
+
+
+def _encounter_summary(
+    settings: HarvestSettings,
+    choice: IdChoice,
+    name: str,
+    read: int,
+    observations: list[Observation],
+    unresolved: list[int],
+    stopped: str | None,
+) -> dict:
+    """One encounter's row of the published document.
+
+    Built here rather than inline because there are two exits from
+    ``harvest_encounter`` -- the ordinary one and the id refusal -- and a refusal
+    that returned no summary would drop the encounter out of the file entirely,
+    which is the one reading it must not have: an encounter nobody could harvest and
+    an encounter nobody tried are different answers.
+    """
+    return {
+        "id": choice.requested,
         "name": name,
+        # Which id was actually read and why. `id` stays the one the tier files this
+        # boss under, so `fight_profiles.json` still joins; `idResolution.used` is
+        # where the kills came from, and it is what `source_json`'s `encounterID`
+        # carries on every row.
+        "idResolution": choice.to_json(),
         "killsRequested": settings.reports,
         "killsRead": read,
         "playersRead": len(observations),
@@ -1301,8 +1601,12 @@ def harvest_encounter(
         # about the encounter, not a failure of the pass -- the same distinction the
         # fight probe draws with `searchExhausted`. Which is why it is false when the
         # point ceiling is what stopped the reading: `stoppedBy` says that instead,
-        # and claiming both would say the encounter is thin when it is not.
-        "fewerKillsThanRequested": read < settings.reports and stopped is None,
+        # and claiming both would say the encounter is thin when it is not. An id
+        # that was refused is thin for a third reason again, which `idResolution`
+        # states, so it does not claim this one either.
+        "fewerKillsThanRequested": (
+            read < settings.reports and stopped is None and not choice.refused
+        ),
         # Carried on the encounter rather than returned alongside it, because it has
         # to reach the document and a fourth return value is one the caller can
         # forget to thread through. It was: the first version of this collected the
@@ -1310,10 +1614,13 @@ def harvest_encounter(
         # permanently empty and a run whose gear half was unusable said nothing.
         "itemsWithoutASlot": sorted(set(unresolved)),
         "gearEntriesSkipped": sum(o.gear_entries_skipped for o in observations),
+        # Players whose row carried no gear array at all. Zero here and zero above
+        # means the gear really was read; this number equalling `playersRead` is the
+        # blocker-1 failure, and nothing else in the file can distinguish it from a
+        # raid that wears nothing.
+        "playersWithoutCombatantInfo": sum(1 for o in observations if o.combatant_info_missing),
+        **({"stoppedBy": stopped} if stopped else {}),
     }
-    if stopped:
-        summary["stoppedBy"] = stopped
-    return observations, summary, sorted(set(buckets))
 
 
 def warcraftlogs_select(pages: list[dict], limit: int, order: str):
@@ -1445,13 +1752,15 @@ def probe_shapes(details: object, codes: dict[int, str], rankings: dict | None) 
         lines.append(f"  no dps rows to read. Top-level payload shape: {top}")
     else:
         lines.append(f"  dps row keys: {sorted(rows[0])}")
-        info = rows[0].get("combatantInfo")
-        shape = sorted(info) if isinstance(info, dict) else type(info).__name__
-        lines.append(f"  combatantInfo keys: {shape}")
+        lines.append(f"  combatantInfo: {describe_combatant_info(rows[0])}")
         pieces, skipped = gear_from_row(rows[0])
-        lines.append(f"  gear entries: {len(pieces)} readable, {skipped} skipped")
-        gear = (info or {}).get("gear") if isinstance(info, dict) else None
-        if isinstance(gear, list) and gear and isinstance(gear[0], dict):
+        missing = sum(1 for row in rows if gear_array(row) is None)
+        lines.append(
+            f"  gear entries: {len(pieces)} readable, {skipped} skipped; "
+            f"{missing} of {len(rows)} dps row(s) carry no gear array at all"
+        )
+        gear = gear_array(rows[0]) or []
+        if gear and isinstance(gear[0], dict):
             lines.append(f"  gear entry keys: {sorted(gear[0])}")
 
     lines.append(f"talentImportCode: {len(codes)} of the fight's actors returned a code")
@@ -1681,9 +1990,20 @@ def cmd_harvest_builds(args) -> int:
             observations.extend(found)
             summary["playerDetailBuckets"] = buckets
             encounters.append(summary)
+            resolution = summary["idResolution"]
+            # Printed for every encounter, not only for a substituted one: "which id
+            # did this actually read" is a question the reader has to be able to
+            # answer without knowing which ids happen to be PTR ones. It goes on the
+            # transcript as well as the log because the transcript is what the
+            # workflow tees into its artifact and its run summary.
+            transcript.append(f"encounter {encounter_id}: {resolution['reason']}")
+            if resolution["used"] is None:
+                log.warning("encounter %d: %s", encounter_id, resolution["reason"])
+            else:
+                log.info("encounter %d: %s", encounter_id, resolution["reason"])
             log.info(
                 "encounter %d (%s): %d kill(s), %d damage player(s)",
-                encounter_id,
+                resolution["used"] if resolution["used"] is not None else encounter_id,
                 summary["name"],
                 summary["killsRead"],
                 summary["playersRead"],
