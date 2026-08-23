@@ -494,6 +494,32 @@ def max_ranks_of(entries: list[Trait]) -> int:
     return first.max_ranks
 
 
+@dataclass(frozen=True)
+class ChoiceOverflow:
+    """A node whose written choice index points past the entries the tree now has.
+
+    The record is worth keeping rather than raising on, because **the bit stream is
+    still in sync when it happens**. simc's writer emitted one choice bit and two
+    index bits and this reader consumes exactly those three, so only the *value* is
+    out of range -- everything after the node is read correctly. Measured on simc
+    ``625a591`` (2026-08-23) against MID2's four refused profiles: all four decode to
+    the end with the same framing every shipped profile has (``spare_bits`` 1-4, the
+    padding to a 6-bit boundary), and the 47 hashes that decode strictly still
+    round-trip byte for byte.
+
+    That is what makes a *repair* possible at all -- see ``talentrepair``. It is also
+    why the strict reader raising is right for every other caller: a build that
+    silently lost a choice is a build that came back as something else.
+    """
+
+    node_id: int
+    #: The index the string wrote.
+    written_index: int
+    #: How many entries the node has in the trait table being read against.
+    entries: int
+    node_type: int
+
+
 def decode_loadout(loadout: str, nodes: dict[int, list[Trait]]) -> Loadout:
     """Read a talent loadout string against one class's nodes.
 
@@ -502,6 +528,30 @@ def decode_loadout(loadout: str, nodes: dict[int, list[Trait]]) -> Loadout:
     string disagrees with the tree is a finding for a human, exactly as it is for a
     fight profile.
     """
+    return _read(loadout, nodes, strict=True)[0]
+
+
+def decode_lenient(
+    loadout: str, nodes: dict[int, list[Trait]]
+) -> tuple[Loadout, tuple[ChoiceOverflow, ...]]:
+    """``decode_loadout``, but reading past a choice index the tree cannot hold.
+
+    Returns the loadout with every such node dropped back to its **first entry and no
+    choice index** -- the state the format writes for a plain node, and what simc's own
+    reader would give the node if the string had not written the index at all.
+
+    This is the only caller that may treat an out-of-range index as data rather than as
+    an error, and it exists for one purpose: ``talentrepair`` needs the rest of the
+    build, which a raise throws away. Every overflow is returned beside the loadout, so
+    a caller cannot use one without seeing them.
+    """
+    return _read(loadout, nodes, strict=False)
+
+
+def _read(
+    loadout: str, nodes: dict[int, list[Trait]], *, strict: bool
+) -> tuple[Loadout, tuple[ChoiceOverflow, ...]]:
+    """The reader both entry points share. ``strict`` raises on a choice overflow."""
     reader = _BitReader(loadout)
     version = reader.read(VERSION_BITS)
     if version != LOADOUT_VERSION:
@@ -512,6 +562,7 @@ def decode_loadout(loadout: str, nodes: dict[int, list[Trait]]) -> Loadout:
     reader.read(TREE_BITS)  # tree hash; simc skips it too
 
     selections: list[Selection] = []
+    overflows: list[ChoiceOverflow] = []
     for node_id in sorted(nodes):
         entries = nodes[node_id]
         if not reader.read(1):  # selected
@@ -531,11 +582,25 @@ def decode_loadout(loadout: str, nodes: dict[int, list[Trait]]) -> Loadout:
             if reader.read(1):  # choice node
                 choice_index = reader.read(CHOICE_BITS)
                 if choice_index >= len(entries):
-                    raise TalentDecodeError(
-                        f"choice index {choice_index} out of bounds for node {node_id} "
-                        f"({len(entries)} entries)"
+                    if strict:
+                        raise TalentDecodeError(
+                            f"choice index {choice_index} out of bounds for node {node_id} "
+                            f"({len(entries)} entries)"
+                        )
+                    overflows.append(
+                        ChoiceOverflow(
+                            node_id=node_id,
+                            written_index=choice_index,
+                            entries=len(entries),
+                            node_type=trait.node_type,
+                        )
                     )
-                trait = entries[choice_index]
+                    # Fall back to what the format writes for a node with no choice:
+                    # first entry, no index. Keeping the out-of-range index would make
+                    # the loadout unencodable, which is the state being repaired.
+                    choice_index = None
+                else:
+                    trait = entries[choice_index]
         selections.append(
             Selection(
                 node_id=node_id,
@@ -558,12 +623,15 @@ def decode_loadout(loadout: str, nodes: dict[int, list[Trait]]) -> Loadout:
     # stream overran the string, and reading that many bits would be meaningless.
     spare = reader.spare_bits
     tail = tuple(reader.read(1) for _ in range(spare)) if spare > 0 else ()
-    return Loadout(
-        version=version,
-        spec_id=spec_id,
-        selections=tuple(selections),
-        spare_bits=spare,
-        framing=Framing(length=len(loadout), tail=tail),
+    return (
+        Loadout(
+            version=version,
+            spec_id=spec_id,
+            selections=tuple(selections),
+            spare_bits=spare,
+            framing=Framing(length=len(loadout), tail=tail),
+        ),
+        tuple(overflows),
     )
 
 
@@ -755,6 +823,27 @@ def spec_rule_violation(loadout: Loadout, nodes: dict[int, list[Trait]]) -> str 
     everything. ``wowdps check-profiles`` remains the version that asks simc itself;
     this is the version a run without a binary can afford.
     """
+    offenders = spec_rule_offenders(loadout, nodes)
+    if not offenders:
+        return None
+    first = offenders[0]
+    return f"Selected node {first.node_id} entry {first.entry_id} is not available to player's spec"
+
+
+def spec_rule_offenders(loadout: Loadout, nodes: dict[int, list[Trait]]) -> tuple[Selection, ...]:
+    """Every selection ``spec_rule_violation`` would refuse, in node order.
+
+    Split out because a *repair* needs the nodes and the message names only the first
+    of them -- and two implementations of one rule is how the wording and the finding
+    drift apart. ``spec_rule_violation`` is this function's first element, worded.
+
+    Note the difference from simc, which is deliberate and recorded in CLAUDE.md: simc
+    reads ``node.front().first`` before it has read the choice index, so it judges a
+    choice node on entry 0 whichever entry the loadout is on. This tests the *chosen*
+    entry. The two agree on everything shipped and would disagree only on a choice node
+    whose entries differ in spec.
+    """
+    found: list[Selection] = []
     for selection in loadout.selections:
         if selection.tree_index in (TREE_HERO, TREE_SELECTION):
             continue
@@ -769,11 +858,8 @@ def spec_rule_violation(loadout: Loadout, nodes: dict[int, list[Trait]]) -> str 
         if entry is None or not entry.spec_ids:
             continue
         if loadout.spec_id not in entry.spec_ids:
-            return (
-                f"Selected node {selection.node_id} entry {selection.entry_id} "
-                f"is not available to player's spec"
-            )
-    return None
+            found.append(selection)
+    return tuple(sorted(found, key=lambda s: s.node_id))
 
 
 def tree_layout(nodes: dict[int, list[Trait]], spec_id: int, sub_tree: int | None) -> list[dict]:

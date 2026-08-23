@@ -116,13 +116,21 @@ needs no edit. Two derivations, one for each half:
   that a tier shipping no set would silently invert. The modal state across the
   tier's shipped profiles is neither.
 
-  Worth knowing where that Arcane gap comes from, because it is not an oversight in
-  the count: **Arcane's shipped profile has its ``set_bonus=`` lines commented out**
-  (``# set_bonus=midnight_season_2_2pc=1`` and ``_4pc=1``, lines 105-106 of both
-  builds on 22b442e) while its action list branches on
-  ``set_bonus.midnight_season_2_4pc`` twice. That is a property of simc's profile,
-  not of this repository, and it is the kind of gap ``dataset.gear_caveat`` exists to
-  flag.
+  Worth knowing where that Arcane gap comes from, and **this file used to name the
+  wrong mechanism** -- corrected here from PR #35, which measured it. The old text
+  said Arcane's profile "has its ``set_bonus=`` lines commented out", implying the
+  build opts out of a set it owns. It does carry those two lines commented; so does
+  **every one of the 35 MID2 profiles, and not one carries an active one** (measured
+  on 22b442e). A convention every profile follows cannot explain a difference between
+  two of them.
+
+  The real mechanism is the **equipped items**. Fire wears
+  ``primal_leywardens_manaflux`` (id 271562, ``id_set`` 2060) where Arcane wears
+  ``ornaments_of_the_eternal_coil`` (id 268241, no ``id_set``) -- same slot, same item
+  level, same bonus ids -- and the same substitution runs through head, chest, hands
+  and legs. Arcane is not switching a set off; it is wearing four different items,
+  none of which is a tier piece. That is a property of simc's profile, not of this
+  repository, and it is the kind of gap ``dataset.gear_caveat`` exists to flag.
 
 Both are published in the anchor's description rather than assumed, because the
 anchor moves numbers and a reader has to be able to see it rather than trust it.
@@ -994,3 +1002,78 @@ def describe(anchor: GearAnchor) -> str:
         f"{len(anchor.unchanged)} already there{emptied}{set_part}. "
         f"Gems, enchants and crafted stats preserved."
     )
+
+
+def display_json(anchor: GearAnchor, profile: str | None = None) -> dict:
+    """The anchor as the site's ``DpsGearAnchor`` wants it, which is a different shape.
+
+    ``to_json`` above is the **record**: every slot the normalization touched, the band,
+    the tally behind the set state. ``DpsGearAnchor`` in ``dps-data.models.ts`` is the
+    **reading**: a label, one list of what was held constant and one of what was left
+    alone, because that is what the panel prints. Only ``itemLevel`` is common to both,
+    and ``preserved``/``tierSet`` appear in both with different kinds.
+
+    The mismatch was reported by wtt-frontend#130 and deliberately left for whoever
+    wired the producer to settle. **It is settled here, on the pipeline side**: the
+    frontend model is untouched and this function projects onto it. The reasoning is
+    that the frontend's shape is the one with a consumer -- a published field nothing
+    reads is a field that drifts -- while the record has no reader outside this
+    repository and loses nothing by staying here. Every fact ``to_json`` carries is
+    still expressed, as a sentence rather than as a column.
+
+    Nothing is dropped silently: an anchor that normalized nothing produces an empty
+    ``normalised`` list, which the panel renders as absent rather than as "held
+    nothing constant".
+    """
+    target = anchor.target
+    normalised: list[str] = []
+    if anchor.changes:
+        span = sorted({c.before for c in anchor.changes if c.before is not None})
+        if not span:
+            written = ""
+        elif len(span) == 1:
+            written = f" from {span[0]}"
+        else:
+            written = f" from {span[0]}-{span[-1]}"
+        silent = sum(1 for c in anchor.changes if c.before is None)
+        stated = f" ({silent} stated none)" if silent else ""
+        normalised.append(
+            f"item level {target.ilevel} on {len(anchor.changes)} slot(s){written}{stated}"
+        )
+    if anchor.unchanged:
+        normalised.append(f"{len(anchor.unchanged)} slot(s) already at {target.ilevel}")
+    if anchor.emptied:
+        normalised.append(
+            f"{len(anchor.emptied)} slot(s) the kit does not fill, written empty so the "
+            f"base actor's own item cannot survive inside it"
+        )
+    normalised.append(f"item level target: {target.ilevel_evidence}")
+    if target.set_option:
+        normalised.append(f"tier set state: {target.set_evidence}")
+    if target.zeroed:
+        normalised.append(f"{len(target.zeroed)} other set token(s) written to zero")
+
+    preserved: list[str] = []
+    for label, slots in (
+        ("gem_id", anchor.gemmed),
+        ("enchant_id", anchor.enchanted),
+        ("crafted_stats", anchor.crafted),
+    ):
+        if slots:
+            preserved.append(f"{label} ({len(slots)} slot(s))")
+
+    if not target.set_option:
+        tier_set = f"none -- {target.tier} ships no set bonus"
+    elif target.set_pieces:
+        tier_set = f"{target.set_pieces}-piece {target.set_name or target.set_option}"
+    else:
+        tier_set = f"no {target.set_name or target.set_option}"
+
+    return {
+        "label": f"Item level {target.ilevel} ({target.band_label} band), {tier_set}",
+        "profile": profile,
+        "itemLevel": target.ilevel,
+        "normalised": normalised,
+        "preserved": preserved,
+        "tierSet": tier_set,
+    }
