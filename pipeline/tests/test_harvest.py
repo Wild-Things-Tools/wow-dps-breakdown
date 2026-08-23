@@ -27,59 +27,75 @@ from wowdps.warcraftlogs import talent_codes_query
 # A tiny synthetic class tree, and an encoder for it
 # --------------------------------------------------------------------------------
 
-CLASS_ID = talenttree.CLASS_IDS["Mage"]
-ARCANE, FIRE = 62, 63
+#: **Death Knight and Hunter rather than Mage, and the fixture is doing work here.**
+#: Warcraft Logs spells a class and a spec without spaces and simc spells them with,
+#: so a fixture whose class and spec are both one word cannot tell the two apart. A
+#: `"type": "DeathKnight"` row is the same string on both sides -- which is how
+#: `CLASS_IDS.get("DeathKnight")` -> None survived a whole feature: every Death
+#: Knight and Demon Hunter observation came back `unknown_class`, every Beast
+#: Mastery one `unknown_spec`, and `spec_key` emitted ids that join to nothing.
+#:
+#: So the default row is a multi-word **class** (`DeathKnight`) and the second
+#: standard row is a multi-word **spec** (`BeastMastery`). Between them every
+#: default fixture in this file exercises the fold.
+DEATH_KNIGHT = talenttree.CLASS_IDS["Death Knight"]
+HUNTER = talenttree.CLASS_IDS["Hunter"]
+FROST, UNHOLY = 251, 252
+BEAST_MASTERY, MARKSMANSHIP = 253, 254
 
 
-def trait(node_id: int, entry_id: int, **overrides) -> Trait:
-    base = dict(
-        tree_index=talenttree.TREE_SPEC,
-        class_id=CLASS_ID,
-        entry_id=entry_id,
-        node_id=node_id,
-        max_ranks=1,
-        req_points=0,
-        spell_id=entry_id * 10,
-        row=1,
-        col=1,
-        selection_index=0,
-        name=f"Talent {entry_id}",
-        spec_ids=(ARCANE,),
-        sub_tree=0,
-        node_type=talenttree.NODE_NORMAL,
-    )
-    base.update(overrides)
-    return Trait(**base)
+def build_traits(class_id: int, main_spec: int, other_spec: int) -> list[Trait]:
+    """Four nodes: two plain spec talents, one only ``other_spec`` may take, and the
+    hero SELECTION node -- which is what names the hero tree and is written with the
+    choice bit set."""
+
+    def trait(node_id: int, entry_id: int, **overrides) -> Trait:
+        base = dict(
+            tree_index=talenttree.TREE_SPEC,
+            class_id=class_id,
+            entry_id=entry_id,
+            node_id=node_id,
+            max_ranks=1,
+            req_points=0,
+            spell_id=entry_id * 10,
+            row=1,
+            col=1,
+            selection_index=0,
+            name=f"Talent {entry_id}",
+            spec_ids=(main_spec,),
+            sub_tree=0,
+            node_type=talenttree.NODE_NORMAL,
+        )
+        base.update(overrides)
+        return Trait(**base)
+
+    return [
+        trait(100, 1000),
+        trait(101, 1001, max_ranks=2),
+        trait(102, 1002, spec_ids=(other_spec,)),
+        trait(
+            103,
+            1003,
+            tree_index=talenttree.TREE_SELECTION,
+            node_type=talenttree.NODE_SELECTION,
+            sub_tree=77,
+            spec_ids=(),
+            name="0",
+        ),
+        trait(
+            103,
+            1004,
+            tree_index=talenttree.TREE_SELECTION,
+            node_type=talenttree.NODE_SELECTION,
+            sub_tree=88,
+            spec_ids=(),
+            name="0",
+        ),
+    ]
 
 
-#: Four nodes: two plain spec talents, one that only Fire may take, and the hero
-#: SELECTION node -- which is what names the hero tree and is written with the
-#: choice bit set.
-TRAITS = [
-    trait(100, 1000),
-    trait(101, 1001, max_ranks=2),
-    trait(102, 1002, spec_ids=(FIRE,)),
-    trait(
-        103,
-        1003,
-        tree_index=talenttree.TREE_SELECTION,
-        node_type=talenttree.NODE_SELECTION,
-        sub_tree=77,
-        spec_ids=(),
-        name="0",
-    ),
-    trait(
-        103,
-        1004,
-        tree_index=talenttree.TREE_SELECTION,
-        node_type=talenttree.NODE_SELECTION,
-        sub_tree=88,
-        spec_ids=(),
-        name="0",
-    ),
-]
-
-NODES = talenttree.nodes_for_class(TRAITS, CLASS_ID)
+DK_NODES = talenttree.nodes_for_class(build_traits(DEATH_KNIGHT, FROST, UNHOLY), DEATH_KNIGHT)
+HUNTER_NODES = talenttree.nodes_for_class(build_traits(HUNTER, BEAST_MASTERY, MARKSMANSHIP), HUNTER)
 
 
 class _BitWriter:
@@ -107,18 +123,19 @@ class _BitWriter:
         return "".join(out)
 
 
-def encode(spec_id: int, picks: dict[int, tuple[int, int]], version: int = 2) -> str:
+def encode(spec_id: int, picks: dict[int, tuple[int, int]], version: int = 2, nodes=None) -> str:
     """``{node id: (choice index, rank)}`` -> a loadout string.
 
     Every selected node is written as purchased, partially ranked and choosing an
     entry, which is the longest of the encodings the reader accepts and therefore
     the one that exercises the most of it.
     """
+    nodes = DK_NODES if nodes is None else nodes
     writer = _BitWriter()
     writer.write(version, talenttree.VERSION_BITS)
     writer.write(spec_id, talenttree.SPEC_BITS)
     writer.write(0, talenttree.TREE_BITS)  # simc writes the tree hash as zeros
-    for node_id in sorted(NODES):
+    for node_id in sorted(nodes):
         if node_id not in picks:
             writer.write(0, 1)
             continue
@@ -132,25 +149,39 @@ def encode(spec_id: int, picks: dict[int, tuple[int, int]], version: int = 2) ->
     return writer.text()
 
 
-ARCANE_BUILD = {100: (0, 1), 101: (0, 2), 103: (0, 1)}
-#: Node 102 is the one only Fire may take, so this is a build the spec rule lets
-#: through for Fire and would refuse for Arcane.
-FIRE_BUILD = {102: (0, 1), 103: (0, 1)}
+FROST_BUILD = {100: (0, 1), 101: (0, 2), 103: (0, 1)}
+#: Node 102 is the one only the other spec may take, so this is a build the spec
+#: rule lets through for Unholy and would refuse for Frost.
+UNHOLY_BUILD = {102: (0, 1), 103: (0, 1)}
+#: The multi-word *spec*. `BeastMastery` is what Warcraft Logs sends; simc says
+#: `Beast Mastery` and the dataset's id is `hunter_beast_mastery`.
+BEAST_MASTERY_BUILD = {100: (0, 1), 103: (0, 1)}
 
 
 def tables() -> harvest.TalentTables:
+    """simc's spelling on the left of every key, which is the whole point.
+
+    `Beast Mastery` with a space, because that is what simc's own table says and
+    what the dataset's `hunter_beast_mastery` is built from. Warcraft Logs will send
+    `BeastMastery`; resolving between the two is `TalentTables.canonical_names`.
+    """
     return harvest.TalentTables(
-        nodes={CLASS_ID: NODES},
-        spec_ids={("Mage", "Arcane"): ARCANE, ("Mage", "Fire"): FIRE},
-        sub_trees={77: "Sunfury", 88: "Spellslinger"},
+        nodes={DEATH_KNIGHT: DK_NODES, HUNTER: HUNTER_NODES},
+        spec_ids={
+            ("Death Knight", "Frost"): FROST,
+            ("Death Knight", "Unholy"): UNHOLY,
+            ("Hunter", "Beast Mastery"): BEAST_MASTERY,
+            ("Hunter", "Marksmanship"): MARKSMANSHIP,
+        },
+        sub_trees={77: "Deathbringer", 88: "Rider of the Apocalypse"},
     )
 
 
 def test_the_synthetic_encoder_round_trips_through_the_shipped_decoder():
     """Control. Everything else here rests on these hashes being real ones."""
-    loadout = talenttree.decode_loadout(encode(ARCANE, ARCANE_BUILD), NODES)
+    loadout = talenttree.decode_loadout(encode(FROST, FROST_BUILD), DK_NODES)
     assert loadout.version == 2
-    assert loadout.spec_id == ARCANE
+    assert loadout.spec_id == FROST
     assert {s.node_id: s.rank for s in loadout.selections} == {100: 1, 101: 2, 103: 1}
     assert loadout.sub_tree == 77
     # The stream is consumed to within the padding of a 6-bit boundary, which is the
@@ -195,17 +226,42 @@ GEAR_ENTRY = {
     "setID": 1900,
 }
 
+#: The default row. `type` and `icon` carry **Warcraft Logs'** spelling, unspaced,
+#: because that is what the service sends -- see the note beside `DEATH_KNIGHT`.
 DPS_ROW = {
     "name": "Somebody",
     "id": 12,
     "guid": 999,
-    "type": "Mage",
+    "type": "DeathKnight",
     "server": "Somewhere",
-    "icon": "Mage-Arcane",
-    "specs": [{"spec": "Arcane", "role": "dps"}],
+    "icon": "DeathKnight-Frost",
+    "specs": [{"spec": "Frost", "role": "dps"}],
     "minItemLevel": 330,
     "maxItemLevel": 340,
     "combatantInfo": {"gear": [GEAR_ENTRY]},
+}
+
+#: The second standard row, and the multi-word **spec**: Warcraft Logs sends
+#: `BeastMastery`, simc says `Beast Mastery`, and the dataset joins on
+#: `hunter_beast_mastery`.
+HUNTER_ROW = {
+    "name": "Nobody",
+    "id": 13,
+    "guid": 998,
+    "type": "Hunter",
+    "server": "Elsewhere",
+    "icon": "Hunter-BeastMastery",
+    "specs": [{"spec": "BeastMastery", "role": "dps"}],
+    "minItemLevel": 330,
+    "maxItemLevel": 340,
+    "combatantInfo": {"gear": [GEAR_ENTRY]},
+}
+
+#: The talent code each of the two standard rows hands back, encoded against its own
+#: class's tree.
+ROSTER_CODES = {
+    12: lambda: encode(FROST, FROST_BUILD),
+    13: lambda: encode(BEAST_MASTERY, BEAST_MASTERY_BUILD, nodes=HUNTER_NODES),
 }
 
 
@@ -235,9 +291,9 @@ def test_the_buckets_that_were_present_are_reported_when_dps_is_not():
 
 def test_a_spec_swap_mid_fight_is_refused_rather_than_guessed():
     """The talent code is one build and the damage is two, so neither name is right."""
-    row = dict(DPS_ROW, specs=[{"spec": "Arcane"}, {"spec": "Fire"}])
+    row = dict(DPS_ROW, specs=[{"spec": "Frost"}, {"spec": "Unholy"}])
     assert harvest.spec_of_row(row) is None
-    assert harvest.spec_of_row(dict(DPS_ROW, specs=[])) == "Arcane"  # falls back to the icon
+    assert harvest.spec_of_row(dict(DPS_ROW, specs=[])) == "Frost"  # falls back to the icon
 
 
 # --------------------------------------------------------------------------------
@@ -307,7 +363,7 @@ def test_an_item_simc_never_heard_of_gets_no_slot_and_is_reported():
 # --------------------------------------------------------------------------------
 
 
-def observation(hash_string: str | None, spec: str = "Arcane", **overrides) -> harvest.Observation:
+def observation(hash_string: str | None, spec: str = "Frost", **overrides) -> harvest.Observation:
     base = dict(
         report="aBcD1234",
         fight_id=7,
@@ -316,7 +372,7 @@ def observation(hash_string: str | None, spec: str = "Arcane", **overrides) -> h
         encounter_name="Nek'zali the Soulcoiler",
         difficulty=5,
         killed_at_ms=1_755_000_000_000,
-        wow_class="Mage",
+        wow_class="Death Knight",
         spec=spec,
         item_level=340.0,
         talent_hash=hash_string,
@@ -325,8 +381,59 @@ def observation(hash_string: str | None, spec: str = "Arcane", **overrides) -> h
     return harvest.Observation(**base)
 
 
+def test_warcraft_logs_spellings_resolve_to_simcs_before_anything_is_looked_up():
+    """The join that decided whether two of the nine target specs were harvestable.
+
+    Executed against the code this replaces: `CLASS_IDS.get("DeathKnight")` -> None
+    and `CLASS_IDS.get("DemonHunter")` -> None, so **every** Death Knight and Demon
+    Hunter observation came back `unknown_class` -- Havoc and Devourer being two of
+    the specs the harvest exists for -- and `spec_ids.get(("Hunter", "BeastMastery"))`
+    -> None, because simc says "Beast Mastery".
+    """
+    assert harvest.canonical_class("DeathKnight") == "Death Knight"
+    assert harvest.canonical_class("DemonHunter") == "Demon Hunter"
+    assert harvest.canonical_class("Mage") == "Mage"
+    # Idempotent, so a caller that resolves twice is not punished for it.
+    assert harvest.canonical_class("Death Knight") == "Death Knight"
+    assert harvest.canonical_class("Kobold") is None
+
+    assert tables().canonical_names("Hunter", "BeastMastery") == ("Hunter", "Beast Mastery")
+    assert tables().canonical_names("DeathKnight", "Frost") == ("Death Knight", "Frost")
+
+
+def test_the_published_spec_id_is_the_one_the_rest_of_the_dataset_joins_on():
+    """`deathknight_frost` and `hunter_beastmastery` are ids nothing else in this
+    repository has ever written. A file full of them looks complete and joins to
+    nothing."""
+    row = observation(encode(FROST, FROST_BUILD), wow_class="DeathKnight")
+    assert observation(encode(FROST, FROST_BUILD)).spec_key == "death_knight_frost"
+    # And the raw spelling is still validated, because `validate` resolves too --
+    # so an observation built by hand somewhere downstream cannot lose the join.
+    assert harvest.validate(row, tables()).reason == harvest.REASON_OK
+
+
+def test_a_class_simc_does_not_name_is_still_reported_as_such():
+    """The control: resolving must not turn every unknown into a plausible answer."""
+    verdict = harvest.validate(
+        observation(encode(FROST, FROST_BUILD), wow_class="Tinker"), tables()
+    )
+    assert verdict.reason == harvest.REASON_UNKNOWN_CLASS
+    assert "Tinker" in verdict.detail
+
+
+def test_a_resolvable_class_with_an_unknown_spec_reports_the_spec():
+    """`unknown_class` and `unknown_spec` are different findings and the fallback
+    has to keep them apart -- otherwise a new spec of a known class reads as the
+    class having disappeared."""
+    verdict = harvest.validate(
+        observation(encode(FROST, FROST_BUILD), wow_class="DeathKnight", spec="Frostfire"),
+        tables(),
+    )
+    assert verdict.reason == harvest.REASON_UNKNOWN_SPEC
+
+
 def test_a_loadable_build_passes_all_four_checks():
-    verdict = harvest.validate(observation(encode(ARCANE, ARCANE_BUILD)), tables())
+    verdict = harvest.validate(observation(encode(FROST, FROST_BUILD)), tables())
     assert verdict.reason == harvest.REASON_OK
     assert verdict.loadout is not None
 
@@ -349,7 +456,7 @@ def test_a_hash_that_will_not_decode_is_reported_never_dropped():
 
 
 def test_a_wrong_serialization_version_is_reported_as_a_decode_failure():
-    verdict = harvest.validate(observation(encode(ARCANE, ARCANE_BUILD, version=3)), tables())
+    verdict = harvest.validate(observation(encode(FROST, FROST_BUILD, version=3)), tables())
     assert verdict.reason == harvest.REASON_DECODE
     assert "version 3" in verdict.detail
 
@@ -365,23 +472,21 @@ def test_a_missing_talent_code_is_its_own_finding():
 def test_a_hash_whose_spec_disagrees_with_the_log_is_rejected():
     """Two sources describing one character. A disagreement means one read is wrong,
     and pooling the build under either name would bury it."""
-    verdict = harvest.validate(observation(encode(FIRE, ARCANE_BUILD)), tables())
+    verdict = harvest.validate(observation(encode(UNHOLY, FROST_BUILD)), tables())
     assert verdict.reason == harvest.REASON_SPEC_MISMATCH
-    assert "63" in verdict.detail
+    assert "252" in verdict.detail
 
 
 def test_simcs_own_spec_rule_is_applied_offline():
     """Node 102 belongs to Fire. Harvesting a build simc will not load would waste
     the whole downstream sweep, so it is decided here rather than by running simc."""
-    verdict = harvest.validate(observation(encode(ARCANE, {**ARCANE_BUILD, 102: (0, 1)})), tables())
+    verdict = harvest.validate(observation(encode(FROST, {**FROST_BUILD, 102: (0, 1)})), tables())
     assert verdict.reason == harvest.REASON_SPEC_RULE
     assert "not available to player's spec" in verdict.detail
 
 
 def test_a_spec_simc_does_not_name_is_reported_rather_than_assumed():
-    verdict = harvest.validate(
-        observation(encode(ARCANE, ARCANE_BUILD), spec="Frostfire"), tables()
-    )
+    verdict = harvest.validate(observation(encode(FROST, FROST_BUILD), spec="Frostfire"), tables())
     assert verdict.reason == harvest.REASON_UNKNOWN_SPEC
 
 
@@ -390,18 +495,18 @@ def test_two_hash_strings_for_one_loadout_are_one_build():
     exports of one build need not be the same string. Keying on the string would
     report thirty copies of one build as thirty builds -- which is precisely the
     number this command exists to produce."""
-    same = encode(ARCANE, ARCANE_BUILD)
+    same = encode(FROST, FROST_BUILD)
     # A different tree hash, same selections: still one build.
     writer = _BitWriter()
     writer.write(2, talenttree.VERSION_BITS)
-    writer.write(ARCANE, talenttree.SPEC_BITS)
+    writer.write(FROST, talenttree.SPEC_BITS)
     writer.write(1, talenttree.TREE_BITS)
     tail = _BitWriter()
-    for node_id in sorted(NODES):
-        if node_id not in ARCANE_BUILD:
+    for node_id in sorted(DK_NODES):
+        if node_id not in FROST_BUILD:
             tail.write(0, 1)
             continue
-        index, rank = ARCANE_BUILD[node_id]
+        index, rank = FROST_BUILD[node_id]
         tail.write(1, 1)
         tail.write(1, 1)
         tail.write(1, 1)
@@ -416,20 +521,23 @@ def test_two_hash_strings_for_one_loadout_are_one_build():
         [observation(same), observation(other, actor_id=13)], tables()
     )
     assert rejected == {}
-    (build,) = builds["mage_arcane"]
+    (build,) = builds["death_knight_frost"]
     assert build.seen_in == 2
 
 
 def test_a_different_loadout_is_a_different_build():
     builds, _ = harvest.group_builds(
         [
-            observation(encode(ARCANE, ARCANE_BUILD)),
-            observation(encode(ARCANE, {100: (0, 1), 103: (1, 1)}), actor_id=13),
+            observation(encode(FROST, FROST_BUILD)),
+            observation(encode(FROST, {100: (0, 1), 103: (1, 1)}), actor_id=13),
         ],
         tables(),
     )
-    assert len(builds["mage_arcane"]) == 2
-    assert {b.hero_tree(tables())[1] for b in builds["mage_arcane"]} == {"Sunfury", "Spellslinger"}
+    assert len(builds["death_knight_frost"]) == 2
+    assert {b.hero_tree(tables())[1] for b in builds["death_knight_frost"]} == {
+        "Deathbringer",
+        "Rider of the Apocalypse",
+    }
 
 
 def test_the_distinct_build_count_is_published_per_spec():
@@ -439,9 +547,9 @@ def test_the_distinct_build_count_is_published_per_spec():
         "MID2",
         5,
         [
-            observation(encode(ARCANE, ARCANE_BUILD)),
-            observation(encode(ARCANE, ARCANE_BUILD), actor_id=13),
-            observation(encode(ARCANE, {100: (0, 1), 103: (1, 1)}), actor_id=14),
+            observation(encode(FROST, FROST_BUILD)),
+            observation(encode(FROST, FROST_BUILD), actor_id=13),
+            observation(encode(FROST, {100: (0, 1), 103: (1, 1)}), actor_id=14),
         ],
         tables(),
         encounters=[],
@@ -477,8 +585,8 @@ def test_the_difficulty_and_the_date_range_travel_with_the_document():
         "MID2",
         5,
         [
-            observation(encode(ARCANE, ARCANE_BUILD)),
-            observation(encode(ARCANE, ARCANE_BUILD), actor_id=13, killed_at_ms=1_755_864_000_000),
+            observation(encode(FROST, FROST_BUILD)),
+            observation(encode(FROST, FROST_BUILD), actor_id=13, killed_at_ms=1_755_864_000_000),
         ],
         tables(),
         encounters=[{"id": 3470, "name": "Nek'zali the Soulcoiler"}],
@@ -495,7 +603,7 @@ def test_the_difficulty_and_the_date_range_travel_with_the_document():
 def test_the_published_source_can_be_reopened():
     """A row nobody can check is a row nobody has to believe."""
     document = harvest.build_document(
-        "MID2", 5, [observation(encode(ARCANE, ARCANE_BUILD))], tables(), encounters=[]
+        "MID2", 5, [observation(encode(FROST, FROST_BUILD))], tables(), encounters=[]
     )
     (source,) = document["specs"][0]["builds"][0]["sources"]
     assert source["report"] == "aBcD1234"
@@ -507,9 +615,10 @@ def test_the_published_source_can_be_reopened():
 def test_no_character_or_server_name_is_written_to_disk():
     """The artefact is a build, not a person. The names are dropped at extraction
     rather than filtered at publication, so they never reach the document at all."""
-    found, _, _ = harvest.observations_from_fight(
-        details_payload(),
-        {12: encode(ARCANE, ARCANE_BUILD)},
+    rows, _ = harvest.player_detail_rows(details_payload())
+    found, _ = harvest.observations_from_fight(
+        rows,
+        {12: encode(FROST, FROST_BUILD)},
         report="aBcD1234",
         fight_id=7,
         encounter_id=3470,
@@ -517,6 +626,7 @@ def test_no_character_or_server_name_is_written_to_disk():
         difficulty=5,
         killed_at_ms=1_755_000_000_000,
         inventory={250215: equipment.INVENTORY_TYPES["trinket"]},
+        tables=tables(),
     )
     document = harvest.build_document("MID2", 5, found, tables(), encounters=[])
     blob = json.dumps(document)
@@ -527,10 +637,19 @@ def test_no_character_or_server_name_is_written_to_disk():
 
 
 def test_a_kill_yields_every_damage_player_and_its_gear():
-    second = dict(DPS_ROW, id=13, name="Else", icon="Mage-Fire", specs=[{"spec": "Fire"}])
-    found, buckets, unresolved = harvest.observations_from_fight(
-        details_payload([DPS_ROW, second]),
-        {12: encode(ARCANE, ARCANE_BUILD), 13: encode(FIRE, ARCANE_BUILD)},
+    """And the ids it yields are simc's, not Warcraft Logs'.
+
+    The payload says `DeathKnight` and `BeastMastery`; the file has to say
+    `death_knight_frost` and `hunter_beast_mastery`, because that is what the rest
+    of the dataset joins on. Looked up in simc's spaced tables as they arrive, the
+    first is an unknown class and the second an unknown spec, and both observations
+    are thrown away with a rejection reason that reads like a finding about the
+    game.
+    """
+    rows, buckets = harvest.player_detail_rows(details_payload([DPS_ROW, HUNTER_ROW]))
+    found, unresolved = harvest.observations_from_fight(
+        rows,
+        {actor: make() for actor, make in ROSTER_CODES.items()},
         report="aBcD1234",
         fight_id=7,
         encounter_id=3470,
@@ -538,19 +657,27 @@ def test_a_kill_yields_every_damage_player_and_its_gear():
         difficulty=5,
         killed_at_ms=1_755_000_000_000,
         inventory={250215: equipment.INVENTORY_TYPES["trinket"]},
+        tables=tables(),
     )
-    assert [o.spec_key for o in found] == ["mage_arcane", "mage_fire"]
+    assert [o.spec_key for o in found] == ["death_knight_frost", "hunter_beast_mastery"]
+    assert [(o.wow_class, o.spec) for o in found] == [
+        ("Death Knight", "Frost"),
+        ("Hunter", "Beast Mastery"),
+    ]
     assert buckets == ["dps", "healers", "tanks"]
     assert unresolved == ()
     assert found[0].gear[0].slot == "trinket1"
     assert found[0].item_level == 340.0
+    # And both decode, which is the other half: an unknown class never reaches the
+    # decoder at all.
+    assert [harvest.validate(o, tables()).reason for o in found] == ["ok", "ok"]
 
 
-def test_a_spec_filter_narrows_the_file_and_nothing_else():
-    """The queries are per kill, not per player, so this costs exactly the same."""
-    second = dict(DPS_ROW, id=13, icon="Mage-Fire", specs=[{"spec": "Fire"}])
-    found, _, _ = harvest.observations_from_fight(
-        details_payload([DPS_ROW, second]),
+def test_a_spec_filter_narrows_the_players_read_out_of_a_kill():
+    """Per player. Which kills are *sampled* is `spec_targets`, tested with the sweep."""
+    rows, _ = harvest.player_detail_rows(details_payload([DPS_ROW, HUNTER_ROW]))
+    found, _ = harvest.observations_from_fight(
+        rows,
         {},
         report="aBcD1234",
         fight_id=7,
@@ -559,9 +686,10 @@ def test_a_spec_filter_narrows_the_file_and_nothing_else():
         difficulty=5,
         killed_at_ms=1,
         inventory={},
-        only_specs=("mage_fire",),
+        tables=tables(),
+        only_specs=("hunter_beast_mastery",),
     )
-    assert [o.spec_key for o in found] == ["mage_fire"]
+    assert [o.spec_key for o in found] == ["hunter_beast_mastery"]
 
 
 # --------------------------------------------------------------------------------
@@ -670,7 +798,7 @@ def test_a_quiet_re_run_leaves_the_file_alone(tmp_path):
     stops being true. `cost` travels with the stamp because it measures the run and
     not the game -- a harvest served out of a warm cache costs nothing and would
     otherwise rewrite the file to say so."""
-    rows = [observation(encode(ARCANE, ARCANE_BUILD))]
+    rows = [observation(encode(FROST, FROST_BUILD))]
     first = harvest.build_document(
         "MID2", 5, rows, tables(), encounters=[], ledger={"pointsSpentThisRun": 12.0}
     )
@@ -690,7 +818,7 @@ def test_a_changed_harvest_does_rewrite_the_stamp(tmp_path):
     path = harvest.write_harvested_builds(
         tmp_path,
         harvest.build_document(
-            "MID2", 5, [observation(encode(ARCANE, ARCANE_BUILD))], tables(), encounters=[]
+            "MID2", 5, [observation(encode(FROST, FROST_BUILD))], tables(), encounters=[]
         ),
     )
     before = json.loads(path.read_text())
@@ -698,8 +826,8 @@ def test_a_changed_harvest_does_rewrite_the_stamp(tmp_path):
         "MID2",
         5,
         [
-            observation(encode(ARCANE, ARCANE_BUILD)),
-            observation(encode(ARCANE, {100: (0, 1), 103: (1, 1)}), actor_id=14),
+            observation(encode(FROST, FROST_BUILD)),
+            observation(encode(FROST, {100: (0, 1), 103: (1, 1)}), actor_id=14),
         ],
         tables(),
         encounters=[],
@@ -751,10 +879,16 @@ class StubClient:
         self.calls.append(f"player-details:{code}:{fight_id}")
         return details_payload(self.roster)
 
+    def spec_rankings(
+        self, encounter_id, class_name, spec_name, difficulty=5, metric="dps", page=1
+    ):
+        self.calls.append(f"spec-rankings:{encounter_id}:{class_name}/{spec_name}:{page}")
+        return self.encounter_rankings(encounter_id, difficulty, metric, page)
+
     def talent_import_codes(self, code, fight_id, actor_ids):
         self.calls.append(f"talent-codes:{code}:{fight_id}:{len(actor_ids)}")
         return {
-            actor: encode(ARCANE, ARCANE_BUILD) if actor == 12 else encode(FIRE, FIRE_BUILD)
+            actor: ROSTER_CODES[actor]() if actor in ROSTER_CODES else encode(UNHOLY, UNHOLY_BUILD)
             for actor in actor_ids
         }
 
@@ -764,15 +898,14 @@ class StubClient:
 
 
 def test_the_sweep_runs_end_to_end_and_costs_two_report_queries_per_kill():
-    roster = [DPS_ROW, dict(DPS_ROW, id=13, icon="Mage-Fire", specs=[{"spec": "Fire"}])]
-    client = StubClient([("aBcD1234", 7), ("eFgH5678", 3)], roster)
+    client = StubClient([("aBcD1234", 7), ("eFgH5678", 3)], [DPS_ROW, HUNTER_ROW])
     settings = harvest.HarvestSettings(
         encounter_ids=(3470,), difficulty=5, reports=2, rankings_pages=1
     )
     plan = harvest.QueryPlan()
 
     found, summary, buckets = harvest.harvest_encounter(
-        client, 3470, settings, {250215: equipment.INVENTORY_TYPES["trinket"]}, plan
+        client, 3470, settings, {250215: equipment.INVENTORY_TYPES["trinket"]}, plan, tables()
     )
 
     assert summary["killsRead"] == 2
@@ -796,12 +929,15 @@ def test_the_sweep_runs_end_to_end_and_costs_two_report_queries_per_kill():
         "MID2", 5, found, tables(), [summary], query_plan=plan.to_json()
     )
     assert document["source"]["killsSampled"] == 2
-    assert {row["specId"] for row in document["specs"]} == {"mage_arcane", "mage_fire"}
+    assert {row["specId"] for row in document["specs"]} == {
+        "death_knight_frost",
+        "hunter_beast_mastery",
+    }
     assert document["coverage"]["rejectedTotal"] == 0
     # Two players of one spec ran the same build in two different kills.
-    arcane = next(row for row in document["specs"] if row["specId"] == "mage_arcane")
-    assert arcane["distinctBuilds"] == 1
-    assert arcane["builds"][0]["seenInKills"] == 2
+    frost = next(row for row in document["specs"] if row["specId"] == "death_knight_frost")
+    assert frost["distinctBuilds"] == 1
+    assert frost["builds"][0]["seenInKills"] == 2
 
 
 def test_an_encounter_with_fewer_kills_than_asked_for_says_so():
@@ -809,7 +945,9 @@ def test_an_encounter_with_fewer_kills_than_asked_for_says_so():
     the fight probe draws with `searchExhausted`."""
     client = StubClient([("aBcD1234", 7)], [DPS_ROW])
     settings = harvest.HarvestSettings(encounter_ids=(3470,), difficulty=5, reports=30)
-    _, summary, _ = harvest.harvest_encounter(client, 3470, settings, {}, harvest.QueryPlan())
+    _, summary, _ = harvest.harvest_encounter(
+        client, 3470, settings, {}, harvest.QueryPlan(), tables()
+    )
     assert summary["killsRead"] == 1
     assert summary["fewerKillsThanRequested"] is True
 
@@ -820,7 +958,7 @@ def test_a_kill_whose_roster_is_empty_costs_no_talent_query():
     client = StubClient([("aBcD1234", 7)], [])
     plan = harvest.QueryPlan()
     settings = harvest.HarvestSettings(encounter_ids=(3470,), difficulty=5, reports=1)
-    found, summary, _ = harvest.harvest_encounter(client, 3470, settings, {}, plan)
+    found, summary, _ = harvest.harvest_encounter(client, 3470, settings, {}, plan, tables())
     assert found == []
     assert plan.player_details == 1
     assert plan.talent_codes == 0
@@ -887,7 +1025,7 @@ def test_a_real_hash_under_the_wrong_spec_name_is_still_caught():
         next(iter(sorted((DATASET / "specs").glob("mage_arcane*.json")))).read_text()
     )
     verdict = harvest.validate(
-        observation(build["talentHash"], spec="Fire", wow_class="Mage"), tables
+        observation(build["talentHash"], spec="Unholy", wow_class="Death Knight"), tables
     )
     assert verdict.reason == harvest.REASON_SPEC_MISMATCH
 
@@ -929,8 +1067,8 @@ def _args(tmp_path, **overrides) -> _Namespace:
 class _FullClient(StubClient):
     """A stub the command can drive, including the bracketing readings."""
 
-    def __init__(self):
-        super().__init__([("aBcD1234", 7)], [DPS_ROW])
+    def __init__(self, roster=None):
+        super().__init__([("aBcD1234", 7)], [DPS_ROW] if roster is None else roster)
         self.ledger = warcraftlogs.PointLedger(
             limit_per_hour=3600, first_reading=100.0, last_reading=118.0
         )
@@ -966,7 +1104,7 @@ def test_the_command_writes_a_dataset_and_reports_what_it_spent(tmp_path, monkey
     document = json.loads((tmp_path / "MID2" / "harvested-builds.json").read_text())
     assert document["tier"] == "MID2"
     assert document["source"]["difficulty"] == 5
-    assert document["specs"][0]["specId"] == "mage_arcane"
+    assert document["specs"][0]["specId"] == "death_knight_frost"
     assert document["specs"][0]["builds"][0]["sources"][0]["simcGear"] == [
         "trinket1=,id=250215,ilevel=334,gem_id=240906,enchant_id=7967"
     ]
@@ -989,7 +1127,7 @@ def test_probe_mode_writes_nothing(tmp_path, monkeypatch, capsys):
     assert "payload shapes, read from the live service" in out
     assert "dps row keys" in out
     assert "talentImportCode: 1 of the fight's actors returned a code" in out
-    assert "mage_arcane: ok" in out
+    assert "death_knight_frost: ok" in out
 
 
 def test_missing_credentials_stop_the_run_rather_than_half_running_it(tmp_path, monkeypatch):
@@ -997,7 +1135,7 @@ def test_missing_credentials_stop_the_run_rather_than_half_running_it(tmp_path, 
         raise warcraftlogs.WarcraftLogsError("WCL_CLIENT_ID and WCL_CLIENT_SECRET must be set.")
 
     monkeypatch.setattr(warcraftlogs.Credentials, "from_env", classmethod(refuse))
-    assert harvest.cmd_harvest_builds(_args(tmp_path)) == 2
+    assert harvest.cmd_harvest_builds(_args(tmp_path, reports=2)) == 2
     assert not (tmp_path / "MID2").exists()
 
 
@@ -1041,7 +1179,7 @@ def test_the_sweep_actually_applies_the_difficulty_refusal():
     client.encounter_rankings = heroic_row
     settings = harvest.HarvestSettings(encounter_ids=(3470,), difficulty=5, reports=1)
     with pytest.raises(harvest.DifficultyMixed) as caught:
-        harvest.harvest_encounter(client, 3470, settings, {}, harvest.QueryPlan())
+        harvest.harvest_encounter(client, 3470, settings, {}, harvest.QueryPlan(), tables())
     assert "difficulty 4" in str(caught.value)
     assert "asked for 5" in str(caught.value)
 
@@ -1051,6 +1189,276 @@ def test_a_ranking_row_stating_no_difficulty_does_not_stop_the_sweep():
     carries the field at all is not knowable from the schema."""
     client = StubClient([("aBcD1234", 7)], [DPS_ROW])
     settings = harvest.HarvestSettings(encounter_ids=(3470,), difficulty=5, reports=1)
-    found, summary, _ = harvest.harvest_encounter(client, 3470, settings, {}, harvest.QueryPlan())
+    found, summary, _ = harvest.harvest_encounter(
+        client, 3470, settings, {}, harvest.QueryPlan(), tables()
+    )
     assert summary["killsRead"] == 1
     assert found
+
+
+# --------------------------------------------------------------------------------
+# What a stopped pass keeps, and what the probe measures about itself
+# --------------------------------------------------------------------------------
+
+
+class _BudgetClient(_FullClient):
+    """Stops on the point ceiling partway through an encounter's kills."""
+
+    def __init__(self, kills, roster, stop_after: int):
+        super().__init__(roster)
+        self.kills = kills
+        self.stop_after = stop_after
+        self.details_calls = 0
+
+    def player_details(self, code, fight_id):
+        self.details_calls += 1
+        if self.details_calls > self.stop_after:
+            from wowdps.fightprobe import PointBudgetExhausted
+
+            raise PointBudgetExhausted("point ceiling reached: 2900 of 3600")
+        return super().player_details(code, fight_id)
+
+
+def test_a_budget_abort_keeps_the_kills_that_encounter_already_paid_for():
+    """`fightprobe.probe_encounter` returns the partial observation plus the reason,
+    and this function's own docstring cited that as the contract it follows while
+    doing the opposite: the exception escaped, so kills 1-8 of the current encounter
+    were discarded after they had been paid for, and the encounter had no summary at
+    all."""
+    client = _BudgetClient([("a", 1), ("b", 2), ("c", 3)], [DPS_ROW, HUNTER_ROW], stop_after=2)
+    settings = harvest.HarvestSettings(encounter_ids=(3470,), difficulty=5, reports=3)
+    found, summary, _ = harvest.harvest_encounter(
+        client, 3470, settings, {}, harvest.QueryPlan(), tables()
+    )
+
+    assert summary["killsRead"] == 2
+    assert len(found) == 4
+    assert "point ceiling" in summary["stoppedBy"]
+    # The encounter is not also accused of being thin: `stoppedBy` says why, and
+    # claiming both would report an encounter that has plenty of kills as short.
+    assert summary["fewerKillsThanRequested"] is False
+
+
+def test_a_stopped_pass_publishes_what_it_read_and_exits_two(tmp_path, monkeypatch, capsys):
+    client = _BudgetClient([("a", 1), ("b", 2)], [DPS_ROW], stop_after=1)
+    _install(monkeypatch, client)
+
+    assert harvest.cmd_harvest_builds(_args(tmp_path, reports=2)) == 2
+    capsys.readouterr()
+
+    document = json.loads((tmp_path / "MID2" / "harvested-builds.json").read_text())
+    assert document["source"]["encounters"][0]["killsRead"] == 1
+    assert document["specs"][0]["specId"] == "death_knight_frost"
+
+
+def test_a_difficulty_refusal_keeps_the_encounters_that_ran_clean(tmp_path, monkeypatch, caplog):
+    """It propagated through a loop catching only PointBudgetExhausted and
+    WarcraftLogsError and out of `cli.main`, which has no handler -- so a pass that
+    had harvested eight encounters printed a traceback, wrote no file and burned the
+    points for nothing."""
+    client = _FullClient()
+    original = client.encounter_rankings
+    seen: list[int] = []
+
+    def rankings(encounter_id, difficulty=5, metric="dps", page=1):
+        seen.append(encounter_id)
+        page_payload = original(encounter_id, difficulty, metric, page)
+        if encounter_id == 3471:
+            page_payload["characterRankings"]["rankings"][0]["difficulty"] = 4
+        return page_payload
+
+    client.encounter_rankings = rankings
+    _install(monkeypatch, client)
+
+    assert harvest.cmd_harvest_builds(_args(tmp_path, encounter=[3470, 3471])) == 1
+
+    # Not a traceback: the refusal's own wording, and the file that ran clean.
+    assert "refusing to pool difficulties" in caplog.text
+    document = json.loads((tmp_path / "MID2" / "harvested-builds.json").read_text())
+    assert [entry["id"] for entry in document["source"]["encounters"]] == [3470]
+    assert document["source"]["difficulty"] == 5
+
+
+def test_the_probe_counts_every_request_it_made_and_makes_no_others(tmp_path, monkeypatch, capsys):
+    """Driven through this stub, the probe made **eight** client calls while printing
+    "queries sent: 5" -- it re-fetched the rankings, the player details and the
+    talent codes the sweep had already paid for, at page 1 even when --page named
+    another. Without a warm cache those are billed, so the measured points were
+    divided by five queries and one kill and the extrapolation came out about 1.6x
+    too large: enough to call an affordable pass unaffordable, which is the one
+    decision the probe exists to inform."""
+    client = _FullClient()
+    _install(monkeypatch, client)
+
+    assert harvest.cmd_harvest_builds(_args(tmp_path, probe=True)) == 0
+    out = capsys.readouterr().out
+
+    assert client.calls == [
+        "rate-limit",
+        "rankings:3470:1",
+        "player-details:aBcD1234:7",
+        "talent-codes:aBcD1234:7:1",
+        "rate-limit",
+    ]
+    assert f"queries sent: {len(client.calls)}" in out
+
+
+def test_the_probe_describes_the_payload_even_when_it_could_read_nothing(
+    tmp_path, monkeypatch, capsys
+):
+    """The case the probe exists for. Handed the *parsed* result, a run whose
+    `playerDetails` had changed shape -- or whose one kill --spec simply filtered
+    out -- printed nothing at all, and a --spec probe read as a failed schema check
+    when the schema was fine."""
+    client = _FullClient()
+    # A bucket rename: the payload is there and nothing can be read out of it.
+    client.player_details = lambda code, fight_id: {"data": {"damage": [DPS_ROW]}}
+    _install(monkeypatch, client)
+
+    assert harvest.cmd_harvest_builds(_args(tmp_path, probe=True)) == 0
+    out = capsys.readouterr().out
+
+    assert "payload shapes, read from the live service" in out
+    assert "buckets none found" in out
+    assert "Top-level payload shape: ['data']" in out
+
+
+def test_the_gear_entries_nobody_could_read_are_counted_in_the_document(
+    tmp_path, monkeypatch, capsys
+):
+    """`pieces, _skipped = gear_from_row(...)` -- computed, documented as
+    load-bearing, thrown away one frame up, which is the defect this PR reports
+    fixing twice elsewhere. If Warcraft Logs renames `combatantInfo.gear[].id`,
+    every entry is skipped, every build publishes `simcGear: []` and
+    `itemsWithoutASlot: []`, and the file reads as "these builds wear nothing worth
+    writing down" rather than "the gear payload moved"."""
+    moved = dict(DPS_ROW, combatantInfo={"gear": [{"itemID": 250215}, {"itemID": 1}]})
+    client = _FullClient(roster=[moved])
+    _install(monkeypatch, client)
+
+    assert harvest.cmd_harvest_builds(_args(tmp_path)) == 0
+    capsys.readouterr()
+
+    document = json.loads((tmp_path / "MID2" / "harvested-builds.json").read_text())
+    assert document["coverage"]["gearEntriesSkipped"] == 2
+    assert document["coverage"]["itemsWithoutASlot"] == []
+    assert document["source"]["encounters"][0]["gearEntriesSkipped"] == 2
+
+
+# --------------------------------------------------------------------------------
+# --spec, the settings object, and the ranking pages
+# --------------------------------------------------------------------------------
+
+
+def test_a_spec_selection_targets_the_ranking_it_samples_from():
+    """The specs this command exists for -- Havoc, Arms, Fury, Feral, Devourer --
+    are the ones least likely to be in a top guild's roster, so kills taken from the
+    encounter's overall damage ranking and filtered afterwards can come back with
+    nothing and an empty `specs` array with nothing saying why."""
+    only, targets, unknown = harvest.resolve_spec_selection(("hunter_beast_mastery",), tables())
+    assert only == ("hunter_beast_mastery",)
+    assert targets == (("Hunter", "Beast Mastery"),)
+    assert unknown == ()
+
+    client = StubClient([("aBcD1234", 7)], [DPS_ROW, HUNTER_ROW])
+    settings = harvest.HarvestSettings(
+        encounter_ids=(3470,), difficulty=5, reports=1, only_specs=only, spec_targets=targets
+    )
+    found, _, _ = harvest.harvest_encounter(
+        client, 3470, settings, {}, harvest.QueryPlan(), tables()
+    )
+    assert client.calls[0] == "spec-rankings:3470:Hunter/Beast Mastery:1"
+    assert [o.spec_key for o in found] == ["hunter_beast_mastery"]
+
+
+def test_warcraft_logs_own_spelling_of_a_spec_key_resolves_too():
+    """`deathknight_frost` is what somebody reading a log will type."""
+    only, targets, unknown = harvest.resolve_spec_selection(("deathknight_frost",), tables())
+    assert only == ("death_knight_frost",)
+    assert targets == (("Death Knight", "Frost"),)
+    assert unknown == ()
+
+
+def test_a_spec_nobody_can_resolve_stops_the_run_rather_than_emptying_the_file(
+    tmp_path, monkeypatch
+):
+    _install(monkeypatch, _FullClient())
+    assert harvest.cmd_harvest_builds(_args(tmp_path, spec=["mage_frostfire"])) == 2
+    assert not (tmp_path / "MID2").exists()
+
+
+def test_probe_mode_settings_describe_the_pass_the_probe_actually_runs(
+    tmp_path, monkeypatch, capsys
+):
+    """`encounter_ids = encounter_ids[:1]` ran *after* the settings were built, so
+    `settings.encounter_ids` held every boss of the tier while the loop read one.
+    Any future code reading the list off the settings object -- the obvious place --
+    would sweep the whole tier in the mode whose contract is "one kill of one
+    encounter, write nothing"."""
+    seen: list[harvest.HarvestSettings] = []
+    real = harvest.harvest_encounter
+
+    def spy(client, encounter_id, settings, *args, **kwargs):
+        seen.append(settings)
+        return real(client, encounter_id, settings, *args, **kwargs)
+
+    monkeypatch.setattr(harvest, "harvest_encounter", spy)
+    _install(monkeypatch, _FullClient())
+
+    assert harvest.cmd_harvest_builds(_args(tmp_path, encounter=[3470, 3471], probe=True)) == 0
+    capsys.readouterr()
+    assert seen[0].encounter_ids == (3470,)
+    assert len(seen) == 1
+
+
+def test_the_settings_default_matches_the_flag_that_documents_it():
+    """`add_arguments` documents one page as deliberate; the dataclass said eight, so
+    any caller building settings directly -- five tests here, and any future
+    scheduled job -- got eight times the ranking queries with no flag set."""
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    harvest.add_arguments(parser)
+    flag_default = parser.parse_args([]).rankings_pages
+    assert harvest.HarvestSettings(encounter_ids=(), difficulty=5).rankings_pages == flag_default
+
+
+def test_an_exhausted_ranking_list_stops_the_page_loop():
+    """Pages were gathered unconditionally, so an encounter whose rankings hold one
+    page still paid for every page asked for."""
+
+    class _OnePage(StubClient):
+        def encounter_rankings(self, encounter_id, difficulty=5, metric="dps", page=1):
+            self.calls.append(f"rankings:{encounter_id}:{page}")
+            if page > 1:
+                return {"id": encounter_id, "characterRankings": {"rankings": []}}
+            return super().encounter_rankings(encounter_id, difficulty, metric, page)
+
+    client = _OnePage([("aBcD1234", 7)], [DPS_ROW])
+    plan = harvest.QueryPlan()
+    settings = harvest.HarvestSettings(
+        encounter_ids=(3470,), difficulty=5, reports=1, rankings_pages=8
+    )
+    harvest.harvest_encounter(client, 3470, settings, {}, plan, tables())
+    assert plan.rankings == 2  # page 1, then the empty page 2 that ends it
+
+
+def test_a_kills_player_details_payload_is_parsed_once():
+    """The actor ids for the talent query and the observations come out of the same
+    rows. Parsed twice, a kill whose `playerDetails` arrives as a JSON string -- a
+    shape this code explicitly supports -- meant a second `json.loads` of a
+    twenty-player table on every kill."""
+    parsed: list[object] = []
+    real = harvest.player_detail_rows
+
+    def counting(payload, bucket="dps"):
+        parsed.append(payload)
+        return real(payload, bucket)
+
+    client = StubClient([("aBcD1234", 7)], [DPS_ROW, HUNTER_ROW])
+    settings = harvest.HarvestSettings(encounter_ids=(3470,), difficulty=5, reports=1)
+    import unittest.mock
+
+    with unittest.mock.patch.object(harvest, "player_detail_rows", counting):
+        harvest.harvest_encounter(client, 3470, settings, {}, harvest.QueryPlan(), tables())
+    assert len(parsed) == 1

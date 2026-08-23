@@ -105,7 +105,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import equipment, specindex, talenttree
+from . import equipment, profiles, specindex, talenttree
 from .talenttree import Loadout, TalentDecodeError, Trait
 
 log = logging.getLogger(__name__)
@@ -214,10 +214,23 @@ class Observation:
     item_level: float | None = None
     talent_hash: str | None = None
     gear: tuple[GearPiece, ...] = ()
+    #: Gear entries ``gear_from_row`` could not read. Carried on the observation
+    #: rather than returned beside it, because the returned version was dropped at
+    #: the only production call site: ``pieces, _skipped = gear_from_row(...)``.
+    #: If Warcraft Logs renames ``combatantInfo.gear[].id`` every entry is skipped,
+    #: every build publishes ``simcGear: []`` and ``itemsWithoutASlot: []``, and the
+    #: file reads as "these builds wear nothing worth writing down" rather than "the
+    #: gear payload moved". Only the count tells those two apart.
+    gear_entries_skipped: int = 0
 
     @property
     def spec_key(self) -> str:
-        """``mage_arcane``, the id shape the rest of the dataset joins on."""
+        """``death_knight_frost``, the id shape the rest of the dataset joins on.
+
+        This is simc's spelling, not Warcraft Logs'. See ``fold_name``: the raw
+        payload would yield ``deathknight_frost`` and ``hunter_beastmastery``, which
+        join to nothing.
+        """
         return f"{_slug(self.wow_class)}_{_slug(self.spec)}"
 
     def source_json(self) -> dict:
@@ -245,6 +258,38 @@ class Verdict:
 
 def _slug(text: str) -> str:
     return "".join(ch if ch.isalnum() else "_" for ch in text.strip().lower()).strip("_")
+
+
+def fold_name(text: str) -> str:
+    """``Death Knight``, ``DeathKnight`` and ``death_knight`` all fold to one key.
+
+    **Warcraft Logs spells a class and a spec without spaces and simc spells them
+    with**, and this join is the whole reason two of the nine specs this command
+    exists for could not be harvested at all. WCL sends ``DeathKnight``,
+    ``DemonHunter`` and ``BeastMastery``; ``talenttree.CLASS_IDS`` is keyed on
+    ``Death Knight`` and simc names the spec ``Beast Mastery``. Looked up directly,
+    every Death Knight and Demon Hunter observation came back
+    ``REASON_UNKNOWN_CLASS`` and every Beast Mastery one ``REASON_UNKNOWN_SPEC`` --
+    Havoc and Devourer being two of the specs the harvest is for.
+
+    Neither spelling is wrong and neither side is going to change, so the join runs
+    through a fold rather than through either of them. Nothing is *stored* folded:
+    an observation carries simc's spelling, because that is what
+    ``Observation.spec_key`` has to produce for the file to join the rest of the
+    dataset (``death_knight_frost``, not ``deathknight_frost``).
+    """
+    return "".join(ch for ch in text.lower() if ch.isalnum())
+
+
+def canonical_class(name: str) -> str | None:
+    """Warcraft Logs' ``DeathKnight`` -> simc's ``Death Knight``. ``None`` if neither.
+
+    ``profiles.CLASS_TOKENS`` is already keyed on exactly this fold -- it is how a
+    simc profile's ``deathknight=`` line is read -- so the mapping exists and only
+    had to be used.
+    """
+    entry = profiles.CLASS_TOKENS.get(fold_name(name))
+    return entry[0] if entry else None
 
 
 def _iso(ms: float | None) -> str | None:
@@ -438,6 +483,30 @@ class TalentTables:
     nodes: dict[int, dict[int, list[Trait]]]
     spec_ids: dict[tuple[str, str], int]
     sub_trees: dict[int, str]
+    #: ``(folded class, folded spec) -> simc's own spelling of the pair``. Built from
+    #: ``spec_ids``, so it cannot drift from it. See ``fold_name``.
+    _canonical: dict[tuple[str, str], tuple[str, str]] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._canonical = {
+            (fold_name(wow_class), fold_name(spec)): (wow_class, spec)
+            for wow_class, spec in self.spec_ids
+        }
+
+    def canonical_names(self, wow_class: str, spec: str) -> tuple[str, str]:
+        """simc's spelling of a pair Warcraft Logs spelled its own way.
+
+        Falls back to whatever the log said for the half that could not be resolved,
+        so an unrecognised pair reaches ``validate`` carrying the name the payload
+        actually contained -- which is the only useful thing a rejection can print.
+        A class that resolves and a spec that does not comes out
+        ``("Death Knight", "Frostfire")``, which reports ``unknown_spec`` rather than
+        the misleading ``unknown_class``.
+        """
+        found = self._canonical.get((fold_name(wow_class), fold_name(spec)))
+        if found:
+            return found
+        return canonical_class(wow_class) or wow_class, spec
 
     @classmethod
     def load(cls, simc_dir: Path, ptr: bool = False) -> TalentTables:
@@ -499,15 +568,20 @@ def validate(observation: Observation, tables: TalentTables) -> Verdict:
     A build that passes all four is *loadable*, which is the only claim made for it.
     Nothing here says it is good.
     """
-    class_id = talenttree.CLASS_IDS.get(observation.wow_class)
+    # Resolved here as well as at extraction, so a directly built observation -- a
+    # test, the shipped-hash corpus, anything downstream -- cannot lose the join by
+    # forgetting to canonicalise. `canonical_names` is idempotent.
+    wow_class, spec = tables.canonical_names(observation.wow_class, observation.spec)
+
+    class_id = talenttree.CLASS_IDS.get(wow_class)
     if class_id is None:
         return Verdict(REASON_UNKNOWN_CLASS, f"no simc class id for {observation.wow_class!r}")
 
-    expected = tables.spec_ids.get((observation.wow_class, observation.spec))
+    expected = tables.spec_ids.get((wow_class, spec))
     if expected is None:
         return Verdict(
             REASON_UNKNOWN_SPEC,
-            f"simc names no spec {observation.spec!r} for {observation.wow_class}",
+            f"simc names no spec {observation.spec!r} for {wow_class}",
         )
 
     if not observation.talent_hash:
@@ -763,6 +837,13 @@ def build_document(
             # large is a run whose gear half is not usable, and nothing else in the
             # file would say so.
             "itemsWithoutASlot": sorted(set(unresolved_items)),
+            # Gear entries that could not be read *at all* -- as opposed to read and
+            # not placeable, above. An empty slot is an ordinary zero-id entry, so a
+            # handful is normal; every entry of every player is Warcraft Logs having
+            # renamed `combatantInfo.gear[].id`, and without this number that run
+            # publishes builds with `simcGear: []` and reads as "these builds wear
+            # nothing worth writing down".
+            "gearEntriesSkipped": sum(o.gear_entries_skipped for o in observations),
         },
     }
     if query_plan:
@@ -822,14 +903,55 @@ class HarvestSettings:
     #: Distinct kills to read per encounter. The main cost dial: each one is two
     #: report-level queries, and each one yields a whole raid's worth of players.
     reports: int = 10
-    rankings_pages: int = 8
+    #: One, matching the CLI default and its stated reason -- unlike the fight probe
+    #: this command does not need the earliest kills, so the first page of the
+    #: damage ranking is the sample. The dataclass said 8, so any caller building
+    #: settings directly (five of the tests, and any future scheduled job) got eight
+    #: times the ranking queries with no flag set and nothing saying so.
+    rankings_pages: int = 1
     page: int = 1
     order: str = "top"
     point_ceiling: float = 0.8
     max_sources: int = 3
-    #: Limit the harvest to these spec keys (``mage_arcane``). Empty means every
-    #: damage player in the sampled kills, which costs exactly the same.
+    #: Limit the harvest to these spec keys (``death_knight_frost``). Empty means
+    #: every damage player in the sampled kills.
     only_specs: tuple[str, ...] = ()
+    #: The same selection as ``(class, spec)`` in simc's spelling, which is what
+    #: targets the *ranking* query. Empty means the encounter's overall ranking.
+    #: See ``gather_rankings``: without this ``--spec`` could only narrow what the
+    #: top overall parses happened to contain.
+    spec_targets: tuple[tuple[str, str], ...] = ()
+
+
+def resolve_spec_selection(
+    keys: tuple[str, ...], tables: TalentTables
+) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...], tuple[str, ...]]:
+    """``--spec`` values -> ``(canonical keys, (class, spec) pairs, unresolved)``.
+
+    One lookup, because ``--spec`` does two jobs: it narrows the published file, and
+    it targets the ranking query so the sampled kills are ones the spec actually
+    parsed in. Both need the same answer and taking it twice is how they would drift.
+
+    Resolved through the same fold everything else here uses, so ``deathknight_frost``
+    -- Warcraft Logs' spelling, which is what somebody reading a log will type --
+    resolves to ``death_knight_frost`` rather than silently matching nothing.
+    """
+    by_fold = {
+        fold_name(wow_class + spec): (f"{_slug(wow_class)}_{_slug(spec)}", (wow_class, spec))
+        for wow_class, spec in tables.spec_ids
+    }
+    resolved: list[str] = []
+    targets: list[tuple[str, str]] = []
+    unresolved: list[str] = []
+    for key in keys:
+        found = by_fold.get(fold_name(key))
+        if found is None:
+            unresolved.append(key)
+            continue
+        if found[0] not in resolved:
+            resolved.append(found[0])
+            targets.append(found[1])
+    return tuple(resolved), tuple(targets), tuple(unresolved)
 
 
 @dataclass
@@ -869,7 +991,7 @@ class QueryPlan:
 
 
 def observations_from_fight(
-    details: object,
+    rows: list[dict],
     codes: dict[int, str],
     *,
     report: str,
@@ -879,14 +1001,22 @@ def observations_from_fight(
     difficulty: int,
     killed_at_ms: float,
     inventory: dict[int, int],
+    tables: TalentTables,
     only_specs: tuple[str, ...] = (),
-) -> tuple[list[Observation], list[str], tuple[int, ...]]:
-    """``(observations, buckets seen, item ids with no slot)`` for one sampled kill.
+) -> tuple[list[Observation], tuple[int, ...]]:
+    """``(observations, item ids with no slot)`` for one sampled kill.
 
-    Pure: everything it needs has already been fetched. That is what lets the whole
+    Takes the rows ``player_detail_rows`` already produced rather than the payload
+    again: the caller has to parse it anyway to know which actors to ask for talent
+    codes, and parsing it twice meant a second ``json.loads`` of a twenty-player
+    table on every kill whose ``playerDetails`` arrived as a JSON string -- a shape
+    this code explicitly supports.
+
+    Pure: everything it needs has already been fetched, which is what lets the whole
     extraction be driven from hand-written payloads in the tests without a client.
+    ``tables`` is data too, and it is here because the id this produces has to be
+    simc's spelling rather than Warcraft Logs'.
     """
-    rows, buckets = player_detail_rows(details)
     observations: list[Observation] = []
     unresolved: list[int] = []
 
@@ -897,7 +1027,7 @@ def observations_from_fight(
         if not isinstance(actor_id, int) or not isinstance(wow_class, str) or not spec:
             continue
 
-        pieces, _skipped = gear_from_row(row)
+        pieces, skipped = gear_from_row(row)
         gear, missing = resolve_slots(pieces, inventory)
         unresolved.extend(missing)
 
@@ -905,6 +1035,7 @@ def observations_from_fight(
         if not isinstance(level, (int, float)):
             level = row.get("minItemLevel")
 
+        wow_class, spec = tables.canonical_names(wow_class, spec)
         observation = Observation(
             report=report,
             fight_id=fight_id,
@@ -918,12 +1049,13 @@ def observations_from_fight(
             item_level=float(level) if isinstance(level, (int, float)) else None,
             talent_hash=codes.get(actor_id),
             gear=gear,
+            gear_entries_skipped=skipped,
         )
         if only_specs and observation.spec_key not in only_specs:
             continue
         observations.append(observation)
 
-    return observations, buckets, tuple(unresolved)
+    return observations, tuple(unresolved)
 
 
 def stated_difficulty(entry: dict) -> object:
@@ -961,88 +1093,186 @@ def check_difficulty(stated: object, wanted: int, where: str) -> None:
         )
 
 
+@dataclass
+class ProbeCapture:
+    """The raw payloads of the first kill a sweep read, kept for ``--probe``.
+
+    **Kept rather than fetched again**, and both halves of that matter.
+
+    *The count.* The first version of the probe asked for the rankings, the player
+    details and the talent codes a second time, after the sweep had already paid for
+    them: driven through the tests' own stub it made **eight** client calls while
+    the run printed "queries sent: 5". Without a warm cache three of those are
+    billed requests, so the measured points were divided by five queries and one
+    kill and every extrapolation came out about 1.6x too large -- enough to call an
+    affordable pass unaffordable, which is the one decision the probe exists to
+    inform. It also re-fetched page 1 even when ``--page`` named another.
+
+    *What it printed.* ``probe_shapes`` was handed the **parsed** result, so a run
+    that produced no observations -- because a bucket was renamed, because
+    ``playerDetails`` changed shape, or simply because ``--spec`` filtered the kill
+    out -- printed the least information in exactly the case the probe exists to
+    diagnose. What is kept here is the response itself, so a schema move is
+    describable whether or not anything could be read out of it.
+    """
+
+    rankings: dict | None = None
+    details: object = None
+    codes: dict[int, str] = field(default_factory=dict)
+    seen_a_fight: bool = False
+
+    def keep_rankings(self, page: dict) -> None:
+        if self.rankings is None:
+            self.rankings = page
+
+    def keep_fight(self, details: object, codes: dict[int, str]) -> None:
+        if not self.seen_a_fight:
+            self.seen_a_fight = True
+            self.details = details
+            self.codes = dict(codes)
+
+
+def gather_rankings(client, encounter_id: int, settings, plan: QueryPlan, capture=None):
+    """The ranking pages one encounter's kills are chosen from.
+
+    Two behaviours worth stating, because both were wrong:
+
+    * **``--spec`` reaches the sample.** Without a spec named, the kills come from
+      the encounter's overall damage ranking -- the top parses of anybody -- and a
+      spec filter applied afterwards can only narrow what those happened to contain.
+      The specs this command exists for (Havoc, Arms, Fury, Feral, Devourer) are the
+      ones least likely to be in a top guild's roster, so ``--spec`` over ten kills
+      could yield nothing and an empty ``specs`` array with nothing saying why.
+      ``spec_rankings`` takes a class and a spec and asks for *their* parses, which
+      is what makes the sample answer the question. It costs one extra ranking query
+      per spec per page and nothing at all per kill -- ranking queries are the cheap
+      kind and the report-level cost is per kill either way.
+    * **An exhausted list stops the loop.** Pages were gathered unconditionally, so
+      an encounter whose rankings hold twelve parses still paid for eight pages.
+    """
+    from . import fightprobe
+    from .warcraftlogs import _ranking_entries
+
+    targets: tuple[tuple[str, str] | None, ...] = settings.spec_targets or (None,)
+    pages: list[dict] = []
+    for target in targets:
+        for offset in range(max(settings.rankings_pages, 1)):
+            fightprobe.check_budget(client, settings.point_ceiling)
+            if target is None:
+                page = client.encounter_rankings(
+                    encounter_id,
+                    difficulty=settings.difficulty,
+                    metric=settings.metric,
+                    page=settings.page + offset,
+                )
+            else:
+                page = client.spec_rankings(
+                    encounter_id,
+                    target[0],
+                    target[1],
+                    difficulty=settings.difficulty,
+                    metric=settings.metric,
+                    page=settings.page + offset,
+                )
+            plan.rankings += 1
+            pages.append(page)
+            if capture is not None:
+                capture.keep_rankings(page)
+            if not _ranking_entries(page):
+                break
+    return pages
+
+
 def harvest_encounter(
     client,
     encounter_id: int,
     settings: HarvestSettings,
     inventory: dict[int, int],
     plan: QueryPlan,
+    tables: TalentTables,
+    capture: ProbeCapture | None = None,
 ) -> tuple[list[Observation], dict, list[str]]:
     """Sample kills of one encounter and read every damage player out of them.
 
-    ``(observations, encounter summary, buckets seen)``. A budget abort is allowed
-    to escape: the caller keeps what earlier encounters produced, which is the same
-    contract ``probe_encounter`` has and the reason a stopped pass here reports
-    "what has been collected" rather than losing it.
+    ``(observations, encounter summary, buckets seen)``.
+
+    **A budget abort returns what it collected**, with the reason on the summary as
+    ``stoppedBy``. That is ``fightprobe.probe_encounter``'s contract, which this
+    function's docstring already claimed to follow while doing the opposite: the
+    exception escaped, so kills 1-8 of the ninth encounter were discarded along with
+    the encounter's summary, after they had been paid for. The reason travels on the
+    summary rather than as a fourth return value for the same reason
+    ``itemsWithoutASlot`` does -- a fourth return value is the one a caller forgets.
+
+    ``DifficultyMixed`` is deliberately *not* caught here. It is a refusal for the
+    whole run rather than a verdict about one encounter, and it is raised before any
+    kill of this encounter has been read.
     """
     from . import fightprobe
-
-    pages = []
-    for offset in range(settings.rankings_pages):
-        fightprobe.check_budget(client, settings.point_ceiling)
-        pages.append(
-            client.encounter_rankings(
-                encounter_id,
-                difficulty=settings.difficulty,
-                metric=settings.metric,
-                page=settings.page + offset,
-            )
-        )
-        plan.rankings += 1
-
-    name = next(
-        (page.get("name") for page in pages if page.get("name")), f"encounter {encounter_id}"
-    )
-
-    # The rankings query is already scoped to one difficulty, so this can only fire
-    # when that scoping did not hold -- which is exactly why it is a refusal and not
-    # a filter. Checked here rather than after the kills are chosen, because a row
-    # dropped by `select_report_fights` would take its disagreement with it.
     from .warcraftlogs import _ranking_entries
-
-    for page in pages:
-        for entry in _ranking_entries(page):
-            check_difficulty(
-                stated_difficulty(entry),
-                settings.difficulty,
-                f"a ranking row of encounter {encounter_id}",
-            )
-
-    kills = warcraftlogs_select(pages, settings.reports, settings.order)
 
     observations: list[Observation] = []
     buckets: list[str] = []
     unresolved: list[int] = []
+    name = f"encounter {encounter_id}"
     read = 0
-    for code, fight_id, started in kills:
-        fightprobe.check_budget(client, settings.point_ceiling)
-        details = client.player_details(code, fight_id)
-        plan.player_details += 1
+    stopped: str | None = None
 
-        rows, seen = player_detail_rows(details)
-        buckets.extend(seen)
-        actor_ids = sorted({row["id"] for row in rows if isinstance(row.get("id"), int)})
-        codes: dict[int, str] = {}
-        if actor_ids:
+    try:
+        pages = gather_rankings(client, encounter_id, settings, plan, capture)
+        name = next((page.get("name") for page in pages if page.get("name")), name)
+
+        # The rankings query is already scoped to one difficulty, so this can only
+        # fire when that scoping did not hold -- which is exactly why it is a refusal
+        # and not a filter. Checked here rather than after the kills are chosen,
+        # because a row dropped by `select_report_fights` would take its
+        # disagreement with it.
+        for page in pages:
+            for entry in _ranking_entries(page):
+                check_difficulty(
+                    stated_difficulty(entry),
+                    settings.difficulty,
+                    f"a ranking row of encounter {encounter_id}",
+                )
+
+        for code, fight_id, started in warcraftlogs_select(pages, settings.reports, settings.order):
             fightprobe.check_budget(client, settings.point_ceiling)
-            codes = client.talent_import_codes(code, fight_id, actor_ids)
-            plan.talent_codes += 1
+            details = client.player_details(code, fight_id)
+            plan.player_details += 1
 
-        found, _seen, missing = observations_from_fight(
-            details,
-            codes,
-            report=code,
-            fight_id=fight_id,
-            encounter_id=encounter_id,
-            encounter_name=name,
-            difficulty=settings.difficulty,
-            killed_at_ms=started,
-            inventory=inventory,
-            only_specs=settings.only_specs,
-        )
-        observations.extend(found)
-        unresolved.extend(missing)
-        read += 1
+            # Parsed once. The actor ids for the talent query and the observations
+            # come out of the same rows; parsing the payload twice meant a second
+            # `json.loads` of a twenty-player table on every kill whose
+            # `playerDetails` arrived as a JSON string.
+            rows, seen = player_detail_rows(details)
+            buckets.extend(seen)
+            actor_ids = sorted({row["id"] for row in rows if isinstance(row.get("id"), int)})
+            codes: dict[int, str] = {}
+            if actor_ids:
+                fightprobe.check_budget(client, settings.point_ceiling)
+                codes = client.talent_import_codes(code, fight_id, actor_ids)
+                plan.talent_codes += 1
+            if capture is not None:
+                capture.keep_fight(details, codes)
+
+            found, missing = observations_from_fight(
+                rows,
+                codes,
+                report=code,
+                fight_id=fight_id,
+                encounter_id=encounter_id,
+                encounter_name=name,
+                difficulty=settings.difficulty,
+                killed_at_ms=started,
+                inventory=inventory,
+                tables=tables,
+                only_specs=settings.only_specs,
+            )
+            observations.extend(found)
+            unresolved.extend(missing)
+            read += 1
+    except fightprobe.PointBudgetExhausted as exc:
+        stopped = str(exc)
 
     summary = {
         "id": encounter_id,
@@ -1053,15 +1283,20 @@ def harvest_encounter(
         "killedBetween": date_span(observations),
         # An encounter whose rankings held fewer kills than were asked for is a fact
         # about the encounter, not a failure of the pass -- the same distinction the
-        # fight probe draws with `searchExhausted`.
-        "fewerKillsThanRequested": read < settings.reports,
+        # fight probe draws with `searchExhausted`. Which is why it is false when the
+        # point ceiling is what stopped the reading: `stoppedBy` says that instead,
+        # and claiming both would say the encounter is thin when it is not.
+        "fewerKillsThanRequested": read < settings.reports and stopped is None,
         # Carried on the encounter rather than returned alongside it, because it has
         # to reach the document and a fourth return value is one the caller can
         # forget to thread through. It was: the first version of this collected the
         # ids and dropped them on the way out, so `coverage.itemsWithoutASlot` was
         # permanently empty and a run whose gear half was unusable said nothing.
         "itemsWithoutASlot": sorted(set(unresolved)),
+        "gearEntriesSkipped": sum(o.gear_entries_skipped for o in observations),
     }
+    if stopped:
+        summary["stoppedBy"] = stopped
     return observations, summary, sorted(set(buckets))
 
 
@@ -1130,7 +1365,7 @@ def describe_cost(ledger: dict, plan: QueryPlan, kills: int) -> list[str]:
     return lines
 
 
-def probe_shapes(details: object, codes: dict[int, str], rankings: dict) -> list[str]:
+def probe_shapes(details: object, codes: dict[int, str], rankings: dict | None) -> list[str]:
     """What the live payloads actually look like, printed rather than assumed.
 
     Every GraphQL document in this project was written against a mirror of the v2
@@ -1143,24 +1378,43 @@ def probe_shapes(details: object, codes: dict[int, str], rankings: dict) -> list
     the rest of this command has to fetch: whether ``characterRankings`` rows
     already carry gear or talents, in which case a whole query per kill is
     unnecessary.
+
+    **The arguments are the responses the sweep already fetched, not what it managed
+    to parse out of them.** That is the difference between a probe that describes a
+    schema move and one that goes quiet exactly when one happened: handed the parsed
+    result, a run that read no observations printed nothing at all, and a ``--spec``
+    probe that simply filtered its one kill out read as a failed schema check.
     """
     lines = ["--- payload shapes, read from the live service ---"]
 
     from .warcraftlogs import _ranking_entries
 
-    entries = _ranking_entries(rankings)
-    lines.append(f"characterRankings: {len(entries)} row(s)")
-    if entries:
-        lines.append(f"  ranking row keys: {sorted(entries[0])}")
-        interesting = [k for k in entries[0] if "gear" in k.lower() or "talent" in k.lower()]
-        lines.append(
-            "  gear/talent already on the ranking row: "
-            + (", ".join(interesting) if interesting else "none -- playerDetails is needed")
-        )
+    if rankings is None:
+        lines.append("characterRankings: no page was fetched (the run stopped before one)")
+    else:
+        entries = _ranking_entries(rankings)
+        lines.append(f"characterRankings: {len(entries)} row(s)")
+        if entries:
+            lines.append(f"  ranking row keys: {sorted(entries[0])}")
+            interesting = [k for k in entries[0] if "gear" in k.lower() or "talent" in k.lower()]
+            lines.append(
+                "  gear/talent already on the ranking row: "
+                + (", ".join(interesting) if interesting else "none -- playerDetails is needed")
+            )
+
+    if details is None:
+        lines.append("playerDetails: no kill was read, so there is no payload to describe")
+        return lines
 
     rows, buckets = player_detail_rows(details)
     lines.append(f"playerDetails: buckets {buckets or 'none found'}, {len(rows)} dps row(s)")
-    if rows:
+    if not rows:
+        # The case the probe is *for*. A bucket that was renamed, or a payload that
+        # is not a table at all, leaves nothing to describe field by field -- so the
+        # top-level shape is printed instead of nothing.
+        top = sorted(details) if isinstance(details, dict) else type(details).__name__
+        lines.append(f"  no dps rows to read. Top-level payload shape: {top}")
+    else:
         lines.append(f"  dps row keys: {sorted(rows[0])}")
         info = rows[0].get("combatantInfo")
         shape = sorted(info) if isinstance(info, dict) else type(info).__name__
@@ -1224,9 +1478,12 @@ def add_arguments(parser) -> None:
     parser.add_argument(
         "--spec",
         action="append",
-        help="limit the harvest to one spec id, e.g. 'mage_arcane' (repeatable). "
-        "Costs exactly the same as harvesting everything -- the queries are per "
-        "kill, not per player -- so this only narrows the file",
+        help="harvest this spec id, e.g. 'death_knight_frost' (repeatable). The "
+        "kills are then chosen from that spec's own rankings rather than the "
+        "encounter's overall damage ranking, which matters because the specs with "
+        "no simc profile are the ones least likely to be in a top guild's roster. "
+        "Costs one extra ranking query per spec -- the cheap kind -- and nothing "
+        "per kill, since playerDetails returns the whole raid either way",
     )
     parser.add_argument(
         "--simc-source",
@@ -1273,7 +1530,7 @@ def cmd_harvest_builds(args) -> int:
     the smallest possible pass -- one kill of one encounter -- is a first-class mode
     that writes nothing, prints the payload shapes and reports what the counter did.
     """
-    from . import fightprobe, fightprofile
+    from . import fightprofile
     from .warcraftlogs import Credentials, WarcraftLogsClient, WarcraftLogsError
 
     try:
@@ -1318,6 +1575,30 @@ def cmd_harvest_builds(args) -> int:
             )
             return 1
 
+    only_specs, spec_targets, unresolved_specs = resolve_spec_selection(
+        tuple(args.spec or ()), tables
+    )
+    if unresolved_specs:
+        # Refused rather than ignored: an unmatchable --spec would target no
+        # ranking, filter every observation out, and publish an empty `specs`
+        # array with nothing in the file saying why -- which is the failure this
+        # flag was making in the first place.
+        log.error(
+            "no spec named %s; simc's own table spells these as class+spec, e.g. "
+            "death_knight_frost or hunter_beast_mastery",
+            ", ".join(repr(key) for key in unresolved_specs),
+        )
+        return 2
+
+    # Truncated *before* the settings are built, so `settings.encounter_ids` is what
+    # the run actually reads. It held every boss of the tier while the loop read one,
+    # so any future code reading the list off the settings object -- the obvious
+    # place -- would sweep the whole tier in the mode whose contract is "one kill of
+    # one encounter, write nothing".
+    if args.probe:
+        encounter_ids = encounter_ids[:1]
+        log.info("probe mode: one kill of encounter %d, writing nothing", encounter_ids[0])
+
     settings = HarvestSettings(
         encounter_ids=tuple(encounter_ids),
         difficulty=args.difficulty,
@@ -1328,17 +1609,18 @@ def cmd_harvest_builds(args) -> int:
         order=args.order,
         point_ceiling=args.point_ceiling,
         max_sources=args.max_sources,
-        only_specs=tuple(args.spec or ()),
+        only_specs=only_specs,
+        spec_targets=spec_targets,
     )
-    if args.probe:
-        encounter_ids = encounter_ids[:1]
-        log.info("probe mode: one kill of encounter %d, writing nothing", encounter_ids[0])
 
     cache_dir = Path(args.cache) if args.cache else None
     plan = QueryPlan()
     observations: list[Observation] = []
     encounters: list[dict] = []
     transcript: list[str] = []
+    capture = ProbeCapture() if args.probe else None
+    refusal: str | None = None
+    stopped_early = False
 
     with WarcraftLogsClient(credentials, cache_dir=cache_dir) as client:
         before = client.rate_limit()
@@ -1351,13 +1633,18 @@ def cmd_harvest_builds(args) -> int:
         for encounter_id in encounter_ids:
             try:
                 found, summary, buckets = harvest_encounter(
-                    client, encounter_id, settings, inventory, plan
+                    client, encounter_id, settings, inventory, plan, tables, capture
                 )
-            except fightprobe.PointBudgetExhausted as exc:
-                # What has been read is kept. The pass is resumable by re-running,
-                # and losing eight encounters' worth of work to the ninth is a
-                # mistake this repository has made once already.
-                log.warning("%s", exc)
+            except DifficultyMixed as exc:
+                # A refusal for the run, and it was caught nowhere: it propagated
+                # through a loop handling only PointBudgetExhausted and
+                # WarcraftLogsError and out of `cli.main`, so a pass that had already
+                # harvested eight encounters printed a traceback, wrote no file and
+                # burned the points for nothing. What is kept is every encounter that
+                # ran clean -- all of it at the difficulty that was asked for, so
+                # nothing is pooled -- and the exit code says a person has to read it.
+                refusal = str(exc)
+                log.error("refusing to pool difficulties: %s", exc)
                 break
             except WarcraftLogsError as exc:
                 log.error("encounter %d failed: %s", encounter_id, exc)
@@ -1372,19 +1659,18 @@ def cmd_harvest_builds(args) -> int:
                 summary["killsRead"],
                 summary["playersRead"],
             )
+            if summary.get("stoppedBy"):
+                # The encounter kept the kills it had already paid for; the pass
+                # stops here and is resumable by re-running once points reset.
+                log.warning("%s", summary["stoppedBy"])
+                stopped_early = True
+                break
 
-        if args.probe:
-            rankings = client.encounter_rankings(
-                encounter_ids[0], difficulty=settings.difficulty, metric=settings.metric
-            )
-            first = next(iter(observations), None)
-            details = client.player_details(first.report, first.fight_id) if first else None
-            codes = (
-                client.talent_import_codes(first.report, first.fight_id, [first.actor_id])
-                if first
-                else {}
-            )
-            transcript.extend(probe_shapes(details, codes, rankings))
+        if args.probe and capture is not None:
+            # No second fetch. The sweep above already paid for these three
+            # payloads; asking again made the probe's own request count wrong by
+            # 60% in the direction that inflates the extrapolation.
+            transcript.extend(probe_shapes(capture.details, capture.codes, capture.rankings))
 
         client.rate_limit()
         ledger = client.ledger.to_json()
@@ -1401,8 +1687,10 @@ def cmd_harvest_builds(args) -> int:
                 f"  {observation.spec_key}: {verdict.reason}"
                 + (f" ({verdict.detail})" if verdict.detail else "")
             )
+        if refusal:
+            transcript.append(f"refused: {refusal}")
         print("\n".join(transcript))
-        return 0
+        return 1 if refusal else 0
 
     document = build_document(
         args.tier,
@@ -1427,5 +1715,14 @@ def cmd_harvest_builds(args) -> int:
         document["source"]["killsSampled"],
         coverage["rejectedTotal"],
     )
+    if refusal:
+        transcript.append(f"refused: {refusal}")
+        transcript.append(f"what ran clean before the refusal was still written to {path}")
     print("\n".join(transcript))
-    return 0
+    # 1 is the one-difficulty refusal: the file is honest but a person has to read
+    # the run before anything is committed off it. 2 is the point ceiling, which
+    # `harvest-builds.yml` turns into a warning -- what was harvested is worth
+    # keeping and re-running once points reset continues the pass.
+    if refusal:
+        return 1
+    return 2 if stopped_early else 0
