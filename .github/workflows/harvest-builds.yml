@@ -49,6 +49,10 @@ on:
       point_ceiling:
         description: 'Abort once this fraction of the hourly point budget is spent'
         default: '0.8'
+      cache:
+        description: 'Serve repeated queries from the response cache. Turn OFF to measure what a pass really costs -- a cached query spends nothing and the cost then reads UNMEASURED'
+        type: boolean
+        default: true
       commit:
         description: 'Commit the harvested file (harvest mode only)'
         type: boolean
@@ -98,11 +102,35 @@ jobs:
             https://github.com/simulationcraft/simc.git simc-src
           git -C simc-src sparse-checkout set engine/dbc/generated
 
+      # Whether this run uses the response cache at all, decided in bash rather than
+      # in an `if:` expression: a dispatched boolean arrives as a real boolean from
+      # the form and as a string from the API, and `inputs.cache != false` is true
+      # for one of those and not the other. Anything that is not the literal "false"
+      # means "use it", so the default and an unset input both keep the cache.
+      - name: Decide whether to use the response cache
+        id: cachemode
+        if: steps.creds.outputs.enabled == 'true'
+        env:
+          USE_CACHE: ${{ inputs.cache }}
+        run: |
+          if [ "$USE_CACHE" = "false" ]; then
+            echo "use=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::running without the response cache, so the point cost of this pass is a real measurement"
+          else
+            echo "use=true" >> "$GITHUB_OUTPUT"
+          fi
+
       # The response cache is what makes iterating on the extraction free: a re-run
       # over the same kills sends nothing and costs no points. Keyed on the tier so a
       # probe and the harvest that follows it share one.
+      #
+      # Skipped entirely when the cache is off, which also skips the post-run save --
+      # otherwise a measured run would seed the cache it was run without. `--cache`
+      # is what CLAUDE.md's own note says a measurement needs an empty directory of,
+      # and until this input existed the workflow passed it unconditionally, so the
+      # default probe mode could never take the measurement it exists for.
       - name: Restore response cache
-        if: steps.creds.outputs.enabled == 'true'
+        if: steps.creds.outputs.enabled == 'true' && steps.cachemode.outputs.use == 'true'
         uses: actions/cache@v4
         with:
           path: .work/harvest-cache
@@ -127,8 +155,10 @@ jobs:
           ENCOUNTERS: ${{ inputs.encounter }}
           SPECS: ${{ inputs.spec }}
           POINT_CEILING: ${{ inputs.point_ceiling || '0.8' }}
+          USE_CACHE: ${{ steps.cachemode.outputs.use }}
         run: |
           args=()
+          if [ "$USE_CACHE" = "true" ]; then args+=(--cache .work/harvest-cache); fi
           # Space-separated, like fight-probe's `encounters`: both flags are
           # repeatable on the command line and a single-valued form would quietly
           # cap a dispatch at one boss.
@@ -146,7 +176,6 @@ jobs:
             --point-ceiling "$POINT_CEILING" \
             --simc-source simc-src \
             --ptr \
-            --cache .work/harvest-cache \
             "${args[@]}" | tee harvest-report.txt
           status=$?
           set -e
