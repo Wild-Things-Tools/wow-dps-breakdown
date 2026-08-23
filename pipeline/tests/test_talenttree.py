@@ -8,13 +8,12 @@ alphabet or a wrong bit order.
 
 import json
 import os
-import re
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from wowdps.profiles import CLASS_TOKENS
+from wowdps import profiles
 from wowdps.talenttree import (
     BASE64,
     CLASS_IDS,
@@ -27,6 +26,7 @@ from wowdps.talenttree import (
     TalentEncodeError,
     Trait,
     _BitReader,
+    _generated,
     decode_loadout,
     encode_loadout,
     nodes_for_class,
@@ -658,19 +658,32 @@ def test_encoding_refuses_the_same_node_twice():
 # --------------------------------------------------------------------------------
 
 
-def simc_checkout() -> Path | None:
-    """A real simc checkout, named by ``WOWDPS_SIMC_DIR``.
+def simc_checkout() -> tuple[Path, bool] | None:
+    """A real simc checkout and which of its two trait tables to read.
 
     The trait table is 686 KB of generated C++ and is not committed here, so the only
-    honest way to run the corpus check is against a checkout somebody points at. The
-    hand-built tests above cover the format; this one covers *simc's actual data*,
-    which is the thing that changes under us.
+    honest way to run the corpus check is against a checkout somebody points at with
+    ``WOWDPS_SIMC_DIR``. The hand-built tests above cover the format; this one covers
+    *simc's actual data*, which is the thing that changes under us.
+
+    The table is chosen by which file is there rather than pinned. ``ptr=True`` was
+    pinned, and simc's live branch ships ``generated/`` without ``trait_data_ptr.inc``,
+    so a live checkout raised ``FileNotFoundError`` in the middle of the test -- which
+    reads as a broken encoder rather than as an unrunnable check. PTR is preferred
+    because that is the table the current tier's profiles are written against
+    (``manifest.simc.ptr``, which is how every production caller picks); with neither
+    file present there is nothing to run and the test skips.
     """
     raw = os.environ.get("WOWDPS_SIMC_DIR")
     if not raw:
         return None
     root = Path(raw)
-    return root if (root / "engine" / "dbc" / "generated").is_dir() else None
+    if not (root / "profiles").is_dir():
+        return None
+    for ptr in (True, False):
+        if _generated(root, "trait_data", ptr).is_file():
+            return root, ptr
+    return None
 
 
 @pytest.mark.skipif(simc_checkout() is None, reason="set WOWDPS_SIMC_DIR to a simc checkout")
@@ -682,32 +695,35 @@ def test_every_shipped_profile_round_trips_byte_identically():
     raise ``TalentDecodeError`` and so have no round trip to test; that is the tier rot
     this project already documents, where a stored hash no longer fits the current tree
     and the bit stream desynchronises.
-    """
-    root = simc_checkout()
-    class_line = re.compile(
-        r"^(" + "|".join(CLASS_TOKENS) + r')\s*=\s*"?([^"\n]+)"?\s*$', re.MULTILINE
-    )
-    talents_line = re.compile(r"^talents\s*=\s*(\S+)\s*$", re.MULTILINE)
-    traits = parse_trait_data(root, ptr=True)
 
+    The corpus comes through ``profiles.discover``, which is the route both production
+    callers use. Re-deriving it here -- a copy of ``_CLASS_LINE``, a copy of
+    ``_TALENTS_LINE`` and a glob -- meant that a generator convention this project has
+    already been caught by once (the unquoted player line) would be fixed in
+    ``profiles.py`` while this copy silently matched fewer profiles, and a shrinking
+    corpus reads exactly like a corpus that shrank.
+    """
+    root, ptr = simc_checkout()
+    traits = parse_trait_data(root, ptr=ptr)
+
+    # One pass over the trait list per class, not per profile: 85 profiles regrouping
+    # the same 13 classes is the slowest thing in the suite. Both production callers
+    # cache it the same way.
+    nodes_by_class: dict[int, dict[int, list[Trait]]] = {}
     checked = undecodable = 0
     for tier in ("MID1", "MID2"):
-        for path in sorted((root / "profiles" / tier).glob("*.simc")):
-            text = path.read_text(encoding="utf-8", errors="replace")
-            found_class, found_talents = class_line.search(text), talents_line.search(text)
-            if not (found_class and found_talents):
+        for profile in profiles.discover(root / "profiles", tier, dps_only=False):
+            class_id = CLASS_IDS.get(profile.wow_class)
+            if not class_id or not profile.talent_hash:
                 continue
-            class_id = CLASS_IDS.get(CLASS_TOKENS[found_class.group(1)][0])
-            if not class_id:
-                continue
-            nodes = nodes_for_class(traits, class_id)
-            original = found_talents.group(1)
+            nodes = nodes_by_class.setdefault(class_id, nodes_for_class(traits, class_id))
+            original = profile.talent_hash
             try:
                 loadout = decode_loadout(original, nodes)
             except TalentDecodeError:
                 undecodable += 1
                 continue
-            assert encode_loadout(loadout, nodes) == original, path.name
+            assert encode_loadout(loadout, nodes) == original, profile.path.name
             checked += 1
     assert checked >= 70, f"only {checked} profiles round-tripped; expected the whole corpus"
     assert undecodable <= 15, f"{undecodable} profiles no longer decode -- has the tree moved?"
