@@ -7,20 +7,28 @@ alphabet or a wrong bit order.
 """
 
 import json
+import os
+import re
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from wowdps.profiles import CLASS_TOKENS
 from wowdps.talenttree import (
     BASE64,
     CLASS_IDS,
     TREE_CLASS,
     TREE_HERO,
     TREE_SPEC,
+    Loadout,
+    Selection,
     TalentDecodeError,
+    TalentEncodeError,
     Trait,
     _BitReader,
     decode_loadout,
+    encode_loadout,
     nodes_for_class,
     parse_sub_tree_names,
     parse_trait_data,
@@ -391,3 +399,302 @@ def test_the_spec_rule_does_not_apply_to_hero_nodes():
     nodes = {10: [trait(10, 100, tree=TREE_HERO, sub_tree=33, spec_ids=(250,))]}
     loadout = decode_loadout(encode(header_bits(251) + [1, 1, 0, 0]), nodes)
     assert spec_rule_violation(loadout, nodes) is None
+
+
+# --------------------------------------------------------------------------------
+# The encoder: the inverse of the decode, and the thing a talent search needs
+# --------------------------------------------------------------------------------
+
+
+def rank_bits(rank: int) -> list[int]:
+    return [(rank >> i) & 1 for i in range(6)]
+
+
+def test_encoding_a_decoded_loadout_reproduces_the_string_exactly():
+    """The property the whole feature rests on. Anything that reads back the same
+    build but writes different bytes will drift a profile the first time a sweep
+    round-trips one."""
+    nodes = {
+        10: [trait(10, 100, max_ranks=2)],
+        20: [trait(20, 200, node_type=2), trait(20, 201, node_type=2)],
+        30: [trait(30, 300, max_ranks=3)],
+    }
+    original = encode(
+        header_bits(62)
+        + [1, 1, 0, 0]  # node 10: purchased, full rank, no choice
+        + [1, 1, 0, 1, 1, 0]  # node 20: choice index 1
+        + [1, 1, 1]
+        + rank_bits(2)
+        + [0]  # node 30: partial rank 2 of 3
+    )
+    loadout = decode_loadout(original, nodes)
+    assert encode_loadout(loadout, nodes) == original
+
+
+def test_the_tree_hash_is_written_as_zeros():
+    """simc's own exporter does this -- ``put_bit( tree_bits, 0 )``, commented
+    "0-filled to bypass validation, as GetTreeHash() is unavailable externally". All 85
+    shipped MID1+MID2 hashes carry zeros there, so nothing is lost by not having it."""
+    nodes = {10: [trait(10, 100)]}
+    written = encode_loadout(decode_loadout(encode(header_bits(62) + [1, 1, 0, 0]), nodes), nodes)
+    reader = _BitReader(written)
+    reader.read(8)
+    reader.read(16)
+    assert reader.read(128) == 0
+
+
+def test_a_granted_node_keeps_its_missing_purchased_bit():
+    """A node the game grants is *selected* without being *purchased*. Writing the
+    purchased bit anyway would add a partial-rank bit and a choice bit behind it and
+    desynchronise every node after it -- and 277 of the 6,422 selected records in the
+    shipped profiles are granted ones, so this is the common case, not a corner."""
+    nodes = {10: [trait(10, 100, max_ranks=3)], 20: [trait(20, 200)]}
+    original = encode(header_bits(62) + [1, 0] + [1, 1, 0, 0])
+    loadout = decode_loadout(original, nodes)
+    assert loadout.selections[0].purchased is False
+    assert loadout.selections[0].rank == 1
+    assert encode_loadout(loadout, nodes) == original
+
+
+def test_the_hero_selection_node_is_written_with_the_choice_bit():
+    """The fact that costs a hero tree if it is missed. simc's exporter sets
+    ``is_choice`` for ``NODE_CHOICE`` **or** ``NODE_SELECTION``, so the sub-tree
+    selection node carries a choice index like any other choice node. An encoder that
+    tested only ``NODE_CHOICE`` writes no index, and the build silently reverts to
+    whichever hero tree the node happens to list first."""
+    nodes = {
+        30: [
+            trait(30, 300, tree=4, sub_tree=52, node_type=3, name="0"),
+            trait(30, 301, tree=4, sub_tree=51, node_type=3, name="0"),
+        ]
+    }
+    original = encode(header_bits(260) + [1, 1, 0, 1, 1, 0])
+    loadout = decode_loadout(original, nodes)
+    assert loadout.sub_tree == 51
+    written = encode_loadout(loadout, nodes)
+    assert written == original
+    assert decode_loadout(written, nodes).sub_tree == 51
+
+
+def test_a_plain_node_is_written_without_a_choice_bit():
+    nodes = {10: [trait(10, 100)]}
+    original = encode(header_bits(62) + [1, 1, 0, 0])
+    assert encode_loadout(decode_loadout(original, nodes), nodes) == original
+
+
+def test_the_partial_bit_is_derived_from_the_rank_when_it_was_not_recorded():
+    """What every hand-built and mutated selection relies on: ``partial=None`` means
+    "work it out from the rank", which is exactly what simc's exporter does."""
+    nodes = {10: [trait(10, 100, max_ranks=3)]}
+    full = Selection(
+        node_id=10,
+        entry_id=100,
+        name="T",
+        spell_id=1,
+        rank=3,
+        tree_index=TREE_CLASS,
+        sub_tree=0,
+        row=1,
+        col=1,
+        node_type=0,
+        max_ranks=3,
+    )
+    part = replace(full, rank=2)
+    empty = Loadout(version=2, spec_id=62, selections=(), spare_bits=0)
+    assert encode_loadout(replace(empty, selections=(full,)), nodes) == encode(
+        header_bits(62) + [1, 1, 0, 0]
+    )
+    assert encode_loadout(replace(empty, selections=(part,)), nodes) == encode(
+        header_bits(62) + [1, 1, 1] + rank_bits(2) + [0]
+    )
+
+
+def test_a_recorded_partial_bit_that_disagrees_with_the_rank_is_still_reproduced():
+    """One shipped MID1 profile writes the partial bit on a node that holds all its
+    ranks. simc refuses that string, but the encoder is the *inverse of the decoder*,
+    not a corrector: re-encoding has to give back what was read, or the refusal moves
+    from simc's parser to a diff nobody can explain."""
+    nodes = {10: [trait(10, 100, max_ranks=2)]}
+    original = encode(header_bits(62) + [1, 1, 1] + rank_bits(2) + [0])
+    loadout = decode_loadout(original, nodes)
+    assert loadout.selections[0].partial is True
+    assert loadout.selections[0].rank == loadout.selections[0].max_ranks
+    assert encode_loadout(loadout, nodes) == original
+
+
+def test_a_source_that_carried_a_longer_tail_is_reproduced():
+    """Three shipped MID2 profiles -- all three Hunters -- carry a whole extra
+    character of zeros past the node stream, because the exporter knew nodes simc's
+    trait table does not. The bits mean nothing; reproducing them is what makes those
+    three round-trip byte-identically."""
+    nodes = {10: [trait(10, 100)]}
+    shortest = encode(header_bits(62) + [1, 1, 0, 0])
+    padded = shortest + "A"
+    loadout = decode_loadout(padded, nodes)
+    assert encode_loadout(loadout, nodes) == padded
+    assert encode_loadout(loadout, nodes, preserve_framing=False) == shortest
+
+
+def test_a_source_that_stopped_before_the_node_stream_did_is_reproduced():
+    """The mirror case, and one MID1 profile is in it: the string ends before the node
+    stream does and the reader supplies zeros for the rest. Re-encoding without the
+    framing writes those zeros out and produces a longer -- equivalent, but not
+    identical -- string."""
+    nodes = {node_id: [trait(node_id, node_id * 10)] for node_id in range(10, 110, 10)}
+    full = encode(header_bits(62) + [1, 1, 0, 0] + [0] * 9)
+    original = full[:-1]
+    loadout = decode_loadout(original, nodes)
+    assert [s.node_id for s in loadout.selections] == [10]
+    assert loadout.spare_bits < 0, "this case is a string shorter than its own node stream"
+    assert encode_loadout(loadout, nodes) == original
+    assert encode_loadout(loadout, nodes, preserve_framing=False) == full
+
+
+def test_framing_never_truncates_a_bit_that_carries_a_selection():
+    """The guard that keeps the framing replay from corrupting a mutation. A build that
+    takes a node late in the tree needs more room than the source had, and the right
+    answer is a longer string -- never a shorter one that reads back as a different
+    build."""
+    nodes = {node_id: [trait(node_id, node_id * 10)] for node_id in range(10, 110, 10)}
+    original = encode(header_bits(62) + [1, 1, 0, 0] + [0] * 9)[:-1]
+    loadout = decode_loadout(original, nodes)
+    grown = replace(
+        loadout,
+        selections=loadout.selections
+        + (
+            Selection(
+                node_id=100,
+                entry_id=1000,
+                name="Late",
+                spell_id=1,
+                rank=1,
+                tree_index=TREE_CLASS,
+                sub_tree=0,
+                row=1,
+                col=1,
+                node_type=0,
+                max_ranks=1,
+            ),
+        ),
+    )
+    written = encode_loadout(grown, nodes)
+    assert [s.node_id for s in decode_loadout(written, nodes).selections] == [10, 100]
+
+
+def test_encoding_refuses_a_node_the_class_does_not_have():
+    nodes = {10: [trait(10, 100)]}
+    stray = Selection(
+        node_id=99,
+        entry_id=990,
+        name="Elsewhere",
+        spell_id=1,
+        rank=1,
+        tree_index=TREE_CLASS,
+        sub_tree=0,
+        row=1,
+        col=1,
+        node_type=0,
+        max_ranks=1,
+    )
+    with pytest.raises(TalentEncodeError):
+        encode_loadout(Loadout(version=2, spec_id=62, selections=(stray,), spare_bits=0), nodes)
+
+
+def test_encoding_refuses_a_rank_too_large_for_its_field():
+    """Six bits of rank. Writing 64 would drop the high bit and silently encode rank
+    zero -- a different build that looks like a successful export."""
+    nodes = {10: [trait(10, 100, max_ranks=70)]}
+    over = Selection(
+        node_id=10,
+        entry_id=100,
+        name="T",
+        spell_id=1,
+        rank=64,
+        tree_index=TREE_CLASS,
+        sub_tree=0,
+        row=1,
+        col=1,
+        node_type=0,
+        max_ranks=70,
+    )
+    with pytest.raises(TalentEncodeError):
+        encode_loadout(Loadout(version=2, spec_id=62, selections=(over,), spare_bits=0), nodes)
+
+
+def test_encoding_refuses_the_same_node_twice():
+    nodes = {10: [trait(10, 100)]}
+    one = Selection(
+        node_id=10,
+        entry_id=100,
+        name="T",
+        spell_id=1,
+        rank=1,
+        tree_index=TREE_CLASS,
+        sub_tree=0,
+        row=1,
+        col=1,
+        node_type=0,
+        max_ranks=1,
+    )
+    with pytest.raises(TalentEncodeError):
+        encode_loadout(Loadout(version=2, spec_id=62, selections=(one, one), spare_bits=0), nodes)
+
+
+# --------------------------------------------------------------------------------
+# The whole shipped corpus, when a simc checkout is at hand
+# --------------------------------------------------------------------------------
+
+
+def simc_checkout() -> Path | None:
+    """A real simc checkout, named by ``WOWDPS_SIMC_DIR``.
+
+    The trait table is 686 KB of generated C++ and is not committed here, so the only
+    honest way to run the corpus check is against a checkout somebody points at. The
+    hand-built tests above cover the format; this one covers *simc's actual data*,
+    which is the thing that changes under us.
+    """
+    raw = os.environ.get("WOWDPS_SIMC_DIR")
+    if not raw:
+        return None
+    root = Path(raw)
+    return root if (root / "engine" / "dbc" / "generated").is_dir() else None
+
+
+@pytest.mark.skipif(simc_checkout() is None, reason="set WOWDPS_SIMC_DIR to a simc checkout")
+def test_every_shipped_profile_round_trips_byte_identically():
+    """The correctness bar, against every talent hash simc ships in either tier.
+
+    Measured on simc 69a46e1, 2026-08-23: **72 of 72 decodable hashes come back byte
+    for byte** -- all 35 MID2 profiles and 37 of MID1's 50. The other 13 MID1 profiles
+    raise ``TalentDecodeError`` and so have no round trip to test; that is the tier rot
+    this project already documents, where a stored hash no longer fits the current tree
+    and the bit stream desynchronises.
+    """
+    root = simc_checkout()
+    class_line = re.compile(
+        r"^(" + "|".join(CLASS_TOKENS) + r')\s*=\s*"?([^"\n]+)"?\s*$', re.MULTILINE
+    )
+    talents_line = re.compile(r"^talents\s*=\s*(\S+)\s*$", re.MULTILINE)
+    traits = parse_trait_data(root, ptr=True)
+
+    checked = undecodable = 0
+    for tier in ("MID1", "MID2"):
+        for path in sorted((root / "profiles" / tier).glob("*.simc")):
+            text = path.read_text(encoding="utf-8", errors="replace")
+            found_class, found_talents = class_line.search(text), talents_line.search(text)
+            if not (found_class and found_talents):
+                continue
+            class_id = CLASS_IDS.get(CLASS_TOKENS[found_class.group(1)][0])
+            if not class_id:
+                continue
+            nodes = nodes_for_class(traits, class_id)
+            original = found_talents.group(1)
+            try:
+                loadout = decode_loadout(original, nodes)
+            except TalentDecodeError:
+                undecodable += 1
+                continue
+            assert encode_loadout(loadout, nodes) == original, path.name
+            checked += 1
+    assert checked >= 70, f"only {checked} profiles round-tripped; expected the whole corpus"
+    assert undecodable <= 15, f"{undecodable} profiles no longer decode -- has the tree moved?"

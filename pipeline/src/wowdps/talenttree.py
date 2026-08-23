@@ -145,6 +145,15 @@ class TalentDecodeError(ValueError):
     """The hash could not be read as a loadout for this class."""
 
 
+class TalentEncodeError(ValueError):
+    """The loadout could not be written as a hash.
+
+    Separate from ``TalentDecodeError`` because the two mean opposite things about
+    where the fault is: a decode error is a statement about a string somebody else
+    wrote, an encode error is a statement about a ``Loadout`` this code assembled.
+    """
+
+
 @dataclass(frozen=True)
 class Trait:
     """One entry of one talent node, straight out of ``trait_data.inc``."""
@@ -328,6 +337,57 @@ class Selection:
     node_type: int
     max_ranks: int
 
+    #: Whether the *purchased* bit was set. A node the game **grants** carries
+    #: ``selected`` without ``purchased`` and sits at one rank, which is a different
+    #: wire record from a node bought up to rank one. 277 of the 6,422 selected
+    #: records in the 85 shipped MID1+MID2 profiles are granted ones, so this is not a
+    #: corner case, and deriving the bit from ``rank == 1`` would be wrong for every
+    #: granted node whose ``max_ranks`` is greater than one.
+    purchased: bool = True
+
+    #: Whether the *partially ranked* bit was set, or ``None`` to derive it as
+    #: ``rank < max_ranks`` -- which is what simc's own exporter does
+    #: (``rank == max_rank`` -> 0, else 1 plus the rank, ``player.cpp`` at 69a46e1).
+    #: ``None`` is the right default for anything built by hand or by a mutation:
+    #: the bit then always agrees with the rank. It is recorded explicitly by
+    #: ``decode_loadout`` so that a string whose bit *disagrees* with its rank still
+    #: re-encodes byte-identically -- one MID1 profile is in exactly that state, and
+    #: simc refuses it ("Partial rank for node N but all N ranks are allocated.").
+    partial: bool | None = None
+
+    #: The choice index if the *choice* bit was written, otherwise ``None``. Not
+    #: derivable from ``node_type``: 78 records in MID1's rotted profiles are choice
+    #: nodes written **without** the bit and 89 are plain nodes written **with** it,
+    #: so the encoder has to be told rather than to infer.
+    choice_index: int | None = None
+
+
+@dataclass(frozen=True)
+class Framing:
+    """How the source string was framed around the node stream.
+
+    The loadout format has no length field: the node stream simply ends, and whatever
+    is left over is padding to a 6-bit character boundary. That leaves two ways for a
+    real string to differ from the shortest one that carries the same loadout, and
+    **both occur in simc's own profiles**, measured over all 85 MID1+MID2 hashes on
+    simc 69a46e1:
+
+    * **Longer.** Three MID2 profiles -- all three Hunters -- carry six to nine spare
+      bits where padding needs at most five, i.e. one whole extra character of zeros.
+      The exporter wrote node records simc's trait table does not have.
+    * **Shorter.** One MID1 profile (Shadow Priest, Archon) ends one bit *before* the
+      node stream does, relying on the reader returning zeros past the end -- which
+      both simc and ``_BitReader`` do.
+
+    Neither changes what the string means, so neither is an error. But reproducing a
+    source byte for byte needs them, which is why the decoder records the framing and
+    the encoder replays it. ``length`` is the source's character count and ``tail``
+    the bits that followed the node stream (empty when the stream overran the string).
+    """
+
+    length: int
+    tail: tuple[int, ...] = ()
+
 
 @dataclass(frozen=True)
 class Loadout:
@@ -337,6 +397,10 @@ class Loadout:
     spec_id: int
     selections: tuple[Selection, ...]
     spare_bits: int
+
+    #: How the source string was framed, when this loadout came from one. ``None`` for
+    #: a loadout assembled in code, which then encodes to its own shortest form.
+    framing: Framing | None = None
 
     @property
     def sub_tree(self) -> int | None:
@@ -377,6 +441,21 @@ def nodes_for_class(traits: list[Trait], class_id: int) -> dict[int, list[Trait]
     return grouped
 
 
+def max_ranks_of(entries: list[Trait]) -> int:
+    """How many ranks a node holds, which is not always its first entry's ``max_ranks``.
+
+    A **tiered** node spreads its ranks over several entries and simc sums them
+    (``range::accumulate`` in both ``parse_traits_hash`` and ``generate_traits_hash``);
+    every other kind of node takes the figure off its first entry. Getting this wrong
+    moves the *partially ranked* bit, which moves six bits of rank into or out of the
+    stream and desynchronises everything after it.
+    """
+    first = entries[0]
+    if first.node_type == NODE_TIERED:
+        return sum(entry.max_ranks for entry in entries)
+    return first.max_ranks
+
+
 def decode_loadout(loadout: str, nodes: dict[int, list[Trait]]) -> Loadout:
     """Read a talent loadout string against one class's nodes.
 
@@ -400,25 +479,25 @@ def decode_loadout(loadout: str, nodes: dict[int, list[Trait]]) -> Loadout:
         if not reader.read(1):  # selected
             continue
         trait = entries[0]
-        max_rank = (
-            sum(entry.max_ranks for entry in entries)
-            if trait.node_type == NODE_TIERED
-            else trait.max_ranks
-        )
+        max_rank = max_ranks_of(entries)
         rank = max_rank
-        if not reader.read(1):  # purchased; otherwise granted at rank 1
+        purchased = bool(reader.read(1))  # otherwise granted at rank 1
+        partial: bool | None = None
+        choice_index: int | None = None
+        if not purchased:
             rank = 1
         else:
-            if reader.read(1):  # partially ranked
+            partial = bool(reader.read(1))  # partially ranked
+            if partial:
                 rank = reader.read(RANK_BITS)
             if reader.read(1):  # choice node
-                index = reader.read(CHOICE_BITS)
-                if index >= len(entries):
+                choice_index = reader.read(CHOICE_BITS)
+                if choice_index >= len(entries):
                     raise TalentDecodeError(
-                        f"choice index {index} out of bounds for node {node_id} "
+                        f"choice index {choice_index} out of bounds for node {node_id} "
                         f"({len(entries)} entries)"
                     )
-                trait = entries[index]
+                trait = entries[choice_index]
         selections.append(
             Selection(
                 node_id=node_id,
@@ -432,14 +511,159 @@ def decode_loadout(loadout: str, nodes: dict[int, list[Trait]]) -> Loadout:
                 col=trait.col,
                 node_type=trait.node_type,
                 max_ranks=max_rank,
+                purchased=purchased,
+                partial=partial,
+                choice_index=choice_index,
             )
         )
+    # Capture the framing before draining the tail: `spare_bits` is negative when the
+    # stream overran the string, and reading that many bits would be meaningless.
+    spare = reader.spare_bits
+    tail = tuple(reader.read(1) for _ in range(spare)) if spare > 0 else ()
     return Loadout(
         version=version,
         spec_id=spec_id,
         selections=tuple(selections),
-        spare_bits=reader.spare_bits,
+        spare_bits=spare,
+        framing=Framing(length=len(loadout), tail=tail),
     )
+
+
+class _BitWriter:
+    """The exact mirror of ``_BitReader``: 6 bits per character, least significant
+    bit first, padded with zeros to a character boundary.
+
+    Kept as a separate class rather than folded into ``encode_loadout`` because the
+    padding rule is the subtle part: the last character of a loadout string is almost
+    never full, and a writer that padded on the *wrong* side would produce a string
+    that reads back as a different build rather than as an error.
+    """
+
+    def __init__(self) -> None:
+        self.bits: list[int] = []
+
+    def write(self, value: int, bits: int) -> None:
+        if value < 0 or value >> bits:
+            raise TalentEncodeError(f"value {value} does not fit in {bits} bits")
+        for offset in range(bits):
+            self.bits.append((value >> offset) & 1)
+
+    def text(self, bits: list[int] | None = None) -> str:
+        raw = self.bits if bits is None else bits
+        padded = raw + [0] * (-len(raw) % CHAR_BITS)
+        out = []
+        for start in range(0, len(padded), CHAR_BITS):
+            char = 0
+            for offset in range(CHAR_BITS):
+                char |= padded[start + offset] << offset
+            out.append(BASE64[char])
+        return "".join(out)
+
+
+def encode_loadout(
+    loadout: Loadout,
+    nodes: dict[int, list[Trait]],
+    *,
+    preserve_framing: bool = True,
+) -> str:
+    """Write a loadout back out as a talent string: the inverse of ``decode_loadout``.
+
+    This is what makes a talent *search* possible at all. Everything upstream of it
+    reads builds simc already ships; a build nobody has written down has to be
+    assembled here and handed to simc as a hash, because a hash is the only way to put
+    talents into a profile.
+
+    The format is written from ``generate_traits_hash`` in ``engine/player/player.cpp``
+    -- simc's own exporter, which is the authority on the two rules that are not
+    visible from the reader alone:
+
+    * the 128-bit tree hash is written as **zeros**, with simc's own comment saying it
+      is "0-filled to bypass validation, as GetTreeHash() is unavailable externally".
+      Measured to be zero in all 85 shipped MID1+MID2 profiles, so nothing is lost by
+      writing zeros;
+    * the choice bit covers ``NODE_CHOICE`` **and** ``NODE_SELECTION`` -- the hero-tree
+      selection node is written as a choice node. Reading only ``NODE_CHOICE`` produces
+      a string whose hero tree silently reverts to the node's first entry.
+
+    Everything else is taken from the ``Selection`` rather than re-derived, which is
+    what makes the round trip exact: see ``purchased``, ``partial`` and
+    ``choice_index`` there for the measurements behind each.
+
+    ``preserve_framing`` replays the source string's own length and tail (see
+    ``Framing``). It is on by default because the common case is "decode, change one
+    thing, encode", where reproducing the source's framing is what makes an *unchanged*
+    build come back byte-identical -- the property the whole round-trip test rests on.
+    Turning it off yields the shortest string carrying the same loadout, which simc
+    reads identically.
+
+    Raises ``TalentEncodeError`` for a loadout that cannot be written at all: two
+    selections of one node, a node the class does not have, or a value too large for
+    its field. Those are all silent corruptions if written anyway -- an over-large rank
+    would simply lose its high bits and encode as a different build.
+    """
+    writer = _BitWriter()
+    writer.write(loadout.version, VERSION_BITS)
+    writer.write(loadout.spec_id, SPEC_BITS)
+    writer.write(0, TREE_BITS)
+
+    chosen: dict[int, Selection] = {}
+    for selection in loadout.selections:
+        if selection.node_id in chosen:
+            raise TalentEncodeError(f"node {selection.node_id} is selected twice")
+        if selection.node_id not in nodes:
+            raise TalentEncodeError(f"node {selection.node_id} is not a node of this class")
+        chosen[selection.node_id] = selection
+
+    for node_id in sorted(nodes):
+        selection = chosen.get(node_id)
+        if selection is None:
+            writer.write(0, 1)
+            continue
+        writer.write(1, 1)
+        writer.write(1 if selection.purchased else 0, 1)
+        if not selection.purchased:
+            continue  # granted nodes stop here; the game gave them at one rank
+
+        max_rank = max_ranks_of(nodes[node_id])
+        partial = selection.partial
+        if partial is None:
+            partial = selection.rank < max_rank
+        writer.write(1 if partial else 0, 1)
+        if partial:
+            writer.write(selection.rank, RANK_BITS)
+
+        writer.write(1 if selection.choice_index is not None else 0, 1)
+        if selection.choice_index is not None:
+            writer.write(selection.choice_index, CHOICE_BITS)
+
+    return writer.text(_framed(writer.bits, loadout.framing if preserve_framing else None))
+
+
+def _framed(bits: list[int], framing: Framing | None) -> list[int]:
+    """Replay a source string's framing around a freshly written node stream.
+
+    One rule covers both directions, because both are just "make the stream as long as
+    the source was, when that can be done without changing what it says":
+
+    * append the tail the source carried past its node stream, then
+    * pad with zeros if still short of the source's length;
+    * if instead the stream now needs *more* room than the source had, give it the room
+      -- unless everything past the source's length is zero, in which case trim back to
+      the source's length.
+
+    The trim is what reproduces a source that stopped early, and it is guarded on the
+    trimmed bits being zero so that a mutation which selects a node near the end of the
+    tree can never be silently truncated into a different build.
+    """
+    if framing is None:
+        return bits
+    target = framing.length * CHAR_BITS
+    framed = bits + list(framing.tail)
+    if len(framed) < target:
+        return framed + [0] * (target - len(framed))
+    if len(framed) > target and not any(framed[target:]):
+        return framed[:target]
+    return framed
 
 
 def spec_rule_violation(loadout: Loadout, nodes: dict[int, list[Trait]]) -> str | None:
