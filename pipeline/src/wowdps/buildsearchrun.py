@@ -21,6 +21,7 @@ labelled rather than pooled:
    that it is optimal, and the display contract keeps the two apart. **No such document
    exists in this repository today**, so this path is wired and unexercised, and a run
    says which of those it was.
+
 **A fourth source is not built, and is described here rather than half-shipped.** Six of
 MID2's uncovered (spec, hero tree) cells are specs simc ships a build for on one of
 their two trees -- Dark Ranger for both Hunters, Pack Leader for Survival, Fatebound for
