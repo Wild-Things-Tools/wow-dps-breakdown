@@ -876,6 +876,55 @@ def cmd_unvalidated(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_gear_anchor(args: argparse.Namespace) -> int:
+    """Show the normalized kit a computed build of this tier would wear.
+
+    Offline and read-only. It exists because the anchor moves numbers -- measured on
+    MID2 at 1000 deterministic iterations, one target, it costs a shipped profile
+    3.65% to 6.17% and lifts a disabled one 45.91% to 65.65% -- and a reader who
+    cannot see the anchor has to take it on trust.
+    """
+    from . import buffsweep, gearanchor
+
+    simc_dir = Path(args.simc_source)
+    profiles_dir = Path(args.profiles)
+    tier = _resolve_tier(profiles_dir, args.tier)
+    found = profiles.discover(profiles_dir, tier, dps_only=True)
+
+    sets = buffsweep.parse_tier_sets(simc_dir, ptr=args.ptr)
+    item_sets = gearanchor.parse_item_sets(simc_dir, ptr=args.ptr)
+    if not buffsweep.sets_for_tier(sets, tier):
+        logging.warning("simc ships no set bonus labelled %s; anchoring gear alone", tier)
+        sets, item_sets = None, None
+
+    selected = [p for p in found if not args.profile or args.profile in p.path.stem]
+    if not selected:
+        logging.error("no %s profile matches %r", tier, args.profile)
+        return 1
+
+    target = gearanchor.derive_target(found, tier, sets, item_sets, wow_class=selected[0].wow_class)
+    print(f"{tier}: item level {target.ilevel} ({target.ilevel_evidence})")
+    print(f"      tier set {target.set_pieces}-piece ({target.set_evidence})")
+    if target.zeroed_options:
+        print(f"      written to zero: {', '.join(target.zeroed_options)}")
+    print()
+
+    for profile in selected:
+        # The target's *set name* is per class; everything else about it is per tier,
+        # so it is re-derived here rather than reused across classes.
+        per_class = gearanchor.derive_target(
+            found, tier, sets, item_sets, wow_class=profile.wow_class
+        )
+        anchor = gearanchor.apply(per_class, gearanchor.read_kit(profile.path))
+        mark = " [unvalidated]" if profile.unvalidated else ""
+        print(f"{profile.path.stem}{mark}")
+        print(f"  {gearanchor.describe(anchor)}")
+        if args.options:
+            for option in anchor.options():
+                print(f"    {option}")
+    return 0
+
+
 def cmd_fights(args: argparse.Namespace) -> int:
     """Publish ``<tier>/fights.json``: what each boss is asserted and measured to be.
 
@@ -1395,6 +1444,22 @@ def build_parser() -> argparse.ArgumentParser:
         "reports success while doing it",
     )
     p_fights.set_defaults(func=cmd_fights)
+
+    p_anchor = sub.add_parser(
+        "gear-anchor",
+        help="the normalized kit a computed build of a tier would wear",
+    )
+    p_anchor.add_argument("--tier", default="latest")
+    p_anchor.add_argument("--profiles", default="simc/profiles")
+    p_anchor.add_argument(
+        "--simc-source", default="simc", help="a simc checkout, for engine/dbc/generated"
+    )
+    p_anchor.add_argument("--profile", help="only profiles whose filename contains this")
+    p_anchor.add_argument(
+        "--options", action="store_true", help="print the simc option lines themselves"
+    )
+    p_anchor.add_argument("--ptr", action="store_true")
+    p_anchor.set_defaults(func=cmd_gear_anchor)
 
     p_buffs = sub.add_parser(
         "buffs",
