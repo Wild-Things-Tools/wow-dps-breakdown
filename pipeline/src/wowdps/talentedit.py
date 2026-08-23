@@ -122,8 +122,26 @@ def _selection(
     a choice change also moves the entry id, the name and the spell id. Replacing one
     field and keeping the rest is how a mutated build ends up describing one talent and
     encoding another.
+
+    Which is also why a **granted** node is refused an entry or a rank here. A node the
+    game grants is written as *selected, not purchased*, and the format stops the record
+    there: no rank, no choice index, and simc reads the node's first entry at one rank.
+    So a granted node flipped to its other entry describes one talent and encodes the
+    other -- and the string it encodes to is the *unmutated build's own hash*, byte for
+    byte, which no downstream check can see. Purchasing the node is the expressible
+    edit, and ``select_node`` is the way to make it.
     """
     entries = _entries(nodes, node_id)
+    if not purchased and choice_index is not None:
+        raise TalentEditError(
+            f"node {node_id} is granted rather than purchased, and the format writes no "
+            f"choice index for a granted node; purchase it to choose an entry"
+        )
+    if not purchased and rank != 1:
+        raise TalentEditError(
+            f"node {node_id} is granted rather than purchased, so it holds exactly one "
+            f"rank; {rank} cannot be written"
+        )
     trait = entries[0]
     if choice_index is not None:
         if not 0 <= choice_index < len(entries):
@@ -215,6 +233,11 @@ def set_choice(
     Refuses a node that is not selected: "change which half of a talent I took" has no
     meaning for a talent nobody took, and quietly selecting it would spend a point the
     caller did not ask to spend.
+
+    Refuses a **granted** node for the same reason one step further on -- see
+    ``_selection``. The format cannot say which entry of a granted node is taken, so
+    the flip would encode to the hash it started from; the caller who wants the other
+    entry has to purchase the node, which is a different edit and spends a point.
     """
     current = selected(loadout, node_id)
     if current is None:

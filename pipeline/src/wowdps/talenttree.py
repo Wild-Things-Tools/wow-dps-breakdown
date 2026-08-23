@@ -597,9 +597,13 @@ def encode_loadout(
     reads identically.
 
     Raises ``TalentEncodeError`` for a loadout that cannot be written at all: two
-    selections of one node, a node the class does not have, or a value too large for
-    its field. Those are all silent corruptions if written anyway -- an over-large rank
-    would simply lose its high bits and encode as a different build.
+    selections of one node, a node the class does not have, a value too large for its
+    field, a choice index past the node's last entry, or a **granted** node carrying a
+    rank or a choice index the format has nowhere to put. Those are all silent
+    corruptions if written anyway -- an over-large rank would simply lose its high bits
+    and encode as a different build, and a granted node's discarded choice index
+    encodes as *the build you started from*, which is worse: the hash is valid, simc
+    runs it, and the number comes back attributed to a variant that was never built.
     """
     writer = _BitWriter()
     writer.write(loadout.version, VERSION_BITS)
@@ -622,6 +626,25 @@ def encode_loadout(
         writer.write(1, 1)
         writer.write(1 if selection.purchased else 0, 1)
         if not selection.purchased:
+            # A granted node's record ends at the purchased bit: the format writes it
+            # no rank and no choice index, and simc's reader gives it the node's FIRST
+            # entry at one rank. So anything else this selection claims is not merely
+            # lost, it is lost *silently* -- the string comes back byte-identical to
+            # the one the unchanged build produces, and a search then attributes the
+            # base build's DPS to a variant it never simulated. Refusing here is the
+            # only place that can be seen: `validate_loadout` reports nothing, because
+            # the hash it would judge is a perfectly legal one.
+            if selection.choice_index is not None:
+                raise TalentEncodeError(
+                    f"node {node_id} is selected but not purchased, and the format writes no "
+                    f"choice index for a granted node; index {selection.choice_index} "
+                    f"(entry {selection.entry_id}) cannot be written"
+                )
+            if selection.rank != 1:
+                raise TalentEncodeError(
+                    f"node {node_id} is selected but not purchased, and the format writes no "
+                    f"rank for a granted node; {selection.rank} ranks cannot be written"
+                )
             continue  # granted nodes stop here; the game gave them at one rank
 
         max_rank = max_ranks_of(nodes[node_id])
@@ -634,6 +657,16 @@ def encode_loadout(
 
         writer.write(1 if selection.choice_index is not None else 0, 1)
         if selection.choice_index is not None:
+            # The same bound `decode_loadout` enforces on the way in. Two bits of
+            # field width is not the only limit: an index inside the field but past
+            # the node's last entry writes a string simc refuses ("Index 2 for choice
+            # node 12 out of bounds.") and this decoder raises on, so the error
+            # belongs here, where the loadout that caused it is still in hand.
+            if selection.choice_index >= len(nodes[node_id]):
+                raise TalentEncodeError(
+                    f"choice index {selection.choice_index} out of bounds for node {node_id} "
+                    f"({len(nodes[node_id])} entries)"
+                )
             writer.write(selection.choice_index, CHOICE_BITS)
 
     return writer.text(_framed(writer.bits, loadout.framing if preserve_framing else None))

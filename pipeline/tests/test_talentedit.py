@@ -6,6 +6,8 @@ end-to-end run in the pull request covers: mutants generated through these primi
 handed to simc at ``iterations=1``.
 """
 
+import random
+
 import pytest
 
 from wowdps.talentedit import (
@@ -25,14 +27,19 @@ from wowdps.talentedit import (
     validate_loadout,
 )
 from wowdps.talenttree import (
+    BASE64,
+    NODE_CHOICE,
+    NODE_SELECTION,
     TREE_CLASS,
     TREE_HERO,
     TREE_SELECTION,
     TREE_SPEC,
     Loadout,
+    TalentEncodeError,
     Trait,
     decode_loadout,
     encode_loadout,
+    max_ranks_of,
 )
 
 SPEC = 260  # Outlaw, in the shipped data; any id does here
@@ -467,3 +474,203 @@ def test_validation_separates_what_simc_refuses_from_what_it_accepts():
     report = validate_loadout(gated, nodes)
     assert report.findings and report.simc_refusals == ()
     assert isinstance(report.findings[0], Finding)
+
+
+# --------------------------------------------------------------------------------
+# The property the whole feature rests on: a mutation that changes the build
+# changes the hash
+# --------------------------------------------------------------------------------
+
+
+def as_string(bits: list[int]) -> str:
+    """A hand-built bit stream as a loadout string, six bits per character, LSB first."""
+    padded = bits + [0] * (-len(bits) % 6)
+    return "".join(
+        BASE64[sum(padded[start + offset] << offset for offset in range(6))]
+        for start in range(0, len(padded), 6)
+    )
+
+
+def header(spec_id: int = SPEC) -> list[int]:
+    version = [(2 >> i) & 1 for i in range(8)]
+    spec = [(spec_id >> i) & 1 for i in range(16)]
+    return version + spec + [0] * 128
+
+
+def mutable_nodes():
+    """``sample_nodes`` plus a tiered node and a second hero node in each sub-tree, so
+    a random walk can reach every shape the encoder branches on."""
+    nodes = sample_nodes()
+    nodes[14] = [
+        trait(14, 140, node_type=1, max_ranks=1, name="Tier A"),
+        trait(14, 141, node_type=1, max_ranks=2, name="Tier B"),
+    ]
+    nodes[32] = [trait(32, 320, tree=TREE_HERO, sub_tree=51, max_ranks=2, name="Trick B")]
+    nodes[33] = [trait(33, 330, tree=TREE_HERO, sub_tree=52, max_ranks=2, name="Fate B")]
+    return nodes
+
+
+def granted_base(nodes) -> Loadout:
+    """A build carrying a **granted** choice node, decoded from a hand-built string.
+
+    Not reachable through the mutation API -- ``_selection`` only ever builds purchased
+    selections -- and it is the one shape finding the encoder's worst failure needs, so
+    it is written on the wire and read back the way a shipped profile arrives.
+    """
+    records = {
+        12: [1, 0],  # selected, NOT purchased: the game grants this choice node
+        20: [1, 1, 0, 0],  # purchased, full rank
+        30: [1, 1, 0, 0],  # a hero node of sub tree 51
+        41: [1, 1, 0, 1, 1, 0],  # this spec's selection node, entry index 1 -> tree 51
+    }
+    bits = header()
+    for node_id in sorted(nodes):
+        bits += records.get(node_id, [0])
+    return decode_loadout(as_string(bits), nodes)
+
+
+def takes(loadout: Loadout) -> dict[int, tuple[int, int, bool]]:
+    """What a build *takes*: entry, rank and whether it was bought, per node.
+
+    The projection the property compares on, and it has to carry the entry id rather
+    than the node id alone -- flipping a choice node changes nothing else.
+    """
+    return {s.node_id: (s.entry_id, s.rank, s.purchased) for s in loadout.selections}
+
+
+def a_mutation(rng: random.Random, build: Loadout, nodes) -> Loadout:
+    """One edit, chosen the way a sweep enumerating them would choose one."""
+    node_ids = sorted(nodes)
+    match rng.choice(("select", "deselect", "choice", "move", "hero")):
+        case "select":
+            node_id = rng.choice(node_ids)
+            entries = nodes[node_id]
+            is_choice = entries[0].node_type in (NODE_CHOICE, NODE_SELECTION)
+            return select_node(
+                build,
+                nodes,
+                node_id,
+                rank=rng.randint(1, max_ranks_of(entries)),
+                choice_index=rng.randrange(len(entries)) if is_choice else None,
+            )
+        case "deselect":
+            return deselect_node(build, rng.choice(node_ids))
+        case "choice":
+            return set_choice(build, nodes, rng.choice(node_ids), rng.randrange(2))
+        case "move":
+            return move_rank(
+                build,
+                nodes,
+                source_node=rng.choice(node_ids),
+                target_node=rng.choice(node_ids),
+                ranks=1,
+            )
+        case _:
+            return swap_hero_tree(build, nodes, rng.choice((51, 52)))
+
+
+def test_a_mutation_that_changes_the_build_changes_the_hash():
+    """The property the encoder exists to guarantee, over many mutations rather than a
+    handful of examples -- because the failure it pins was invisible to every example
+    anybody wrote.
+
+    A **granted** choice node flipped to its other entry used to encode to a string
+    *byte-identical* to the unmutated build's: the format writes no choice index for a
+    granted node, so the flip was silently dropped. Nothing downstream could see it --
+    the hash is valid, simc runs it, ``validate_loadout`` returns ``legal`` with zero
+    findings -- and a talent search would have attributed the base build's DPS to a
+    variant it never simulated. That is the worst failure available to this module: not
+    a crash, a confident wrong number.
+
+    Two assertions per mutation, and the first is the one that catches it:
+
+    * the round trip reflects the mutation -- ``decode(encode(mutant))`` takes what the
+      mutant takes;
+    * a mutant that takes something different encodes to a different string.
+    """
+    rng = random.Random(20260823)
+    nodes = mutable_nodes()
+    bases = [
+        empty(),
+        granted_base(nodes),
+        select_node(select_node(empty(), nodes, 10, rank=2), nodes, 12, choice_index=0),
+        select_node(swap_hero_tree(empty(), nodes, 52), nodes, 31),
+    ]
+
+    applied = refused = changed = 0
+    for _ in range(600):
+        base = rng.choice(bases)
+        try:
+            mutant = a_mutation(rng, base, nodes)
+        except TalentEditError:
+            # A sweep meets these constantly -- flipping a node nobody took, moving a
+            # rank across two trees. An edit the tree cannot express is refused by
+            # name, which is the whole point: it is never quietly performed.
+            refused += 1
+            continue
+        applied += 1
+
+        written = encode_loadout(mutant, nodes)
+        assert takes(decode_loadout(written, nodes)) == takes(mutant), (
+            f"the hash does not read back as the build that was written: {takes(mutant)}"
+        )
+        if takes(mutant) != takes(base):
+            changed += 1
+            assert written != encode_loadout(base, nodes), (
+                f"a mutation changed the build and not the hash: {takes(base)} -> {takes(mutant)}"
+            )
+
+    assert applied > 200, f"only {applied} of 600 mutations were applied at all"
+    assert changed > 100, f"only {changed} mutations changed the build; the walk is too timid"
+    assert refused, "no edit was refused; the walk never reached an inexpressible one"
+
+
+def test_flipping_a_granted_choice_node_is_refused_rather_than_silently_dropped():
+    """The single case behind the property test above, stated as an example.
+
+    ``set_choice`` used to copy the granted node's ``purchased=False`` onto a selection
+    naming the *other* entry, and the encoder then wrote neither. The build described
+    one talent and encoded the one it started from.
+    """
+    nodes = mutable_nodes()
+    build = granted_base(nodes)
+    granted = selected(build, 12)
+    assert (granted.purchased, granted.rank, granted.entry_id) == (False, 1, 120)
+
+    with pytest.raises(TalentEditError, match="granted"):
+        set_choice(build, nodes, 12, 1)
+
+    # The expressible edit is to buy the node, and it does change the hash.
+    bought = select_node(build, nodes, 12, choice_index=1)
+    assert encode_loadout(bought, nodes) != encode_loadout(build, nodes)
+    assert selected(decode_loadout(encode_loadout(bought, nodes), nodes), 12).entry_id == 121
+
+
+def test_the_encoder_refuses_a_granted_selection_it_cannot_write():
+    """The same guard one layer down, where a loadout assembled by ``replace`` arrives.
+    The editor cannot build one of these; ``dataclasses.replace`` can, and the tests in
+    this file use it."""
+    from dataclasses import replace
+
+    nodes = mutable_nodes()
+    build = granted_base(nodes)
+    granted = selected(build, 12)
+
+    lying = _replaced(build, replace(granted, entry_id=121, choice_index=1))
+    with pytest.raises(TalentEncodeError, match="choice index"):
+        encode_loadout(lying, nodes)
+
+    ranked = _replaced(build, replace(granted, rank=2))
+    with pytest.raises(TalentEncodeError, match="rank"):
+        encode_loadout(ranked, nodes)
+
+
+def _replaced(loadout: Loadout, selection) -> Loadout:
+    from dataclasses import replace
+
+    return replace(
+        loadout,
+        selections=tuple(
+            selection if s.node_id == selection.node_id else s for s in loadout.selections
+        ),
+    )

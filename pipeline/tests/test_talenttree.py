@@ -621,6 +621,19 @@ def test_encoding_refuses_a_rank_too_large_for_its_field():
         encode_loadout(Loadout(version=2, spec_id=62, selections=(over,), spare_bits=0), nodes)
 
 
+def test_encoding_refuses_a_choice_index_past_the_last_entry():
+    """Two bits of field width is not the only bound. An index that fits the field but
+    names no entry writes a string ``decode_loadout`` raises on and simc refuses with
+    "Index 2 for choice node 20 out of bounds." -- so the refusal belongs here, where
+    the loadout that caused it is still in hand, rather than one round trip later."""
+    nodes = {20: [trait(20, 200, node_type=2), trait(20, 201, node_type=2)]}
+    original = encode(header_bits(62) + [1, 1, 0, 1, 1, 0])
+    loadout = decode_loadout(original, nodes)
+    past_the_end = replace(loadout, selections=(replace(loadout.selections[0], choice_index=2),))
+    with pytest.raises(TalentEncodeError, match="out of bounds"):
+        encode_loadout(past_the_end, nodes)
+
+
 def test_encoding_refuses_the_same_node_twice():
     nodes = {10: [trait(10, 100)]}
     one = Selection(
