@@ -2439,32 +2439,151 @@ restores a previous run's cache, so the second probe dispatch is exactly when th
 happens; `describe_cost` prints how many queries were cache hits and that an empty
 `--cache` directory is what takes the measurement.
 
-### What is unverified
+### The first live runs, 2026-08-23 -- and an omitted argument again
 
-Everything that needs the live service, and it is a longer list than usual because
-nothing has been sent:
+**This section replaces "nothing has been sent".** It has now been sent, and the two
+things it found are both the same shape: a run in which every visible number is
+healthy and the thing being collected is not there.
 
-- **Every field name and payload shape.** In particular the *shape* of `playerDetails`
-  -- the role buckets, `combatantInfo.gear`, and the `id`/`itemLevel`/`gems`/
-  `permanentEnchant` keys the gear reader looks for. Warcraft Logs documents this table
-  as not frozen. `--probe` prints the key sets so the first run names anything that
-  moved instead of surfacing as an empty harvest.
-- **Whether `characterRankings` rows already carry gear or talents.** If they do, a
-  whole query per kill is unnecessary. `--probe` reports it; it cannot be answered
-  offline.
-- **The point cost.** Unknown. Do not read "two queries per kill" as "cheap" -- the
-  first `--order public` run in this repo moved the counter from nothing to 2880 of
-  3600 on report-level queries, which is the family `playerDetails` belongs to. If the
-  probe says a full pass is unaffordable, that is the finding.
+**The gear was never asked for.** `Report.playerDetails` takes
+`includeCombatantInfo`, **default `false`**, and when it is false the server answers
+with each row's `combatantInfo` present and *empty* -- serialised `[]`, not an absent
+key. So the first probe (CI 32660348582) read 14 dps rows, got 14 talent codes, and
+reported `gear entries: 0 readable, 0 skipped`. Nothing looked broken.
 
-**What a probe run will now report, so the next reading can be judged.** It sends
-exactly five requests -- two uncached rate-limit readings, one rankings page, one
-`playerDetails`, one aliased talent-code query -- and `queries sent:` prints that same
-five. If the counter moves it prints the delta, the per-kill figure marked `(measured)`
-and a 240-kill figure marked `EXTRAPOLATION`. If it still prints UNMEASURED after this,
-the cause is no longer the cache: it is either that the readings genuinely did not move
-(Warcraft Logs' counter behaving as it did for the fight probe, which is itself the
-finding) or that `rateLimitData` came back absent, which prints as a different line.
+This was **introspected, not guessed**: `wowdps wcl-schema --type Report`
+(CI 32660759853) prints the argument list with its defaults, and the mirrors this
+feature was written against do not carry that argument at all -- so no amount of
+re-reading them would have found it. `Encounter` was introspected in the same run:
+`id: Int!`, `name: String!`, and `characterRankings` carries an
+`includeCombatantInfo` of its own that nothing here uses.
+
+Third time for the general rule, so treat it as settled: **an omitted argument is a
+default, not nothing.** `hostilityType`, `includeResources` and now this.
+
+**The probe's own display hid it.** It printed `combatantInfo keys: list` -- a type
+name standing where keys belong -- so an argument that was not sent read exactly like
+a payload shape the parser had failed on, and the first diagnosis was of the wrong
+problem. It now names the empty list for what it is and counts how many rows carried
+no gear array at all. A **non-empty** `combatantInfo` list is described and
+deliberately not parsed: nobody has observed one, and a branch for an unobserved
+shape is a guess with the authority of code.
+
+With the argument passed, the same query returns
+`combatantInfo: dict, keys ['artifact', 'factionID', 'gear', 'heartOfAzeroth',
+'specIDs', 'stats', 'talentTree', 'talents']` and `17 readable, 1 skipped` gear
+entries on the first row.
+
+Two things about the gear payload that are **not** settled by that run:
+
+- the first entry's keys are `['bonusIDs', 'icon', 'id', 'itemLevel', 'name',
+  'quality', 'setID', 'slot']` -- **no `gems`, no `permanentEnchant`**. Those are what
+  `gear_from_row` reads for the two things this repository has measured to matter most
+  (+1.09% enchant, +0.44% gem, against +0.09% for a ten item level step). Most likely
+  Warcraft Logs omits a key with nothing in it and that entry is an unsocketed,
+  unenchanted slot; that is an inference, not a reading, and it needs one socketed
+  item in a payload to settle.
+- the entry carries a **`slot`** field. This project derives the slot from simc's own
+  item table on purpose and should keep doing so -- a positional array and a
+  third-party label are both assertions about somebody else's payload -- but the field
+  exists and is the obvious cross-check if anyone wants one.
+
+### What the point cost actually is
+
+Measured, cold cache, so no query was served from disk:
+
+| pass | kills | queries | points | per kill |
+|---|---|---|---|---|
+| probe, one kill of 53470 | 1 | 5 | 6.2 | 6.15 |
+| full MID2 pass, all 8 encounters, `--reports 15` | **20** | **58** | **99.9** | **5.00** |
+
+Budget is **18,000 points an hour**, so the full pass above cost **0.55%** of one
+hour. Quote the n=20 figure: the probe's is one kill carrying the pass's fixed
+overhead. At 5.00 a kill, 240 kills is about 1,200 points, under 7% of an hour --
+so the cost was never the constraint here, and `--reports` can be raised freely.
+
+The query count is exactly the plan's arithmetic: 2 rate-limit + 12 rankings (8 filed,
+4 twins) + 4 encounter names + 20 `playerDetails` + 20 talent-code = 58. Average 1.72
+points a query.
+
+**`--cache` was passed unconditionally by the workflow**, which meant the mode whose
+purpose is to measure could never measure -- a cached query really does spend nothing.
+`cache: false` on the dispatch is what takes the reading, and it skips the
+`actions/cache` step so the measured run does not seed a cache either.
+
+### MID2's PTR encounter ids: the fix is right and the premise was not
+
+`fight_profiles.json` files MID2's bosses under PTR ids (53420, 53421, 53429, 53445,
+53455, 53470, 53492, 53497) and that is deliberate -- the tier was seeded from zone 54
+and CLAUDE.md relies on the PTR-ness riding in the id. **Do not renumber them.**
+The harvest's *addressing* moves instead: an encounter with no ranked parses resolves
+to its live twin by stripping the leading `5`, and the twin is used only when
+`worldData.encounter` gives it the **same name**.
+
+**What a full pass measured (CI 32661537069, Mythic, 2026-08-23):**
+
+| filed | resolution | kills | players |
+|---|---|---|---|
+| 53420 Sszorak | read as 3420, name verified | 0 | 0 |
+| 53421 The Twin Fangs | read as 3421, name verified | 0 | 0 |
+| 53429 The Coiled Altar | read as 3429, name verified | 0 | 0 |
+| 53445 Entombed Sentinels | harvested as filed | 7 | 96 |
+| 53455 Vashnik the Malignant | harvested as filed | 2 | 28 |
+| 53470 Nek'zali, the Soulcoiler | harvested as filed | 7 | 98 |
+| 53492 Ula'tek | read as 3492, name verified | 0 | 0 |
+| 53497 The Lost Explorers | harvested as filed | 4 | 56 |
+
+**Four of the eight PTR ids have ranked parses and harvest fine.** The four that do
+not have live twins that are equally empty. So on this tier today the substitution
+recovers **nothing**, and "a PTR id cannot be harvested" is false.
+
+The observation that motivated it -- *53420 returns 0 kills, 3470 returns 100 rows* --
+compares **two different bosses**: 53420 is Sszorak, 3470 is Nek'zali. Worth keeping
+as the shape of the error rather than as a fact: two ids that differ by a leading 5
+are the same boss, two ids that do not are not comparable at all, and the second
+reading is what makes a coincidence look like a cause.
+
+Keep the resolution anyway. It fires only for an id with nothing to read, costs one
+cheap query when it does, and is the right address whenever a filed id really is the
+wrong one -- a state this tier has been in before and will be in again at the next
+season boundary.
+
+**The name check is measurably strict, and the case is on this tier.** Warcraft Logs
+names 53470 *"Nek'zali, the Soulcoiler"* and 3470 *"Nek'zali the Soulcoiler"*: the pair
+differs by a comma, and that substitution would be **refused**. It never comes up today
+because 53470 has parses of its own. Left strict on purpose -- a refusal costs one
+boss's kills and prints both names for a person to read, a false accept files a full
+set of real builds under the wrong fight and nothing downstream can detect it.
+Loosening it to ignore punctuation is a human's decision with the two names in view.
+
+### What a harvest covers, measured rather than hoped
+
+Same pass, 20 kills, 278 damage players, **0 rejected**: **168 distinct builds across
+25 specs**. Every one of the four damage specs that has *no number at all* on the site
+-- their stored simc hash is refused by simc's own talent parser -- came back with
+usable builds:
+
+```
+demon_hunter_havoc     4 builds from  8 kills
+paladin_retribution    6 builds from 12 kills
+warrior_arms           7 builds from 12 kills
+warrior_fury           3 builds from  4 kills
+```
+
+A harvested hash is current and legal by construction, so this is the direct route to
+publishing those four. What it does **not** establish is that the resulting number
+would be comparable: a harvested character wears its own gear, which is the problem
+`gearanchor` exists for.
+
+### What is still unverified
+
+- **A socketed item in a real gear payload.** `gems` and `permanentEnchant` have not
+  been seen, and they carry the two effects this project has measured to matter most.
+- **Whether the twin resolution ever recovers a kill.** On MID2 it does not; it has
+  never fired on a boss whose twin had parses.
+- **Whether `characterRankings` rows carry gear or talents** -- answered, and the
+  answer is no: the row keys are `amount, bracketData, class, duration, faction,
+  hardModeLevel, name, report, spec, startTime`. A whole query per kill is necessary.
 
 ## Why specs are missing: simc wrote the profiles and switched them off
 

@@ -34,13 +34,22 @@ agree word for word on the descriptions quoted here:
 * ``Encounter.characterRankings`` -- already used by ``fightprobe`` to get from a
   boss to a list of ``(report code, fight id)``. Reused unchanged.
 
-**None of that is verified against the live service.** There are no Warcraft Logs
-credentials in the environment this was written in, so no query in this module has
-ever been sent. That is the same position ``fightprobe`` and ``lootsources`` were
-in before their first CI run, and it is handled the same way: the extraction is
-pinned against hand-written payloads, the first live run is a schema check as much
-as a harvest, and ``--probe`` exists to make that first run cheap and legible
-rather than a full sweep that fails on a field name.
+**That was written before anything had been sent, and it is now measured.** The
+first live runs went out on **2026-08-23** and the mirrors were right about every
+field name -- and silent about an *argument*. ``playerDetails`` takes
+``includeCombatantInfo``, its default is ``false``, and none of the three mirrors
+carries it, so the first probe read fourteen real players and returned no gear at
+all while every other number in the run looked healthy. The argument list this
+module now passes is introspected from the live server
+(``wowdps wcl-schema --type Report``) rather than mirrored, and
+``test_harvest.SCHEMA_EXCERPT`` carries the introspected signature.
+
+Two general things to take from that. **An omitted argument is a default, not
+nothing** -- this repository has now paid for that lesson three times
+(``hostilityType``, ``includeResources``, and this). And a schema mirror can be
+complete about the fields and incomplete about the arguments, which is exactly the
+half that fails silently: a wrong field name is an error, a missing argument is a
+polite answer to a smaller question.
 
 ## The cost shape, which is why the queries look like this
 
@@ -60,12 +69,18 @@ actor's talent code is fetched in a *single* request by aliasing
 therefore costs the same whether one spec is wanted from it or twenty, which is
 what makes harvesting for the nine missing specs affordable at all.
 
-**What that costs in points is unknown and this module does not guess it.** The
-query *count* is arithmetic and is reported; points per query are not published by
-Warcraft Logs and the repository's own rule is to read ``rateLimitData`` and find
-out. ``cmd_harvest_builds`` brackets the pass with two standalone readings, and a
-counter that did not move is reported as UNMEASURED rather than as zero -- the
-exact mistake that shipped once here already.
+**What that costs in points was unknown and is now measured**, cold cache so that
+nothing came from disk: a full MID2 pass over all eight encounters read **20 kills
+in 58 queries for 99.9 points** of an 18,000-point hourly budget -- **5.00 points
+per sampled kill**, 0.55% of one hour. Quote that figure rather than the probe's
+6.15: a one-kill probe carries the pass's fixed overhead alone.
+
+The counter is still *read* rather than predicted, because Warcraft Logs publishes
+no cost formula. ``cmd_harvest_builds`` brackets the pass with two standalone
+readings, and a counter that did not move is reported as UNMEASURED rather than as
+zero -- the exact mistake that shipped once here already. A measurement needs
+``--cache`` pointed at an empty directory, or omitted; a warm cache genuinely spends
+nothing and no re-run against it will say more.
 
 ## What a harvested build is evidence of, and what it is not
 
