@@ -348,6 +348,80 @@ def test_paired_slots_are_numbered_by_order_of_appearance():
     assert [p.slot for p in resolved] == ["finger1", "finger2"]
 
 
+def test_a_dual_wielders_off_hand_is_not_published_as_a_main_hand():
+    """Most modern one-handers are INVTYPE_WEAPON (13) for *both* copies, so a
+    single slot name per inventory type produced `['main_hand=,id=111',
+    'main_hand=,id=222']` and in a profile the second overwrote the first. A Rogue,
+    Havoc, Fury, Enhancement or Frost Death Knight build -- several of them the
+    unprofiled specs this exists for -- published wearing its off-hand as its main
+    hand, with nothing in the document saying so."""
+    pieces = [harvest.GearPiece(index=15, item_id=111), harvest.GearPiece(index=16, item_id=222)]
+    resolved, unresolved = harvest.resolve_slots(pieces, {111: 13, 222: 13})
+    assert [p.slot for p in resolved] == ["main_hand", "off_hand"]
+    assert unresolved == ()
+
+
+def test_an_item_that_can_only_be_an_off_hand_gets_the_off_hand():
+    """A shield keeps the only socket it can occupy whichever end of the array it is
+    at. This module's whole premise is that the array's order means nothing that was
+    written down anywhere, so neither answer may depend on it."""
+    pieces = [harvest.GearPiece(index=15, item_id=111), harvest.GearPiece(index=16, item_id=222)]
+    resolved, _ = harvest.resolve_slots(pieces, {111: 13, 222: 14})
+    assert [p.slot for p in resolved] == ["main_hand", "off_hand"]
+
+    flipped = [harvest.GearPiece(index=15, item_id=222), harvest.GearPiece(index=16, item_id=111)]
+    resolved, _ = harvest.resolve_slots(flipped, {111: 13, 222: 14})
+    assert [p.slot for p in resolved] == ["off_hand", "main_hand"]
+
+
+def test_a_flexible_weapon_cannot_crowd_out_one_that_has_only_one_socket():
+    """The case the ordering exists for, and the one an "in array order" allocation
+    gets wrong: a one-hander (either hand) listed *before* a main-hand-only weapon
+    takes the main hand, and the item that cannot go anywhere else is left with
+    nothing -- reported as unplaced while a socket it could have filled sits
+    occupied by an item that had a second choice.
+
+    Constrained items are therefore placed first. The sort is stable, so this
+    changes nothing for two rings, two trinkets or two one-handers, which are the
+    ordinary cases.
+    """
+    pieces = [harvest.GearPiece(index=15, item_id=111), harvest.GearPiece(index=16, item_id=222)]
+    resolved, unresolved = harvest.resolve_slots(pieces, {111: 13, 222: 21})
+    assert [p.slot for p in resolved] == ["off_hand", "main_hand"]
+    assert unresolved == ()
+
+
+def test_two_two_handers_are_both_placed_because_fury_carries_two():
+    pieces = [harvest.GearPiece(index=15, item_id=1), harvest.GearPiece(index=16, item_id=2)]
+    resolved, _ = harvest.resolve_slots(pieces, {1: 17, 2: 17})
+    assert [p.slot for p in resolved] == ["main_hand", "off_hand"]
+
+
+def test_a_third_weapon_is_reported_rather_than_overwriting_one():
+    """There is no third hand. An item with no socket left cannot go in a profile,
+    so it is reported for the same reason an unknown item is."""
+    pieces = [harvest.GearPiece(index=i, item_id=i) for i in (1, 2, 3)]
+    resolved, unresolved = harvest.resolve_slots(pieces, {1: 13, 2: 13, 3: 13})
+    assert [p.slot for p in resolved] == ["main_hand", "off_hand", None]
+    assert unresolved == (3,)
+
+
+def test_the_shoulder_and_wrist_lines_are_readable_by_this_repositorys_own_reader():
+    """simc accepts `shoulders=` and `shoulder=` alike and its shipped profiles write
+    the plural -- measured 2026-08-23 -- so the emitted line is the plural. The trap
+    is the other side: `gearpool._EQUIP_LINE`, which `equipped_item_ids` reads every
+    profile through, accepted only the singular and matched 14 of MID2 Arcane Mage's
+    16 gear lines."""
+    from wowdps import gearpool
+
+    pieces = [harvest.GearPiece(index=2, item_id=333), harvest.GearPiece(index=8, item_id=444)]
+    resolved, _ = harvest.resolve_slots(pieces, {333: 3, 444: 9})
+    lines = [piece.simc_line() for piece in resolved]
+    assert lines == ["shoulders=,id=333", "wrists=,id=444"]
+    for line in lines:
+        assert gearpool._EQUIP_LINE.match(line), line
+
+
 def test_an_item_simc_never_heard_of_gets_no_slot_and_is_reported():
     """It cannot be written into a profile, so claiming a slot for it would be a
     claim with nothing behind it -- the refusal `gearpool` already makes."""

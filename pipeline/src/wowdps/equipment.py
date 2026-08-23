@@ -594,6 +594,39 @@ _ITEM_ROW = re.compile(r'^\s*\{ "((?:[^"\\]|\\.)*)", (.*) \},\s*$')
 _EFFECT_ROW = re.compile(r"^\s*\{\s*\d+,\s*\d+,\s*(\d+),")
 _STAT_ROW = re.compile(r"^\s*\{\s*(-?\d+),\s*(-?\d+),\s*[-0-9.]+f\s*\},\s*$")
 
+#: Positional offsets into a ``dbc_item_data_t`` row, read against
+#: ``engine/dbc/item_data.hpp``. Named because two readers used to carry the same
+#: bare integers and only one of them was ever going to be updated.
+_FIELD_ID = 0
+_FIELD_ILEVEL = 4
+_FIELD_QUALITY = 8
+_FIELD_INVENTORY_TYPE = 9
+_FIELD_STATS = 16
+_FIELD_STAT_COUNT = 17
+_MIN_ITEM_FIELDS = 27
+
+
+def _item_rows(text: str):
+    """``(name, fields)`` for every item row of ``item_data.inc``.
+
+    One reader, because there were two. ``inventory_types`` re-implemented
+    ``discover_items``' row parsing forty lines below it -- the same regex, the same
+    ``{...}`` -> SOCKETS and ``&__item_stats_data[N]`` -> STATSN substitutions, the
+    same comma split, the same field-count guard and the same positional offsets. A
+    layout change had to be made in both places, and the copy that was missed would
+    keep parsing and return *wrong slot numbers* rather than failing.
+    """
+    for line in text.splitlines():
+        match = _ITEM_ROW.match(line)
+        if not match:
+            continue
+        rest = re.sub(r"\{[^}]*\}", "SOCKETS", match.group(2))
+        rest = re.sub(r"&__item_stats_data\[(\d+)\]", r"STATS\1", rest)
+        fields = [part.strip() for part in rest.split(",")]
+        if len(fields) < _MIN_ITEM_FIELDS:
+            continue
+        yield match.group(1), fields
+
 
 @dataclass(frozen=True)
 class DiscoveredItem:
@@ -640,28 +673,20 @@ def discover_items(simc_dir: Path, inventory_type: int) -> list[DiscoveredItem]:
             with_effects.add(int(row.group(1)))
 
     found: list[DiscoveredItem] = []
-    for line in item_text.splitlines():
-        match = _ITEM_ROW.match(line)
-        if not match:
-            continue
-        name, rest = match.group(1), match.group(2)
-        rest = re.sub(r"\{[^}]*\}", "SOCKETS", rest)
-        rest = re.sub(r"&__item_stats_data\[(\d+)\]", r"STATS\1", rest)
-        fields = [part.strip() for part in rest.split(",")]
-        if len(fields) < 27:
-            continue
+    for name, fields in _item_rows(item_text):
         try:
-            item_id = int(fields[0])
-            ilevel = int(fields[4])
-            quality = int(fields[8])
-            inv_type = int(fields[9])
-            stats_count = int(fields[17])
+            item_id = int(fields[_FIELD_ID])
+            ilevel = int(fields[_FIELD_ILEVEL])
+            quality = int(fields[_FIELD_QUALITY])
+            inv_type = int(fields[_FIELD_INVENTORY_TYPE])
+            stats_count = int(fields[_FIELD_STAT_COUNT])
         except ValueError:
             continue
         if inv_type != inventory_type:
             continue
 
-        offset = int(fields[16][5:]) if fields[16].startswith("STATS") else None
+        stats_field = fields[_FIELD_STATS]
+        offset = int(stats_field[5:]) if stats_field.startswith("STATS") else None
         primary: str | None = None
         secondary: str | None = None
         if offset is not None:
@@ -689,44 +714,73 @@ def discover_items(simc_dir: Path, inventory_type: int) -> list[DiscoveredItem]:
     return found
 
 
-#: simc's ``inventory_type`` for every slot a harvested character can wear, mapped to
-#: the option name a simc profile uses for it. Read off ``engine/dbc/item_data.hpp``
-#: and cross-checked against the tier's own profiles -- MID2's Arcane Mage equips
-#: ``head=``, ``finger1=``, ``trinket1=`` and the rest of these names, so the right
-#: hand side is what a profile actually consumes rather than a guess at one.
+#: simc's ``inventory_type`` -> the simc profile option names that type can occupy,
+#: in preference order. Types read off ``engine/dbc/data_enums.hh`` (``INVTYPE_*``)
+#: and cross-checked against simc's own ``util::translate_invtype``.
 #:
-#: The paired slots deliberately carry no number here. Which ring is ``finger1`` is
-#: not a property of the ring, and nothing in an item table can say it; the harvest
-#: numbers them by order of appearance instead. See ``resolve_slots``.
-INVENTORY_TYPE_SLOTS: dict[int, str] = {
-    1: "head",
-    2: "neck",
-    3: "shoulders",
-    4: "shirt",
-    5: "chest",
-    6: "waist",
-    7: "legs",
-    8: "feet",
-    9: "wrists",
-    10: "hands",
-    11: "finger",
-    12: "trinket",
-    13: "main_hand",  # one-hand
-    14: "off_hand",  # shield
-    15: "main_hand",  # ranged (bows are the main hand slot in modern WoW)
-    16: "back",
-    17: "main_hand",  # two-hand
-    19: "tabard",
-    20: "chest",  # robe
-    21: "main_hand",
-    22: "off_hand",
-    23: "off_hand",  # held in off-hand
-    26: "main_hand",  # ranged right
+#: **A tuple per type, not a name**, and that is the fix for a real defect rather
+#: than tidying. Most modern one-handers are ``INVTYPE_WEAPON`` (13) for both copies
+#: a dual-wielder carries, and a single name mapped both to ``main_hand``: two items
+#: of type 13 produced ``['main_hand=,id=111', 'main_hand=,id=222']``, and in a
+#: profile the second overwrites the first. A Rogue, Havoc, Fury, Enhancement or
+#: Frost Death Knight build -- several of them the unprofiled specs this is for --
+#: published wearing its off-hand as its main hand, with nothing in the document
+#: saying so. 15/17/21/26 collapsed the same way. Which of two interchangeable
+#: one-handers is the main hand is not a property of either item, exactly as which
+#: ring is ``finger1`` is not; both are settled by order of appearance.
+#:
+#: Two-handers get both hands because Fury dual-wields them. Types that can only go
+#: in one hand -- a shield, a held-in-off-hand, a main-hand-only weapon -- name one
+#: socket, and ``resolve_slots`` assigns those before the flexible ones so a
+#: constrained item cannot be crowded out by a flexible one that arrived first.
+#:
+#: The right-hand side is simc's *plural* spelling for shoulders and wrists.
+#: Measured on 2026-08-23 against simc's midnight branch: ``player.cpp`` registers
+#: both spellings (``shoulders`` and ``shoulder``, ``wrists`` and ``wrist``,
+#: ``hands``/``hand``, ``legs``/``leg``, ``feet``/``foot``, ``finger1``/``ring1``),
+#: and every shipped MID2 profile writes the plural -- ``shoulders=`` and
+#: ``wrists=``, in all five class profiles checked. See CLAUDE.md: a *reader* in
+#: this repository has to accept both, an emitter writes what simc ships.
+INVENTORY_TYPE_SLOTS: dict[int, tuple[str, ...]] = {
+    1: ("head",),
+    2: ("neck",),
+    3: ("shoulders",),
+    4: ("shirt",),
+    5: ("chest",),
+    6: ("waist",),
+    7: ("legs",),
+    8: ("feet",),
+    9: ("wrists",),
+    10: ("hands",),
+    11: ("finger1", "finger2"),
+    12: ("trinket1", "trinket2"),
+    13: ("main_hand", "off_hand"),  # one-hand: either hand
+    14: ("off_hand",),  # shield
+    15: ("main_hand",),  # ranged (bows are the main hand slot in modern WoW)
+    16: ("back",),
+    17: ("main_hand", "off_hand"),  # two-hand: Fury carries two
+    19: ("tabard",),
+    20: ("chest",),  # robe
+    21: ("main_hand",),  # main hand only
+    22: ("off_hand",),  # off hand only
+    23: ("off_hand",),  # held in off-hand
+    25: ("main_hand",),  # thrown, which simc also translates to the main hand
+    26: ("main_hand",),  # ranged right (guns, wands, crossbows)
 }
 
-#: Slots a character wears two of. Ordered numbering is applied to these and to
-#: nothing else, because everywhere else the item's own inventory type is the answer.
-PAIRED_SLOTS: tuple[str, ...] = ("finger", "trinket")
+
+def slot_candidates(inventory_type: int | None) -> tuple[str, ...]:
+    """The profile options an item of this inventory type could occupy.
+
+    Empty for a type simc's table does not place -- a bag, a quiver, an item simc
+    has never heard of. Those get no slot and are reported, which is the same
+    refusal ``gearpool`` makes for an item it cannot simulate: it cannot be written
+    into a profile, so claiming a slot for it would be a claim with nothing behind
+    it.
+    """
+    if not inventory_type:
+        return ()
+    return INVENTORY_TYPE_SLOTS.get(inventory_type, ())
 
 
 def inventory_types(simc_dir: Path) -> dict[int, int]:
@@ -740,25 +794,15 @@ def inventory_types(simc_dir: Path) -> dict[int, int]:
     still looks like a plausible row.
 
     An item's slot is a property of the item, and simc already ships it. So the
-    slot is *derived* per item and the array index is kept only as evidence. An
-    item simc has never heard of resolves to nothing and is reported, the same
-    refusal ``gearpool`` makes for an item it cannot simulate.
+    slot is *derived* per item and the array index is kept only as evidence.
     """
     generated = simc_dir / "engine" / "dbc" / "generated"
     text = (generated / "item_data.inc").read_text(encoding="utf-8", errors="replace")
 
     found: dict[int, int] = {}
-    for line in text.splitlines():
-        match = _ITEM_ROW.match(line)
-        if not match:
-            continue
-        rest = re.sub(r"\{[^}]*\}", "SOCKETS", match.group(2))
-        rest = re.sub(r"&__item_stats_data\[(\d+)\]", r"STATS\1", rest)
-        fields = [part.strip() for part in rest.split(",")]
-        if len(fields) < 27:
-            continue
+    for _name, fields in _item_rows(text):
         try:
-            found[int(fields[0])] = int(fields[9])
+            found[int(fields[_FIELD_ID])] = int(fields[_FIELD_INVENTORY_TYPE])
         except ValueError:
             continue
     return found

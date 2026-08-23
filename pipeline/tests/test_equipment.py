@@ -553,13 +553,50 @@ def test_inventory_types_reads_every_item_not_one_slots_worth(tmp_path):
     """
     found = equipment.inventory_types(fake_simc(tmp_path))
     assert found == {270161: 12, 271874: 1}
-    assert equipment.INVENTORY_TYPE_SLOTS[found[270161]] == "trinket"
-    assert equipment.INVENTORY_TYPE_SLOTS[found[271874]] == "head"
+    assert equipment.slot_candidates(found[270161]) == ("trinket1", "trinket2")
+    assert equipment.slot_candidates(found[271874]) == ("head",)
 
 
-def test_a_slot_a_character_wears_two_of_is_named_without_a_number(tmp_path):
-    """Which ring is ``finger1`` is not a property of the ring, and nothing in an
-    item table can say it. The harvest numbers them by order of appearance."""
-    for slot in equipment.PAIRED_SLOTS:
-        assert slot in equipment.INVENTORY_TYPE_SLOTS.values()
-        assert not slot[-1].isdigit()
+def test_the_two_inventory_type_tables_agree_with_each_other(tmp_path):
+    """They state the same fact in opposite directions -- name to type, type to
+    sockets -- and nothing tied them together, so one could be edited without the
+    other."""
+    for name, inventory_type in equipment.INVENTORY_TYPES.items():
+        sockets = equipment.slot_candidates(inventory_type)
+        assert sockets, f"{name} has no socket for inventory type {inventory_type}"
+        assert all(socket.rstrip("12") == name for socket in sockets), (name, sockets)
+
+
+def test_a_type_simc_does_not_place_gets_no_socket():
+    """A bag, a quiver, or a type this table has never seen. It cannot be written
+    into a profile, so it is reported rather than given a plausible slot."""
+    assert equipment.slot_candidates(18) == ()  # INVTYPE_BAG
+    assert equipment.slot_candidates(None) == ()
+    assert equipment.slot_candidates(0) == ()
+
+
+def test_the_hands_are_two_sockets_and_a_constrained_item_names_only_one():
+    """Most modern one-handers are INVTYPE_WEAPON (13) for *both* copies a
+    dual-wielder carries, so a single name per type published an off-hand as a main
+    hand. A shield or a held-in-off-hand can only be the off hand and says so."""
+    assert equipment.slot_candidates(13) == ("main_hand", "off_hand")
+    assert equipment.slot_candidates(17) == ("main_hand", "off_hand")  # Fury carries two
+    assert equipment.slot_candidates(14) == ("off_hand",)  # shield
+    assert equipment.slot_candidates(23) == ("off_hand",)  # held in off-hand
+    assert equipment.slot_candidates(21) == ("main_hand",)
+
+
+def test_the_shoulder_and_wrist_option_names_are_the_ones_simc_ships(tmp_path):
+    """Measured 2026-08-23 against simc's midnight branch, because this is exactly
+    the pair of names two modules in this repository disagree about.
+
+    simc's `player.cpp` registers *both* spellings (`shoulders` and `shoulder`,
+    `wrists` and `wrist`), and every shipped MID2 profile writes the plural. An
+    emitter therefore writes the plural; a reader has to accept both, which is what
+    `gearpool._EQUIP_LINE` was not doing.
+    """
+    from wowdps import gearpool
+
+    for inventory_type in (3, 9):
+        (option,) = equipment.slot_candidates(inventory_type)
+        assert gearpool._EQUIP_LINE.match(f"{option}=some_item,id=271874,ilevel=344")

@@ -426,31 +426,47 @@ def gear_from_row(row: dict) -> tuple[list[GearPiece], int]:
 def resolve_slots(
     pieces: list[GearPiece], inventory: dict[int, int]
 ) -> tuple[tuple[GearPiece, ...], tuple[int, ...]]:
-    """Name each item's slot from simc's item table. Returns ``(pieces, unresolved ids)``.
+    """Name each item's slot from simc's item table. Returns ``(pieces, unplaced ids)``.
 
     The slot is a property of the item and simc ships it, so nothing here asserts
-    what position 12 of somebody else's array means. The one thing the item table
-    genuinely cannot answer is *which* ring is ``finger1``, because that is not a
-    property of the ring; paired slots are numbered by order of appearance, which
-    is stable for a given payload and is the only orderable fact available.
+    what position 12 of somebody else's array means. What the item table genuinely
+    cannot answer is *which* of two interchangeable items goes in the first socket
+    -- which ring is ``finger1``, which of a dual-wielder's two one-handers is the
+    main hand -- because that is not a property of either item. Those are settled by
+    order of appearance, which is the only orderable fact available.
 
-    An item simc has never heard of keeps its data and gets no slot. It cannot be
-    put in a profile, so claiming a slot for it would be a claim with nothing
-    behind it -- the same refusal ``gearpool`` makes for an item it cannot simulate.
+    So this is a socket allocation rather than a lookup: each item names the sockets
+    its inventory type could occupy and takes the first one still free.
+    **Constrained items are placed first**, which is what stops a flexible one-hander
+    that happens to be listed before a shield from taking the off hand the shield
+    cannot do without. The sort is stable, so two items with the same freedom keep
+    their order and a re-run places them identically.
+
+    An item simc has never heard of, or one with no socket left, keeps its data and
+    gets no slot: it cannot be put in a profile, so claiming one would be a claim
+    with nothing behind it -- the same refusal ``gearpool`` makes for an item it
+    cannot simulate.
     """
-    used: dict[str, int] = {}
+    candidates = [equipment.slot_candidates(inventory.get(piece.item_id)) for piece in pieces]
+    order = sorted(range(len(pieces)), key=lambda index: len(candidates[index]) or 99)
+
+    taken: set[str] = set()
+    slots: dict[int, str] = {}
+    for index in order:
+        slot = next((name for name in candidates[index] if name not in taken), None)
+        if slot is None:
+            continue
+        taken.add(slot)
+        slots[index] = slot
+
     resolved: list[GearPiece] = []
     unresolved: list[int] = []
-    for piece in pieces:
-        inventory_type = inventory.get(piece.item_id)
-        slot = equipment.INVENTORY_TYPE_SLOTS.get(inventory_type) if inventory_type else None
+    for index, piece in enumerate(pieces):
+        slot = slots.get(index)
         if slot is None:
             unresolved.append(piece.item_id)
             resolved.append(piece)
             continue
-        if slot in equipment.PAIRED_SLOTS:
-            used[slot] = used.get(slot, 0) + 1
-            slot = f"{slot}{used[slot]}"
         resolved.append(
             GearPiece(
                 index=piece.index,
