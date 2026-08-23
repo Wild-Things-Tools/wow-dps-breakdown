@@ -106,6 +106,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .buffsweep import TierSet, sets_for_tier
+from .equipment import ITEM_FIELD_COUNT, iter_item_rows
 from .profiles import SpecProfile
 from .talenttree import CLASS_IDS
 
@@ -351,18 +352,16 @@ class SetToken:
         )
 
 
-_ITEM_ROW = re.compile(r'^\s*\{ "((?:[^"\\]|\\.)*)", (.*) \},\s*$')
+class AnchorError(ValueError):
+    """A tier or a table that cannot say what a comparable kit looks like."""
+
+
 #: ``id_set`` is the 24th field of ``dbc_item_data_t`` (``engine/dbc/item_data.hpp``),
-#: counting the name out separately as the row regex does. Read positionally for the
-#: same reason ``equipment.discover_items`` reads its fields positionally: the table
-#: is a plain C array and there is no simc command that lists items.
-#:
-#: **This is the second place that parses that array**, and the duplication is worth
-#: knowing about: ``equipment.discover_items`` reads different columns of the same
-#: rows for the gear pools. A simc struct change breaks both, and loudly -- both
-#: check the field count -- but both have to be fixed.
+#: counting the name out separately as ``equipment.iter_item_rows`` does. Read
+#: positionally for the same reason ``equipment.discover_items`` reads its fields
+#: positionally: the table is a plain C array and there is no simc command that lists
+#: items. The row *decoding* is shared with that module; only the column differs.
 _ID_SET_FIELD = 23
-_FIELD_COUNT = 27
 
 
 def parse_item_sets(simc_dir: Path, ptr: bool = False) -> dict[int, int]:
@@ -372,18 +371,37 @@ def parse_item_sets(simc_dir: Path, ptr: bool = False) -> dict[int, int]:
     whose ``parsed.data.id_set`` is zero and otherwise matches it against
     ``item_set_bonus_t::set_id``. Doing the same offline is what lets a kit be asked
     "do you already wear this set" without running a simulation.
+
+    **It refuses rather than returning what it managed**, and that is the whole of the
+    difference from what it used to do. Skipping a malformed row and returning the
+    accumulated dict means a simc struct change makes every row fail and the function
+    answer ``{}`` -- which is not ``None``, so ``derive_target`` accepted it, counted
+    zero pieces on every profile, and published *"the state most of the tier's shipped
+    profiles are in (28 shipped profile(s) wear none)"* as derived evidence for a kit
+    with the set switched off. By this module's own measurement that costs 13.13% on
+    Arcane Mage, stated as a finding about the tier.
+
+    Two guards, because the failure has two shapes:
+
+    * **Nothing decoded.** No rows at all, or none of the expected width, or none
+      belonging to a set. The last one is worth refusing on even though it looks like
+      a legitimate answer: 12,260 of simc's 115,470 items carry an ``id_set`` on
+      69a46e1, and a table where *none* does is a table that was not read.
+    * **A row of the wrong width.** Measured on 69a46e1, all 115,470 rows are exactly
+      ``ITEM_FIELD_COUNT`` fields. So the test is equality, not the lower bound it
+      was: a field *inserted* before index 23 passes a lower bound and silently
+      turns ``id_set`` into its neighbour, which is the same wrong answer wearing a
+      plausible face.
     """
     name = "item_data_ptr.inc" if ptr else "item_data.inc"
     path = simc_dir / "engine" / "dbc" / "generated" / name
     found: dict[int, int] = {}
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        match = _ITEM_ROW.match(line)
-        if not match:
-            continue
-        rest = re.sub(r"\{[^}]*\}", "SOCKETS", match.group(2))
-        rest = re.sub(r"&__item_stats_data\[(\d+)\]", r"STATS\1", rest)
-        fields = [part.strip() for part in rest.split(",")]
-        if len(fields) < _FIELD_COUNT:
+    rows = 0
+    malformed = 0
+    for _name, fields in iter_item_rows(path.read_text(encoding="utf-8", errors="replace")):
+        rows += 1
+        if len(fields) != ITEM_FIELD_COUNT:
+            malformed += 1
             continue
         try:
             item_id = int(fields[0])
@@ -392,6 +410,19 @@ def parse_item_sets(simc_dir: Path, ptr: bool = False) -> dict[int, int]:
             continue
         if id_set:
             found[item_id] = id_set
+    if malformed:
+        raise AnchorError(
+            f"{malformed} of {rows} rows in {path.name} are not {ITEM_FIELD_COUNT} "
+            f"fields wide, so field {_ID_SET_FIELD} is no longer id_set. Re-read "
+            f"dbc_item_data_t in engine/dbc/item_data.hpp and fix _ID_SET_FIELD; "
+            f"equipment.discover_items reads the same rows and needs the same fix."
+        )
+    if not found:
+        raise AnchorError(
+            f"no item in {path.name} belongs to a set ({rows} rows read), so no kit "
+            f"can be asked whether it already wears one. That is not a tier without "
+            f"sets -- it is a table that was not read."
+        )
     return found
 
 
@@ -547,10 +578,6 @@ class AnchorTarget:
         }
 
 
-class AnchorError(ValueError):
-    """A tier whose own profiles cannot say what a comparable kit looks like."""
-
-
 def derive_target(
     profiles: list[SpecProfile],
     tier: str,
@@ -602,7 +629,12 @@ def derive_target(
             f"from talenttree.CLASS_IDS, or None to leave the anchor class-agnostic."
         )
     if sets is not None:
-        if item_sets is None:
+        if not item_sets:
+            # Empty and absent are the same refusal, deliberately. ``{}`` is what a
+            # struct change used to produce, and it read as "nothing wears a set" --
+            # a full set of plausible numbers with the set switched off on every
+            # build. ``parse_item_sets`` refuses at the source now; this catches a
+            # caller that built the dict some other way.
             raise AnchorError(
                 "a set token was supplied without simc's item table, so which set "
                 "state is comparable cannot be derived. Pass "

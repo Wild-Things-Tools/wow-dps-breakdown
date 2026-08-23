@@ -66,6 +66,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from importlib import resources
 from pathlib import Path
@@ -594,6 +595,40 @@ _ITEM_ROW = re.compile(r'^\s*\{ "((?:[^"\\]|\\.)*)", (.*) \},\s*$')
 _EFFECT_ROW = re.compile(r"^\s*\{\s*\d+,\s*\d+,\s*(\d+),")
 _STAT_ROW = re.compile(r"^\s*\{\s*(-?\d+),\s*(-?\d+),\s*[-0-9.]+f\s*\},\s*$")
 
+#: Fields per ``dbc_item_data_t`` row, counting the name out separately as
+#: ``_ITEM_ROW`` does. Measured on simc 69a46e1: **all 115,470 rows are exactly this
+#: wide**, none narrower and none wider, which is why readers here test equality
+#: rather than a lower bound. A lower bound passes a row with a field *inserted*, and
+#: every positional index after the insertion point then reads its neighbour --
+#: silently, with plausible values.
+ITEM_FIELD_COUNT = 27
+
+
+def iter_item_rows(text: str) -> Iterator[tuple[str, list[str]]]:
+    """``(name, fields)`` for every ``dbc_item_data_t`` row in ``item_data.inc``.
+
+    Shared because the decoding is identical wherever the table is read and the
+    *columns* are what differ: this module wants item level, quality and inventory
+    type for the gear pools, ``gearanchor.parse_item_sets`` wants ``id_set``. Two
+    copies of the same regex and the same two substitutions meant a simc struct
+    change had to be found twice.
+
+    The two substitutions are what make a positional split possible at all: a socket
+    array and a stats pointer both contain commas, so each is collapsed to one token
+    before the row is split.
+
+    Rows of the wrong width are **yielded, not swallowed**, so each caller can decide
+    whether a malformed table is something to skip or something to refuse on. Nothing
+    here can tell those apart.
+    """
+    for line in text.splitlines():
+        match = _ITEM_ROW.match(line)
+        if not match:
+            continue
+        rest = re.sub(r"\{[^}]*\}", "SOCKETS", match.group(2))
+        rest = re.sub(r"&__item_stats_data\[(\d+)\]", r"STATS\1", rest)
+        yield match.group(1), [part.strip() for part in rest.split(",")]
+
 
 @dataclass(frozen=True)
 class DiscoveredItem:
@@ -640,15 +675,8 @@ def discover_items(simc_dir: Path, inventory_type: int) -> list[DiscoveredItem]:
             with_effects.add(int(row.group(1)))
 
     found: list[DiscoveredItem] = []
-    for line in item_text.splitlines():
-        match = _ITEM_ROW.match(line)
-        if not match:
-            continue
-        name, rest = match.group(1), match.group(2)
-        rest = re.sub(r"\{[^}]*\}", "SOCKETS", rest)
-        rest = re.sub(r"&__item_stats_data\[(\d+)\]", r"STATS\1", rest)
-        fields = [part.strip() for part in rest.split(",")]
-        if len(fields) < 27:
+    for name, fields in iter_item_rows(item_text):
+        if len(fields) != ITEM_FIELD_COUNT:
             continue
         try:
             item_id = int(fields[0])

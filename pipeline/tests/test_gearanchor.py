@@ -249,6 +249,45 @@ def test_a_set_token_without_the_item_table_is_a_refusal(tmp_path):
         gearanchor.derive_target(profiles, "MID2", MID2_SETS)
 
 
+def test_an_item_table_that_decoded_nothing_is_a_refusal(tmp_path):
+    """``{}`` is not ``None`` and used to sail straight through.
+
+    ``parse_item_sets`` skipped a malformed row and returned what it had, so a simc
+    struct change made all 115,470 rows fail and the answer was an empty dict. That
+    is not None, so ``derive_target`` accepted it, counted zero pieces on every
+    profile and published *"28 shipped profile(s) wear none"* as derived evidence
+    for a kit with the set switched off -- worth **-13.13%** on Arcane Mage by this
+    module's own measurement. Both ends refuse now.
+    """
+    generated = tmp_path / "engine" / "dbc" / "generated"
+    generated.mkdir(parents=True)
+    (generated / "item_data.inc").write_text("static const std::array x { {\n} };\n")
+
+    with pytest.raises(gearanchor.AnchorError, match="belongs to a set"):
+        gearanchor.parse_item_sets(tmp_path)
+
+    profiles = [profile(tmp_path, "a", FOUR_PIECE, item_level=334)]
+    with pytest.raises(gearanchor.AnchorError, match="item_sets="):
+        gearanchor.derive_target(profiles, "MID2", MID2_SETS, {})
+
+
+def test_a_row_of_the_wrong_width_is_a_refusal_not_a_skip(tmp_path):
+    """A field *inserted* passes a lower bound and shifts every index after it.
+
+    Measured on simc 69a46e1, all 115,470 rows are exactly 27 fields wide, so the
+    test is equality. Under ``>= 27`` an inserted field left the row count intact
+    and turned field 23 into its neighbour -- the same wrong answer with a plausible
+    face, which is the shape this whole module exists to refuse.
+    """
+    generated = tmp_path / "engine" / "dbc" / "generated"
+    generated.mkdir(parents=True)
+    widened = ITEM_DATA_INC.replace(" 0, 0, 2060,", " 0, 0, 0, 2060,")
+    (generated / "item_data.inc").write_text(widened, encoding="utf-8")
+
+    with pytest.raises(gearanchor.AnchorError, match="fields wide"):
+        gearanchor.parse_item_sets(tmp_path)
+
+
 # --------------------------------------------------------------------------------
 # The set state
 # --------------------------------------------------------------------------------
