@@ -1820,6 +1820,13 @@ zero. `WarcraftLogsClient.query` takes a `cache` flag and `rate_limit` is the on
 caller passing False: a cached response is a record of *then* and this query asks about
 *now*.
 
+**There are then two kinds of UNMEASURED and the output says which.** The readings are
+honest, but if the pass *between* them was served from the response cache it really did
+spend nothing, and no re-run against that cache will say more. `harvest-builds.yml`
+restores a previous run's cache, so the second probe dispatch is exactly when this
+happens; `describe_cost` prints how many queries were cache hits and that an empty
+`--cache` directory is what takes the measurement.
+
 ### What is unverified
 
 Everything that needs the live service, and it is a longer list than usual because

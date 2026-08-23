@@ -1366,6 +1366,19 @@ def describe_cost(ledger: dict, plan: QueryPlan, kills: int) -> list[str]:
             f"That is not the same as free; treat the cost of a full pass as unknown "
             f"until a run moves it."
         )
+        # Which of the two kinds of UNMEASURED this is. The bracketing readings are
+        # never cached, so they always report the hour honestly -- but if the pass
+        # between them was served from the response cache then it really did cost
+        # nothing, and no number of re-runs against that cache will ever say more.
+        # Without this line the two are indistinguishable from the output, and the
+        # second dispatch of a probe is exactly when it happens.
+        cached = ledger.get("cacheHits") or 0
+        if cached:
+            lines.append(
+                f"cost: {cached} of {cached + (ledger.get('queries') or 0)} queries came "
+                f"from the response cache, so this run genuinely spent nothing. To take "
+                f"the measurement, run against an empty --cache directory."
+            )
         return lines
 
     lines.append(f"cost: {spent:.1f} points of {limit} for {kills} kill(s), {plan.total} queries")

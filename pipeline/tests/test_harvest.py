@@ -790,6 +790,30 @@ def test_a_counter_that_did_not_move_is_unmeasured_and_not_zero():
     assert "points per sampled kill" not in joined
 
 
+def test_a_run_served_from_the_cache_says_which_kind_of_unmeasured_it_is():
+    """The bracketing readings are never cached, so they report the hour honestly --
+    but a pass whose payload queries were all cache hits really did cost nothing, and
+    no number of re-runs against that cache will say more. The workflow restores a
+    previous run's cache, so the *second* probe dispatch is exactly when this
+    happens, and from the output alone the two kinds of UNMEASURED look identical."""
+    lines = harvest.describe_cost(
+        {
+            "pointsSpentThisRun": 0.0,
+            "limitPerHour": 3600,
+            "firstReading": 41.0,
+            "lastReading": 41.0,
+            "queries": 2,
+            "cacheHits": 3,
+        },
+        harvest.QueryPlan(rankings=1, player_details=1, talent_codes=1),
+        kills=1,
+    )
+    joined = "\n".join(lines)
+    assert "UNMEASURED" in joined
+    assert "3 of 5 queries came from the response cache" in joined
+    assert "empty --cache directory" in joined
+
+
 def test_an_extrapolated_full_pass_says_that_it_is_an_extrapolation():
     lines = harvest.describe_cost(
         {
@@ -933,8 +957,7 @@ class StubClient:
         self.roster = roster
         self.calls: list[str] = []
 
-    def encounter_rankings(self, encounter_id, difficulty=5, metric="dps", page=1):
-        self.calls.append(f"rankings:{encounter_id}:{page}")
+    def _page(self, encounter_id):
         return {
             "id": encounter_id,
             "name": "Nek'zali the Soulcoiler",
@@ -953,11 +976,15 @@ class StubClient:
         self.calls.append(f"player-details:{code}:{fight_id}")
         return details_payload(self.roster)
 
+    def encounter_rankings(self, encounter_id, difficulty=5, metric="dps", page=1):
+        self.calls.append(f"rankings:{encounter_id}:{page}")
+        return self._page(encounter_id)
+
     def spec_rankings(
         self, encounter_id, class_name, spec_name, difficulty=5, metric="dps", page=1
     ):
         self.calls.append(f"spec-rankings:{encounter_id}:{class_name}/{spec_name}:{page}")
-        return self.encounter_rankings(encounter_id, difficulty, metric, page)
+        return self._page(encounter_id)
 
     def talent_import_codes(self, code, fight_id, actor_ids):
         self.calls.append(f"talent-codes:{code}:{fight_id}:{len(actor_ids)}")
@@ -1441,7 +1468,12 @@ def test_a_spec_selection_targets_the_ranking_it_samples_from():
     found, _, _ = harvest.harvest_encounter(
         client, 3470, settings, {}, harvest.QueryPlan(), tables()
     )
-    assert client.calls[0] == "spec-rankings:3470:Hunter/Beast Mastery:1"
+    # One ranking query, for that spec's parses, and no overall ranking beside it.
+    assert client.calls == [
+        "spec-rankings:3470:Hunter/Beast Mastery:1",
+        "player-details:aBcD1234:7",
+        "talent-codes:aBcD1234:7:2",
+    ]
     assert [o.spec_key for o in found] == ["hunter_beast_mastery"]
 
 
