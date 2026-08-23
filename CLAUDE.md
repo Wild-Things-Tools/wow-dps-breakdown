@@ -4549,6 +4549,26 @@ Two things worth keeping from that:
   converged one is the same error as a truncated event fetch presented as a whole
   fight.
 
+### Two things about the schedule that only a real run showed
+
+Both were found by running the calibration over the tier, not by a test, and both are
+invisible from any single round's output.
+
+- **The halving rounds must be planned *after* the climb, from the field it hands
+  them.** Planned from the pre-climb field, ``keep`` was half of ten while the field
+  arriving was two hundred, so the round dropped most of a tied field "for budget" and
+  the halving had stopped halving anything. And the climb must hand on its **tie-rule
+  survivors**, not everything it visited: re-measuring a deterministic run at the
+  precision it already ran at returns the same numbers for nothing.
+- **The replan has to be clamped.** ``plan_rounds`` gives a field of two a *single*
+  round at ``FINAL_ITERATIONS``, so the climb runs at 3000 -- and quadrupling that asks
+  for a schedule starting above where it ends (``iteration schedule must rise: start
+  12000, final 3000``). Measured: exactly **2 of MID2's 39** searchable builds are that
+  narrow, and they are both Frost Death Knight, which has one flippable choice node.
+  They are also both pet specs, so those two builds climb at full precision and cost
+  several times what the other 37 do. Worth knowing before reading a run's wall clock
+  as a per-build cost.
+
 ### The gate, and what it does not gate
 
 `PASS_MIN_NOT_BEHIND` = 0.80 and `PASS_MAX_LOSS` = 0.02, **fixed and committed before
