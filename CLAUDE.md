@@ -937,8 +937,12 @@ it is answered the same way: from the published manifest's `simc.ptr`. Measured 
 (12,260 items carry an `id_set` in both), so it changes nothing today -- which is
 exactly the kind of agreement that stops being true without announcing itself.
 
-**What it flags today**, MID2 at 22b442e: 14 of the 40 damage builds -- the two Arcane
-ones, plus all twelve disabled profiles, which wear no set at all. That second group is
+**What it flags today**, MID2 at 22b442e: 14 of the 40 damage builds simc ships or has
+written down -- the two Arcane ones, plus all twelve disabled profiles, which wear no
+set at all. **Ten of those reach the published file**, because simc refuses four of the
+disabled profiles' talent hashes and they produce no row at all; count against
+`index.json`'s 36 builds rather than against the 40, or the arithmetic is over the
+wrong column. That second group is
 the other half of the pair "45 item levels behind **and** none of this season's tier
 set" that the unvalidated section already names, and it is now stated as its own flag
 rather than folded into the item-level one. Of the tier's 28 *shipped* damage builds
