@@ -1186,6 +1186,8 @@ def cmd_build_search(args: argparse.Namespace) -> int:
     entries: list[computedbuilds.SpecEntry] = []
     rows: list[computedbuilds.CalibrationRow] = []
     notes: list[str] = []
+    out_dir = Path(args.out) / tier
+    publishing = not args.calibrate or args.write_calibration
     if harvested is None:
         notes.append(
             "No harvested-builds document was available to this run, so no candidate "
@@ -1197,6 +1199,8 @@ def cmd_build_search(args: argparse.Namespace) -> int:
         if context.blocked:
             logging.warning("%s: %s", context.profile.id, context.blocked)
             entries.append(_unsearched_entry(context, args.targets, gearanchor))
+            if publishing:
+                _publish(args, tier, entries, rows, notes, len(found), out_dir)
             continue
         try:
             outcome = buildsearchrun.run_build(
@@ -1214,6 +1218,8 @@ def cmd_build_search(args: argparse.Namespace) -> int:
         except (simc_runner.SimcError, buildsearch.SearchError) as exc:
             logging.error("%s: search failed: %s", context.profile.id, exc)
             entries.append(_unsearched_entry(context, args.targets, gearanchor, reason=str(exc)))
+            if publishing:
+                _publish(args, tier, entries, rows, notes, len(found), out_dir)
             continue
 
         head_to_head, row = _head_to_head(
@@ -1229,6 +1235,8 @@ def cmd_build_search(args: argparse.Namespace) -> int:
                 "none" if row.found is None else f"{row.found.dps:.0f}",
             )
         entries.append(_entry_for(context, outcome, head_to_head, args, computedbuilds, gearanchor))
+        if publishing:
+            _publish(args, tier, entries, rows, notes, len(found), out_dir)
 
     # A head-to-head runs on every build, blind or not -- it is what fills the
     # document's `simc` side. It is only *calibration* when the search was blind,
@@ -1246,23 +1254,50 @@ def cmd_build_search(args: argparse.Namespace) -> int:
         print("  " + calibration.summary())
         print()
 
-    if args.calibrate and not args.write_calibration:
+    if publishing:
+        path = _publish(args, tier, entries, rows, notes, len(found), out_dir)
+        logging.info("wrote %s (%d entr(ies))", path, len(entries))
+    else:
         logging.info("calibration run: nothing published (pass --write-calibration to record it)")
-        return 0 if calibration is not None and calibration.passed else 2
 
-    out_dir = Path(args.out) / tier
-    document = computedbuilds.build_document(
-        tier,
-        entries,
-        iterations=args.iterations,
-        deterministic=True,
-        builds_available=len(found),
-        calibration=calibration,
-        notes=notes,
-    )
-    path = computedbuilds.write_computed_builds(out_dir, document)
-    logging.info("wrote %s (%d entr(ies))", path, len(entries))
+    if args.calibrate:
+        # The gate decides the exit code, and a failure is a *result*: the workflow
+        # reports it and refuses to commit rather than treating it as a broken run.
+        return 0 if calibration is not None and calibration.passed else 2
     return 0
+
+
+def _publish(args, tier, entries, rows, notes, builds_available, out_dir):
+    """Rewrite the whole document. Called after **every** build, not once at the end.
+
+    CLAUDE.md records this exact defect in the gear sweep: the entry claimed a per-spec
+    write while ``write_gear`` was called once after the loop, so an interrupted sweep
+    left *nothing* rather than a smaller dataset. A search costs CPU-hours, so being
+    interrupted is the expected case, and ``coverage`` is already honest about covering
+    fewer builds than the tier has.
+
+    Worth naming how that defect nearly shipped again here: the edit that introduced
+    this function was applied by a scripted string replacement whose anchor no longer
+    matched after a reformat, so it silently did nothing -- while the CLAUDE.md entry
+    describing per-build writes was written anyway. ``test_buildsearch_cli`` asserts the
+    document really is rewritten per build, which is the only thing that can tell a
+    described behaviour from an implemented one.
+    """
+    from . import computedbuilds
+
+    calibration = computedbuilds.Calibration(rows=tuple(rows)) if rows and args.calibrate else None
+    return computedbuilds.write_computed_builds(
+        out_dir,
+        computedbuilds.build_document(
+            tier,
+            entries,
+            iterations=args.iterations,
+            deterministic=True,
+            builds_available=builds_available,
+            calibration=calibration,
+            notes=notes,
+        ),
+    )
 
 
 def talenttree_traits(simc_dir: Path, ptr: bool) -> list:
@@ -1372,36 +1407,34 @@ def _head_to_head(simc, context, settings, outcome, args, buildsearchrun, builds
     for candidate, _ in outcome.ranked:
         field.append(candidate)
     if not field:
-        return {}, None
+        return ({}, None), None
 
     measured = buildsearchrun.measure(
         simc, context, settings, field, args.iterations, args.targets, args.timeout
     )
     row = buildsearchrun.calibration_row(context, outcome, measured, simc_key) if original else None
-    return measured, row
+    # ``(what was measured, which of them is simc's)``, then the calibration row. The
+    # simc candidate travels with the measurements rather than being rebuilt by the
+    # caller: in a blind run ``context.seeds[0]`` is the *scrambled* build, and a
+    # caller reaching for it there would publish it under simc's name.
+    return (measured, field[0] if original else None), row
 
 
-def _entry_for(context, outcome, measured, args, computedbuilds, gearanchor):
-    """One published row: simc's side, ours, the runner-up, the anchor and the caveats."""
-    from . import buildsearch
+def _entry_for(context, outcome, head_to_head, args, computedbuilds, gearanchor):
+    """One published row: simc's side, ours, the runner-up, the anchor and the caveats.
 
+    The simc side is the candidate ``_head_to_head`` actually measured, not one rebuilt
+    here. Rebuilding it read ``context.seeds[0]``, which in a **blind** run is the
+    scrambled build rather than simc's -- harmless today because only the hash is
+    published, and exactly the kind of thing that stops being harmless the moment
+    another field is added.
+    """
+    measured, simc_candidate = head_to_head
     hero = context.profile.hero_label
     simc_side = None
-    if "simcbuild" in measured:
+    if simc_candidate is not None and simc_candidate.key in measured:
         simc_side = computedbuilds.contender_json(
-            buildsearch.Candidate(
-                key="simcbuild",
-                label=context.profile.display_name,
-                origin=buildsearch.ORIGIN_SIMC,
-                loadout=context.seeds[0].loadout,
-                talent_hash=(
-                    context.repair.repaired_hash
-                    if context.repair and context.repair.repaired_hash
-                    else (context.profile.talent_hash or "")
-                ),
-            ),
-            measured["simcbuild"],
-            hero_talent=hero,
+            simc_candidate, measured[simc_candidate.key], hero_talent=hero
         )
 
     sides = [
