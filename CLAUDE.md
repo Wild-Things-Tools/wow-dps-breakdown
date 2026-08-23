@@ -4380,3 +4380,172 @@ and expect the `table` payload shape (`_table_entries` guesses between `entries`
   `settings.medianDpsError` — the median error actually *measured* across every cell — and
   `settings.deterministic`; `samplingError()` and `describeConvergence()` in
   `web/src/lib/format.ts` are the only things that should phrase either.
+
+## Searching for a build, and what a search may claim
+
+`buildsearch.py` (the algorithm), `buildsearchrun.py` (the wiring), `talentrepair.py`
+(the forced repair), `computedbuilds.py` (the gate and the document), `wowdps
+build-search`, `.github/workflows/build-search.yml` -> `<tier>/computed-builds.json`,
+drawn by wtt-frontend's `dps-computed.ts`.
+
+### Only edits that leave the node set alone, and why that is a proof
+
+simc validates eleven things and **none of them is an unlock edge, a point gate or a
+point budget** — see the talent-tree section. Two of the three this project can check.
+The third is not in simc's data at all, so a search that adds or drops a node cannot
+know whether the result is reachable.
+
+The way out is not to check the edges but to make the question not arise:
+
+> If the seed's node set is legal, and an edit does not change which nodes are
+> selected, then every unlock edge satisfied by the seed is satisfied by the result —
+> because an unlock edge is a statement about which nodes are taken, and that set is
+> identical.
+
+That is a proof, not a heuristic, it needs no edge table, and `test_buildsearch.py`
+asserts it over generated mutations rather than arguing it. The same invariance carries
+the other two for free: `move_rank` preserves each tree's total, and a gate is a
+threshold on a tree's total.
+
+**What it costs is stated with every published number**: the search cannot discover
+that a different *set* of talents is better.
+
+### The search space is smaller than "choices and ranks" suggests
+
+Measured on simc `625a591` (2026-08-23) over MID2's 39 searchable builds:
+
+| | min | median | max |
+|---|---|---|---|
+| flippable choice nodes | **1** | 9 | 16 |
+| rank-move pairs | 0 | **0** | 4 |
+
+**Rank moves are unavailable on 33 of the 39 builds.** MID2's profiles put nodes at
+full rank or at one rank, so there is rarely a rank to move that would not empty its
+source — and emptying a source changes the node set, which voids the proof above. So
+this is in practice a **choice-node search** and the rank-move machinery earns its
+place on six builds. Do not describe the space as though both axes were live.
+
+The floor is not a rounding case either: both Frost Death Knight builds offer exactly
+**one** flippable choice node, so their entire search space is two builds. Those are
+the same two profiles `_THIN_CLASS_TREE` flags for spending 10 class points.
+
+### The blind calibration caught a structural defect, not a statistical one
+
+The first version generated the whole field once, around the seeds, and never again.
+Measured blind on both Arcane builds at 3000 iterations, that came back **3.4% and 4.1%
+behind** simc's own build — and the reason is arithmetic rather than noise: a scrambled
+seed has a median of **nine** choice nodes set at random and a one-shot single-edit
+neighbourhood corrects exactly **one**. The search could not reach simc's build from a
+blind start however many variants it measured. The calibration was measuring the
+algorithm's reach.
+
+Adding a greedy climb — measure the leader's whole one-edit neighbourhood, take the
+winner, repeat — moved the same two builds to **−0.18% and an exact tie** (Sunfury
+recovered simc's build to the DPS). Same seed, same criterion, same iteration counts.
+
+Two things worth keeping from that:
+
+- **A step is taken only when the new leader separates from the old one** under the tie
+  rule. Without it the climb walks uphill on Monte Carlo noise and reports the walk.
+- **A climb that spends every step says so.** A truncated climb presented as a
+  converged one is the same error as a truncated event fetch presented as a whole
+  fight.
+
+### The gate, and what it does not gate
+
+`PASS_MIN_NOT_BEHIND` = 0.80 and `PASS_MAX_LOSS` = 0.02, **fixed and committed before
+the first calibration row existed**. Both must hold. simc's build is *inside* the space
+the search covers — it is one choice assignment over the same node set — so "tie or
+beat" is the natural bar rather than a generous one; 80% leaves room for the budget
+rather than for the method, and the second constant exists because the first can be
+satisfied by a search that is catastrophically wrong on one build.
+
+A row with **no candidate** counts as behind *and* as an unbounded loss. Treating it as
+zero would let "found nothing" clear a criterion about how badly the search may lose.
+
+**Repairs are not gated, and that is not an inconsistency.** A repair asserts only
+"simc refuses the hash its own profile ships, and this is that hash with the correction
+the trait table forces" — checkable by running simc, containing no optimality claim,
+and therefore not something a calibration could ever be evidence about.
+
+### Repairing a refused hash: three of the six are not one-node repairs
+
+Four of MID2's damage specs have **no number anywhere** — Havoc DH, Retribution Paladin,
+Arms and Fury Warrior — because simc's own parser refuses their stored hash. Asked
+directly on `625a591`, each exits **81**.
+
+**`spec-index.json` reports the wrong reason for four of the six, and reports one node
+where there are more.** Two separate things:
+
+- The published wording for Havoc and Retribution is *"choice index 1 out of bounds for
+  node 91020 (1 entries)"*, which is **this project's decoder speaking**. simc says
+  *"Node 91020 is not a choice node but has index selection."* — a different one of its
+  eleven refusals (#10, not #11). Right node, wrong sentence, and a caller grepping a
+  real run's stderr for the published one finds nothing.
+- Both `decode_loadout` and `spec_rule_violation` stop at the **first** failure, so
+  "exactly one node each" is an artifact of the reporting. Read past it with
+  `decode_lenient`: Havoc Aldrachi Reaver has **5** overflowing nodes, Retribution
+  **7** and **4**, and Arms and Fury have **2** spec-rule offenders each.
+
+Neither is fixed here — they are `specindex`'s fields and rewriting them churns a
+published document — but do not read that panel as a count.
+
+### Round-tripping is **not** evidence that a decode is sound
+
+47 of MID2's 51 hashes decode strictly and **all 47 re-encode byte for byte**, Arms and
+Fury included. That is tempting to read as "the decode is right" and it is not: the
+encoder walks the same node list as the decoder, so a reader whose walk disagrees with
+the *writer's* still reproduces the string it misread. Round-tripping proves reader and
+writer are inverses and says nothing about the tree the hash came from.
+
+Two signals do carry information, and both are read off the corpus rather than typed:
+**`spare_bits`** (observed range **-1 to 9** over the 84 MID1+MID2 profiles that decode;
+MID2 alone 0 to 9) and **per-tree point totals** against `derive_point_budget`. Applied
+to the five refused decodes they separate cleanly and agree with each other:
+
+| profile | spare bits | class/spec/hero | verdict |
+|---|---|---|---|
+| Havoc Fel-Scarred | 3 | 35/34/14 | sound |
+| Havoc Aldrachi Reaver | **-77** | 33/30/6 | overran the string |
+| Retribution (both) | **10** | 31/**37**/16 | stopped early, over budget |
+| Arms | 1 | 36/34/14 | sound |
+| Fury | 4 | 37/**30**/14 | sound, with a caveat |
+
+So the choice-index overflow is a *symptom* on three of those five and the whole disease
+on one. **The screen only ever rejects**: a build that passes was not caught, not
+proven, and that sentence travels with every repair as a caveat.
+
+**Verified against simc**: the three repaired hashes load and simulate — Havoc
+Fel-Scarred 115,335, Arms 106,065, Fury 96,418 DPS at 300 deterministic iterations on
+the profiles' own (289 item level) gear, all exit 0 where the originals exit 81. Those
+absolute numbers are why the anchor exists; do not compare them with the tier.
+
+**Fury spends 30 spec points where 82 of the other 83 profiles across both tiers spend
+exactly 34.** Not a decode failure — MID1's Fury profile reads 30 too, and a desync
+would not reproduce across two tiers. It is simc's profile being four points light, and
+the repair does not spend them: spending a point is a search decision.
+
+### Anchor: one shape published, and it is the site's
+
+`GearAnchor.to_json()` is the **record**; `DpsGearAnchor` in `dps-data.models.ts` is the
+**reading**. Only `itemLevel` is common to both and `preserved`/`tierSet` share a name
+and differ in kind — reported by wtt-frontend#130 and left for whoever wired the
+producer. **Settled on the pipeline side**: `gearanchor.display_json` projects onto the
+frontend's shape and the frontend model is untouched, because the frontend's shape is
+the one with a consumer and a published field nothing reads is a field that drifts.
+
+### Cost, measured
+
+**~3 CPU-minutes per build** for a blind calibration at the shipped settings (breadth
+24, climb 12, 300/1200/3000), timed on a 4-core box: both Arcane builds cost **5m59s of
+CPU**. MID2's 39 searchable builds are therefore near **2 CPU-hours** — about half an
+hour of wall clock on a 4-vCPU runner, comfortably inside `timeout-minutes: 350`, and
+the reason `build-search.yml` is **one job rather than a matrix**. A non-blind publish
+run is cheaper, because the climb stops as soon as no neighbour separates.
+
+`workflow_dispatch` only and no schedule, for the same reason `gear.yml` is: builds
+change when a tuning pass or a season changes. **Something has to invoke it or the
+document never exists** — the same failure `hero_trees.json` shipped. A committed
+document survives the nightly: `dataset.merge_shards` creates its output directory and
+writes into it, with no `rmtree` and no directory replacement, so a file it did not
+produce is left alone.
