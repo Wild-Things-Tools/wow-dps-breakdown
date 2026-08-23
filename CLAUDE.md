@@ -807,10 +807,13 @@ Every profile the `id_set` parse puts at four or more pieces returned DPS
 independent derivations agreeing on every row is the same check `talenttree`'s decode
 rests on.
 
-### Arcane's profile switches its own set off, and its rotation asks about it
+### Arcane wears no tier set, and the commented `set_bonus=` line is not why
 
 Worth its own entry because it is a property of **simc's shipped profile** and it is
-in the numbers on the live site today, not something this repository does.
+in the numbers on the live site today, not something this repository does. **The
+heading and the first half of this entry used to state the wrong mechanism**, and the
+wrong one is the plausible one, which is why it is corrected here in place rather
+than deleted.
 
 `MID2_Mage_Arcane.simc` and `MID2_Mage_Arcane_Sunfury.simc` carry, at lines 105-106
 on simc 22b442e:
@@ -820,21 +823,135 @@ on simc 22b442e:
 # set_bonus=midnight_season_2_4pc=1
 ```
 
-Commented out -- while the same file's action list branches on
-`set_bonus.midnight_season_2_4pc` twice, once in the Spellslinger list and once in
-the Sunfury one. So the rotation is written for a build wearing the four-piece and
-the character is simulated without it.
+That reads like a profile switching its own set off. **It is not.** Measured on
+22b442e, 2026-08-23: **35 MID2 profiles carry that line and all 35 carry it
+commented; exactly zero profiles anywhere in the tier carry an active `set_bonus=`
+line.** It is simc's generator convention -- Fire, Frost, Shadow, both Shamans and
+every other build wearing four or five pieces carries the identical commented pair.
+A mechanism that is present on the whole tier cannot explain a difference between two
+builds and the other twenty-six.
 
-Measured by the orchestrator, 1000 deterministic iterations, patchwerk one target,
-simc 69a46e1: **with the set 216,935.5 (+/-0.158%), without it 189,598.5
-(+/-0.147%) -- a 14.4% gap.**
+**The set comes from the equipped items**, which is what `set_bonus_t::initialize`
+reads: `dbc_item_data_t::id_set` on each equipped piece, matched against
+`item_set_bonus_t::set_id`. Side by side, the armour lines of the two Mage profiles:
+
+```
+Fire     shoulders=primal_leywardens_manaflux,id=271562,...,redirected_base_stats=268241
+Arcane   shoulders=ornaments_of_the_eternal_coil,id=268241,...
+```
+
+Both at item level 334 with the same bonus ids. 271562 carries `id_set` 2060
+(*Primal Leywarden's Attire*, the Mage set); 268241 carries none -- and Fire's tier
+piece **redirects its base stats to the very id Arcane equips**, so the two are the
+same stats with and without set membership. Same story in head, chest, hands and
+legs. Arcane is not opting out of a set it owns; it is wearing four different items.
+
+The rotation half of the old entry stands and is worth keeping: both Arcane action
+lists branch on `set_bonus.midnight_season_2_4pc` twice, at lines 61 and 71, so the
+rotation is written for a build wearing the four-piece and the character is simulated
+without it.
+
+**The magnitude, re-measured**, profileset against profileset (never against the base
+actor), 1000 deterministic iterations, patchwerk one target, simc 22b442e,
+2026-08-23:
+
+```
+Arcane Spellslinger   none 176,582.7   2pc 191,443.9 (+8.42%)   4pc 199,763.3  +13.13%
+Arcane Sunfury        none 189,598.5   2pc 207,145.3 (+9.25%)   4pc 216,935.5  +14.42%
+Shadow Priest         none 185,952.9   2pc 196,567.4 (+5.71%)   4pc 209,675.3  +12.76%
+```
+
+Per-profileset error is 0.11-0.31%, so the tie band on the four-piece gain is at
+worst 0.44% and every figure is thirty times outside it.
+
+**Two numbers were in circulation for "Arcane" and both are right** -- this file said
+14.4% and `gearanchor`'s docstring says 13.13%, and neither said which build. They are
+the two Arcane builds: 13.13% is Spellslinger and 14.42% is Sunfury, reproduced here
+to the tenth on a different simc revision from the one either was taken on. Write the
+build name beside a per-build number.
+
+**Shadow Priest is the control**, and it is what makes the offline piece count usable:
+it already wears four pieces, and forcing the four-piece on returns 209,675.3 against
+a base actor of 209,682.5 -- 0.003% apart, inside its own 0.11% error. So a profile the
+`id_set` count puts at four does not move when the set is forced on, and one it puts at
+zero moves 13-14%. Two independent derivations agreeing is the same check the talent
+decode rests on.
 
 Two things follow. It is not a bug here and must not be "fixed" by editing simc's
 profile -- this project does not author profiles, and the whole claim of the dataset
-is that it is what simc ships. And it is exactly the kind of systematic difference
-`gearComparable` exists to flag: a build ranked against 26 others that wear their set
-is not being compared on rotation and talents alone. The gear anchor is the other
-half of the answer, for builds this project computes rather than ones simc ships.
+is that it is what simc ships. And it is exactly the kind of systematic difference a
+comparability flag exists to state: a build ranked against 26 others that wear their
+set is not being compared on rotation and talents alone. `tierSetComparable` is that
+flag (see below); the gear anchor is the other half of the answer, for builds this
+project computes rather than ones simc ships.
+
+### `tierSetComparable`: the second gear caveat, and why it is not the first
+
+`dataset.shipped_set_states` + `dataset.tier_set_caveat` + `cli._tier_set_reference`.
+Exactly the shape of `shipped_item_levels` + `gear_caveat` one paragraph up, for the
+other systematic gear difference a tier can hold.
+
+**Two flags, not one, and MID2 is why.** Its two Arcane builds sit squarely inside the
+334-344 band and wear no set; its twelve disabled profiles carry *both* gaps. One
+boolean would leave the sentence beside it guessing which claim it carried, and -- the
+sharper reason -- an `ilevel` bump would close one and leave the other looking fixed.
+So `gearComparable` keeps meaning item level and `tierSetComparable` means set state.
+Both are emitted **only when false**, so MID1, whose 50 shipped profiles all wear four
+pieces, produces the bytes it did before this existed.
+
+Four decisions in the derivation, all of them the item-level band's decisions applied
+to a categorical variable:
+
+- **The reference is voted for, never written down.** No spec name, no set token, no
+  class. The sets come from `item_set_bonus.inc`, an equipped item's membership from
+  `item_data.inc`, and the reference state from the tier's own shipped profiles.
+- **States, not piece counts.** Reduced through `gearanchor.set_state` before the vote,
+  over the thresholds simc's table carries rather than an assumed 2 and 4. MID2's raw
+  counts are 12 profiles at four pieces and 14 at five -- a coin flip between two
+  numbers that mean the same thing to the simulation -- where as states it is 26 to 2.
+  Same reduction `gearanchor.derive_set_pieces` makes, for the same reason.
+- **A strict majority, or no reference and no flag.** "This build differs from what the
+  tier wears" needs a tier that wears one thing; naming one half of a split tier the
+  reference would flag the other half for disagreeing with a coin toss. More than half
+  is what the word means rather than a tuned tolerance, and the failure direction is
+  the safe one. Note this is deliberately *not* `derive_set_pieces`'s tie rule, which
+  breaks toward the lower state -- that one has to answer with something, because a
+  computed build has to wear something, and this one does not.
+- **A class the tier ships no set for is `None`, not zero.** `count_set_pieces` over an
+  empty id set correctly returns zero, and reading that as "wears none" would flag
+  exactly the classes a partial set list forgot. Neither MID1 nor MID2 has such a
+  class; the guard is for the tier that does.
+
+**Shard safety is structural rather than conventional.** `_tier_set_reference` takes a
+profiles directory and discovers the tier itself, the way `spec_coverage` does -- there
+is no parameter a shard could hand its own slice through. Passing `cmd_build`'s
+`all_profiles` would be right today and one refactor away from passing `selected`, and
+a per-shard majority would be a full set of plausible flags on the wrong builds.
+Tanks are discovered too, which makes the answer independent of `--include-tanks` as
+well as of the shard: measured on 22b442e, MID2 tallies 33 at the four-piece against 2
+at none with tanks and 26 against 2 without -- the same verdict from a wider base.
+
+**Which of simc's two item tables** is the question `talent-trees` already answers, and
+it is answered the same way: from the published manifest's `simc.ptr`. Measured on
+22b442e on 2026-08-23 the live and PTR tables give byte-identical tallies for MID2
+(12,260 items carry an `id_set` in both), so it changes nothing today -- which is
+exactly the kind of agreement that stops being true without announcing itself.
+
+**What it flags today**, MID2 at 22b442e: 14 of the 40 damage builds -- the two Arcane
+ones, plus all twelve disabled profiles, which wear no set at all. That second group is
+the other half of the pair "45 item levels behind **and** none of this season's tier
+set" that the unvalidated section already names, and it is now stated as its own flag
+rather than folded into the item-level one. Of the tier's 28 *shipped* damage builds
+only the two Arcane ones are flagged. MID1 flags nothing shipped -- all 50 of its
+profiles wear four pieces -- so no published byte moves there.
+
+**The dataset states it; the view does not draw it yet.** `web/` renders
+`gearComparable === false` as a faded bar, a "gear differs" mark and a caption
+sentence, and the new field is simply unknown to it -- harmless, and invisible. What a
+follow-up needs is named in the pull request: `BuildLike`/`types.ts` gain the field,
+`UnvalidatedMark` gains a third `Mark` with its own wording, and if `buildOpacity` is
+widened to cover it then `OverviewView`'s caption has to stop saying "a different item
+level", because it would then be describing two different claims with one sentence.
 
 ### What the anchor actually did
 
