@@ -166,6 +166,39 @@ def test_a_build_simc_refuses_is_repaired_and_searched(tmp_path, stubbed):
     assert "Repaired talent hash, not an optimised build" in text
 
 
+def test_a_repaired_build_hands_simc_a_loadable_base_actor(tmp_path, stubbed, monkeypatch):
+    """**The defect a real run found and no unit test could.**
+
+    Nothing *reads* the base actor, but simc still **builds** it -- from the profile
+    file, before it generates a single profileset. For the four specs this feature
+    exists for, the profile's own hash is exactly the one simc refuses, so the whole
+    invocation exits 81 and takes every profileset with it:
+
+        Error: Initialization error: Player 'MID2_Demon_Hunter_Havoc_Fel-Scarred':
+        Hash '...': Node 91024 is not a choice node but has index selection.
+
+    Verifying a repaired hash by hand as ``simc PROFILE talents=HASH`` proves nothing
+    about this, because that overrides the profile and the pipeline reaches simc by a
+    different route. So the assertion is on what the runner is *handed*.
+    """
+    seen: dict = {}
+    real = buildsearch.simc_runner
+
+    def capture(*args, **kwargs):
+        seen["base_talents"] = kwargs.get("base_talents")
+        return stubbed
+
+    monkeypatch.setattr(buildsearch, "simc_runner", capture)
+    cli.cmd_build_search(_args(tmp_path, build="warrior_arms"))
+    del real
+    assert seen["base_talents"], "a repaired build must hand simc a loadable base actor"
+
+    seen.clear()
+    cli.cmd_build_search(_args(tmp_path, build="mage_arcane_sunfury"))
+    # A profile simc already accepts needs no override: simc reads it from the file.
+    assert seen["base_talents"] is None
+
+
 def test_a_build_whose_decode_cannot_be_trusted_is_published_as_unsearched(tmp_path, stubbed):
     """Retribution's hash reads a tree that has changed shape under it. Repairing it
     would be a valid hash for a build nobody wrote, so nothing is searched -- and the

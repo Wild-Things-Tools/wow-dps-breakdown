@@ -73,6 +73,16 @@ class BuildContext:
     blocked: str | None = None
     repair: talentrepair.Repair | None = None
 
+    @property
+    def base_talents(self) -> str | None:
+        """A hash simc will load, for the base actor every invocation builds.
+
+        None when the profile's own hash is fine -- simc then reads it from the file, as
+        it always has. Set to the repaired hash when it is not, because simc builds the
+        base actor before it generates any profileset and exits 81 if it cannot.
+        """
+        return self.repair.repaired_hash if self.repair and self.repair.ok else None
+
 
 def _key(prefix: str, index: int) -> str:
     """A profileset name simc's option parser will not choke on."""
@@ -239,7 +249,12 @@ def measure(
     """One field, measured once. Used for the head-to-head that follows a search."""
     request = simc_runner.SimRequest(profile=context.profile, scenario=PATCHWERK, targets=targets)
     runner = buildsearch.simc_runner(
-        simc, request, settings, context.anchor.options(), timeout=timeout
+        simc,
+        request,
+        settings,
+        context.anchor.options(),
+        timeout=timeout,
+        base_talents=context.base_talents,
     )
     return runner(candidates, iterations)
 
@@ -260,7 +275,12 @@ def run_build(
     """Search one build, on its own anchored kit, at one target count."""
     request = simc_runner.SimRequest(profile=context.profile, scenario=PATCHWERK, targets=targets)
     runner = buildsearch.simc_runner(
-        simc, request, settings, context.anchor.options(), timeout=timeout
+        simc,
+        request,
+        settings,
+        context.anchor.options(),
+        timeout=timeout,
+        base_talents=context.base_talents,
     )
     return buildsearch.search(
         spec_id=context.profile.spec_id,

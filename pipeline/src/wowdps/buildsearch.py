@@ -888,12 +888,13 @@ def simc_runner(
     settings: SimSettings,
     anchor_options: Sequence[str],
     timeout: int = 3600,
+    base_talents: str | None = None,
 ) -> Runner:
     """A ``Runner`` that measures a field as profilesets in one simc invocation.
 
-    Three things in it are the project's rules rather than choices, and getting any of
-    them wrong produces plausible numbers that are wrong by about a tenth of a percent
-    -- which is the same size as the differences being measured:
+    Four things in it are the project's rules rather than choices, and getting any of
+    the first three wrong produces plausible numbers that are wrong by about a tenth of
+    a percent -- which is the same size as the differences being measured:
 
     * **profileset against profileset, never against the base actor.** The base actor
       runs a different iteration count and lands ~0.09% away from an identical
@@ -903,9 +904,31 @@ def simc_runner(
     * **the anchor's options ride on every variant**, ahead of the talents. Two
       candidates then differ in ``talents=`` and in nothing else, which is the whole
       claim a talent search makes.
+    * **``base_talents`` must be a hash simc will load**, and this one is not about
+      precision -- it is about the run happening at all.
+
+    The fourth is the one a real run found and no test could. Nothing *reads* the base
+    actor, but simc still **builds** it, from the profile file, before it generates a
+    single profileset -- and for the four specs this feature exists for, the profile's
+    own hash is exactly the one simc refuses. Measured on the tier-wide calibration:
+
+        Error: Initialization error: Player 'MID2_Demon_Hunter_Havoc_Fel-Scarred':
+        Hash '...': Node 91024 is not a choice node but has index selection.
+
+    simc exits 81 and the whole invocation dies, taking every profileset in it with it.
+    A repaired hash verified by hand on the command line (``simc PROFILE talents=HASH``,
+    which overrides the profile) therefore proves nothing about whether the *pipeline*
+    can run it, because the pipeline reaches simc by a different route. Passing the
+    repaired hash as a base-actor option is what makes the profilesets reachable; each
+    one still sets its own ``talents=`` and so overrides it.
     """
     from . import simc_runner as runner_module
     from .scenarios import SimSettings as Settings
+
+    # Ahead of the profileset lines, so the base actor is built from a hash simc
+    # accepts. Options after the profile path override the profile -- see
+    # ``simc_runner.build_command``.
+    base = (f"talents={base_talents}",) if base_talents else ()
 
     def run(candidates: Sequence[Candidate], iterations: int) -> dict[str, Measurement]:
         sets = [
@@ -922,7 +945,7 @@ def simc_runner(
                 target_error=0.0,
                 max_iterations=iterations,
                 threads=settings.threads,
-                extra_options=settings.extra_options,
+                extra_options=(*settings.extra_options, *base),
             ),
             sets,
             timeout=timeout,
