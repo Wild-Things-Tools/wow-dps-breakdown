@@ -49,6 +49,28 @@ def find_simc(explicit: str | None = None) -> Path:
     )
 
 
+#: Whether this pipeline's sims read simc's PTR client data. They do not: nothing in
+#: ``build_command`` passes ``ptr=1``, and simc's report says so itself -- ``dbc``
+#: carries a ``Live`` and a ``PTR`` block plus ``version_used``, and on simc 625a591
+#: (2026-08-23) ``version_used`` is ``Live`` for the exact argv below.
+#:
+#: **This is not the same thing as ``report["ptr_enabled"]``**, which the manifest
+#: publishes as ``simc.ptr``. That is ``SC_USE_PTR``, a compile-time constant
+#: defined as 1 in ``engine/config.hpp`` on simc's midnight branch, so it is
+#: true of every binary this project builds and says nothing about which data a run
+#: used. Anything choosing between simc's ``*_ptr.inc`` and ``*.inc`` generated tables
+#: to match the sims wants *this* answer -- see ``cli._tier_set_reference``.
+#:
+#: Placement matters and is easy to get wrong: ``ptr=1`` only bites *before* the
+#: profile path, because simc copies the sim's dbc into the player while parsing the
+#: profile. Measured on MID2 Arcane at 1000 deterministic iterations, ``version_used``
+#: comes back Live / Live / PTR for no option / after / before -- and the DPS is
+#: 176,364.3 in all three, since simc's two tables agree on 625a591. So this is about
+#: reading the table the sims read, not about a number that would move today.
+#: ``test_build_command_never_enables_ptr_data`` fails if this stops being true.
+USES_PTR_DATA = False
+
+
 def build_command(
     simc: Path,
     request: SimRequest,
@@ -59,6 +81,11 @@ def build_command(
 
     Options placed *after* the profile file override anything the profile sets,
     which is how the scenario forces its fight style and target count.
+
+    ``ptr=`` is deliberately not among them, and it could not be here even if it
+    were wanted: simc copies the sim's dbc into the player when the profile is
+    parsed, so the option only bites *before* the profile path. See
+    ``USES_PTR_DATA``.
     """
     scenario = request.scenario
     return [
