@@ -178,7 +178,7 @@ def _resolve_scenarios(
 def _tier_set_reference(
     profiles_dir: Path,
     tier: str,
-    out_root: Path,
+    ptr: bool = False,
 ) -> dataset.TierSetReference | None:
     """Which tier-set state the tier's shipped profiles wear, or ``None`` and why.
 
@@ -203,21 +203,38 @@ def _tier_set_reference(
     simulations, so it warns and returns ``None``; nothing is then flagged, which is
     the state the dataset was in before this existed.
 
-    **Which of simc's two item tables is the same question ``talent-trees`` answers**,
-    and it is answered the same way: the published manifest records whether the tier
-    was built against PTR data, and reading the wrong table would describe a different
-    game state while decoding perfectly. Measured on simc 22b442e on 2026-08-23, the
-    live and PTR tables give byte-identical tallies for MID2 (12,260 items carry an
-    ``id_set`` in both), so this changes nothing today -- which is exactly the kind of
-    agreement that stops being true without announcing itself.
+    **Which of simc's two item tables is stated, never discovered, and the version
+    this replaces described a mechanism it did not implement.** It read the ``ptr``
+    flag out of ``<out_root>/<tier>/index.json`` and called that "the same question
+    ``talent-trees`` answers, answered the same way" -- but ``talent-trees`` takes an
+    explicit ``--ptr`` and falls back to a manifest under ``--out``, which for that
+    command *is* the published dataset, while ``cmd_build``'s ``--out`` is where this
+    run writes. The nightly passes ``--out shard``, a fresh empty directory, so the
+    file never existed, ``ptr`` silently defaulted to ``False``, and nothing said so.
+    ``--ptr`` is the whole of the interface now, matching ``gear-anchor``, which reads
+    these same two tables.
+
+    **And the manifest could not have answered it anyway.** ``manifest.simc.ptr`` is
+    ``report["ptr_enabled"]``, which is ``SC_USE_PTR`` -- a compile-time constant,
+    ``#define``\ d to 1 in ``engine/config.hpp`` on simc's midnight branch, so it says
+    the binary *carries* PTR data and not that anything used it. What the run used is
+    ``dbc.version_used``, and measured on simc 625a591 on 2026-08-23 against the exact
+    argv ``simc_runner.build_command`` produces, it is **Live**: this pipeline never
+    passes ``ptr=1``, and the option has to precede the profile to take effect at all
+    (passed after it, the actor is already built -- 169,135 DPS against 188,911 on
+    MID2 Arcane at one iteration, so it is not a cosmetic difference). Hence the
+    default here is the live table, which is what the sims read.
+    ``test_build_command_never_enables_ptr_data`` is what stops that going stale.
+
+    Live and PTR agree today in both tables -- 12,260 items carry an ``id_set`` in
+    each and the two maps are equal, as are all 376 set rows, measured on 22b442e and
+    again on 625a591 -- which is exactly the kind of agreement that stops being true
+    without announcing itself. That is why the choice is stated rather than left to a
+    file that happens not to be there.
     """
     from . import buffsweep, gearanchor
 
     simc_dir = profiles_dir.parent
-    manifest_path = out_root / tier / "index.json"
-    ptr = False
-    if manifest_path.is_file():
-        ptr = bool(json.loads(manifest_path.read_text(encoding="utf-8")).get("simc", {}).get("ptr"))
     try:
         sets = buffsweep.parse_tier_sets(simc_dir, ptr=ptr)
         item_sets = gearanchor.parse_item_sets(simc_dir, ptr=ptr)
@@ -330,7 +347,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     # The other systematic gear difference a tier can hold, derived the same way and
     # from the same list. Read once here rather than per profile: the item table is
     # 26 MB and parsing it is the whole cost of the answer.
-    reference_set = _tier_set_reference(profiles_dir, tier, Path(args.out))
+    reference_set = _tier_set_reference(profiles_dir, tier, ptr=args.ptr)
 
     results: list[dataset.SpecResult] = []
     simc_meta: dict = {}
@@ -1497,6 +1514,19 @@ def build_parser() -> argparse.ArgumentParser:
     add_common(p_build)
     p_build.add_argument("--simc", help="path to the simc binary (default: $PATH)")
     p_build.add_argument("--out", default=str(DEFAULT_OUT), help="output directory")
+    # Stated, not discovered. The predecessor read it out of a manifest under --out,
+    # which in a sharded run is a fresh scratch directory, so it was never anything
+    # but False; and the flag it read (`simc.ptr`) is simc's SC_USE_PTR compile
+    # constant rather than the data source the sims used. Same spelling as
+    # `gear-anchor`, which reads the same two tables. See `_tier_set_reference`.
+    p_build.add_argument(
+        "--ptr",
+        action=argparse.BooleanOptionalAction,
+        default=simc_runner.USES_PTR_DATA,
+        help="read simc's PTR item and set-bonus tables when checking each build's "
+        "tier-set state. The default tracks which client data this pipeline's sims "
+        "actually read, which is the live one",
+    )
     p_build.add_argument(
         "--scenario",
         action="append",
