@@ -956,6 +956,12 @@ def cmd_fights(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_harvest_builds(args: argparse.Namespace) -> int:
+    from . import harvest
+
+    return harvest.cmd_harvest_builds(args)
+
+
 def cmd_fight_probe(args: argparse.Namespace) -> int:
     from . import fightprobe
 
@@ -1575,6 +1581,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     fightprobe.add_arguments(p_fight_probe)
     p_fight_probe.set_defaults(func=cmd_fight_probe)
+
+    p_harvest = sub.add_parser(
+        "harvest-builds",
+        help="collect the talent builds and gear real players killed a boss with, "
+        "from Warcraft Logs (needs credentials)",
+    )
+    from . import harvest
+
+    harvest.add_arguments(p_harvest)
+    p_harvest.set_defaults(func=cmd_harvest_builds)
 
     p_talents = sub.add_parser(
         "talents",
