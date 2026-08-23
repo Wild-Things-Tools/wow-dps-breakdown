@@ -121,7 +121,11 @@ REASON_SPEC_MISMATCH = "spec_mismatch"
 REASON_SPEC_RULE = "spec_rule_violation"
 REASON_UNKNOWN_CLASS = "unknown_class"
 REASON_UNKNOWN_SPEC = "unknown_spec"
-REASON_WRONG_DIFFICULTY = "wrong_difficulty"
+
+# There is deliberately no rejection reason for a wrong difficulty. Mixing two is a
+# refusal for the whole run (`DifficultyMixed`), not a per-observation verdict, and a
+# constant sitting in this list would say the opposite -- that such a row is published
+# as one rejection among others.
 
 
 class DifficultyMixed(ValueError):
