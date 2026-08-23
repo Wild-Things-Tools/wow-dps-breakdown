@@ -4643,6 +4643,35 @@ exactly 34.** Not a decode failure — MID1's Fury profile reads 30 too, and a d
 would not reproduce across two tiers. It is simc's profile being four points light, and
 the repair does not spend them: spending a point is a search decision.
 
+### The base actor is never *read* and is always *built*
+
+**The defect that defeated the whole repair feature, found by a real run and invisible
+to every test.** `run_profilesets` compares profilesets to profilesets and reads nothing
+from the base actor -- which is correct and is documented at length elsewhere in this
+file. simc still **builds** that actor, from the profile file, before it generates a
+single profileset. For the four specs the repair exists for, the profile's own hash is
+exactly the one simc refuses:
+
+```
+Error: Initialization error: Player 'MID2_Demon_Hunter_Havoc_Fel-Scarred':
+Hash '...': Node 91024 is not a choice node but has index selection.
+```
+
+simc exits **81** and the entire invocation dies, taking every profileset in it. So all
+three repaired builds came back `search failed` on the first tier-wide calibration.
+
+The trap is in how it was verified. `simc PROFILE.simc talents=HASH` **overrides the
+profile**, so a repaired hash checked that way loads and simulates and proves nothing
+about the pipeline, which reaches simc by a different route. Any check of a talent hash
+has to go through the route the pipeline actually uses, or it is checking a different
+question.
+
+`buildsearch.simc_runner` takes `base_talents` and `BuildContext.base_talents` supplies
+it only when a repair happened; each profileset still sets its own `talents=` and so
+overrides it. Measured after the fix: **Arms Warrior, a spec with no number anywhere on
+the site, returns 157,770 DPS** on the anchored kit -- against 106,065 on its own
+289-item-level gear, which is the anchor doing exactly what it exists for.
+
 ### Anchor: one shape published, and it is the site's
 
 `GearAnchor.to_json()` is the **record**; `DpsGearAnchor` in `dps-data.models.ts` is the
