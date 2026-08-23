@@ -518,6 +518,40 @@ def test_the_halving_rounds_size_themselves_to_the_field_the_climb_hands_them():
     assert outcome.rounds[0].survived > buildsearch.FINAL_KEEP
 
 
+def test_a_build_with_one_choice_node_survives_the_replan():
+    """The narrowest build in MID2, and it broke a real run.
+
+    ``plan_rounds`` gives a field of two a *single* round at the final precision, so the
+    climb runs at 3000 -- and quadrupling that asks for a schedule starting above where
+    it ends. Both Frost Death Knight builds are exactly this shape (one flippable choice
+    node), so this is the first build a tier-wide calibration reaches, and it came back
+    ``iteration schedule must rise: start 12000, final 3000``.
+    """
+    nodes = {
+        12: [
+            trait(12, 120, node_type=2, name="Left"),
+            trait(12, 121, node_type=2, name="Right"),
+        ],
+        41: sample_nodes()[41],
+    }
+    build = Loadout(version=2, spec_id=SPEC, selections=(), spare_bits=0)
+    build = select_node(build, nodes, 12, choice_index=0)
+    build = select_node(build, nodes, 41, rank=1, choice_index=0)
+    seed = seed_from(key="s00", label="s", origin="simc", loadout=build, nodes=nodes)
+    outcome = search(
+        spec_id="x",
+        build_id="x",
+        seeds=[seed],
+        nodes=nodes,
+        runner=_runner(lambda c: 100.0 + len(c.lineage)),
+        breadth=8,
+    )
+    assert outcome.best is not None
+    assert outcome.rounds
+    assert outcome.rounds[-1].iterations == buildsearch.FINAL_ITERATIONS
+    assert not outcome.notes or all("stopped there" not in n for n in outcome.notes)
+
+
 def test_the_climb_refuses_a_step_the_tie_rule_calls_noise():
     """Without this the climb walks uphill on Monte Carlo noise and reports the walk."""
     nodes = sample_nodes()

@@ -645,7 +645,15 @@ def search(
             # halving of anything.
             alive = survivors
             if not rounds:
-                schedule = plan_rounds(len(alive), start=schedule[0].iterations * ITERATION_FACTOR)
+                # Clamped, because the climb may already have run at the final
+                # precision: ``plan_rounds`` gives a field of two a single round at
+                # ``FINAL_ITERATIONS``, and quadrupling that asks for a schedule that
+                # starts above where it ends. Measured on Frost Death Knight, which has
+                # exactly one flippable choice node and therefore a field of two --
+                # ``iteration schedule must rise: start 12000, final 3000``, on the
+                # first build of a real calibration.
+                nxt = min(schedule[0].iterations * ITERATION_FACTOR, FINAL_ITERATIONS)
+                schedule = plan_rounds(len(alive), start=nxt)
             elif len(schedule) > 1:
                 schedule = schedule[1:]
 
