@@ -614,8 +614,13 @@ def validate_loadout(
 
     The ``simc_refuses`` findings are transcriptions of ``parse_traits_hash``, in its
     own words and with its own ids, so a caller can both skip the simulation and
-    predict the line simc would have printed. The rest is game legality, which simc
-    does not check at all.
+    predict the line simc would have printed. The ``unencodable`` ones say there is no
+    hash to run at all, in this project's words because simc has no line for them. The
+    rest is game legality, which simc does not check.
+
+    Read ``findings`` and ``unchecked`` together: ``legal`` means nothing was *found*,
+    and a build whose hero sub-tree is indeterminate or whose unlock edges nobody could
+    look at has not been cleared, it has been partly examined.
     """
     findings: list[Finding] = []
     findings += _hash_findings(loadout, nodes)
