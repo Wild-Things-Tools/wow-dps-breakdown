@@ -374,6 +374,75 @@ def test_the_probe_says_how_many_rows_carried_no_gear_at_all():
     assert "includeCombatantInfo" in printed
 
 
+#: A kit shaped like a real one: a head with no socket and no enchant, a ring with
+#: both, a back with an enchant only. The keys are the ones the live payload used
+#: on 2026-08-23.
+HEAD_ENTRY = {"id": 250100, "itemLevel": 340, "slot": 0, "quality": 4, "name": "A Helm"}
+RING_ENTRY = {
+    "id": 250200,
+    "itemLevel": 340,
+    "slot": 10,
+    "gems": [{"id": 240906}],
+    "permanentEnchant": 7967,
+}
+BACK_ENTRY = {"id": 250300, "itemLevel": 340, "slot": 14, "permanentEnchant": 7331}
+
+
+def _kit(*entries):
+    return [dict(DPS_ROW, combatantInfo={"gear": list(entries)})]
+
+
+def test_the_first_gear_entry_cannot_settle_whether_the_adornments_are_sent():
+    """The correction that produced this function, stated as the test.
+
+    A kit's first entry is the head slot: no socket, and usually no enchant. So an
+    entry without `gems` or `permanentEnchant` is what you see whether Warcraft Logs
+    omits an empty key, never sends the key, or sends it under another name -- and a
+    conclusion drawn from that one entry is under-determined. Reading every entry is
+    what separates them, because a Mythic raider's rings and back carry both.
+    """
+    printed = "\n".join(harvest.describe_gear_keys(_kit(HEAD_ENTRY)))
+    assert "gems: 0 of 1 entries" in printed
+    assert "absent from the whole kit" in printed
+
+    # The same reader over a kit that has a ring and a back: the keys are there, and
+    # the slot each sits on is named.
+    printed = "\n".join(harvest.describe_gear_keys(_kit(HEAD_ENTRY, RING_ENTRY, BACK_ENTRY)))
+    assert "gems: 1 of 3 entries carry the key (1 non-empty), on slot(s) 10" in printed
+    assert "permanentEnchant: 2 of 3 entries carry the key (2 non-empty)" in printed
+    assert "slot(s) 10, 14" in printed
+
+
+def test_the_union_of_gear_keys_is_reported_not_one_entrys_keys():
+    """An intersection would hide exactly the keys that matter, since they sit on
+    two slots of sixteen. The union is what says whether they are ever sent."""
+    lines = harvest.describe_gear_keys(_kit(HEAD_ENTRY, RING_ENTRY, BACK_ENTRY))
+    union = next(line for line in lines if "union over" in line)
+    assert "'gems'" in union and "'permanentEnchant'" in union
+    assert "union over 3 entries of 1 dps row(s)" in union
+
+    beyond = next(line for line in lines if "beyond the first entry's eight" in line)
+    assert "'gems'" in beyond and "'permanentEnchant'" in beyond
+
+
+def test_a_kit_whose_keys_are_only_the_first_entrys_eight_says_so():
+    """The other outcome, and it has to be legible as a measured absence rather than
+    as nothing having been checked."""
+    lines = harvest.describe_gear_keys(_kit(HEAD_ENTRY, dict(HEAD_ENTRY, id=250101, slot=1)))
+    beyond = next(line for line in lines if "beyond the first entry's eight" in line)
+    assert beyond.endswith("none")
+
+
+def test_the_probe_reads_every_gear_entry_not_the_first():
+    printed = "\n".join(
+        harvest.probe_shapes(
+            {"data": {"dps": _kit(HEAD_ENTRY, RING_ENTRY, BACK_ENTRY), "healers": []}}, {}, None
+        )
+    )
+    assert "first gear entry keys:" in printed
+    assert "union over 3 entries" in printed
+
+
 def test_an_empty_slot_is_counted_rather_than_ignored():
     row = {"combatantInfo": {"gear": [{"id": 0}, GEAR_ENTRY, "nonsense"]}}
     pieces, skipped = harvest.gear_from_row(row)
