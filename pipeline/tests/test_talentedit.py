@@ -367,6 +367,95 @@ def test_a_choice_index_past_the_last_entry_is_reported():
     )
 
 
+def test_a_wrong_serialization_version_is_reported_in_simcs_own_words():
+    """The cheapest of simc's eleven refusals to predict, and the only one the encoder
+    can introduce by itself -- ``encode_loadout`` writes ``loadout.version`` verbatim,
+    so a loadout assembled with the wrong one produces a well-formed hash that simc
+    rejects on its very first check. It was not checked at all: ``validate_loadout``
+    returned ``legal`` with zero findings for a string starting 'BQQAAA'."""
+    from dataclasses import replace
+
+    nodes = sample_nodes()
+    build = replace(select_node(empty(), nodes, 10), version=1)
+    assert encode_loadout(build, nodes).startswith("BQQAAA")
+    report = validate_loadout(build, nodes)
+    assert not report.legal
+    assert [f.code for f in report.simc_refusals] == ["version"]
+    assert report.simc_refusals[0].message == "Invalid serialization version."
+
+
+def test_a_rank_the_hash_never_carries_is_not_reported_as_a_simc_refusal():
+    """Finding and refusal are different claims. With the partial bit clear the rank is
+    never written, so simc reads a legal build at full rank and refuses nothing --
+    reporting it as a refusal makes a search using ``simc_refusals`` to skip
+    simulations discard a build simc accepts. The over-large rank is still reported,
+    once, as ``rank_not_written``."""
+    from dataclasses import replace
+
+    nodes = {10: [trait(10, 100, max_ranks=3)]}
+    build = select_node(empty(), nodes, 10, rank=2)
+    over = replace(build, selections=(replace(build.selections[0], rank=64, partial=False),))
+    report = validate_loadout(over, nodes)
+    assert [f.code for f in report.findings] == ["rank_not_written"]
+    assert report.simc_refusals == ()
+
+    # Written, and then it does not fit: an encoder limit, in our own words.
+    written = replace(build, selections=(replace(build.selections[0], rank=64, partial=True),))
+    codes = [f.code for f in validate_loadout(written, nodes).findings]
+    assert "rank_unwritable" in codes
+    unwritable = next(
+        f for f in validate_loadout(written, nodes).findings if f.code == "rank_unwritable"
+    )
+    assert unwritable.unencodable and not unwritable.simc_refuses
+
+
+def test_a_finding_only_quotes_simc_when_simc_would_say_it():
+    """The honesty rule ``Finding``'s own docstring states. Three findings used to
+    carry ``simc_refuses`` with a message simc never emits -- a node of another class,
+    a rank past six bits, a choice index past two -- so a caller matching a real run's
+    stderr against the prediction would find nothing and could not tell a misprediction
+    from a simc version change. All three are encoder limits: there is no hash, so simc
+    is never asked."""
+    from dataclasses import replace
+
+    nodes = sample_nodes()
+    stray = replace(select_node(empty(), nodes, 10).selections[0], node_id=99)
+    elsewhere = validate_loadout(replace(empty(), selections=(stray,)), nodes).findings
+    assert [f.code for f in elsewhere] == ["unknown_node"]
+    assert elsewhere[0].unencodable and not elsewhere[0].simc_refuses
+    with pytest.raises(TalentEncodeError):
+        encode_loadout(replace(empty(), selections=(stray,)), nodes)
+
+    # An index that fits the node and not the field needs a node of five entries, which
+    # simc's table does not contain: measured over all thirteen classes of the PTR trait
+    # table on 69a46e1 (2026-08-23), nodes carry 1, 2 or 3 entries and never more, so
+    # against real data the bounds check always fires first. The guard is kept anyway,
+    # and it says our own words rather than simc's.
+    wide_nodes = {50: [trait(50, 500 + i, node_type=2) for i in range(5)]}
+    wide = replace(
+        select_node(empty(), wide_nodes, 50, choice_index=1).selections[0], choice_index=4
+    )
+    found = validate_loadout(replace(empty(), selections=(wide,)), wide_nodes).findings
+    assert [f.code for f in found] == ["choice_index_unwritable"]
+    assert found[0].unencodable and not found[0].simc_refuses
+
+
+def test_an_out_of_bounds_choice_index_is_both_refused_and_unwritable():
+    """The two flags are independent, not exclusive: simc refuses a string carrying
+    this index, in the wording asserted here, and this encoder refuses to write one."""
+    from dataclasses import replace
+
+    nodes = sample_nodes()
+    build = select_node(empty(), nodes, 12, choice_index=1)
+    bad = replace(build, selections=(replace(build.selections[0], choice_index=3),))
+    report = validate_loadout(bad, nodes)
+    finding = report.findings[0]
+    assert finding.code == "choice_index_out_of_bounds"
+    assert finding.message == "Index 3 for choice node 12 out of bounds."
+    assert finding.simc_refuses and finding.unencodable
+    assert report.unencodable == (finding,)
+
+
 def test_a_clean_build_carries_no_refusal():
     nodes = sample_nodes()
     build = select_node(select_node(empty(), nodes, 10, rank=2), nodes, 12, choice_index=0)

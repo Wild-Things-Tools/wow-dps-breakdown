@@ -19,13 +19,20 @@ load, and cheerfully simulate for ten minutes, a build that spends sixty points 
 tree, takes a capstone with nothing leading to it, and skips the gates entirely. The
 number that comes back is a real simulation of a character that cannot exist.
 
-So there are two separate questions, and this module keeps them apart:
+So there are three separate questions, and this module keeps them apart:
 
+* **Can it be written at all?** -- ``Finding.unencodable``. Some loadouts have no
+  hash: a rank that does not fit six bits, a choice index past the node's last entry,
+  a node of another class. ``encode_loadout`` raises on those, so simc never sees them
+  and no simc wording exists to predict -- the message is this project's own.
 * **Will simc take it?** -- ``Finding.simc_refuses``. A search should never spend a
   simulation on a hash simc is going to reject, and the rejection is decidable here,
   offline, in simc's own words.
 * **Is it a legal build?** -- everything else. This is where game legality lives,
   because nothing downstream will ever ask.
+
+The first two are not exclusive: an out-of-bounds choice index is both a string this
+encoder refuses to write and one simc refuses to read.
 
 What can and cannot be checked
 ------------------------------
@@ -71,6 +78,7 @@ from dataclasses import dataclass, replace
 
 from .talenttree import (
     CHOICE_BITS,
+    LOADOUT_VERSION,
     NODE_CHOICE,
     NODE_SELECTION,
     NODE_TIERED,
@@ -79,6 +87,7 @@ from .talenttree import (
     TREE_HERO,
     TREE_SELECTION,
     TREE_SPEC,
+    VERSION_BITS,
     Loadout,
     Selection,
     Trait,
@@ -461,10 +470,22 @@ def swap_hero_tree(
 class Finding:
     """One reason a build is not what it claims to be.
 
-    ``simc_refuses`` separates the two questions this module exists to keep apart: a
-    finding that carries it names a hash simc will not load at all, and its ``message``
-    is simc's own wording so it can be matched against a run's stderr. A finding
-    without it names a build simc will happily simulate and a player could not have.
+    Two flags, three claims, and conflating them shipped a real defect: three findings
+    carried ``simc_refuses`` with a message simc **never emits**, so a caller grepping a
+    real run's stderr for the predicted line would find nothing and could not tell its
+    own misprediction from a simc version change.
+
+    * ``simc_refuses`` -- simc will not load this hash, and ``message`` is simc's own
+      wording with its own punctuation, copied from the format literals in
+      ``parse_traits_hash``, so it can be matched against a run's stderr.
+    * ``unencodable`` -- ``encode_loadout`` will not write this loadout at all, so
+      there is no hash and simc is never asked. The wording is **ours**, deliberately,
+      because there is no simc line to quote.
+    * neither -- a build simc will happily simulate and a player could not have.
+
+    The two flags are independent rather than exclusive: a choice index past the node's
+    last entry is a string this encoder refuses to write *and* one simc refuses to read,
+    and both facts are worth carrying.
     """
 
     code: str
@@ -472,6 +493,7 @@ class Finding:
     node_id: int | None = None
     entry_id: int | None = None
     simc_refuses: bool = False
+    unencodable: bool = False
 
 
 @dataclass(frozen=True)
@@ -557,6 +579,11 @@ class Validation:
         """The subset a simulation would waste itself on."""
         return tuple(f for f in self.findings if f.simc_refuses)
 
+    @property
+    def unencodable(self) -> tuple[Finding, ...]:
+        """The subset that has no hash at all -- ``encode_loadout`` raises on these."""
+        return tuple(f for f in self.findings if f.unencodable)
+
 
 def validate_loadout(
     loadout: Loadout,
@@ -573,7 +600,7 @@ def validate_loadout(
     does not check at all.
     """
     findings: list[Finding] = []
-    findings += _simc_refusals(loadout, nodes)
+    findings += _hash_findings(loadout, nodes)
     findings += _gate_violations(loadout, nodes)
     if budget is not None:
         findings += _budget_violations(loadout, budget)
@@ -591,25 +618,50 @@ def validate_loadout(
     return Validation(findings=tuple(findings), unchecked=tuple(unchecked))
 
 
-def _simc_refusals(loadout: Loadout, nodes: dict[int, list[Trait]]) -> list[Finding]:
-    """simc's own refusals, in simc's own words -- ``parse_traits_hash``, 69a46e1.
+def _hash_findings(loadout: Loadout, nodes: dict[int, list[Trait]]) -> list[Finding]:
+    """Everything the *hash* decides: what simc refuses, and what has no hash at all.
 
-    Every one of these throws in simc: ``do_error`` raises ``std::invalid_argument``,
-    so even the message that says "ignoring" aborts the parse. The strings are copied
-    from the format literals, punctuation included, so they can be matched against a
-    real run's output.
+    simc's refusals are ``parse_traits_hash`` at 69a46e1, in simc's own words. Every one
+    of them throws -- ``do_error`` raises ``std::invalid_argument``, so even the message
+    that says "ignoring" aborts the parse -- and the strings are copied from the format
+    literals, punctuation included, so they can be matched against a real run's output.
+
+    The rest are this project's own words for a loadout ``encode_loadout`` will not
+    write. They are *not* dressed up as simc wordings: simc never sees these builds, so
+    quoting a line it would have printed is a claim nobody can check. See ``Finding``.
     """
     found: list[Finding] = []
+
+    # The cheapest of simc's eleven refusals to predict, and the only one this encoder
+    # can introduce by itself: `encode_loadout` writes `loadout.version` verbatim, so a
+    # loadout assembled with the wrong one produces a well-formed string simc refuses on
+    # its first check. Left unchecked, `validate_loadout` called such a build legal.
+    if loadout.version != LOADOUT_VERSION:
+        found.append(
+            Finding(
+                code="version",
+                message="Invalid serialization version.",
+                simc_refuses=True,
+                # Outside eight bits there is no string at all: the writer raises rather
+                # than dropping the high bits and producing a version 2 hash.
+                unencodable=bool(loadout.version >> VERSION_BITS),
+            )
+        )
+
     for selection in loadout.selections:
         node_id = selection.node_id
         entries = nodes.get(node_id)
         if not entries:
+            # Not a simc refusal, and simc has no wording for it: `generate_tree_nodes`
+            # hands the parser the class's own nodes and it reads one bit per node, so
+            # a node of another class is unreachable there. It is the *encoder* that
+            # refuses, in the same words, and there is then no hash to run.
             found.append(
                 Finding(
                     code="unknown_node",
-                    message=f"Node {node_id} is not a node of this class.",
+                    message=f"node {node_id} is not a node of this class",
                     node_id=node_id,
-                    simc_refuses=True,
+                    unencodable=True,
                 )
             )
             continue
@@ -700,6 +752,23 @@ def _simc_refusals(loadout: Loadout, nodes: dict[int, list[Trait]]) -> list[Find
                         simc_refuses=True,
                     )
                 )
+            # Inside the partial branch, because that is the only branch that writes a
+            # rank. Outside it this fired for a rank the hash never carries -- already
+            # reported as `rank_not_written` twelve lines above -- and reported it as a
+            # simc refusal, so a search using `simc_refusals` to skip simulations
+            # discarded a build simc accepts.
+            if selection.rank >> RANK_BITS:
+                found.append(
+                    Finding(
+                        code="rank_unwritable",
+                        message=(
+                            f"rank {selection.rank} for node {node_id} does not fit in the "
+                            f"{RANK_BITS} bits the format gives it"
+                        ),
+                        node_id=node_id,
+                        unencodable=True,
+                    )
+                )
 
         if selection.choice_index is not None:
             if first.node_type not in (NODE_CHOICE, NODE_SELECTION):
@@ -712,6 +781,8 @@ def _simc_refusals(loadout: Loadout, nodes: dict[int, list[Trait]]) -> list[Find
                     )
                 )
             elif selection.choice_index >= len(entries):
+                # Both at once, which is what the two flags are for: simc refuses a
+                # string carrying this index, and this encoder refuses to write one.
                 found.append(
                     Finding(
                         code="choice_index_out_of_bounds",
@@ -721,6 +792,7 @@ def _simc_refusals(loadout: Loadout, nodes: dict[int, list[Trait]]) -> list[Find
                         ),
                         node_id=node_id,
                         simc_refuses=True,
+                        unencodable=True,
                     )
                 )
             elif selection.choice_index >> CHOICE_BITS:
@@ -728,25 +800,13 @@ def _simc_refusals(loadout: Loadout, nodes: dict[int, list[Trait]]) -> list[Find
                     Finding(
                         code="choice_index_unwritable",
                         message=(
-                            f"Index {selection.choice_index} for choice node {node_id} does not "
-                            f"fit in {CHOICE_BITS} bits."
+                            f"choice index {selection.choice_index} for node {node_id} does "
+                            f"not fit in the {CHOICE_BITS} bits the format gives it"
                         ),
                         node_id=node_id,
-                        simc_refuses=True,
+                        unencodable=True,
                     )
                 )
-        if selection.rank >> RANK_BITS:
-            found.append(
-                Finding(
-                    code="rank_unwritable",
-                    message=(
-                        f"Rank {selection.rank} for node {node_id} does not fit in "
-                        f"{RANK_BITS} bits."
-                    ),
-                    node_id=node_id,
-                    simc_refuses=True,
-                )
-            )
     return found
 
 
