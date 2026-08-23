@@ -41,10 +41,10 @@ on:
         description: 'Distinct kills per encounter. Two report-level queries each, and each yields the whole raid'
         default: '10'
       encounter:
-        description: 'One encounter id, or empty for every boss the tier lists'
+        description: 'Space-separated encounter ids, or empty for every boss the tier lists'
         default: ''
       spec:
-        description: 'Narrow the file to one spec id, e.g. mage_arcane (costs the same either way)'
+        description: 'Space-separated spec ids, e.g. death_knight_frost. Targets the ranking sample at those specs as well as narrowing the file'
         default: ''
       point_ceiling:
         description: 'Abort once this fraction of the hourly point budget is spent'
@@ -114,20 +114,51 @@ jobs:
         env:
           WCL_CLIENT_ID: ${{ secrets.WCL_CLIENT_ID }}
           WCL_CLIENT_SECRET: ${{ secrets.WCL_CLIENT_SECRET }}
+          # Every input is bound here and read as "$VAR" below, never interpolated
+          # into the script. `${{ }}` is substituted into the file *before* bash sees
+          # it, so a dispatched value containing a quote and a semicolon becomes
+          # script -- and this job holds `contents: write` and WCL_CLIENT_SECRET.
+          # An environment variable is data to bash however it is spelled. Same
+          # arrangement as `fight-probe.yml`, deliberately not a second pattern.
+          MODE: ${{ inputs.mode || 'probe' }}
+          TIER: ${{ inputs.tier || 'MID2' }}
+          DIFFICULTY: ${{ inputs.difficulty || '5' }}
+          REPORTS: ${{ inputs.reports || '10' }}
+          ENCOUNTERS: ${{ inputs.encounter }}
+          SPECS: ${{ inputs.spec }}
+          POINT_CEILING: ${{ inputs.point_ceiling || '0.8' }}
         run: |
-          args=(
-            --tier "${{ inputs.tier }}"
-            --difficulty "${{ inputs.difficulty }}"
-            --reports "${{ inputs.reports }}"
-            --point-ceiling "${{ inputs.point_ceiling }}"
-            --simc-source simc-src
-            --ptr
-            --cache .work/harvest-cache
-          )
-          [ -n "${{ inputs.encounter }}" ] && args+=(--encounter "${{ inputs.encounter }}")
-          [ -n "${{ inputs.spec }}" ] && args+=(--spec "${{ inputs.spec }}")
-          [ "${{ inputs.mode }}" = "probe" ] && args+=(--probe)
-          wowdps harvest-builds "${args[@]}" | tee harvest-report.txt
+          args=()
+          # Space-separated, like fight-probe's `encounters`: both flags are
+          # repeatable on the command line and a single-valued form would quietly
+          # cap a dispatch at one boss.
+          for id in $ENCOUNTERS; do args+=(--encounter "$id"); done
+          for key in $SPECS; do args+=(--spec "$key"); done
+          if [ "$MODE" = "probe" ]; then args+=(--probe); fi
+          # `| tee` makes tee's status the pipeline's, so without pipefail a refusal
+          # or a crash would report as a clean run and the commit below would fire.
+          set -o pipefail
+          set +e
+          wowdps harvest-builds \
+            --tier "$TIER" \
+            --difficulty "$DIFFICULTY" \
+            --reports "$REPORTS" \
+            --point-ceiling "$POINT_CEILING" \
+            --simc-source simc-src \
+            --ptr \
+            --cache .work/harvest-cache \
+            "${args[@]}" | tee harvest-report.txt
+          status=$?
+          set -e
+          # 2 is the point ceiling stopping the pass. What was harvested is written
+          # and is worth keeping, so it is a warning, exactly as in `fight-probe.yml`.
+          # Anything else non-zero -- notably the one-difficulty refusal -- fails the
+          # step, which is what stops the Commit step below from running.
+          if [ "$status" = "2" ]; then
+            echo "::warning::the pass stopped early on the point ceiling; partial output uploaded"
+          elif [ "$status" != "0" ]; then
+            exit "$status"
+          fi
 
       # Whatever the run managed, even when the step above failed or the point ceiling
       # stopped it. `if: success()` is the default and it skipped the upload on exactly
@@ -144,9 +175,12 @@ jobs:
 
       - name: Summary
         if: always() && steps.creds.outputs.enabled == 'true'
+        env:
+          MODE: ${{ inputs.mode || 'probe' }}
+          TIER: ${{ inputs.tier || 'MID2' }}
         run: |
           {
-            echo "## Harvest (${{ inputs.mode }}) — ${{ inputs.tier }}"
+            echo "## Harvest ($MODE) — $TIER"
             echo
             echo '```'
             cat harvest-report.txt 2>/dev/null || echo "(no report — the run did not get that far)"
@@ -155,16 +189,18 @@ jobs:
 
       - name: Commit
         if: steps.creds.outputs.enabled == 'true' && inputs.mode == 'harvest' && inputs.commit
+        env:
+          TIER: ${{ inputs.tier || 'MID2' }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "web/public/data/${{ inputs.tier }}/harvested-builds.json"
+          git add "web/public/data/$TIER/harvested-builds.json"
           # `generatedAt` and `cost` are settled when nothing else moved, so a re-run
           # that harvested the same builds leaves nothing to commit and any diff here
           # means the builds themselves changed.
           if git diff --cached --quiet; then
             echo "::notice::no change to commit"
           else
-            git commit -m "data: harvest builds for ${{ inputs.tier }} $(date -u +%Y-%m-%d)"
+            git commit -m "data: harvest builds for $TIER $(date -u +%Y-%m-%d)"
             git push
           fi
