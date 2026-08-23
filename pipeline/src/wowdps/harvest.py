@@ -1021,6 +1021,12 @@ def harvest_encounter(
         # about the encounter, not a failure of the pass -- the same distinction the
         # fight probe draws with `searchExhausted`.
         "fewerKillsThanRequested": read < settings.reports,
+        # Carried on the encounter rather than returned alongside it, because it has
+        # to reach the document and a fourth return value is one the caller can
+        # forget to thread through. It was: the first version of this collected the
+        # ids and dropped them on the way out, so `coverage.itemsWithoutASlot` was
+        # permanently empty and a run whose gear half was unusable said nothing.
+        "itemsWithoutASlot": sorted(set(unresolved)),
     }
     return observations, summary, sorted(set(buckets))
 
@@ -1298,7 +1304,6 @@ def cmd_harvest_builds(args) -> int:
     plan = QueryPlan()
     observations: list[Observation] = []
     encounters: list[dict] = []
-    unresolved: list[int] = []
     transcript: list[str] = []
 
     with WarcraftLogsClient(credentials, cache_dir=cache_dir) as client:
@@ -1373,7 +1378,9 @@ def cmd_harvest_builds(args) -> int:
         encounters,
         ledger=ledger,
         max_sources=settings.max_sources,
-        unresolved_items=tuple(unresolved),
+        unresolved_items=tuple(
+            item for encounter in encounters for item in encounter.get("itemsWithoutASlot", ())
+        ),
         query_plan=plan.to_json(),
     )
     path = write_harvested_builds(Path(args.out) / args.tier, document)

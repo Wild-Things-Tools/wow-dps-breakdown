@@ -999,3 +999,27 @@ def test_missing_credentials_stop_the_run_rather_than_half_running_it(tmp_path, 
     monkeypatch.setattr(warcraftlogs.Credentials, "from_env", classmethod(refuse))
     assert harvest.cmd_harvest_builds(_args(tmp_path)) == 2
     assert not (tmp_path / "MID2").exists()
+
+
+def test_an_item_with_no_slot_reaches_the_published_document(tmp_path, monkeypatch, capsys):
+    """The gear half of a harvest is only usable for items simc can name a slot for,
+    so a run where many cannot is a run whose gear half is not usable -- and nothing
+    else in the file would say so.
+
+    This is a defect that was in the first version of the sweep: the ids were
+    collected inside `harvest_encounter` and dropped on the way out, so
+    `coverage.itemsWithoutASlot` was permanently empty and read as "all good".
+    """
+    client = _FullClient()
+    _install(monkeypatch, client)
+    # simc's table knows nothing about the item this player is wearing.
+    monkeypatch.setattr(harvest.equipment, "inventory_types", lambda _dir: {})
+
+    assert harvest.cmd_harvest_builds(_args(tmp_path)) == 0
+    capsys.readouterr()
+
+    document = json.loads((tmp_path / "MID2" / "harvested-builds.json").read_text())
+    assert document["coverage"]["itemsWithoutASlot"] == [250215]
+    assert document["source"]["encounters"][0]["itemsWithoutASlot"] == [250215]
+    # The build itself still lands: the talents are readable even when the gear is not.
+    assert document["specs"][0]["builds"][0]["sources"][0]["simcGear"] == []
