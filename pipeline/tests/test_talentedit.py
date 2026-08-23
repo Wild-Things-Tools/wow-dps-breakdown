@@ -515,6 +515,49 @@ def test_deriving_a_budget_from_nothing_is_refused():
 
 
 # --------------------------------------------------------------------------------
+# The hero sub-tree, when nothing names it
+# --------------------------------------------------------------------------------
+
+
+def test_hero_points_with_no_selection_node_are_reported_as_pooled():
+    """``Loadout.in_tree(TREE_HERO)`` keeps everything when no SELECTION node names a
+    tree, so two hero nodes from two sub-trees count as one two-point spend. The gate
+    check then measures a node's ``req_points`` against a spend pooled from two trees
+    and the budget check measures the same pooled figure against a one-tree ceiling.
+    Neither can say which tree it should have used -- and saying nothing let
+    "indeterminate" read as "legal", which is the distinction ``unchecked`` exists for."""
+    nodes = sample_nodes()
+    build = select_node(select_node(empty(), nodes, 30), nodes, 31)
+    assert build.sub_tree is None
+    assert build.points(TREE_HERO) == 2  # one point in each of two trees
+
+    report = validate_loadout(build, nodes)
+    assert report.findings == ()
+    note = next((n for n in report.unchecked if "hero tree" in n), None)
+    assert note is not None, report.unchecked
+    assert "no sub-tree selection node" in note
+    assert "[51, 52]" in note
+
+
+def test_two_selection_nodes_are_reported_as_pooled_too():
+    """The state a hero swap through a donor's selection node leaves behind: two nodes
+    naming two trees, so ``sub_tree`` is ``None`` for the opposite reason."""
+    nodes = sample_nodes()
+    build = select_node(swap_hero_tree(empty(), nodes, 51), nodes, 40, choice_index=0)
+    build = select_node(build, nodes, 30)
+    assert build.sub_tree is None
+    note = next(n for n in validate_loadout(build, nodes).unchecked if "hero tree" in n)
+    assert "2 sub-tree selection node(s)" in note
+
+
+def test_a_build_that_names_its_hero_tree_is_not_reported_as_indeterminate():
+    nodes = sample_nodes()
+    build = select_node(swap_hero_tree(empty(), nodes, 51), nodes, 30)
+    assert build.sub_tree == 51
+    assert not any("hero tree" in note for note in validate_loadout(build, nodes).unchecked)
+
+
+# --------------------------------------------------------------------------------
 # Unlock edges: absent, and said to be absent
 # --------------------------------------------------------------------------------
 

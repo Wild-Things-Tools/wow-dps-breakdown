@@ -606,6 +606,9 @@ def validate_loadout(
         findings += _budget_violations(loadout, budget)
 
     unchecked: list[str] = []
+    indeterminate = _indeterminate_hero_tree(loadout)
+    if indeterminate:
+        unchecked.append(indeterminate)
     if not edges:
         unchecked.append(
             f"unlock edges ({edges.source}); a node with nothing leading to it cannot be "
@@ -616,6 +619,41 @@ def validate_loadout(
     if budget is None:
         unchecked.append("point budgets (no budget supplied)")
     return Validation(findings=tuple(findings), unchecked=tuple(unchecked))
+
+
+def _indeterminate_hero_tree(loadout: Loadout) -> str | None:
+    """Whether the hero checks above were run on one hero tree or on several pooled.
+
+    ``Loadout.in_tree(TREE_HERO)`` narrows hero nodes to the sub-tree the SELECTION node
+    names, and falls back to *keeping everything* when there is no such node or when two
+    of them disagree. That fallback is right for the tree view -- it draws what it has --
+    and wrong for a gate or a budget: ``_gate_violations`` then compares a node's
+    ``req_points`` against a spend pooled from two trees, which is over-permissive, and
+    ``_budget_violations`` compares the same pooled figure against a ceiling one tree is
+    supposed to hold.
+
+    Neither check can say which tree it should have used, and neither is worth refusing
+    over -- a build carrying no selection node is a legitimate intermediate state of a
+    hero swap. What is not acceptable is saying nothing: "the sub-tree is indeterminate"
+    must not reach a reader as "no findings, so this is legal", which is the same
+    distinction ``unchecked`` exists for one row above.
+    """
+    hero = [s for s in loadout.selections if s.tree_index == TREE_HERO]
+    if not hero or loadout.sub_tree is not None:
+        return None
+    named = sorted({s.sub_tree for s in loadout.selections if s.tree_index == TREE_SELECTION})
+    trees = sorted({s.sub_tree for s in hero})
+    how = (
+        f"the build selects {len(named)} sub-tree selection node(s) naming {named}"
+        if named
+        else "the build selects no sub-tree selection node"
+    )
+    return (
+        f"which hero tree this build plays ({how}, so no single tree is named); the "
+        f"{sum(s.rank for s in hero)} hero point(s) in sub-tree(s) {trees} are therefore "
+        f"pooled, and the hero gate and budget checks above ran against that pooled total "
+        f"rather than against one tree's"
+    )
 
 
 def _hash_findings(loadout: Loadout, nodes: dict[int, list[Trait]]) -> list[Finding]:
