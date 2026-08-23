@@ -49,8 +49,9 @@ bonus ids would be making a claim about every slot from a measurement taken on t
 same reason as ``buffsweep.set_variants``: a kit that already wears the set would
 otherwise carry it into the anchor silently, and a kit that wears last season's would
 carry *that*. Neither is a property of the build being computed. The current tier's
-token is written to 1/1 and every other numbered tier of the same expansion is
-written to 0/0, so the anchor states the set state rather than inheriting it.
+token is written at the state derived below -- typically 1/1 -- and every other
+numbered tier of the same expansion is written to 0/0, so the anchor *states* the
+set state rather than inheriting it.
 
 **Nothing else is touched.** Race, consumables, level and the action list stay as the
 source profile has them. Those are not gear, and a module called "gear anchor" that
