@@ -396,7 +396,21 @@ class Loadout:
     version: int
     spec_id: int
     selections: tuple[Selection, ...]
-    spare_bits: int
+
+    #: How many bits of the **source string** were left over after its node stream, or
+    #: ``None`` for a loadout that did not come from one. It is a description of a
+    #: string, not of a build: "the stream terminates within six bits of the end" is one
+    #: of the four checks the decode rests on, and it is a check on the string that was
+    #: read. A mutation's own stream is a different length -- a character longer or
+    #: shorter -- so carrying the source's figure onto it would make that check describe
+    #: a string nobody wrote, and the MID1 Shadow Priest case would carry a *negative*
+    #: figure onto a build whose stream now fits. ``None`` says "no string was read"
+    #: rather than claiming a number.
+    #:
+    #: Not the same thing as ``framing``, which is carried onto a mutation on purpose:
+    #: that one is replayed by the encoder, which is what makes an unchanged build come
+    #: back byte-identical.
+    spare_bits: int | None
 
     #: How the source string was framed, when this loadout came from one. ``None`` for
     #: a loadout assembled in code, which then encodes to its own shortest form.

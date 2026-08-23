@@ -184,8 +184,16 @@ def _selection(
 
 
 def _with(loadout: Loadout, selections: Iterable[Selection]) -> Loadout:
+    """The mutated loadout, with the donor's *description of its own string* dropped.
+
+    ``framing`` is kept deliberately -- the encoder replays it, which is what makes an
+    unchanged build come back byte-identical. ``spare_bits`` is the opposite case: it
+    describes where the source string's node stream ended, the mutant's stream is a
+    different length, and nothing recomputes it. Carried verbatim it survived as a
+    number about a string nobody wrote, negative included.
+    """
     ordered = tuple(sorted(selections, key=lambda s: s.node_id))
-    return replace(loadout, selections=ordered)
+    return replace(loadout, selections=ordered, spare_bits=None)
 
 
 def selected(loadout: Loadout, node_id: int) -> Selection | None:

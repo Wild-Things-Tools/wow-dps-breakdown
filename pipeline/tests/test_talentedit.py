@@ -758,6 +758,23 @@ def test_a_mutation_that_changes_the_build_changes_the_hash():
     assert refused, "no edit was refused; the walk never reached an inexpressible one"
 
 
+def test_a_mutation_does_not_carry_the_donors_spare_bits():
+    """``spare_bits`` describes where the *source string's* node stream ended, and a
+    mutant's stream is a different length -- a character longer or shorter -- so the
+    figure would be about a string nobody wrote. The shortest-string case is not the
+    worrying one: one shipped MID1 profile decodes to a **negative** spare count (its
+    string stops before its node stream does), and carried verbatim that reached builds
+    whose stream fits comfortably. ``framing`` is carried on purpose, because the
+    encoder replays it."""
+    nodes = mutable_nodes()
+    build = granted_base(nodes)
+    assert build.spare_bits is not None and build.framing is not None
+
+    mutant = select_node(build, nodes, 10, rank=2)
+    assert mutant.spare_bits is None, "a mutated loadout has no source string to describe"
+    assert mutant.framing == build.framing, "the framing replay is deliberate and stays"
+
+
 def test_flipping_a_granted_choice_node_is_refused_rather_than_silently_dropped():
     """The single case behind the property test above, stated as an example.
 
