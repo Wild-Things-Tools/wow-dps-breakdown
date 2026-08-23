@@ -1,0 +1,2977 @@
+{
+ "schemaVersion": 1,
+ "generatedAt": "2026-08-23T22:01:44+00:00",
+ "tier": "MID2",
+ "note": "Builds this project computed, beside SimulationCraft's own where simc ships one. simc's build is never replaced here -- both are published and the site decides what to present, so a computed build has to win by more than the two runs' combined sampling error to be shown as the answer. Every comparison is profileset against profileset on one anchored kit, so the difference is the talents.",
+ "settings": {
+  "iterations": 3000,
+  "deterministic": true
+ },
+ "coverage": {
+  "specs": 42,
+  "specsAvailable": 42
+ },
+ "specs": [
+  {
+   "id": "death_knight_frost_default",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Frost Death Knight (Deathbringer)",
+    "talentHash": "CsPAAAAAAAAAAAAAAAAAAAAAAMAGAADYYYMiBjhZGDmZmZmZmZmBAAAAAAAAgxYgBAsMMhMWwMjhBGAGmBAwA",
+    "heroTalent": "Deathbringer",
+    "dps": 217042.1,
+    "dpsError": 0.0584,
+    "iterations": 3000,
+    "priorityDps": 217042.1
+   },
+   "best": {
+    "origin": "simc",
+    "label": "Frost Death Knight (Deathbringer)",
+    "talentHash": "CsPAAAAAAAAAAAAAAAAAAAAAAMAGAADYYYMiBjhZGDmZmZmZmZmBAAAAAAAAgxYgBAsMMhMWwMjhBGAGmBAwA",
+    "heroTalent": "Deathbringer",
+    "dps": 217042.1,
+    "dpsError": 0.0584,
+    "iterations": 3000,
+    "priorityDps": 217042.1,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 3000 iterations, then 1 halving round(s) from 3000 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "4 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 4,
+     "startedFrom": null
+    }
+   },
+   "runnerUp": null,
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Baleful Grave-Knight's Crucible",
+    "profile": "death_knight_frost_default",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 16 slot(s) from 344 (15 stated none)",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (6 slot(s))"
+    ],
+    "tierSet": "4-piece Baleful Grave-Knight's Crucible"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 3000 iterations."
+   ]
+  },
+  {
+   "id": "death_knight_frost_rider_of_the_apocalypse",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Frost Death Knight (Rider of the Apocalypse)",
+    "talentHash": "CsPAAAAAAAAAAAAAAAAAAAAAAMDwAAYADDjRMYMMzYwMmZmZmZmBAAAAAAAAAAzihBGYohG2wMjhBGAGAmZAG",
+    "heroTalent": "Rider of the Apocalypse",
+    "dps": 213329.4,
+    "dpsError": 0.0661,
+    "iterations": 3000,
+    "priorityDps": 213329.4
+   },
+   "best": {
+    "origin": "simc",
+    "label": "Frost Death Knight (Rider of the Apocalypse)",
+    "talentHash": "CsPAAAAAAAAAAAAAAAAAAAAAAMDwAAYADDjRMYMMzYwMmZmZmZmBAAAAAAAAAAzihBGYohG2wMjhBGAGAmZAG",
+    "heroTalent": "Rider of the Apocalypse",
+    "dps": 213329.4,
+    "dpsError": 0.0661,
+    "iterations": 3000,
+    "priorityDps": 213329.4,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 3000 iterations, then 1 halving round(s) from 3000 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "4 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 4,
+     "startedFrom": null
+    }
+   },
+   "runnerUp": null,
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Baleful Grave-Knight's Crucible",
+    "profile": "death_knight_frost_rider_of_the_apocalypse",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 16 slot(s) from 344 (15 stated none)",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (6 slot(s))"
+    ],
+    "tierSet": "4-piece Baleful Grave-Knight's Crucible"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 3000 iterations."
+   ]
+  },
+  {
+   "id": "death_knight_unholy_rider_of_the_apocalypse",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Unholy Death Knight (Rider of the Apocalypse)",
+    "talentHash": "CwPAAAAAAAAAAAAAAAAAAAAAAAwMjZMDDz2MzMTzmZmZMjBAAAAAAAgZGmZAwyMmZ2mZGjZAbmFDDZgZjhGLAYGAGzMjZAmZmxYA",
+    "heroTalent": "Rider of the Apocalypse",
+    "dps": 218842.7,
+    "dpsError": 0.0604,
+    "iterations": 3000,
+    "priorityDps": 218842.7
+   },
+   "best": {
+    "origin": "search",
+    "label": "Unholy Death Knight (Rider of the Apocalypse) + choice node 76176 -> entry index 1 + choice node 95060 -> entry index 0",
+    "talentHash": "CwPAAAAAAAAAAAAAAAAAAAAAAAwMjZMDDz2MzMTzmZmZMjBAAAAAAAgZGmZAw2MmZ2mZGjZAbmFDDZgZhhGLAYGAGzMjZAmZmxYA",
+    "heroTalent": "Rider of the Apocalypse",
+    "dps": 218829.5,
+    "dpsError": 0.0599,
+    "iterations": 3000,
+    "priorityDps": 218829.5,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "22 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 22,
+     "startedFrom": "s00_v004"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Unholy Death Knight (Rider of the Apocalypse) + choice node 76176 -> entry index 1 + choice node 76064 -> entry index 0",
+    "talentHash": "CwPAAAAAAAAAAAAAAAAAAAAAAAwMjZMDDzyMzMTzmZmZMjBAAAAAAAgZGmZAw2MmZ2mZGjZAbmFDDZgZjhGLAYGAGzMjZAmZmxYA",
+    "heroTalent": "Rider of the Apocalypse",
+    "dps": 218829.5,
+    "dpsError": 0.0599,
+    "iterations": 3000,
+    "priorityDps": 218829.5,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "22 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 22,
+     "startedFrom": "s00_v004"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Baleful Grave-Knight's Crucible",
+    "profile": "death_knight_unholy_rider_of_the_apocalypse",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 15 slot(s) from 344 (14 stated none)",
+     "3 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (8 slot(s))",
+     "crafted_stats (2 slot(s))"
+    ],
+    "tierSet": "4-piece Baleful Grave-Knight's Crucible"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.08% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 1 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "death_knight_unholy_san_layn",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Unholy Death Knight (San'layn)",
+    "talentHash": "CwPAAAAAAAAAAAAAAAAAAAAAAAwMjZMDDz2MzMTzmZmZMjBAAAAAAAgZGmZAw2MmZ2mZGjZMwAzYRjlFAbTsBgZAYMzMmBzMYGjB",
+    "heroTalent": "San'layn",
+    "dps": 215298.9,
+    "dpsError": 0.0565,
+    "iterations": 3000,
+    "priorityDps": 215298.9
+   },
+   "best": {
+    "origin": "search",
+    "label": "Unholy Death Knight (San'layn) + choice node 95055 -> entry index 1 + choice node 95055 -> entry index 0",
+    "talentHash": "CwPAAAAAAAAAAAAAAAAAAAAAAAwMjZMDDz2MzMTzmZmZMjBAAAAAAAgZGmZAw2MmZ2mZGjZMwAzYRjlFAbTsBgZAYMzMmBzMYGjB",
+    "heroTalent": "San'layn",
+    "dps": 215298.9,
+    "dpsError": 0.0565,
+    "iterations": 3000,
+    "priorityDps": 215298.9,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "26 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 26,
+     "startedFrom": "s00_v004"
+    }
+   },
+   "runnerUp": null,
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Baleful Grave-Knight's Crucible",
+    "profile": "death_knight_unholy_san_layn",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 15 slot(s) from 344 (14 stated none)",
+     "3 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (8 slot(s))",
+     "crafted_stats (2 slot(s))"
+    ],
+    "tierSet": "4-piece Baleful Grave-Knight's Crucible"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations."
+   ]
+  },
+  {
+   "id": "demon_hunter_devourer_annihilator",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Devourer Demon Hunter (Annihilator)",
+    "talentHash": "CgcBAAAAAAAAAAAAAAAAAAAAAAA2MmZmZmZmBzMAAAAAAALzYAzAAAAAAAAwMGMmZmZMzMzYmFzYsotNmZmZ2abmZGAjZAIwMzgxMA",
+    "heroTalent": "Annihilator",
+    "dps": 189267.7,
+    "dpsError": 0.06,
+    "iterations": 3000,
+    "priorityDps": 189267.7
+   },
+   "best": {
+    "origin": "search",
+    "label": "Devourer Demon Hunter (Annihilator) + choice node 108726 -> entry index 0 + choice node 108727 -> entry index 0",
+    "talentHash": "CgcBAAAAAAAAAAAAAAAAAAAAAAA2MmZmZmZmBzMAAAAAAALzYAzAAAAAAAAwMGMmZmZMzMzYmFzYsolFmZmZ2abmZGAjZAIwMzgxMA",
+    "heroTalent": "Annihilator",
+    "dps": 192583.4,
+    "dpsError": 0.0579,
+    "iterations": 3000,
+    "priorityDps": 192583.4,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "20 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 20,
+     "startedFrom": "s00_v003"
+    }
+   },
+   "runnerUp": null,
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Abyssal Doomhound's Pursuit",
+    "profile": "demon_hunter_devourer_annihilator",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 16 slot(s) from 285-289 (3 stated none)",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (7 slot(s))",
+     "crafted_stats (2 slot(s))"
+    ],
+    "tierSet": "4-piece Abyssal Doomhound's Pursuit"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations."
+   ]
+  },
+  {
+   "id": "demon_hunter_devourer_void_scarred",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Devourer Demon Hunter (Void-Scarred)",
+    "talentHash": "CgcBAAAAAAAAAAAAAAAAAAAAAAA2MmZmZmZmxwMAAAAAAAegxsNYGAAAAAAAAmxMMmZmZMzMzMzsNzYsplNAEwAMjZmZZmZa2mZbmZMMA",
+    "heroTalent": "Void-Scarred",
+    "dps": 216078.3,
+    "dpsError": 0.066,
+    "iterations": 3000,
+    "priorityDps": 216078.3
+   },
+   "best": {
+    "origin": "search",
+    "label": "Devourer Demon Hunter (Void-Scarred) + choice node 108726 -> entry index 1 + choice node 108727 -> entry index 0",
+    "talentHash": "CgcBAAAAAAAAAAAAAAAAAAAAAAA2MmZmZmZmxwMAAAAAAAegxsNYGAAAAAAAAmxMMmZmZMzMzMzsNzYsptFAEwAMjZmZZmZa2mZbmZMMA",
+    "heroTalent": "Void-Scarred",
+    "dps": 221403.4,
+    "dpsError": 0.0646,
+    "iterations": 3000,
+    "priorityDps": 221403.4,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 3-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "49 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 49,
+     "startedFrom": "s00_v003"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Devourer Demon Hunter (Void-Scarred) + choice node 108726 -> entry index 1 + choice node 108727 -> entry index 0 + rank 91000 -> 90996",
+    "talentHash": "CgcBAAAAAAAAAAAAAAAAAAAAAAA2MmZmZmZmxwMAAAAAAAmxDsNYGAAAAAAAAmxMMmZmZMzMzMzsNzYsptFAEwAMjZmZZmZa2mZbmZMMA",
+    "heroTalent": "Void-Scarred",
+    "dps": 221403.4,
+    "dpsError": 0.0646,
+    "iterations": 3000,
+    "priorityDps": 221403.4,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 3-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "49 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 49,
+     "startedFrom": "c00_008"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Abyssal Doomhound's Pursuit",
+    "profile": "demon_hunter_devourer_void_scarred",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 16 slot(s) from 285-289 (2 stated none)",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (7 slot(s))",
+     "crafted_stats (2 slot(s))"
+    ],
+    "tierSet": "4-piece Abyssal Doomhound's Pursuit"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.09% tie band. Both are published for that reason.",
+    "The climb stopped after 1 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 4 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse.",
+    "At 3000 iterations 1 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "demon_hunter_havoc_aldrachi_reaver",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": false,
+   "simc": null,
+   "best": null,
+   "runnerUp": null,
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Abyssal Doomhound's Pursuit",
+    "profile": "demon_hunter_havoc_aldrachi_reaver",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 16 slot(s) from 720-723 (1 stated none)",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (7 slot(s))",
+     "enchant_id (8 slot(s))"
+    ],
+    "tierSet": "4-piece Abyssal Doomhound's Pursuit"
+   },
+   "caveats": [
+    "No search ran for this build: the decode did not survive the soundness screen, so a repair would be a valid hash for a build nobody wrote: the node stream overran the string by 77 bit(s); every build in the corpus ends between 0 and 9 bits from the end, so this reader is out of step with whoever wrote the hash"
+   ]
+  },
+  {
+   "id": "demon_hunter_havoc_fel_scarred",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Havoc Demon Hunter (Fel-Scarred)",
+    "talentHash": "CEkAAAAAAAAAAAAAAAAAAAAAAYgZmZMjZmZmhJjZGAAAAAAwsZMbzMmZmtZmx2MzDMDjxMWGYbWMjhZTTjZmxwGAAAAAAAAzMYAAAAYA",
+    "heroTalent": "Fel-Scarred",
+    "dps": 175994.1,
+    "dpsError": 0.0485,
+    "iterations": 3000,
+    "priorityDps": 175994.1
+   },
+   "best": {
+    "origin": "search",
+    "label": "Havoc Demon Hunter (Fel-Scarred) + choice node 91021 -> entry index 0 + choice node 91001 -> entry index 0",
+    "talentHash": "CEkAAAAAAAAAAAAAAAAAAAAAAYgZmZMjZmZmhJjZGAAAAAAwsZMLzMmZmtZmxyMzDMDjxMWGYbWMjhZTTjZmxwGAAAAAAAAzMYAAAAYA",
+    "heroTalent": "Fel-Scarred",
+    "dps": 179857.6,
+    "dpsError": 0.0491,
+    "iterations": 3000,
+    "priorityDps": 179857.6,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "34 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 34,
+     "startedFrom": "s00_v003"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Havoc Demon Hunter (Fel-Scarred) + choice node 91021 -> entry index 0 + choice node 94913 -> entry index 0",
+    "talentHash": "CEkAAAAAAAAAAAAAAAAAAAAAAYgZmZMjZmZmhJjZGAAAAAAwsZMbzMmZmtZmxyMzDMDjxMWGYbWMjhZRTjZmxwGAAAAAAAAzMYAAAAYA",
+    "heroTalent": "Fel-Scarred",
+    "dps": 179857.6,
+    "dpsError": 0.0491,
+    "iterations": 3000,
+    "priorityDps": 179857.6,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "34 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 34,
+     "startedFrom": "s00_v003"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Abyssal Doomhound's Pursuit",
+    "profile": "demon_hunter_havoc_fel_scarred",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 16 slot(s) (16 stated none)",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (7 slot(s))",
+     "crafted_stats (2 slot(s))"
+    ],
+    "tierSet": "4-piece Abyssal Doomhound's Pursuit"
+   },
+   "caveats": [
+    "Repaired talent hash, not an optimised build: simc refuses the hash its own profile ships, and this is that hash with the correction the current trait table forces -- nothing was chosen.",
+    "The screen that cleared this decode can only reject: passing it means the read was not caught out, not that it was proven faithful to the tree the hash was exported from.",
+    "'Chaotic Transformation' (node 91024) is written with choice index 1 and now holds 1 entry/entries, so the index cannot be written at all; the node keeps its first entry, which is what simc's reader gives a node carrying no index",
+    "The repaired build leaves 2 talent point(s) unspent (2 in the class tree) against the ceiling this tier's shipped profiles set. Spending them is a search decision and this repair makes none.",
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.07% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 3 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "druid_balance_default",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Balance Druid (Elune's Chosen)",
+    "talentHash": "CYGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWoMbNjxMDwsYmZmZhBjZZmlZYmZswyMLzMGzshhBYstMzgxsNCMBAAAYxMzMzgNDjxAAwMDMA",
+    "heroTalent": "Elune's Chosen",
+    "dps": 193734.7,
+    "dpsError": 0.0665,
+    "iterations": 3000,
+    "priorityDps": 193734.7
+   },
+   "best": {
+    "origin": "search",
+    "label": "Balance Druid (Elune's Chosen) + choice node 94597 -> entry index 0",
+    "talentHash": "CYGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWoMbNjxMDwsYmZmZhBjZZmlZYmZswyMLzMGzshhBYstMzgxsMCMBAAAYxMzMzgNDjxAAwMDMA",
+    "heroTalent": "Elune's Chosen",
+    "dps": 193734.7,
+    "dpsError": 0.0665,
+    "iterations": 3000,
+    "priorityDps": 193734.7,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "38 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 38,
+     "startedFrom": "s00"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Balance Druid (Elune's Chosen) + choice node 82198 -> entry index 1",
+    "talentHash": "CYGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2oMbNjxMDwsYmZmZhBjZZmlZYmZswyMLzMGzshhBYstMzgxsNCMBAAAYxMzMzgNDjxAAwMDMA",
+    "heroTalent": "Elune's Chosen",
+    "dps": 193734.7,
+    "dpsError": 0.0665,
+    "iterations": 3000,
+    "priorityDps": 193734.7,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "38 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 38,
+     "startedFrom": "s00"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Bark of the Enigmatic Dreamwatcher",
+    "profile": "druid_balance_default",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 16 slot(s) from 285-289 (1 stated none)",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (8 slot(s))",
+     "crafted_stats (2 slot(s))"
+    ],
+    "tierSet": "4-piece Bark of the Enigmatic Dreamwatcher"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.09% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 3 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "druid_feral_wildstalker",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Feral Druid (Wildstalker)",
+    "talentHash": "CcGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAjZwMzMzMmtFPwyMbzYGzMDAAAALBzGMmZUzYWYmZGjZmZAAAAAAAGAAAABAz2MLNbzssBmZAWMDGAAzMAYA",
+    "heroTalent": "Wildstalker",
+    "dps": 201329.3,
+    "dpsError": 0.0556,
+    "iterations": 3000,
+    "priorityDps": 201329.3
+   },
+   "best": {
+    "origin": "search",
+    "label": "Feral Druid (Wildstalker) + rank 82121 -> 82110 + choice node 82198 -> entry index 1",
+    "talentHash": "CcGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAjZwMzMzMmtFzyMbzYGPwMDAAAAbBzGMmZUzYWYmZGjZmZAAAAAAAGAAAABAz2MLNbzssBmZAWMDGAAzMAYA",
+    "heroTalent": "Wildstalker",
+    "dps": 204723.1,
+    "dpsError": 0.0561,
+    "iterations": 3000,
+    "priorityDps": 204723.1,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "42 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 42,
+     "startedFrom": "s00_v000"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Feral Druid (Wildstalker) + rank 82121 -> 82110 + choice node 82229 -> entry index 1",
+    "talentHash": "CcGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAjZwMzMzMmtFzyMbzYGPwMDAAAALBzGMmZUzY2YmZGjZmZAAAAAAAGAAAABAz2MLNbzssBmZAWMDGAAzMAYA",
+    "heroTalent": "Wildstalker",
+    "dps": 204723.1,
+    "dpsError": 0.0561,
+    "iterations": 3000,
+    "priorityDps": 204723.1,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "42 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 42,
+     "startedFrom": "s00_v000"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Bark of the Enigmatic Dreamwatcher",
+    "profile": "druid_feral_wildstalker",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 15 slot(s) from 285-289",
+     "3 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (8 slot(s))",
+     "crafted_stats (1 slot(s))"
+    ],
+    "tierSet": "4-piece Bark of the Enigmatic Dreamwatcher"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.08% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 3 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "evoker_devastation_flameshaper",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Devastation Evoker (Flameshaper)",
+    "talentHash": "CsbBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgZmZwMDGMgBjZamZmJjxyMzMzwMzMzAmxMzYmZbmZwMwMmB2ALgZYCsFsMMAmZGG",
+    "heroTalent": "Flameshaper",
+    "dps": 206316.1,
+    "dpsError": 0.0612,
+    "iterations": 3000,
+    "priorityDps": 206316.1
+   },
+   "best": {
+    "origin": "search",
+    "label": "Devastation Evoker (Flameshaper) + choice node 94956 -> entry index 0",
+    "talentHash": "CsbBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgZmZwMDGMgBjZamZmJjxyMzMzwMzMzAmxMzYmZbmZwMwMmB2ALgZYCsEsMMAmZGG",
+    "heroTalent": "Flameshaper",
+    "dps": 206741.5,
+    "dpsError": 0.0612,
+    "iterations": 3000,
+    "priorityDps": 206741.5,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "17 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 17,
+     "startedFrom": "s00"
+    }
+   },
+   "runnerUp": null,
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Echo of Calamity",
+    "profile": "evoker_devastation_flameshaper",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 16 slot(s) from 289 (2 stated none)",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "27 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (8 slot(s))",
+     "crafted_stats (2 slot(s))"
+    ],
+    "tierSet": "4-piece Echo of Calamity"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations."
+   ]
+  },
+  {
+   "id": "evoker_devastation_sc",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Devastation Evoker (Scalecommander)",
+    "talentHash": "CsbBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAzMDMDzgBmZGjZaYmpZMWmxMzMz8AzMzAmxMGzMLzMDMwYwCsMGN2GQmBBbYGMzghB",
+    "heroTalent": "Scalecommander",
+    "dps": 201326.1,
+    "dpsError": 0.0524,
+    "iterations": 3000,
+    "priorityDps": 201326.1
+   },
+   "best": {
+    "origin": "search",
+    "label": "Devastation Evoker (Scalecommander) + choice node 94928 -> entry index 1 + rank 93281 -> 93329 + choice node 94943 -> entry index 0",
+    "talentHash": "CsbBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAzMDMPAzgBmZGjZaYmpZMWmxMzMzMzMzAmxMGzMLzMDMwYwGsMGNWGQmBBbYGMzghB",
+    "heroTalent": "Scalecommander",
+    "dps": 206429.1,
+    "dpsError": 0.0512,
+    "iterations": 3000,
+    "priorityDps": 206429.1,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 3-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "33 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 33,
+     "startedFrom": "c00_005"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Devastation Evoker (Scalecommander) + choice node 94928 -> entry index 1 + rank 93281 -> 93329",
+    "talentHash": "CsbBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAzMDMPAzgBmZGjZaYmpZMWmxMzMzMzMzAmxMGzMLzMDMwYwGsMGN2GQmBBbYGMzghB",
+    "heroTalent": "Scalecommander",
+    "dps": 206125.7,
+    "dpsError": 0.0518,
+    "iterations": 3000,
+    "priorityDps": 206125.7,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 3-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "33 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 33,
+     "startedFrom": "s00_v002"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Echo of Calamity",
+    "profile": "evoker_devastation_sc",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 16 slot(s) from 289 (2 stated none)",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "27 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (8 slot(s))",
+     "crafted_stats (2 slot(s))"
+    ],
+    "tierSet": "4-piece Echo of Calamity"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The climb stopped after 1 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 1 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "hunter_beast_mastery_default",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Beast Mastery Hunter (Pack Leader)",
+    "talentHash": "C0PAAAAAAAAAAAAAAAAAAAAAAAMmxwCsAzwwMsBAgZYMzyMDzYmxMMzYMzwMjZMziZmxMmBjpZAAAAAzAAAwYmZAmZjxGMLgtBgBA",
+    "heroTalent": "Pack Leader",
+    "dps": 221204.4,
+    "dpsError": 0.0416,
+    "iterations": 3000,
+    "priorityDps": 221204.4
+   },
+   "best": {
+    "origin": "search",
+    "label": "Beast Mastery Hunter (Pack Leader) + choice node 102393 -> entry index 1",
+    "talentHash": "C0PAAAAAAAAAAAAAAAAAAAAAAAMmxwCsAzwwMsBAgZYMzyMDzYmxMMzYMzwMjZMzmZmxMmBjpZAAAAAzAAAwYmZAmZjxGMLgtBgB",
+    "heroTalent": "Pack Leader",
+    "dps": 221204.4,
+    "dpsError": 0.0416,
+    "iterations": 3000,
+    "priorityDps": 221204.4,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "25 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 25,
+     "startedFrom": "s00"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Beast Mastery Hunter (Pack Leader) + choice node 110152 -> entry index 0",
+    "talentHash": "C0PAAAAAAAAAAAAAAAAAAAAAAAMmxwCsAzwwMsBAgZYMzyMDzYmxMMzYMzwMjZMziZmxMmBjpZAAAAAzAAAwYmZAmZjxCMLgtBgB",
+    "heroTalent": "Pack Leader",
+    "dps": 221204.4,
+    "dpsError": 0.0416,
+    "iterations": 3000,
+    "priorityDps": 221204.4,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "25 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 25,
+     "startedFrom": "s00"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Skulking Viper's Ambush",
+    "profile": "hunter_beast_mastery_default",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 9 slot(s) from 331-344",
+     "6 slot(s) already at 334",
+     "3 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (6 slot(s))",
+     "crafted_stats (2 slot(s))"
+    ],
+    "tierSet": "4-piece Skulking Viper's Ambush"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.06% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 2 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "hunter_marksmanship_default",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Marksmanship Hunter (Sentinel)",
+    "talentHash": "C4PAAAAAAAAAAAAAAAAAAAAAAwCMwMGzYZAjZwGAAAAAAAAYGzYmFzYmZMDGTzYwYbZmZmZmZmZWYmlBzAAAGzMjBwM22gBYjZ2mxAA",
+    "heroTalent": "Sentinel",
+    "dps": 223958.5,
+    "dpsError": 0.0723,
+    "iterations": 3000,
+    "priorityDps": 223958.5
+   },
+   "best": {
+    "origin": "search",
+    "label": "Marksmanship Hunter (Sentinel) + choice node 103986 -> entry index 1",
+    "talentHash": "C4PAAAAAAAAAAAAAAAAAAAAAAwCMwMGzYZAjZwGAAAAAAAAYGzYmFzYmZMDGTzYwYbZmZmZmZmZ2YmlBzAAAGzMjBwM22gBYjZ2mxA",
+    "heroTalent": "Sentinel",
+    "dps": 223958.5,
+    "dpsError": 0.0723,
+    "iterations": 3000,
+    "priorityDps": 223958.5,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "32 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 32,
+     "startedFrom": "s00"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Marksmanship Hunter (Sentinel) + choice node 110164 -> entry index 0",
+    "talentHash": "C4PAAAAAAAAAAAAAAAAAAAAAAwCMwMGzYZAjZwGAAAAAAAAYGzYmFzYmZMDGTzYwYbZmZmZmZmZWYmlBzAAAGzMjBwM22gBYhZ2mxA",
+    "heroTalent": "Sentinel",
+    "dps": 223958.5,
+    "dpsError": 0.0723,
+    "iterations": 3000,
+    "priorityDps": 223958.5,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "32 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 32,
+     "startedFrom": "s00"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Skulking Viper's Ambush",
+    "profile": "hunter_marksmanship_default",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 10 slot(s) from 331-344",
+     "5 slot(s) already at 334",
+     "3 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (6 slot(s))",
+     "crafted_stats (2 slot(s))"
+    ],
+    "tierSet": "4-piece Skulking Viper's Ambush"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.10% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 3 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "hunter_survival_default",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Survival Hunter (Sentinel)",
+    "talentHash": "C8PAAAAAAAAAAAAAAAAAAAAAAMWgBmxoxyAYmgtZMzMGzyAAAAAAwMmxMLmxYGzgx0MAAAADAmxyyMzsYMzMjZmBAzYZDGDjNDAA",
+    "heroTalent": "Sentinel",
+    "dps": 208144.7,
+    "dpsError": 0.0568,
+    "iterations": 3000,
+    "priorityDps": 208144.7
+   },
+   "best": {
+    "origin": "search",
+    "label": "Survival Hunter (Sentinel) + choice node 109307 -> entry index 1 + choice node 102393 -> entry index 1",
+    "talentHash": "C8PAAAAAAAAAAAAAAAAAAAAAAMWgBmxoxyAYmgtZMzMGzyAAAAAAwMmxMbmxYGzgx0MAAAADAmx2yMzsYMzMjZmBAzYZDGDjNDA",
+    "heroTalent": "Sentinel",
+    "dps": 208565.1,
+    "dpsError": 0.0586,
+    "iterations": 3000,
+    "priorityDps": 208565.1,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "30 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 30,
+     "startedFrom": "s00_v005"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Survival Hunter (Sentinel) + choice node 109307 -> entry index 1 + choice node 110152 -> entry index 0",
+    "talentHash": "C8PAAAAAAAAAAAAAAAAAAAAAAMWgBmxoxyAYmgtZMzMGzyAAAAAAwMmxMLmxYGzgx0MAAAADAmx2yMzsYMzMjZmBAzYZBGDjNDA",
+    "heroTalent": "Sentinel",
+    "dps": 208565.1,
+    "dpsError": 0.0586,
+    "iterations": 3000,
+    "priorityDps": 208565.1,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "30 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 30,
+     "startedFrom": "s00_v005"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Skulking Viper's Ambush",
+    "profile": "hunter_survival_default",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 10 slot(s) from 331-344",
+     "5 slot(s) already at 334",
+     "3 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (8 slot(s))",
+     "crafted_stats (2 slot(s))"
+    ],
+    "tierSet": "4-piece Skulking Viper's Ambush"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.08% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 3 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "mage_arcane_spellslinger",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Arcane Mage (Spellslinger)",
+    "talentHash": "C4DAAAAAAAAAAAAAAAAAAAAAAYGGLzMzswMDamZGAAAGAAEwMzMLLzMxCAAwMzMjNLzMzsMjxYmZwCzYmZGAgBAAYmZBAMDAGmZG",
+    "heroTalent": "Spellslinger",
+    "dps": 193087.1,
+    "dpsError": 0.0867,
+    "iterations": 3000,
+    "priorityDps": 193087.1
+   },
+   "best": {
+    "origin": "search",
+    "label": "Arcane Mage (Spellslinger) + choice node 102460 -> entry index 0 + choice node 94660 -> entry index 1",
+    "talentHash": "C4DAAAAAAAAAAAAAAAAAAAAAAYGGLzMzswMDamZGAAAGAAEwMzMLbzMxCAAwMzMjFLzMzsMjxYmZwCzYmZGAgBAAYmZBAMDAGmZG",
+    "heroTalent": "Spellslinger",
+    "dps": 193144.9,
+    "dpsError": 0.0864,
+    "iterations": 3000,
+    "priorityDps": 193144.9,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "28 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 28,
+     "startedFrom": "s00_v005"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Arcane Mage (Spellslinger) + choice node 102460 -> entry index 0 + choice node 94659 -> entry index 1",
+    "talentHash": "C4DAAAAAAAAAAAAAAAAAAAAAAYGGLzMzswMDamZGAAAGAAEwMzMbLzMxCAAwMzMjFLzMzsMjxYmZwCzYmZGAgBAAYmZBAMDAGmZG",
+    "heroTalent": "Spellslinger",
+    "dps": 193035.0,
+    "dpsError": 0.0862,
+    "iterations": 3000,
+    "priorityDps": 193035.0,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "28 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 28,
+     "startedFrom": "s00_v005"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Primal Leywarden's Attire",
+    "profile": "mage_arcane_spellslinger",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 8 slot(s) from 331-344",
+     "8 slot(s) already at 334",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (8 slot(s))",
+     "crafted_stats (2 slot(s))"
+    ],
+    "tierSet": "4-piece Primal Leywarden's Attire"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.06% against a 0.12% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 3 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "mage_arcane_sunfury",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Arcane Mage (Sunfury)",
+    "talentHash": "C4DAAAAAAAAAAAAAAAAAAAAAAYGGLzMzswMDamZGAAAGAwMz0sssMDAEbAAAzMzM2sMzMzyMGjZmBLMjZmZAAGAAgBYmBMDAGmZG",
+    "heroTalent": "Sunfury",
+    "dps": 209070.5,
+    "dpsError": 0.0885,
+    "iterations": 3000,
+    "priorityDps": 209070.5
+   },
+   "best": {
+    "origin": "search",
+    "label": "Arcane Mage (Sunfury) + choice node 102460 -> entry index 0 + choice node 108654 -> entry index 1",
+    "talentHash": "C4DAAAAAAAAAAAAAAAAAAAAAAYGGLzMzswMDamZGAAAGAwMz0sssMDAEbAAAzMzMWsMzMzyMGjZmBbMjZmZAAGAAgBYmBMDAGmZG",
+    "heroTalent": "Sunfury",
+    "dps": 209144.2,
+    "dpsError": 0.0929,
+    "iterations": 3000,
+    "priorityDps": 209144.2,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "30 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 30,
+     "startedFrom": "s00_v007"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Arcane Mage (Sunfury) + choice node 102460 -> entry index 0 + choice node 94649 -> entry index 1",
+    "talentHash": "C4DAAAAAAAAAAAAAAAAAAAAAAYGGLzMzswMDamZGAAAGAwMz0stsMDAEbAAAzMzMWsMzMzyMGjZmBLMjZmZAAGAAgBYmBMDAGmZG",
+    "heroTalent": "Sunfury",
+    "dps": 209144.2,
+    "dpsError": 0.0929,
+    "iterations": 3000,
+    "priorityDps": 209144.2,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "30 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 30,
+     "startedFrom": "s00_v007"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Primal Leywarden's Attire",
+    "profile": "mage_arcane_sunfury",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 8 slot(s) from 331-344",
+     "8 slot(s) already at 334",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (8 slot(s))",
+     "crafted_stats (2 slot(s))"
+    ],
+    "tierSet": "4-piece Primal Leywarden's Attire"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.13% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 3 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse.",
+    "At 3000 iterations 1 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "mage_fire_frostfire",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Fire Mage (Frostfire)",
+    "talentHash": "C8DAAAAAAAAAAAAAAAAAAAAAAYGGLzMzswMzIzMGAAAmZZGzMLzCEAAwiZG2mZmZGLAAAAAYxMzMDAAMzwMzMzMzsAMzAyYMGMYMA",
+    "heroTalent": "Frostfire",
+    "dps": 201643.5,
+    "dpsError": 0.0577,
+    "iterations": 3000,
+    "priorityDps": 201643.5
+   },
+   "best": {
+    "origin": "search",
+    "label": "Fire Mage (Frostfire) + choice node 109409 -> entry index 1",
+    "talentHash": "C8DAAAAAAAAAAAAAAAAAAAAAAYGGLzMzswMzIzMGAAAmZZGzMLzCEAAwiZG2mZmZGLAAAAAYxMzMDAAMzwMzMzMzsBMzAyYMGMYMA",
+    "heroTalent": "Frostfire",
+    "dps": 201643.5,
+    "dpsError": 0.0577,
+    "iterations": 3000,
+    "priorityDps": 201643.5,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "31 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 31,
+     "startedFrom": "s00"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Fire Mage (Frostfire) + choice node 94633 -> entry index 1",
+    "talentHash": "C8DAAAAAAAAAAAAAAAAAAAAAAYGGLzMzswMzIzMGAAAmZbGzMLzCEAAwiZG2mZmZGLAAAAAYxMzMDAAMzwMzMzMzsAMzAyYMGMYMA",
+    "heroTalent": "Frostfire",
+    "dps": 201643.5,
+    "dpsError": 0.0577,
+    "iterations": 3000,
+    "priorityDps": 201643.5,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "31 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 31,
+     "startedFrom": "s00"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Primal Leywarden's Attire",
+    "profile": "mage_fire_frostfire",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 7 slot(s) from 331-344",
+     "9 slot(s) already at 334",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (8 slot(s))",
+     "crafted_stats (2 slot(s))"
+    ],
+    "tierSet": "4-piece Primal Leywarden's Attire"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.08% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 4 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse.",
+    "At 3000 iterations 1 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "mage_fire_sunfury",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Fire Mage (Sunfury)",
+    "talentHash": "C8DAAAAAAAAAAAAAAAAAAAAAAYGGLzMzswMzIzMGAAAGAwMz0sstMDAwmZmx2MzMzYBAAAAALmZmZAAgZMmZmZMzsMAMzQGjBMDjB",
+    "heroTalent": "Sunfury",
+    "dps": 208996.7,
+    "dpsError": 0.0621,
+    "iterations": 3000,
+    "priorityDps": 208996.7
+   },
+   "best": {
+    "origin": "search",
+    "label": "Fire Mage (Sunfury) + choice node 109409 -> entry index 1",
+    "talentHash": "C8DAAAAAAAAAAAAAAAAAAAAAAYGGLzMzswMzIzMGAAAGAwMz0sstMDAwmZmx2MzMzYBAAAAALmZmZAAgZMmZmZMzsNAMzQGjBMDjB",
+    "heroTalent": "Sunfury",
+    "dps": 208996.7,
+    "dpsError": 0.0621,
+    "iterations": 3000,
+    "priorityDps": 208996.7,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "31 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 31,
+     "startedFrom": "s00"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Fire Mage (Sunfury) + choice node 94649 -> entry index 1",
+    "talentHash": "C8DAAAAAAAAAAAAAAAAAAAAAAYGGLzMzswMzIzMGAAAGAwMz0sttMDAwmZmx2MzMzYBAAAAALmZmZAAgZMmZmZMzsMAMzQGjBMDjB",
+    "heroTalent": "Sunfury",
+    "dps": 208996.7,
+    "dpsError": 0.0621,
+    "iterations": 3000,
+    "priorityDps": 208996.7,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "31 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 31,
+     "startedFrom": "s00"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Primal Leywarden's Attire",
+    "profile": "mage_fire_sunfury",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 7 slot(s) from 331-344",
+     "9 slot(s) already at 334",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (8 slot(s))",
+     "crafted_stats (2 slot(s))"
+    ],
+    "tierSet": "4-piece Primal Leywarden's Attire"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.09% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 4 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse.",
+    "At 3000 iterations 1 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "mage_frost_frostfire",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Frost Mage (Frostfire)",
+    "talentHash": "CAEAAAAAAAAAAAAAAAAAAAAAAYGGLzMzsMmZmYmZGjZMziZmZmxMzsMTzMLzCAAAaBAAAAAA2AYbZMzMDsNjxM2WAAAAzMYGYADMMA",
+    "heroTalent": "Frostfire",
+    "dps": 191309.3,
+    "dpsError": 0.0669,
+    "iterations": 3000,
+    "priorityDps": 191309.3
+   },
+   "best": {
+    "origin": "search",
+    "label": "Frost Mage (Frostfire) + choice node 108653 -> entry index 0",
+    "talentHash": "CAEAAAAAAAAAAAAAAAAAAAAAAYGGLzMzsMmZmYmZGjZMziZmZmxMzsMTzMLzCAAAaBAAAAAA2AYZZMzMDsNjxM2WAAAAzMYGYADMMA",
+    "heroTalent": "Frostfire",
+    "dps": 191309.3,
+    "dpsError": 0.0669,
+    "iterations": 3000,
+    "priorityDps": 191309.3,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "37 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 37,
+     "startedFrom": "s00"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Frost Mage (Frostfire) + choice node 62094 -> entry index 1",
+    "talentHash": "CAEAAAAAAAAAAAAAAAAAAAAAAYGGbzMzsMmZmYmZGjZMziZmZmxMzsMTzMLzCAAAaBAAAAAA2AYbZMzMDsNjxM2WAAAAzMYGYADMMA",
+    "heroTalent": "Frostfire",
+    "dps": 191309.3,
+    "dpsError": 0.0669,
+    "iterations": 3000,
+    "priorityDps": 191309.3,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "37 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 37,
+     "startedFrom": "s00"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Primal Leywarden's Attire",
+    "profile": "mage_frost_frostfire",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 16 slot(s) (16 stated none)",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (5 slot(s))",
+     "crafted_stats (2 slot(s))"
+    ],
+    "tierSet": "4-piece Primal Leywarden's Attire"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.09% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 4 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse.",
+    "At 3000 iterations 1 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "mage_frost_spellslinger",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Frost Mage (Spellslinger)",
+    "talentHash": "CAEAAAAAAAAAAAAAAAAAAAAAAYGGLzMzsMmZmYmZGjZMziZmZmZMDEAAYmZmllZm2AAAAAAgNA2WGzMzAbzYmZYBAAgZ2AmBGwADD",
+    "heroTalent": "Spellslinger",
+    "dps": 199257.7,
+    "dpsError": 0.0537,
+    "iterations": 3000,
+    "priorityDps": 199257.7
+   },
+   "best": {
+    "origin": "search",
+    "label": "Frost Mage (Spellslinger) + choice node 62094 -> entry index 1",
+    "talentHash": "CAEAAAAAAAAAAAAAAAAAAAAAAYGGbzMzsMmZmYmZGjZMziZmZmZMDEAAYmZmllZm2AAAAAAgNA2WGzMzAbzYmZYBAAgZ2AmBGwADD",
+    "heroTalent": "Spellslinger",
+    "dps": 199257.7,
+    "dpsError": 0.0537,
+    "iterations": 3000,
+    "priorityDps": 199257.7,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "35 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 35,
+     "startedFrom": "s00"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Frost Mage (Spellslinger) + choice node 108864 -> entry index 1",
+    "talentHash": "CAEAAAAAAAAAAAAAAAAAAAAAAYGGLzMzsMmZmYmZGjZMziZmZmZMDEAAYmZmllZm2AAAAAAgNA2WGzMzAbzYmZYDAAgZ2AmBGwADD",
+    "heroTalent": "Spellslinger",
+    "dps": 199257.7,
+    "dpsError": 0.0537,
+    "iterations": 3000,
+    "priorityDps": 199257.7,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "35 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 35,
+     "startedFrom": "s00"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Primal Leywarden's Attire",
+    "profile": "mage_frost_spellslinger",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 16 slot(s) (16 stated none)",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (5 slot(s))",
+     "crafted_stats (2 slot(s))"
+    ],
+    "tierSet": "4-piece Primal Leywarden's Attire"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.08% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 4 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse.",
+    "At 3000 iterations 1 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "monk_windwalker_conduit_of_the_celestials",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Windwalker Monk (Conduit of the Celestials)",
+    "talentHash": "C0QAAAAAAAAAAAAAAAAAAAAAAMzYM2GGsMzMbzAAAAAAAAAAAAsMMCzYbYAzYYmZmhZZYGmlZCAYzMbjhZmZGAALmZZWGTQAAYAMDALjBMzMLG",
+    "heroTalent": "Conduit of the Celestials",
+    "dps": 185158.9,
+    "dpsError": 0.065,
+    "iterations": 3000,
+    "priorityDps": 185158.9
+   },
+   "best": {
+    "origin": "search",
+    "label": "Windwalker Monk (Conduit of the Celestials) + choice node 101203 -> entry index 0 + choice node 101136 -> entry index 1",
+    "talentHash": "C0QAAAAAAAAAAAAAAAAAAAAAAMzYM2GGsMzMbzAAAAAAAAAAAAsNMCzYbYAzYYmZmhZZYGmlZCAYxMbjhZmZGAALmZZWGTQAAYAMDALjBMzMLG",
+    "heroTalent": "Conduit of the Celestials",
+    "dps": 187814.8,
+    "dpsError": 0.06,
+    "iterations": 3000,
+    "priorityDps": 187814.8,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "38 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 38,
+     "startedFrom": "s00_v003"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Windwalker Monk (Conduit of the Celestials) + choice node 101203 -> entry index 0 + choice node 101183 -> entry index 1",
+    "talentHash": "C0QAAAAAAAAAAAAAAAAAAAAAAMzYM2GGsMzMbzAAAAAAAAAAAAsMMCzYbYAzYYmZmhZZYGmtZCAYxMbjhZmZGAALmZZWGTQAAYAMDALjBMzMLG",
+    "heroTalent": "Conduit of the Celestials",
+    "dps": 187814.8,
+    "dpsError": 0.06,
+    "iterations": 3000,
+    "priorityDps": 187814.8,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "38 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 38,
+     "startedFrom": "s00_v003"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Guile of the Monkey King",
+    "profile": "monk_windwalker_conduit_of_the_celestials",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 16 slot(s) (16 stated none)",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (9 slot(s))",
+     "crafted_stats (1 slot(s))"
+    ],
+    "tierSet": "4-piece Guile of the Monkey King"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.08% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 2 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse.",
+    "At 3000 iterations 1 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "monk_windwalker_default",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Windwalker Monk (Shado-Pan)",
+    "talentHash": "C0QAAAAAAAAAAAAAAAAAAAAAAMzMD2mxgtZGbzAAAAAAAAAAAAsMMCzYbYAzYYmZmhZZYGmlZCAYxMbjhZmZGAAbAoZZWamZmFAMwMDAsMGwAG",
+    "heroTalent": "Shado-Pan",
+    "dps": 195875.4,
+    "dpsError": 0.0586,
+    "iterations": 3000,
+    "priorityDps": 195875.4
+   },
+   "best": {
+    "origin": "search",
+    "label": "Windwalker Monk (Shado-Pan) + choice node 101052 -> entry index 0 + choice node 101136 -> entry index 1",
+    "talentHash": "C0QAAAAAAAAAAAAAAAAAAAAAAMzMD2mxglZGbzAAAAAAAAAAAAsNMCzYbYAzYYmZmhZZYGmlZCAYxMbjhZmZGAAbAoZZWamZmFAMwMDAsMGwAG",
+    "heroTalent": "Shado-Pan",
+    "dps": 196214.9,
+    "dpsError": 0.0594,
+    "iterations": 3000,
+    "priorityDps": 196214.9,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "39 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 39,
+     "startedFrom": "s00_v010"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Windwalker Monk (Shado-Pan) + choice node 101052 -> entry index 0 + choice node 101183 -> entry index 1",
+    "talentHash": "C0QAAAAAAAAAAAAAAAAAAAAAAMzMD2mxglZGbzAAAAAAAAAAAAsMMCzYbYAzYYmZmhZZYGmtZCAYxMbjhZmZGAAbAoZZWamZmFAMwMDAsMGwAG",
+    "heroTalent": "Shado-Pan",
+    "dps": 196214.9,
+    "dpsError": 0.0594,
+    "iterations": 3000,
+    "priorityDps": 196214.9,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "39 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 39,
+     "startedFrom": "s00_v010"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Guile of the Monkey King",
+    "profile": "monk_windwalker_default",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 15 slot(s) (15 stated none)",
+     "3 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (8 slot(s))",
+     "crafted_stats (1 slot(s))"
+    ],
+    "tierSet": "4-piece Guile of the Monkey King"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.08% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 3 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse.",
+    "At 3000 iterations 1 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "paladin_retribution_default",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": false,
+   "simc": null,
+   "best": null,
+   "runnerUp": null,
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Radiance of the Consecrated Flame",
+    "profile": "paladin_retribution_default",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 15 slot(s) from 285-289",
+     "3 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (5 slot(s))",
+     "crafted_stats (2 slot(s))"
+    ],
+    "tierSet": "4-piece Radiance of the Consecrated Flame"
+   },
+   "caveats": [
+    "No search ran for this build: the decode did not survive the soundness screen, so a repair would be a valid hash for a build nobody wrote: the node stream stopped 10 bits short of the end, past the 0-9 every build in the corpus spans; the build reads 37 points in the specialisation tree, above the 34 in MID2's shipped profiles; the build reads 16 points in the hero tree, above the 14 in MID2's shipped profiles"
+   ]
+  },
+  {
+   "id": "paladin_retribution_herald_of_the_sun",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": false,
+   "simc": null,
+   "best": null,
+   "runnerUp": null,
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Radiance of the Consecrated Flame",
+    "profile": "paladin_retribution_herald_of_the_sun",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 15 slot(s) from 285-289",
+     "3 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (5 slot(s))",
+     "crafted_stats (2 slot(s))"
+    ],
+    "tierSet": "4-piece Radiance of the Consecrated Flame"
+   },
+   "caveats": [
+    "No search ran for this build: the decode did not survive the soundness screen, so a repair would be a valid hash for a build nobody wrote: the node stream stopped 10 bits short of the end, past the 0-9 every build in the corpus spans; the build reads 37 points in the specialisation tree, above the 34 in MID2's shipped profiles; the build reads 15 points in the hero tree, above the 14 in MID2's shipped profiles"
+   ]
+  },
+  {
+   "id": "priest_shadow_archon",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Shadow Priest (Archon)",
+    "talentHash": "CIQAAAAAAAAAAAAAAAAAAAAAAMMDDAAAAAAAAAAAAmZxMmZbmxMz2MGzw2MzYmZGbIzYxMNAzAMzmZ0sZAIjxCAmZAjZmZMbMz2yAMDGA",
+    "heroTalent": "Archon",
+    "dps": 209141.2,
+    "dpsError": 0.0383,
+    "iterations": 3000,
+    "priorityDps": 209141.2
+   },
+   "best": {
+    "origin": "search",
+    "label": "Shadow Priest (Archon) + choice node 109017 -> entry index 0 + choice node 82708 -> entry index 1",
+    "talentHash": "CIQAAAAAAAAAAAAAAAAAAAAAAMMDDAAAAAAAAAAAAmZxMmZbmxMz2MGzw2MzYmZGbIzYzMNAzAMzmZ0sZAIjxCAmZAjZmZMLMz2yAMDGA",
+    "heroTalent": "Archon",
+    "dps": 209151.7,
+    "dpsError": 0.0386,
+    "iterations": 3000,
+    "priorityDps": 209151.7,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "32 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 32,
+     "startedFrom": "s00_v002"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Shadow Priest (Archon) + choice node 109017 -> entry index 0 + choice node 94686 -> entry index 0",
+    "talentHash": "CIQAAAAAAAAAAAAAAAAAAAAAAMMDDAAAAAAAAAAAAmZxMmZbmxMz2MGzw2MzYmZGbIzYxMNAzAMzmZ0sYAIjxCAmZAjZmZMLMz2yAMDGA",
+    "heroTalent": "Archon",
+    "dps": 209151.7,
+    "dpsError": 0.0386,
+    "iterations": 3000,
+    "priorityDps": 209151.7,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "32 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 32,
+     "startedFrom": "s00_v002"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Cosmic Penitent's Raiment",
+    "profile": "priest_shadow_archon",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 8 slot(s) from 331-344",
+     "8 slot(s) already at 334",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (7 slot(s))"
+    ],
+    "tierSet": "4-piece Cosmic Penitent's Raiment"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.05% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 3 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "priest_shadow_voidweaver",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Shadow Priest (Voidweaver)",
+    "talentHash": "CIQAAAAAAAAAAAAAAAAAAAAAAMMjZGAAAAAAAAAAAAMLmxMbzMMz2MzYG2mZGzMzYDZGLmpBYmZGAIAz2stEMbMAwgxMzMmtxMYmBzgB",
+    "heroTalent": "Voidweaver",
+    "dps": 201533.8,
+    "dpsError": 0.0342,
+    "iterations": 3000,
+    "priorityDps": 201533.8
+   },
+   "best": {
+    "origin": "search",
+    "label": "Shadow Priest (Voidweaver) + choice node 109017 -> entry index 0 + choice node 94696 -> entry index 1",
+    "talentHash": "CIQAAAAAAAAAAAAAAAAAAAAAAMMjZGAAAAAAAAAAAAMLmxMbzMMz2MzYG2mZGzMzYDZGLmpBYmZGAIAz2stFMbMAwgxMzMmlxMYmBzgB",
+    "heroTalent": "Voidweaver",
+    "dps": 201651.2,
+    "dpsError": 0.0348,
+    "iterations": 3000,
+    "priorityDps": 201651.2,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "30 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 30,
+     "startedFrom": "s00_v004"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Shadow Priest (Voidweaver) + choice node 109017 -> entry index 0 + choice node 82695 -> entry index 0",
+    "talentHash": "CIQAAAAAAAAAAAAAAAAAAAAAAMMjZGAAAAAAAAAAAAMLmxMbzMMz2MzYG2mZGzMzYBZGLmpBYmZGAIAz2stEMbMAwgxMzMmlxMYmBzgB",
+    "heroTalent": "Voidweaver",
+    "dps": 201651.2,
+    "dpsError": 0.0348,
+    "iterations": 3000,
+    "priorityDps": 201651.2,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "30 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 30,
+     "startedFrom": "s00_v004"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Cosmic Penitent's Raiment",
+    "profile": "priest_shadow_voidweaver",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 8 slot(s) from 331-344",
+     "8 slot(s) already at 334",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (7 slot(s))"
+    ],
+    "tierSet": "4-piece Cosmic Penitent's Raiment"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.05% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 3 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "rogue_assassination_deathstalker",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Assassination Rogue (Deathstalker)",
+    "talentHash": "CMQAAAAAAAAAAAAAAAAAAAAAAYmlxsNDGAAAAAYWGsNDAAAAAIbzMzMzMjxyMzMbzsMzMzYGzYMmZMMAbmlBGwSwywEYYxgZGgxYA",
+    "heroTalent": "Deathstalker",
+    "dps": 227754.2,
+    "dpsError": 0.0506,
+    "iterations": 3000,
+    "priorityDps": 227754.2
+   },
+   "best": {
+    "origin": "search",
+    "label": "Assassination Rogue (Deathstalker) + choice node 90763 -> entry index 0 + choice node 95123 -> entry index 1",
+    "talentHash": "CMQAAAAAAAAAAAAAAAAAAAAAAYmlxsNDGAAAAAYWGsNDAAAAAIbzMzMzMjxyMzMLzsMzMzYGzYMmZMMAbmlBGwWwywEYYxgZGgxYA",
+    "heroTalent": "Deathstalker",
+    "dps": 227772.9,
+    "dpsError": 0.0502,
+    "iterations": 3000,
+    "priorityDps": 227772.9,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "36 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 36,
+     "startedFrom": "s00_v000"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Assassination Rogue (Deathstalker) + choice node 90763 -> entry index 0 + choice node 90686 -> entry index 1",
+    "talentHash": "CMQAAAAAAAAAAAAAAAAAAAAAAYmlxsNDGAAAAAY2GsNDAAAAAIbzMzMzMjxyMzMLzsMzMzYGzYMmZMMAbmlBGwSwywEYYxgZGgxYA",
+    "heroTalent": "Deathstalker",
+    "dps": 227772.9,
+    "dpsError": 0.0502,
+    "iterations": 3000,
+    "priorityDps": 227772.9,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "36 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 36,
+     "startedFrom": "s00_v000"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Chosen Bloodslayer's Hexweave",
+    "profile": "rogue_assassination_deathstalker",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 16 slot(s) (16 stated none)",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (6 slot(s))",
+     "crafted_stats (2 slot(s))"
+    ],
+    "tierSet": "4-piece Chosen Bloodslayer's Hexweave"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.07% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 3 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse.",
+    "At 3000 iterations 1 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "rogue_assassination_fatebound",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Assassination Rogue (Fatebound)",
+    "talentHash": "CMQAAAAAAAAAAAAAAAAAAAAAAYmlxsNDGAAAAAYWGsNDAAAAAIbzMzMzMjxyMzMbzsMzMzYGzYMmZMMAGYBmxoxsBy2A2MAYmZMGA",
+    "heroTalent": "Fatebound",
+    "dps": 223148.5,
+    "dpsError": 0.0572,
+    "iterations": 3000,
+    "priorityDps": 223148.5
+   },
+   "best": {
+    "origin": "search",
+    "label": "Assassination Rogue (Fatebound) + choice node 95114 -> entry index 1",
+    "talentHash": "CMQAAAAAAAAAAAAAAAAAAAAAAYmlxsNDGAAAAAYWGsNDAAAAAIbzMzMzMjxyMzMbzsMzMzYGzYMmZMMAGYDmxoxsBy2A2MAYmZMGA",
+    "heroTalent": "Fatebound",
+    "dps": 223159.7,
+    "dpsError": 0.0586,
+    "iterations": 3000,
+    "priorityDps": 223159.7,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "32 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 32,
+     "startedFrom": "s00"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Assassination Rogue (Fatebound) + choice node 90763 -> entry index 0",
+    "talentHash": "CMQAAAAAAAAAAAAAAAAAAAAAAYmlxsNDGAAAAAYWGsNDAAAAAIbzMzMzMjxyMzMLzsMzMzYGzYMmZMMAGYBmxoxsBy2A2MAYmZMGA",
+    "heroTalent": "Fatebound",
+    "dps": 222970.1,
+    "dpsError": 0.0575,
+    "iterations": 3000,
+    "priorityDps": 222970.1,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "32 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 32,
+     "startedFrom": "s00"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Chosen Bloodslayer's Hexweave",
+    "profile": "rogue_assassination_fatebound",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 16 slot(s) (16 stated none)",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (6 slot(s))",
+     "crafted_stats (2 slot(s))"
+    ],
+    "tierSet": "4-piece Chosen Bloodslayer's Hexweave"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations."
+   ]
+  },
+  {
+   "id": "rogue_outlaw_default",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Outlaw Rogue (Trickster)",
+    "talentHash": "CQQAAAAAAAAAAAAAAAAAAAAAAAgx2MMzMmZmtZmZmZMmF4BmZbaZw2MAAAAAALLzMzwMzMziZmZbAAAAYmBAjZxwQGYWYhWYjBYmBDMA",
+    "heroTalent": "Trickster",
+    "dps": 244778.4,
+    "dpsError": 0.105,
+    "iterations": 3000,
+    "priorityDps": 244778.4
+   },
+   "best": {
+    "origin": "search",
+    "label": "Outlaw Rogue (Trickster) + choice node 90742 -> entry index 1",
+    "talentHash": "CQQAAAAAAAAAAAAAAAAAAAAAAAgx2MMzMmZmtZmZmZMmF4BmZbaZw2MAAAAAALbzMzwMzMziZmZbAAAAYmBAjZxwQGYWYhWYjBYmBDMA",
+    "heroTalent": "Trickster",
+    "dps": 244778.4,
+    "dpsError": 0.105,
+    "iterations": 3000,
+    "priorityDps": 244778.4,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "49 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 49,
+     "startedFrom": "s00"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Outlaw Rogue (Trickster) + choice node 90686 -> entry index 1",
+    "talentHash": "CQQAAAAAAAAAAAAAAAAAAAAAAAgx2MMzMmZmtZmZmZMmF4BmZbabw2MAAAAAALLzMzwMzMziZmZbAAAAYmBAjZxwQGYWYhWYjBYmBDMA",
+    "heroTalent": "Trickster",
+    "dps": 244778.4,
+    "dpsError": 0.105,
+    "iterations": 3000,
+    "priorityDps": 244778.4,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "49 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 49,
+     "startedFrom": "s00"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Chosen Bloodslayer's Hexweave",
+    "profile": "rogue_outlaw_default",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 13 slot(s) from 331-344 (9 stated none)",
+     "3 slot(s) already at 334",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (8 slot(s))",
+     "crafted_stats (1 slot(s))"
+    ],
+    "tierSet": "4-piece Chosen Bloodslayer's Hexweave"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.15% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 3 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse.",
+    "At 3000 iterations 2 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "rogue_subtlety_default",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Subtlety Rogue (Deathstalker)",
+    "talentHash": "CUQAAAAAAAAAAAAAAAAAAAAAAAgx2MAAAAAwsMGLTMbbjxMDDzMzMzw8AbzYGbbzMzMzMjBjZ2GAAAAGMmFzyADYBsMMhMLYGmZAmxA",
+    "heroTalent": "Deathstalker",
+    "dps": 253283.9,
+    "dpsError": 0.0426,
+    "iterations": 3000,
+    "priorityDps": 253283.9
+   },
+   "best": {
+    "origin": "search",
+    "label": "Subtlety Rogue (Deathstalker) + rank 90720 -> 90732 + choice node 95131 -> entry index 1",
+    "talentHash": "CUQAAAAAAAAAAAAAAAAAAAAAAAgx2MAAAAAwsMGLTMbbjxMDDzDMzMzwMbzYGbbzMzMzMjBjZ2GAAAAGMmFzyADYBsNMhMLYGmZAmxA",
+    "heroTalent": "Deathstalker",
+    "dps": 254370.4,
+    "dpsError": 0.0426,
+    "iterations": 3000,
+    "priorityDps": 254370.4,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "48 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 48,
+     "startedFrom": "s00_v000"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Subtlety Rogue (Deathstalker) + rank 90720 -> 90732 + choice node 90686 -> entry index 1",
+    "talentHash": "CUQAAAAAAAAAAAAAAAAAAAAAAAgx2MAAAAAwsNGLTMbbjxMDDzDMzMzwMbzYGbbzMzMzMjBjZ2GAAAAGMmFzyADYBsMMhMLYGmZAmxA",
+    "heroTalent": "Deathstalker",
+    "dps": 253912.9,
+    "dpsError": 0.0425,
+    "iterations": 3000,
+    "priorityDps": 253912.9,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "48 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 48,
+     "startedFrom": "s00_v000"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Chosen Bloodslayer's Hexweave",
+    "profile": "rogue_subtlety_default",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 9 slot(s) from 331-344 (2 stated none)",
+     "7 slot(s) already at 334",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (9 slot(s))"
+    ],
+    "tierSet": "4-piece Chosen Bloodslayer's Hexweave"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 5 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "shaman_elemental_farseer",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Elemental Shaman (Farseer)",
+    "talentHash": "CYQAAAAAAAAAAAAAAAAAAAAAAAAAAAzMbbzMmZmZZbZMMjBAAAAsYmNYADY2YCZWAgZbmZGjtFTYmxYxMzMmZWsMjFzMMzyAAGGAzMGGGA",
+    "heroTalent": "Farseer",
+    "dps": 239367.8,
+    "dpsError": 0.0598,
+    "iterations": 3000,
+    "priorityDps": 239367.8
+   },
+   "best": {
+    "origin": "search",
+    "label": "Elemental Shaman (Farseer) + choice node 103640 -> entry index 1 + choice node 103626 -> entry index 1",
+    "talentHash": "CYQAAAAAAAAAAAAAAAAAAAAAAAAAAAzMbbzMmZmZZbZMMjBAAAAsYmNYADY2YCZWAgZbmZGjtFTYmxYxMzMmZWsNjFzMMz2AAGGAzMGGGA",
+    "heroTalent": "Farseer",
+    "dps": 239248.8,
+    "dpsError": 0.0658,
+    "iterations": 3000,
+    "priorityDps": 239248.8,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "48 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 48,
+     "startedFrom": "s00_v002"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Elemental Shaman (Farseer) + choice node 103640 -> entry index 1 + choice node 103593 -> entry index 1",
+    "talentHash": "CYQAAAAAAAAAAAAAAAAAAAAAAAAAAAzMbbzMmZmZZbZMMjBAAAAsYmNYADY2YCZWAgZbmZGjtNTYmxYxMzMmZWsMjFzMMz2AAGGAzMGGGA",
+    "heroTalent": "Farseer",
+    "dps": 239248.8,
+    "dpsError": 0.0658,
+    "iterations": 3000,
+    "priorityDps": 239248.8,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "48 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 48,
+     "startedFrom": "s00_v002"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Ophidian Oracle's Prophecy",
+    "profile": "shaman_elemental_farseer",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 16 slot(s) (16 stated none)",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (8 slot(s))",
+     "crafted_stats (2 slot(s))"
+    ],
+    "tierSet": "4-piece Ophidian Oracle's Prophecy"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.09% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 5 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse.",
+    "At 3000 iterations 2 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "shaman_elemental_stormbringer",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Elemental Shaman (Stormbringer)",
+    "talentHash": "CYQAAAAAAAAAAAAAAAAAAAAAAAAAAAzMbbzMmZmZZbZgxMDAAAAAWMjhNYBmRDN2AgZbmZGjtFTYmxYxMzMmZWsMjFzMjZWAAGGYmBGGGA",
+    "heroTalent": "Stormbringer",
+    "dps": 221257.5,
+    "dpsError": 0.0679,
+    "iterations": 3000,
+    "priorityDps": 221257.5
+   },
+   "best": {
+    "origin": "search",
+    "label": "Elemental Shaman (Stormbringer) + choice node 103626 -> entry index 1",
+    "talentHash": "CYQAAAAAAAAAAAAAAAAAAAAAAAAAAAzMbbzMmZmZZbZgxMDAAAAAWMjhNYBmRDN2AgZbmZGjtFTYmxYxMzMmZWsNjFzMjZWAAGGYmBGGGA",
+    "heroTalent": "Stormbringer",
+    "dps": 221257.5,
+    "dpsError": 0.0679,
+    "iterations": 3000,
+    "priorityDps": 221257.5,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "48 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 48,
+     "startedFrom": "s00"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Elemental Shaman (Stormbringer) + choice node 94880 -> entry index 1",
+    "talentHash": "CYQAAAAAAAAAAAAAAAAAAAAAAAAAAAzMbbzMmZmZZbZgxMDAAAAAWMjhNYDmRDN2AgZbmZGjtFTYmxYxMzMmZWsMjFzMjZWAAGGYmBGGGA",
+    "heroTalent": "Stormbringer",
+    "dps": 221257.5,
+    "dpsError": 0.0679,
+    "iterations": 3000,
+    "priorityDps": 221257.5,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "48 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 48,
+     "startedFrom": "s00"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Ophidian Oracle's Prophecy",
+    "profile": "shaman_elemental_stormbringer",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 16 slot(s) (16 stated none)",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (8 slot(s))",
+     "crafted_stats (2 slot(s))"
+    ],
+    "tierSet": "4-piece Ophidian Oracle's Prophecy"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.10% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 5 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse.",
+    "At 3000 iterations 2 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "shaman_enhancement_stormbringer",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Enhancement Shaman (Stormbringer)",
+    "talentHash": "CcQAAAAAAAAAAAAAAAAAAAAAAMzMzgZmZmZmhZmZAAAAAAAAA2AsZGDLkFYGGawCAzyMmxYZZGYmZbsMzMzMGGzAAMDjZGGBmZwgxA",
+    "heroTalent": "Stormbringer",
+    "dps": 219369.0,
+    "dpsError": 0.0618,
+    "iterations": 3000,
+    "priorityDps": 219369.0
+   },
+   "best": {
+    "origin": "search",
+    "label": "Enhancement Shaman (Stormbringer) + choice node 103611 -> entry index 1",
+    "talentHash": "CcQAAAAAAAAAAAAAAAAAAAAAAMzMzgZmZmZmhZmZAAAAAAAAA2AsZGDLkFYGGawCAzyMmxYZZGYmZbsNzMzMGGzAAMDjZGGBmZwgxA",
+    "heroTalent": "Stormbringer",
+    "dps": 219369.0,
+    "dpsError": 0.0618,
+    "iterations": 3000,
+    "priorityDps": 219369.0,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "31 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 31,
+     "startedFrom": "s00"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Enhancement Shaman (Stormbringer) + choice node 103581 -> entry index 1",
+    "talentHash": "CcQAAAAAAAAAAAAAAAAAAAAAAMzMzgZmZmZmhZmZAAAAAAAAA2AsZGDLkFYGGawCAz2MmxYZZGYmZbsMzMzMGGzAAMDjZGGBmZwgxA",
+    "heroTalent": "Stormbringer",
+    "dps": 219369.0,
+    "dpsError": 0.0618,
+    "iterations": 3000,
+    "priorityDps": 219369.0,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "31 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 31,
+     "startedFrom": "s00"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Ophidian Oracle's Prophecy",
+    "profile": "shaman_enhancement_stormbringer",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 16 slot(s) (16 stated none)",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (9 slot(s))",
+     "crafted_stats (3 slot(s))"
+    ],
+    "tierSet": "4-piece Ophidian Oracle's Prophecy"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.09% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 4 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse.",
+    "At 3000 iterations 1 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "shaman_enhancement_totemic",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Enhancement Shaman (Totemic)",
+    "talentHash": "CcQAAAAAAAAAAAAAAAAAAAAAAMzMzMzMzMzMzMzMzYGAAAAAAAAAsAbwMW0YbAMTwGAzyMmZGLLzYhZmNWmZmZYYMDAgBYMjYmBAGDA",
+    "heroTalent": "Totemic",
+    "dps": 209439.5,
+    "dpsError": 0.0442,
+    "iterations": 3000,
+    "priorityDps": 209439.5
+   },
+   "best": {
+    "origin": "search",
+    "label": "Enhancement Shaman (Totemic) + choice node 103607 -> entry index 0",
+    "talentHash": "CcQAAAAAAAAAAAAAAAAAAAAAAMzMzMzMzMzMzMzMzYGAAAAAAAAAsAbwMW0YbAMTwGAzyMmZGLLzYhZmFWmZmZYYMDAgBYMjYmBAGDA",
+    "heroTalent": "Totemic",
+    "dps": 209439.5,
+    "dpsError": 0.0442,
+    "iterations": 3000,
+    "priorityDps": 209439.5,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "35 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 35,
+     "startedFrom": "s00"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Enhancement Shaman (Totemic) + choice node 103581 -> entry index 1",
+    "talentHash": "CcQAAAAAAAAAAAAAAAAAAAAAAMzMzMzMzMzMzMzMzYGAAAAAAAAAsAbwMW0YbAMTwGAz2MmZGLLzYhZmNWmZmZYYMDAgBYMjYmBAGDA",
+    "heroTalent": "Totemic",
+    "dps": 209439.5,
+    "dpsError": 0.0442,
+    "iterations": 3000,
+    "priorityDps": 209439.5,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "35 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 35,
+     "startedFrom": "s00"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Ophidian Oracle's Prophecy",
+    "profile": "shaman_enhancement_totemic",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 16 slot(s) (16 stated none)",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (9 slot(s))",
+     "crafted_stats (2 slot(s))"
+    ],
+    "tierSet": "4-piece Ophidian Oracle's Prophecy"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.06% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 4 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse.",
+    "At 3000 iterations 2 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "warlock_affliction_hellcaller",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Affliction Warlock (Hellcaller)",
+    "talentHash": "CkQAAAAAAAAAAAAAAAAAAAAAAwMzMzoZhhZmZmlBAAYmZZWmZmlxAAWgBmFjGzAysBWGAAAmBAAmZAzMjBzwMjZmZGMzMzAAmBG",
+    "heroTalent": "Hellcaller",
+    "dps": 191793.6,
+    "dpsError": 0.0539,
+    "iterations": 3000,
+    "priorityDps": 191793.6
+   },
+   "best": {
+    "origin": "search",
+    "label": "Affliction Warlock (Hellcaller) + choice node 94835 -> entry index 1",
+    "talentHash": "CkQAAAAAAAAAAAAAAAAAAAAAAwMzMzoZhhZmZmlBAAYmZZWmZmlxAAWgBmNjGzAysBWGAAAmBAAmZAzMjBzwMjZmZGMzMzAAmBG",
+    "heroTalent": "Hellcaller",
+    "dps": 191793.6,
+    "dpsError": 0.0539,
+    "iterations": 3000,
+    "priorityDps": 191793.6,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "26 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 26,
+     "startedFrom": "s00"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Affliction Warlock (Hellcaller) + choice node 94822 -> entry index 1",
+    "talentHash": "CkQAAAAAAAAAAAAAAAAAAAAAAwMzMzoZhhZmZmlBAAYmZZWmZmlxAA2gBmFjGzAysBWGAAAmBAAmZAzMjBzwMjZmZGMzMzAAmBG",
+    "heroTalent": "Hellcaller",
+    "dps": 191793.6,
+    "dpsError": 0.0539,
+    "iterations": 3000,
+    "priorityDps": 191793.6,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "26 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 26,
+     "startedFrom": "s00"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Damned Necrolyte's Shattered Restraints",
+    "profile": "warlock_affliction_hellcaller",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 15 slot(s) from 331-344 (12 stated none)",
+     "1 slot(s) already at 334",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (8 slot(s))",
+     "crafted_stats (1 slot(s))"
+    ],
+    "tierSet": "4-piece Damned Necrolyte's Shattered Restraints"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.08% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 3 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "warlock_affliction_soul_harvester",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Affliction Warlock (Soul Harvester)",
+    "talentHash": "CkQAAAAAAAAAAAAAAAAAAAAAAwMzMzoZhhZmZmlBAAYmZZ2mZmlxAAjllBGwEMDbBG2GAAAmBAAwMDzMjBzwMzMzMGMzMzAAmBG",
+    "heroTalent": "Soul Harvester",
+    "dps": 198740.4,
+    "dpsError": 0.049,
+    "iterations": 3000,
+    "priorityDps": 198740.4
+   },
+   "best": {
+    "origin": "search",
+    "label": "Affliction Warlock (Soul Harvester) + choice node 72045 -> entry index 0",
+    "talentHash": "CkQAAAAAAAAAAAAAAAAAAAAAAwMzMzoZhhZmZmlBAAYmZZWmZmlxAAjllBGwEMDbBG2GAAAmBAAwMDzMjBzwMzMzMGMzMzAAmBG",
+    "heroTalent": "Soul Harvester",
+    "dps": 198942.8,
+    "dpsError": 0.0522,
+    "iterations": 3000,
+    "priorityDps": 198942.8,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "26 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 26,
+     "startedFrom": "s00"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Affliction Warlock (Soul Harvester) + choice node 94824 -> entry index 1",
+    "talentHash": "CkQAAAAAAAAAAAAAAAAAAAAAAwMzMzoZhhZmZmlBAAYmZZ2mZmlxAAjltBGwEMDbBG2GAAAmBAAwMDzMjBzwMzMzMGMzMzAAmBG",
+    "heroTalent": "Soul Harvester",
+    "dps": 198740.4,
+    "dpsError": 0.049,
+    "iterations": 3000,
+    "priorityDps": 198740.4,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "26 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 26,
+     "startedFrom": "s00"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Damned Necrolyte's Shattered Restraints",
+    "profile": "warlock_affliction_soul_harvester",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 15 slot(s) from 331-344 (12 stated none)",
+     "1 slot(s) already at 334",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (8 slot(s))",
+     "crafted_stats (1 slot(s))"
+    ],
+    "tierSet": "4-piece Damned Necrolyte's Shattered Restraints"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 3 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "warlock_demonology_soulharvester",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Demonology Warlock (Soul Harvester)",
+    "talentHash": "CoQAAAAAAAAAAAAAAAAAAAAAAwMzMzoZjhZmxsMAAAAAAAjtlBGwAmhtQGbmhZ2mlZmZMDAYMzMzAMzMmxMDAAwMzMzMjZYZAYA",
+    "heroTalent": "Soul Harvester",
+    "dps": 198359.4,
+    "dpsError": 0.0575,
+    "iterations": 3000,
+    "priorityDps": 198359.4
+   },
+   "best": {
+    "origin": "search",
+    "label": "Demonology Warlock (Soul Harvester) + choice node 94824 -> entry index 1",
+    "talentHash": "CoQAAAAAAAAAAAAAAAAAAAAAAwMzMzoZjhZmxsMAAAAAAAjttBGwAmhtQGbmhZ2mlZmZMDAYMzMzAMzMmxMDAAwMzMzMjZYZAYA",
+    "heroTalent": "Soul Harvester",
+    "dps": 198359.4,
+    "dpsError": 0.0575,
+    "iterations": 3000,
+    "priorityDps": 198359.4,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "25 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 25,
+     "startedFrom": "s00"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Demonology Warlock (Soul Harvester) + choice node 71956 -> entry index 1",
+    "talentHash": "CoQAAAAAAAAAAAAAAAAAAAAAAwMzMzoZjhZmxsNAAAAAAAjtlBGwAmhtQGbmhZ2mlZmZMDAYMzMzAMzMmxMDAAwMzMzMjZYZAYA",
+    "heroTalent": "Soul Harvester",
+    "dps": 198359.4,
+    "dpsError": 0.0575,
+    "iterations": 3000,
+    "priorityDps": 198359.4,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "25 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 25,
+     "startedFrom": "s00"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Damned Necrolyte's Shattered Restraints",
+    "profile": "warlock_demonology_soulharvester",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 15 slot(s) from 331-344 (13 stated none)",
+     "1 slot(s) already at 334",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (8 slot(s))",
+     "crafted_stats (1 slot(s))"
+    ],
+    "tierSet": "4-piece Damned Necrolyte's Shattered Restraints"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.08% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 2 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "warlock_destruction_diabolist",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Destruction Warlock (Diabolist)",
+    "talentHash": "CsQAAAAAAAAAAAAAAAAAAAAAAwMmZGNLMzmZmZWmFzMzsYMWMDAAmZGzMzCYMjhFyAbDL0YhBAAGDM2AwMDwYGzYDAAwMzMAAMGG",
+    "heroTalent": "Diabolist",
+    "dps": 209282.9,
+    "dpsError": 0.0417,
+    "iterations": 3000,
+    "priorityDps": 209282.9
+   },
+   "best": {
+    "origin": "search",
+    "label": "Destruction Warlock (Diabolist) + choice node 94836 -> entry index 1",
+    "talentHash": "CsQAAAAAAAAAAAAAAAAAAAAAAwMmZGNLMzmZmZWmFzMzsYMWMDAAmZGzMzCYMjhNyAbDL0YhBAAGDM2AwMDwYGzYDAAwMzMAAMGG",
+    "heroTalent": "Diabolist",
+    "dps": 209282.9,
+    "dpsError": 0.0417,
+    "iterations": 3000,
+    "priorityDps": 209282.9,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "37 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 37,
+     "startedFrom": "s00"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Destruction Warlock (Diabolist) + choice node 71937 -> entry index 1",
+    "talentHash": "CsQAAAAAAAAAAAAAAAAAAAAAAwMmZGNbMzmZmZWmFzMzsYMWMDAAmZGzMzCYMjhFyAbDL0YhBAAGDM2AwMDwYGzYDAAwMzMAAMGG",
+    "heroTalent": "Diabolist",
+    "dps": 209282.9,
+    "dpsError": 0.0417,
+    "iterations": 3000,
+    "priorityDps": 209282.9,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "37 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 37,
+     "startedFrom": "s00"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Damned Necrolyte's Shattered Restraints",
+    "profile": "warlock_destruction_diabolist",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 15 slot(s) from 331-344 (13 stated none)",
+     "1 slot(s) already at 334",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (8 slot(s))",
+     "crafted_stats (1 slot(s))"
+    ],
+    "tierSet": "4-piece Damned Necrolyte's Shattered Restraints"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.06% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 4 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse.",
+    "At 3000 iterations 1 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "warlock_destruction_hellcaller",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Destruction Warlock (Hellcaller)",
+    "talentHash": "CsQAAAAAAAAAAAAAAAAAAAAAAwMmZGNLMzmZmZWmFzMzsYMWMDAAmZGzMziNYgZxoxMAmtYjBAAGDM2AAmZwYGzYDAAwMzMAAMGG",
+    "heroTalent": "Hellcaller",
+    "dps": 216613.0,
+    "dpsError": 0.0429,
+    "iterations": 3000,
+    "priorityDps": 216613.0
+   },
+   "best": {
+    "origin": "search",
+    "label": "Destruction Warlock (Hellcaller) + choice node 94822 -> entry index 0",
+    "talentHash": "CsQAAAAAAAAAAAAAAAAAAAAAAwMmZGNLMzmZmZWmFzMzsYMWMDAAmZGzMziFYgZxoxMAmtYjBAAGDM2AAmZwYGzYDAAwMzMAAMGG",
+    "heroTalent": "Hellcaller",
+    "dps": 216613.0,
+    "dpsError": 0.0429,
+    "iterations": 3000,
+    "priorityDps": 216613.0,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "37 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 37,
+     "startedFrom": "s00"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Destruction Warlock (Hellcaller) + choice node 71937 -> entry index 1",
+    "talentHash": "CsQAAAAAAAAAAAAAAAAAAAAAAwMmZGNbMzmZmZWmFzMzsYMWMDAAmZGzMziNYgZxoxMAmtYjBAAGDM2AAmZwYGzYDAAwMzMAAMGG",
+    "heroTalent": "Hellcaller",
+    "dps": 216613.0,
+    "dpsError": 0.0429,
+    "iterations": 3000,
+    "priorityDps": 216613.0,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "37 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 37,
+     "startedFrom": "s00"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Damned Necrolyte's Shattered Restraints",
+    "profile": "warlock_destruction_hellcaller",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 15 slot(s) from 331-344 (13 stated none)",
+     "1 slot(s) already at 334",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (8 slot(s))",
+     "crafted_stats (1 slot(s))"
+    ],
+    "tierSet": "4-piece Damned Necrolyte's Shattered Restraints"
+   },
+   "caveats": [
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.06% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 4 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse.",
+    "At 3000 iterations 1 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "warrior_arms_default",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Arms Warrior (Slayer)",
+    "talentHash": "CcEAAAAAAAAAAAAAAAAAAAAAAAzMzsMzMzMDAAAghphxYmxyMzMzgxMDAAAAgZWmZAZMWWGYBMgZYCZGsBMjNz2YwMGgZGAmBA",
+    "heroTalent": "Slayer",
+    "dps": 157231.2,
+    "dpsError": 0.0681,
+    "iterations": 3000,
+    "priorityDps": 157231.2
+   },
+   "best": {
+    "origin": "search",
+    "label": "Arms Warrior (Slayer) + choice node 108705 -> entry index 0",
+    "talentHash": "CcEAAAAAAAAAAAAAAAAAAAAAAAzMzsMzMzMDAAAghphxYmxyMzMzgxMDAAAAgZWmZAZMWWGYBMgZYCZGsBMjNzyYwMGgZGAmBA",
+    "heroTalent": "Slayer",
+    "dps": 157231.2,
+    "dpsError": 0.0681,
+    "iterations": 3000,
+    "priorityDps": 157231.2,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "27 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 27,
+     "startedFrom": "s00"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Arms Warrior (Slayer) + choice node 108676 -> entry index 0",
+    "talentHash": "CcEAAAAAAAAAAAAAAAAAAAAAAAzMzsMzMzMDAAAghphxYmxyMzMzgxMDAAAAgZWmZAZMWWGYBMgZYCZGsBMjFz2YwMGgZGAmBA",
+    "heroTalent": "Slayer",
+    "dps": 157231.2,
+    "dpsError": 0.0681,
+    "iterations": 3000,
+    "priorityDps": 157231.2,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "27 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 27,
+     "startedFrom": "s00"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Jade Warlord's Dominion",
+    "profile": "warrior_arms_default",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 15 slot(s) (15 stated none)",
+     "3 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (8 slot(s))"
+    ],
+    "tierSet": "4-piece Jade Warlord's Dominion"
+   },
+   "caveats": [
+    "Repaired talent hash, not an optimised build: simc refuses the hash its own profile ships, and this is that hash with the correction the current trait table forces -- nothing was chosen.",
+    "The screen that cleared this decode can only reject: passing it means the read was not caught out, not that it was proven faithful to the tree the hash was exported from.",
+    "\"Odyn's Fury\" (node 110203, entry 136735) belongs to another specialisation, so this build cannot take it and simc refuses the hash over it; the node is dropped and its 1 rank(s) left unspent",
+    "'Phalanx' (node 110411, entry 137001) belongs to another specialisation, so this build cannot take it and simc refuses the hash over it; the node is dropped and its 4 rank(s) left unspent",
+    "The repaired build leaves 6 talent point(s) unspent (1 in the class tree, 5 in the specialisation tree) against the ceiling this tier's shipped profiles set. Spending them is a search decision and this repair makes none.",
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.10% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 2 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  },
+  {
+   "id": "warrior_fury_default",
+   "scenario": "patchwerk",
+   "targets": 1,
+   "searched": true,
+   "simc": {
+    "origin": "simc",
+    "label": "Fury Warrior (Slayer)",
+    "talentHash": "CgEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgGDjxMsMzMzMDjZmZGzMzsMzMGzMbDzMAAQMWWGYBMBzwEYG2AmZ2Y2AAgZGDjZmhBA",
+    "heroTalent": "Slayer",
+    "dps": 161764.9,
+    "dpsError": 0.0598,
+    "iterations": 3000,
+    "priorityDps": 161764.9
+   },
+   "best": {
+    "origin": "search",
+    "label": "Fury Warrior (Slayer) + choice node 108674 -> entry index 0",
+    "talentHash": "CgEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgGDjxMsMzMzMDjZmZGzMzsMzMGzMbDzMAAQMWWGYBMBzwEYG2AmZWY2AAgZGDjZmhBA",
+    "heroTalent": "Slayer",
+    "dps": 161764.9,
+    "dpsError": 0.0598,
+    "iterations": 3000,
+    "priorityDps": 161764.9,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "25 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 25,
+     "startedFrom": "s00"
+    }
+   },
+   "runnerUp": {
+    "origin": "search",
+    "label": "Fury Warrior (Slayer) + choice node 94795 -> entry index 1",
+    "talentHash": "CgEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgGDjxMsMzMzMDjZmZGzMzsMzMGzMbDzMAAQMWWGYDMBzwEYG2AmZ2Y2AAgZGDjZmhBA",
+    "heroTalent": "Slayer",
+    "dps": 161764.9,
+    "dpsError": 0.0598,
+    "iterations": 3000,
+    "priorityDps": 161764.9,
+    "search": {
+     "method": "Node-set-preserving talent edits: a 2-round climb at 300 iterations, then 2 halving round(s) from 1200 to 3000 deterministic iterations, pruning on the tie rule",
+     "description": "25 variant(s) evaluated from 1 seed(s) (1 from simc)",
+     "seed": 0,
+     "variantsEvaluated": 25,
+     "startedFrom": "s00"
+    }
+   },
+   "anchor": {
+    "label": "Item level 334 (334-344 band), 4-piece Jade Warlord's Dominion",
+    "profile": "warrior_fury_default",
+    "itemLevel": 334,
+    "normalised": [
+     "item level 334 on 16 slot(s) (16 stated none)",
+     "2 slot(s) the kit does not fill, written empty so the base actor's own item cannot survive inside it",
+     "item level target: the floor of the 334-344 band the tier's shipped profiles state",
+     "tier set state: the state most of the tier's shipped profiles are in (26 shipped profile(s) wear 4, 2 shipped profile(s) wear none)",
+     "28 other set token(s) written to zero"
+    ],
+    "preserved": [
+     "gem_id (6 slot(s))",
+     "enchant_id (9 slot(s))"
+    ],
+    "tierSet": "4-piece Jade Warlord's Dominion"
+   },
+   "caveats": [
+    "Repaired talent hash, not an optimised build: simc refuses the hash its own profile ships, and this is that hash with the correction the current trait table forces -- nothing was chosen.",
+    "The screen that cleared this decode can only reject: passing it means the read was not caught out, not that it was proven faithful to the tree the hash was exported from.",
+    "'Rend' (node 109391, entry 135597) belongs to another specialisation, so this build cannot take it and simc refuses the hash over it; the node is dropped and its 1 rank(s) left unspent",
+    "'Blood and Thunder' (node 110653, entry 137471) belongs to another specialisation, so this build cannot take it and simc refuses the hash over it; the node is dropped and its 1 rank(s) left unspent",
+    "The repaired build leaves 6 talent point(s) unspent (2 in the class tree, 4 in the specialisation tree) against the ceiling this tier's shipped profiles set. Spending them is a search decision and this repair makes none.",
+    "The search varies which entry each choice node takes and how ranks are distributed among the nodes the seed already takes. It never adds or drops a node, so it cannot find that a different *set* of talents is better -- this is the best build in that neighbourhood, not the best build for the spec.",
+    "Unlock edges are not in simc's data and were not checked. They do not need to be: every candidate takes exactly the nodes its seed took, so any edge the seed satisfied the candidate satisfies too. The claim is only as good as the seed's own legality.",
+    "The winner did not separate from the runner-up: +0.00% against a 0.08% tie band. Both are published for that reason.",
+    "The climb stopped after 0 step(s): no neighbour separated from the leader at 300 iterations.",
+    "At 1200 iterations 2 variant(s) tied with the leader and were dropped to fit the round's budget, not because they measured worse."
+   ]
+  }
+ ],
+ "notes": [
+  "No harvested-builds document was available to this run, so no candidate came from a real player's build. Seeds were simc's own builds (repaired where simc refuses its own hash) and generated variants."
+ ]
+}

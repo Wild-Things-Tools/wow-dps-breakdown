@@ -95,11 +95,14 @@ jobs:
           cmake --build simc/build -j"$(nproc)"
 
   # One job, not a matrix, and that is a measurement rather than a simplification.
-  # Timed locally on a 4-core box: a blind calibration of both Arcane builds cost
-  # **5m59s of CPU**, i.e. ~3 CPU-minutes per build, which puts MID2's 39 searchable
-  # builds near **2 CPU-hours** -- about half an hour of wall clock on a 4-vCPU runner
-  # and comfortably inside `timeout-minutes`. Sharding would buy nothing and would need
-  # a merge step, which is a second document shape to keep in agreement with the site.
+  # Timed over a whole MID2 publish pass on a 4-core box: 42 builds, 39 of them
+  # searched, 1,237 variants, **153.7 CPU-minutes** in 48m12s of wall clock -- 3.9
+  # CPU-minutes per searched build. That is under an hour on a 4-vCPU runner and
+  # comfortably inside `timeout-minutes`. Sharding would buy nothing and would need a
+  # merge step, which is a second document shape to keep in agreement with the site.
+  #
+  # Budget a *calibration* run higher, not lower: it starts from a scrambled build and
+  # has to climb, where a seeded publish run frequently takes no climb step at all.
   search:
     needs: simc
     runs-on: ubuntu-latest

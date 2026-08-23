@@ -99,6 +99,39 @@ def test_the_document_carries_every_key_the_site_reads():
     assert DATASET_KEYS <= set(document())
 
 
+def test_no_undeclared_field_reaches_a_row_the_site_reads():
+    """The other half of the contract, and the half a subset test cannot state.
+
+    Every check above asks whether a declared key is *present*; none of them notices a
+    key the site has never heard of. That is the direction this document drifts in --
+    a producer grows a field, nothing reads it, and the next person takes it for part
+    of the contract. So the rows are pinned to exactly the declared sets.
+
+    Two deliberate exceptions, both at document level and both named here so they stay
+    the only two: ``notes`` carries per-run sentences (which seed sources were
+    available) and ``calibration`` carries the gate's own table. Neither has a home in
+    the declared interface, ``dps-computed.ts`` reads neither, and both are omitted
+    entirely when there is nothing to say.
+    """
+    assert set(document()) == DATASET_KEYS
+    doc = computedbuilds.build_document(
+        "MID2",
+        [entry()],
+        iterations=3000,
+        deterministic=True,
+        builds_available=42,
+        calibration=computedbuilds.Calibration(rows=[]),
+        notes=["a note"],
+    )
+    assert set(doc) - DATASET_KEYS == {"notes", "calibration"}
+    for row in doc["specs"]:
+        assert set(row) == SPEC_KEYS
+        assert set(row["anchor"]) == ANCHOR_KEYS
+        for side in ("simc", "best", "runnerUp"):
+            if row[side] is not None:
+                assert set(row[side]) <= CONTENDER_KEYS | {"harvest", "search"}
+
+
 def test_the_schema_version_is_the_one_the_site_supports():
     """``isReadableDataset`` refuses anything above ``SUPPORTED_COMPUTED_SCHEMA``, so a
     bump here renders nothing on the site until the frontend is updated -- on purpose,

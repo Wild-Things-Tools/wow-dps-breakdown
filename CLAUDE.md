@@ -4681,14 +4681,74 @@ producer. **Settled on the pipeline side**: `gearanchor.display_json` projects o
 frontend's shape and the frontend model is untouched, because the frontend's shape is
 the one with a consumer and a published field nothing reads is a field that drifts.
 
-### Cost, measured
+### Cost, measured over a whole pass
 
-**~3 CPU-minutes per build** for a blind calibration at the shipped settings (breadth
-24, climb 12, 300/1200/3000), timed on a 4-core box: both Arcane builds cost **5m59s of
-CPU**. MID2's 39 searchable builds are therefore near **2 CPU-hours** — about half an
-hour of wall clock on a 4-vCPU runner, comfortably inside `timeout-minutes: 350`, and
-the reason `build-search.yml` is **one job rather than a matrix**. A non-blind publish
-run is cheaper, because the climb stops as soon as no neighbour separates.
+**153.7 CPU-minutes for MID2's 42 builds** — 39 searched, 3 refused, 1,237 variants —
+at the shipped settings (breadth 24, climb 12, 300/1200/3000), i.e. **3.9 CPU-minutes
+per searched build**. Wall clock was 48m12s on a 4-core box, so the run held ~3.2 of 4
+cores. Measured as the process tree's `cutime + cstime` off `/proc`, sampled every 10s
+and read at exit; single-build timings taken while something else was on the box are
+upper bounds and are not the figure to quote.
+
+That is under an hour of wall clock on a 4-vCPU runner, comfortably inside
+`timeout-minutes: 350`, and the reason `build-search.yml` is **one job rather than a
+matrix**. Sharding would buy nothing and would need a merge step, i.e. a second
+document shape to keep in agreement with the site.
+
+**A blind calibration costs more than a publish pass, not less**, which is the opposite
+of what "the climb stops as soon as no neighbour separates" suggests on its own: a
+seeded run frequently takes zero climb steps because simc's own build is already a
+local maximum, while a scrambled start has a median of nine wrong choice nodes and has
+to walk. Budget the calibration at the higher figure.
+
+### What the published pass found: simc's own build is beatable on 12 of 39
+
+MID2, one target, 3000 deterministic iterations, every build seeded with simc's own
+hash (repaired where simc refuses it), 2026-08-23. **12 of the 39 searchable builds
+carry a computed build that beats simc's outside the tie band**, median gain among them
+**+1.43%**; the largest are Devastation Evoker (Scalecommander) **+2.54%**, Devourer DH
+(Void-Scarred) **+2.46%** and Havoc DH (Fel-Scarred) **+2.20%**. The other 27 tie.
+
+Two things that is and is not. It **is** evidence that simc's shipped choice-node
+assignments are not always its own APL's best, on the anchored kit at one target. It is
+**not** a claim about the tier's balance: the search cannot change which nodes are
+taken, so a build it improves is still simc's node set, and every gain is measured
+against simc's build on the same gear rather than against the shipped dataset's numbers.
+
+**Three specs with no number anywhere on the site now have one**, all from a repaired
+hash: Havoc DH (Fel-Scarred) 179,858, Fury Warrior 161,765, Arms Warrior 157,231. On
+Arms and Fury the search separated from nothing, so what is published is the repair and
+only the repair -- which is the repair working as designed rather than a thin result.
+Retribution Paladin and Havoc's Aldrachi Reaver build stay refused, with the screen's
+reason on the row.
+
+### A pre-existing harvest test fails only with `WOWDPS_SIMC_SOURCE` set
+
+Found on 2026-08-23 and **not** introduced here -- it fails identically at
+`0b43705`. `test_harvest.py::test_a_real_hash_under_the_wrong_spec_name_is_still_caught`
+feeds an Arcane hash in as a Death Knight and asserts `spec_mismatch`; `harvest.validate`
+decodes *before* it compares spec ids, and that hash no longer survives a decode against
+Death Knight's node list, so the verdict is `decode_error`. The control's point stands
+(it is still a refusal) but the reason it asserts is not the reason it gets.
+
+Worth keeping for the shape rather than the bug: the test is gated on an environment
+variable, so `pytest -q` skips it and the default gate is green. A test that only runs
+in a mode nobody runs is a test that decays silently -- and this repository has three
+such gates now (`WOWDPS_SIMC_DIR`, `WOWDPS_SIMC_SOURCE`, and the pair together), each
+covering a different set.
+
+### Two document fields go beyond the frontend's declared interface
+
+`DpsComputedDataset` declares seven keys. The emitter adds two, both at document level,
+both omitted when empty, and neither read by `dps-computed.ts`: **`notes`** (per-run
+sentences -- which seed sources were available) and **`calibration`** (the gate's own
+table). They are named in `test_no_undeclared_field_reaches_a_row_the_site_reads`, which
+pins the *rows* to exactly the declared sets.
+
+That test exists because every other test of this document asks whether a declared key
+is **present**, and none of them can see a key the site has never heard of -- which is
+the direction this document drifts in. A producer grows a field, nothing reads it, and
+the next person takes it for part of the contract.
 
 `workflow_dispatch` only and no schedule, for the same reason `gear.yml` is: builds
 change when a tuning pass or a season changes. **Something has to invoke it or the
