@@ -509,6 +509,61 @@ def test_every_slot_ends_at_one_item_level(tmp_path):
     )
 
 
+def test_a_slot_the_kit_lacks_is_emptied_rather_than_left_to_the_base_actor(tmp_path):
+    """A profileset applies its options *on top of* the base profile.
+
+    So a slot the kit says nothing about keeps whatever the base actor wears, at the
+    base actor's item level, inside something the description calls anchored. MID2's
+    Windwalker Monk kit has fifteen gear lines and its Arcane Mage sixteen, so
+    anchoring the Monk against the Mage as base leaves an off-hand nobody chose.
+    """
+    profiles = [profile(tmp_path, "a", FOUR_PIECE, item_level=334)]
+    target = gearanchor.derive_target(profiles, "MID2")
+    anchor = gearanchor.apply(target, gearanchor.parse_gear_lines(FOUR_PIECE))
+    options = anchor.options()
+
+    assert "off_hand=" in options
+    assert "trinket1=" in options
+    # A slot the kit *does* carry is written as the item, never emptied.
+    assert "head=" not in options
+    assert anchor.to_json()["slotsEmptied"].count("head") == 0
+
+
+def test_a_slot_written_under_an_alias_is_not_emptied_as_well(tmp_path):
+    """The two halves of the alias fix have to hold together or the kit loses a slot.
+
+    ``wrist=`` and ``wrists=`` are one slot to simc, so a kit carrying the first that
+    was also handed an empty second would end up wearing neither -- and the empty
+    line comes last, so it is the one that wins.
+    """
+    profiles = [profile(tmp_path, "a", FOUR_PIECE, item_level=334)]
+    target = gearanchor.derive_target(profiles, "MID2")
+    anchor = gearanchor.apply(target, gearanchor.parse_gear_lines("wrist=bands,id=1,ilevel=289"))
+
+    assert "wrists=" not in anchor.options()
+    assert "wrist=bands,id=1,ilevel=334" in anchor.options()
+
+
+def test_an_enchant_written_by_name_counts_as_preserved(tmp_path):
+    """``preserved`` is evidence, and it was empty for slots that are enchanted.
+
+    ``item_t::parse_options`` takes ``enchant=`` beside ``enchant_id=``. Counted on
+    simc 69a46e1: six MID2 gear lines use the name form, five on Blood Deathbringer
+    and one on Havoc Aldrachi Reaver, and MID1 uses it 38 times. The enchant survives
+    either way -- the whole line is preserved -- so what was wrong was the claim
+    beside it.
+    """
+    kit = gearanchor.parse_gear_lines(
+        "wrists=frozen_bindings,id=1,ilevel=289,enchant=rune_of_sanguination\n"
+        "neck=a_chain,id=2,ilevel=289,gems=quick_ruby\n"
+    )
+    profiles = [profile(tmp_path, "a", FOUR_PIECE, item_level=334)]
+    anchor = gearanchor.apply(gearanchor.derive_target(profiles, "MID2"), kit)
+
+    assert anchor.enchanted == ("wrists",)
+    assert anchor.gemmed == ("neck",)
+
+
 def test_the_description_says_what_moved_and_what_did_not(tmp_path):
     """Published beside the build, so a reader can see the anchor rather than trust it."""
     profiles = [profile(tmp_path, "a", FOUR_PIECE, item_level=334)]

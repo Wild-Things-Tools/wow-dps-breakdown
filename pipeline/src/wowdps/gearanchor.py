@@ -166,6 +166,20 @@ SLOT_ALIASES: dict[str, str] = {
 #: profile line, not about correctness.
 _ILEVEL_AFTER: tuple[str, ...] = ("bonus_id", "id")
 
+#: Both spellings of a gem and of an enchant, because a profile uses either.
+#: ``item_t::parse_options`` registers ``gem_id`` beside ``gems`` and ``enchant_id``
+#: beside ``enchant``, the id form taking numbers and the other taking simc's own
+#: names. Counted over the gear lines on 69a46e1: **six MID2 lines use the name
+#: form** -- five on Blood Deathbringer, one on Havoc Aldrachi Reaver -- against 369
+#: using ``enchant_id``, and MID1 uses it 38 times across eight profiles.
+#:
+#: The enchant round-trips either way, because the whole line is preserved; what was
+#: wrong was the *evidence*. ``to_json()['preserved']['enchants']`` came back empty
+#: for a slot that is enchanted, and that field exists precisely because "preserved"
+#: is a claim rather than an observation.
+_GEM_OPTIONS: tuple[str, ...] = ("gem_id", "gems")
+_ENCHANT_OPTIONS: tuple[str, ...] = ("enchant_id", "enchant")
+
 #: Longest first, so ``hands=`` cannot be read as the ``hand`` alias with a stray
 #: ``s``. Python's alternation backtracks and would get there anyway; the sort makes
 #: it true by construction rather than by a property of the regex engine.
@@ -217,6 +231,9 @@ class GearLine:
 
     def has(self, key: str) -> bool:
         return any(existing == key for existing, _ in self.options)
+
+    def has_any(self, keys: tuple[str, ...]) -> bool:
+        return any(existing in keys for existing, _ in self.options)
 
     def render(self) -> str:
         parts = [f"{self.alias or self.slot}={self.name}"]
@@ -723,7 +740,8 @@ def other_set_tokens(
 
     Zeroing everything is the only bound that cannot let an unstated bonus through,
     which is this module's whole thesis applied to itself. The cost is measured and
-    small: 41 option lines for a Mage on 69a46e1, parsed once per actor.
+    small: 40 zeroed lines for a Mage on 69a46e1, 42 set_bonus lines in all, parsed
+    once per actor.
 
     Scoped by class because the option is only valid for a class the set exists for
     -- ``set_bonus_t::parse_set_bonus_option`` skips rows of another class and then
@@ -777,14 +795,28 @@ class GearAnchor:
     gemmed: tuple[str, ...] = ()
     enchanted: tuple[str, ...] = ()
     crafted: tuple[str, ...] = ()
+    #: Slots the kit does not carry, written as an explicit empty option. See
+    #: ``options`` -- these are what stops the base actor's own item surviving inside
+    #: something the description calls anchored.
+    emptied: tuple[str, ...] = ()
 
     def options(self) -> tuple[str, ...]:
         """Every simc option line the anchor consists of, gear first then the set.
 
         Usable directly as a ``Profileset``'s options, which is the point: two
         variants that both carry these differ in nothing but what the caller varies.
+
+        **Every slot is written, including the ones the kit has nothing in.** A
+        profileset applies its options *on top of* the base profile, so a slot the
+        kit is silent about keeps whatever the base actor wears -- at the base
+        actor's item level, inside a kit this then describes as anchored.
+        MID2's Windwalker Monk kit has fifteen gear lines and its Arcane Mage sixteen,
+        so anchoring the Monk against the Mage as base left an off-hand nobody chose,
+        at an item level the anchor did not set. An empty option clears the slot,
+        which is the one thing that makes the emitted kit a function of the kit alone.
         """
-        return (*(line.render() for line in self.lines), *self.target.set_options())
+        empties = tuple(f"{slot}=" for slot in self.emptied)
+        return (*(line.render() for line in self.lines), *empties, *self.target.set_options())
 
     def to_json(self) -> dict:
         """The description published beside a computed build.
@@ -798,6 +830,7 @@ class GearAnchor:
             **self.target.to_json(),
             "slotsNormalized": [change.to_json() for change in self.changes],
             "slotsAlreadyAtTarget": list(self.unchanged),
+            "slotsEmptied": list(self.emptied),
             "preserved": {
                 "gems": list(self.gemmed),
                 "enchants": list(self.enchanted),
@@ -828,13 +861,14 @@ def apply(target: AnchorTarget, kit: list[GearLine]) -> GearAnchor:
             unchanged.append(line.slot)
         else:
             changes.append(SlotChange(slot=line.slot, before=before, after=target.ilevel))
-        if line.has("gem_id"):
+        if line.has_any(_GEM_OPTIONS):
             gemmed.append(line.slot)
-        if line.has("enchant_id"):
+        if line.has_any(_ENCHANT_OPTIONS):
             enchanted.append(line.slot)
         if line.has("crafted_stats"):
             crafted.append(line.slot)
 
+    worn = {line.slot for line in kit}
     return GearAnchor(
         target=target,
         lines=tuple(lines),
@@ -843,6 +877,7 @@ def apply(target: AnchorTarget, kit: list[GearLine]) -> GearAnchor:
         gemmed=tuple(gemmed),
         enchanted=tuple(enchanted),
         crafted=tuple(crafted),
+        emptied=tuple(slot for slot in GEAR_SLOTS if slot not in worn),
     )
 
 
