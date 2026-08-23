@@ -58,6 +58,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .equipment import DiscoveredItem, GearItem
+from .gearanchor import read_kit
 from .lootsources import ItemDrop, LootIndex, Rotation
 
 #: A companion instance needs at least this many of the tier's equipped items to
@@ -71,15 +72,6 @@ MIN_COMPANION_HITS = 1
 def _normalise(name: str) -> str:
     """Fold a name to something two sources can agree on."""
     return re.sub(r"[^a-z0-9]+", "", name.lower().replace("&", "and"))
-
-
-#: Equipment lines in a simc profile. Only real gear slots -- a profile also carries
-#: `id=` inside other options, and reading those would place items nobody wears.
-_EQUIP_LINE = re.compile(
-    r"^(?:head|neck|shoulder|back|chest|wrist|hands|waist|legs|feet|finger[12]"
-    r"|trinket[12]|main_hand|off_hand)\s*=.*?\bid=(\d+)",
-    re.MULTILINE,
-)
 
 
 def equipped_item_ids(simc_dir: Path, tier: str) -> frozenset[int]:
@@ -97,14 +89,24 @@ def equipped_item_ids(simc_dir: Path, tier: str) -> frozenset[int]:
     What a tier *is*, for this project, is the set of profiles simc ships under that
     name. So the raid is the one that drops what those profiles wear -- derived from
     simc, like every other number here, and immune to the season boundary.
+
+    **Read with ``gearanchor.parse_gear_lines``, which is the only parser of simc
+    gear lines this repository keeps.** There used to be three, and the shape of what
+    that costs is on record: this one listed ``shoulder`` and ``wrist`` where
+    ``gearanchor.GEAR_SLOTS`` listed ``shoulders`` and ``wrists``, so each read the
+    lines the other dropped and neither said so. Measured on simc 69a46e1, its own
+    regex found **204 of MID2's 227** equipped item ids and 176 of MID1's 203 -- a
+    tenth of the evidence for which raid a tier belongs to, missing because every
+    profile that spells the slot in the plural contributed no shoulders and no wrists.
     """
-    found: set[int] = set()
     directory = simc_dir / "profiles" / tier
     if not directory.is_dir():
         return frozenset()
+    found: set[int] = set()
     for path in sorted(directory.glob("*.simc")):
-        text = path.read_text(encoding="utf-8", errors="replace")
-        found.update(int(match) for match in _EQUIP_LINE.findall(text))
+        for line in read_kit(path):
+            if line.item_id:
+                found.add(line.item_id)
     return frozenset(found)
 
 

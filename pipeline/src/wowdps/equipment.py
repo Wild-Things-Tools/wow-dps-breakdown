@@ -553,29 +553,36 @@ class SlotAdornment:
         return not self.gem_ids and self.enchant_id is None
 
 
-def _gear_line(socket: str) -> re.Pattern[str]:
-    return re.compile(rf"^{re.escape(socket)}\s*=(?P<rest>.*)$", re.MULTILINE)
-
-
 def read_adornments(profile_path: Path, slot: EquipmentSlot) -> dict[str, SlotAdornment]:
     """What this profile gems and enchants each of a slot's sockets with.
 
     Per socket rather than per slot, because a profile may gem one ring and not the
     other, and the comparison only has to be internally consistent: whatever the
     baseline wears in a socket, the candidate replacing it wears too.
+
+    Read through ``gearanchor.parse_gear_lines`` rather than a regex of its own. That
+    is the only parser of simc gear lines this repository keeps, and the reason is on
+    record in ``gearpool.equipped_item_ids``: when there were three, one of them
+    listed the slot aliases the others did not and each silently dropped what the
+    others read. Nothing in the pools' own sockets is spelled with an alias today,
+    so this is about the next slot rather than about this one.
     """
-    text = profile_path.read_text(encoding="utf-8", errors="replace")
+    from .gearanchor import parse_gear_lines
+
+    lines = {
+        line.slot: line
+        for line in parse_gear_lines(profile_path.read_text(encoding="utf-8", errors="replace"))
+    }
     found: dict[str, SlotAdornment] = {}
     for socket in slot.sockets:
-        match = _gear_line(socket).search(text)
-        if not match:
+        line = lines.get(socket)
+        if line is None:
             continue
-        rest = match.group("rest")
-        gems = re.search(r"\bgem_id=([\d/]+)", rest)
-        enchant = re.search(r"\benchant_id=(\d+)", rest)
+        gems = next((value for key, value in line.options if key == "gem_id"), "")
+        enchant = next((value for key, value in line.options if key == "enchant_id"), "")
         found[socket] = SlotAdornment(
-            gem_ids=tuple(int(g) for g in gems.group(1).split("/") if g) if gems else (),
-            enchant_id=int(enchant.group(1)) if enchant else None,
+            gem_ids=tuple(int(gem) for gem in gems.split("/") if gem.isdigit()),
+            enchant_id=int(enchant) if enchant.isdigit() else None,
         )
     return found
 
