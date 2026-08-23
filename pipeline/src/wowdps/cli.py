@@ -890,32 +890,64 @@ def cmd_gear_anchor(args: argparse.Namespace) -> int:
     profiles_dir = Path(args.profiles)
     tier = _resolve_tier(profiles_dir, args.tier)
     found = profiles.discover(profiles_dir, tier, dps_only=True)
-
-    sets = buffsweep.parse_tier_sets(simc_dir, ptr=args.ptr)
-    item_sets = gearanchor.parse_item_sets(simc_dir, ptr=args.ptr)
-    if not buffsweep.sets_for_tier(sets, tier):
-        logging.warning("simc ships no set bonus labelled %s; anchoring gear alone", tier)
-        sets, item_sets = None, None
+    if not found:
+        # Distinct from the filter miss below, which used to swallow this case and
+        # report the filter as None -- naming something the user never supplied.
+        logging.error(
+            "no damage profile at all under %s/%s, so there is nothing to anchor",
+            profiles_dir,
+            tier,
+        )
+        return 1
 
     selected = [p for p in found if not args.profile or args.profile in p.path.stem]
     if not selected:
-        logging.error("no %s profile matches %r", tier, args.profile)
+        logging.error(
+            "none of %s's %d damage profiles matches %r",
+            tier,
+            len(found),
+            args.profile,
+        )
         return 1
 
-    target = gearanchor.derive_target(found, tier, sets, item_sets, wow_class=selected[0].wow_class)
+    try:
+        sets: list[buffsweep.TierSet] | None = buffsweep.parse_tier_sets(simc_dir, ptr=args.ptr)
+        item_sets: dict[int, int] | None = gearanchor.parse_item_sets(simc_dir, ptr=args.ptr)
+        if sets is not None and not buffsweep.sets_for_tier(sets, tier):
+            logging.warning("simc ships no set bonus labelled %s; anchoring gear alone", tier)
+            sets, item_sets = None, None
+
+        # Only the *set name* and the zeroed tokens vary by class; the item level, the
+        # tally and the state do not. Deriving per profile re-ran the whole tier tally
+        # once per profile -- 40 tallies and ~1,120 profile reads on MID2 -- so it is
+        # derived once per distinct class and reused.
+        targets: dict[str, gearanchor.AnchorTarget] = {}
+        for profile in selected:
+            if profile.wow_class not in targets:
+                targets[profile.wow_class] = gearanchor.derive_target(
+                    found, tier, sets, item_sets, wow_class=profile.wow_class
+                )
+        anchors = [
+            (
+                profile,
+                gearanchor.apply(targets[profile.wow_class], gearanchor.read_kit(profile.path)),
+            )
+            for profile in selected
+        ]
+    except gearanchor.AnchorError as exc:
+        # Both of this module's refusals are worded for a human and name their own
+        # fix. A traceback buries that sentence under six frames.
+        logging.error("%s", exc)
+        return 1
+
+    target = targets[selected[0].wow_class]
     print(f"{tier}: item level {target.ilevel} ({target.ilevel_evidence})")
     print(f"      tier set {target.set_pieces}-piece ({target.set_evidence})")
     if target.zeroed_options:
-        print(f"      written to zero: {', '.join(target.zeroed_options)}")
+        print(f"      {len(target.zeroed_options)} other set(s) written to zero")
     print()
 
-    for profile in selected:
-        # The target's *set name* is per class; everything else about it is per tier,
-        # so it is re-derived here rather than reused across classes.
-        per_class = gearanchor.derive_target(
-            found, tier, sets, item_sets, wow_class=profile.wow_class
-        )
-        anchor = gearanchor.apply(per_class, gearanchor.read_kit(profile.path))
+    for profile, anchor in anchors:
         mark = " [unvalidated]" if profile.unvalidated else ""
         print(f"{profile.path.stem}{mark}")
         print(f"  {gearanchor.describe(anchor)}")

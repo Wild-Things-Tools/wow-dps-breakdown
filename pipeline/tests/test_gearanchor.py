@@ -7,9 +7,11 @@ code still does the thing the measurement justified.
 
 from __future__ import annotations
 
+import argparse
+
 import pytest
 
-from wowdps import gearanchor
+from wowdps import cli, gearanchor
 from wowdps.buffsweep import TierSet
 from wowdps.profiles import SpecProfile
 
@@ -597,3 +599,92 @@ def test_the_set_states_go_on_one_line(tmp_path):
     assert options[0].startswith("set_bonus=")
     assert options[0] == "set_bonus=" + "/".join(target.set_states())
     assert "midnight_season_1_4pc=0" in options[0]
+
+
+# --------------------------------------------------------------------------------
+# The command
+# --------------------------------------------------------------------------------
+
+
+SET_BONUS_INC = """\
+static const std::array<item_set_bonus_t, 2> __set_bonus_data { {
+  { "Primal Attire", "midnight_season_2", "MID2", 27, 2060, 2, 8, -1, -1, 111, \
+{ 500001, 500002, 0 } },
+  { "Primal Attire", "midnight_season_2", "MID2", 27, 2060, 4, 8, -1, -1, 112, \
+{ 500001, 500002, 0 } },
+} };
+"""
+
+
+def anchor_tier(tmp_path, *, body=FOUR_PIECE, sets=True, items=True, profiles_count=1, filter=None):
+    """A ``wowdps gear-anchor`` run over a small tier written into ``tmp_path``."""
+    simc_dir = tmp_path / "simc"
+    generated = simc_dir / "engine" / "dbc" / "generated"
+    generated.mkdir(parents=True)
+    (generated / "item_data.inc").write_text(ITEM_DATA_INC if items else "", encoding="utf-8")
+    (generated / "item_set_bonus.inc").write_text(SET_BONUS_INC if sets else "", encoding="utf-8")
+    tier_dir = simc_dir / "profiles" / "MID2"
+    tier_dir.mkdir(parents=True)
+    for index in range(profiles_count if body else 0):
+        name = f"MID2_Mage_Arcane_{index}"
+        (tier_dir / f"{name}.simc").write_text(
+            f'mage="{name}"\nspec=arcane\nlevel=80\nrole=spell\n' + body, encoding="utf-8"
+        )
+    return cli.cmd_gear_anchor(
+        argparse.Namespace(
+            simc_source=str(simc_dir),
+            profiles=str(simc_dir / "profiles"),
+            tier="MID2",
+            ptr=False,
+            profile=filter,
+            options=False,
+        )
+    )
+
+
+def test_a_refusal_reaches_the_user_as_a_message_not_a_traceback(tmp_path, caplog):
+    """Both refusals are worded for a human and name their own fix.
+
+    ``cmd_gear_anchor`` did not catch ``AnchorError``, so an unreadable item table or
+    a tier that states no item level surfaced as six frames of Python with that
+    sentence at the bottom -- where every other domain error in this CLI is a
+    ``logging.error`` and a ``return 1``.
+    """
+    assert anchor_tier(tmp_path, items=False) == 1
+    assert "belongs to a set" in caplog.text
+
+
+def test_an_empty_tier_is_not_reported_as_an_unmatched_filter(tmp_path, caplog):
+    """The message named ``None`` -- something the user never supplied.
+
+    "No profile matches None" is a different problem from "no profile matches
+    'Feral'", and only one of them is about a filter.
+    """
+    assert anchor_tier(tmp_path, body="") == 1
+    assert "nothing to anchor" in caplog.text
+    assert "None" not in caplog.text
+
+    caplog.clear()
+    assert anchor_tier(tmp_path / "other", filter="Feral") == 1
+    assert "matches 'Feral'" in caplog.text
+
+
+def test_the_tier_tally_is_derived_once_per_class_not_once_per_profile(tmp_path, monkeypatch):
+    """``derive_set_pieces`` re-read every profile in the tier on every call.
+
+    It takes no class and returns the same answer each time; only ``set_name`` and the
+    zeroed tokens vary. On MID2's forty damage profiles that was forty full tallies
+    and about 1,120 profile file reads, and any sweep consuming the anchor copies
+    whatever call shape it sees here.
+    """
+    calls = 0
+    real = gearanchor.derive_set_pieces
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(gearanchor, "derive_set_pieces", counted)
+    assert anchor_tier(tmp_path, profiles_count=3) == 0
+    assert calls == 1
