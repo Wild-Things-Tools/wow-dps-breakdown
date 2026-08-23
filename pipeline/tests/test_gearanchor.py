@@ -139,6 +139,32 @@ def test_gems_enchants_and_crafted_stats_survive_the_normalization():
     )
 
 
+def test_the_slot_aliases_simc_accepts_are_read_as_the_slots_they_are():
+    """simc's option parser takes more slot names than ``slot_type_string`` emits.
+
+    ``player_t::create_options`` registers ``shoulder`` beside ``shoulders`` and
+    ``wrist`` beside ``wrists``, against the same ``items[SLOT_*]`` entry. Three MID2
+    profiles write the singular form and all three are profiles simc *disabled* --
+    the set this module exists to rescue. Reading only the plural left Havoc's
+    shoulder at item level 723 and its wrist at 720 against an anchor of 334, while
+    the description reported success on the fourteen slots it did see.
+    """
+    text = (
+        "shoulder=,id=237689,ilevel=723\n"
+        "wrist=silvermoon_agents_deflectors,id=244576,ilevel=720\n"
+        "ring1=a_ring,id=1,ilevel=289\n"
+    )
+    lines = gearanchor.parse_gear_lines(text)
+
+    assert [line.slot for line in lines] == ["shoulders", "wrists", "finger1"]
+    # The source spelling survives the round trip: simc accepts either, and a
+    # normalization that renamed a slot would not be a normalization.
+    assert lines[0].render() == "shoulder=,id=237689,ilevel=723"
+    assert lines[1].with_ilevel(334).render() == (
+        "wrist=silvermoon_agents_deflectors,id=244576,ilevel=334"
+    )
+
+
 def test_only_live_gear_lines_are_read():
     """A profile's ``# Gear Summary`` and simc's generators both hide gear behind ``#``.
 

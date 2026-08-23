@@ -109,10 +109,10 @@ from .buffsweep import TierSet, sets_for_tier
 from .profiles import SpecProfile
 from .talenttree import CLASS_IDS
 
-#: simc's own equipment option names, in the order ``util::slot_type_string`` lists
-#: them (``engine/util/util.cpp``). This is simc's option vocabulary rather than
-#: anything about a tier, so it is written down; a slot simc adds would need a line
-#: here, and simc adding a slot is not a seasonal event.
+#: One entry per equipment slot, in the order ``util::slot_type_string`` lists them
+#: (``engine/util/util.cpp``). This is simc's vocabulary rather than anything about a
+#: tier, so it is written down; a slot simc adds would need a line here, and simc
+#: adding a slot is not a seasonal event.
 GEAR_SLOTS: tuple[str, ...] = (
     "head",
     "neck",
@@ -134,6 +134,29 @@ GEAR_SLOTS: tuple[str, ...] = (
     "tabard",
 )
 
+#: **simc's option parser accepts more slot names than ``slot_type_string`` emits**,
+#: and reading only the emitted ones is silent data loss rather than a parse error.
+#: Every alias here is a second ``add_option`` against the *same* ``items[SLOT_*]``
+#: entry in ``player_t::create_options`` (``engine/player/player.cpp``), so simc
+#: treats the two spellings as one slot and so must anything that reads a profile.
+#:
+#: Real profiles use them. Measured on simc 69a46e1: three MID2 profiles write
+#: ``shoulder=`` and ``wrist=`` -- Feral Druid and both Aldrachi Reaver Demon
+#: Hunters -- and every one of the three is a profile simc *disabled*, which is
+#: exactly the set this module exists to make comparable. Dropping those two lines
+#: left Havoc's shoulder at item level 723 and its wrist at 720 against an anchor of
+#: 334, while the description reported the other fourteen slots as normalized and
+#: said nothing about the two it never saw.
+SLOT_ALIASES: dict[str, str] = {
+    "shoulder": "shoulders",
+    "leg": "legs",
+    "foot": "feet",
+    "wrist": "wrists",
+    "hand": "hands",
+    "ring1": "finger1",
+    "ring2": "finger2",
+}
+
 #: Where ``ilevel=`` is inserted on a line that does not already carry one: directly
 #: after these, which is where simc's own profile generator writes it. Option order
 #: inside a gear line does not change what simc builds -- ``item_t::parse_options``
@@ -142,7 +165,11 @@ GEAR_SLOTS: tuple[str, ...] = (
 #: profile line, not about correctness.
 _ILEVEL_AFTER: tuple[str, ...] = ("bonus_id", "id")
 
-_GEAR_LINE = re.compile(rf"^({'|'.join(GEAR_SLOTS)})\s*=(?P<rest>.*)$")
+#: Longest first, so ``hands=`` cannot be read as the ``hand`` alias with a stray
+#: ``s``. Python's alternation backtracks and would get there anyway; the sort makes
+#: it true by construction rather than by a property of the regex engine.
+_SLOT_NAMES = sorted((*GEAR_SLOTS, *SLOT_ALIASES), key=len, reverse=True)
+_GEAR_LINE = re.compile(rf"^({'|'.join(_SLOT_NAMES)})\s*=(?P<rest>.*)$")
 
 
 @dataclass(frozen=True)
@@ -153,11 +180,19 @@ class GearLine:
     ``name`` keeps the bare item name simc puts first (empty for the
     ``trinket1=,id=...`` form the sweeps emit). Round-tripping an untouched line has
     to be byte-identical or a "normalized" kit is silently a different kit.
+
+    ``slot`` is always the canonical name, so two spellings of one slot compare and
+    deduplicate as one slot; ``alias`` carries the spelling the source used when it
+    used one of ``SLOT_ALIASES``, and ``render`` writes that back. Both halves are
+    load-bearing: without the first, a kit written with ``wrist=`` would be handed an
+    empty ``wrists=`` beside it and end up wearing neither.
     """
 
     slot: str
     name: str
     options: tuple[tuple[str, str], ...]
+    #: The source's spelling, when it differed from ``slot``. Empty otherwise.
+    alias: str = ""
 
     @property
     def ilevel(self) -> int | None:
@@ -183,7 +218,7 @@ class GearLine:
         return any(existing == key for existing, _ in self.options)
 
     def render(self) -> str:
-        parts = [f"{self.slot}={self.name}"]
+        parts = [f"{self.alias or self.slot}={self.name}"]
         parts.extend(f"{key}={value}" for key, value in self.options)
         return ",".join(parts)
 
@@ -230,7 +265,7 @@ def parse_gear_lines(text: str) -> list[GearLine]:
     return found
 
 
-def _parse_rest(slot: str, rest: str) -> GearLine:
+def _parse_rest(written: str, rest: str) -> GearLine:
     fields = rest.split(",")
     name = ""
     if fields and "=" not in fields[0]:
@@ -242,7 +277,13 @@ def _parse_rest(slot: str, rest: str) -> GearLine:
             continue
         key, value = field.split("=", 1)
         options.append((key.strip(), value.strip()))
-    return GearLine(slot=slot, name=name, options=tuple(options))
+    slot = SLOT_ALIASES.get(written, written)
+    return GearLine(
+        slot=slot,
+        name=name,
+        options=tuple(options),
+        alias="" if slot == written else written,
+    )
 
 
 def read_kit(path: Path) -> list[GearLine]:
