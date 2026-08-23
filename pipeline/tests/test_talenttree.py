@@ -720,6 +720,15 @@ def test_every_shipped_profile_round_trips_byte_identically():
     already been caught by once (the unquoted player line) would be fixed in
     ``profiles.py`` while this copy silently matched fewer profiles, and a shrinking
     corpus reads exactly like a corpus that shrank.
+
+    **The counts are over what simc *ships*.** Every hash that decodes is still checked,
+    unvalidated ones included -- a real hash is a real test of the format -- but a
+    profile materialised out of a generator by ``wowdps unvalidated --write`` is not part
+    of the corpus the bounds describe, and it is exactly the population that carries
+    stale talent hashes. Observed while writing this: a checkout with MID2's 13 disabled
+    profiles materialised into it goes from 13 undecodable to **15**, which is the
+    ``undecodable <= 15`` bound to the unit -- and the message that bound prints is "has
+    the tree moved?", which would have been the wrong answer confidently given.
     """
     root, ptr = simc_checkout()
     traits = parse_trait_data(root, ptr=ptr)
@@ -736,12 +745,13 @@ def test_every_shipped_profile_round_trips_byte_identically():
                 continue
             nodes = nodes_by_class.setdefault(class_id, nodes_for_class(traits, class_id))
             original = profile.talent_hash
+            shipped = not profile.unvalidated
             try:
                 loadout = decode_loadout(original, nodes)
             except TalentDecodeError:
-                undecodable += 1
+                undecodable += shipped
                 continue
             assert encode_loadout(loadout, nodes) == original, profile.path.name
-            checked += 1
+            checked += shipped
     assert checked >= 70, f"only {checked} profiles round-tripped; expected the whole corpus"
     assert undecodable <= 15, f"{undecodable} profiles no longer decode -- has the tree moved?"
