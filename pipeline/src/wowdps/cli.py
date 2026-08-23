@@ -175,6 +175,80 @@ def _resolve_scenarios(
     return list(unique.values())
 
 
+def _tier_set_reference(
+    profiles_dir: Path,
+    tier: str,
+    out_root: Path,
+) -> dataset.TierSetReference | None:
+    """Which tier-set state the tier's shipped profiles wear, or ``None`` and why.
+
+    **It discovers the tier itself rather than taking a profile list**, which is what
+    makes it shard-safe in the way ``profiles.spec_coverage`` already is: there is no
+    parameter a shard could hand its own slice through, so all twelve shards compute
+    one reference and ``merge_shards`` keeping the newest manifest keeps a correct
+    one. Passing ``cmd_build``'s ``all_profiles`` would be right today and would be
+    one refactor away from passing ``selected``, and the resulting per-shard majority
+    would be a full set of plausible flags on the wrong builds.
+
+    Tanks are discovered too, for the same reason and not because their damage
+    matters: they are shipped profiles that wear the set, and reading them makes the
+    reference independent of ``--include-tanks`` as well as of the shard. Measured on
+    simc 22b442e, MID2: with tanks the tally is 33 profiles at the four-piece against
+    2 at none, without them 26 against 2 -- the same verdict from a wider base.
+
+    Two of simc's generated tables answer the question and both live beside the
+    profiles directory, so the simc checkout is derived from it rather than asked for
+    again -- ``--profiles`` defaults to ``.work/simc/profiles`` and every workflow
+    lays it out that way. A checkout without them is not a reason to lose a night of
+    simulations, so it warns and returns ``None``; nothing is then flagged, which is
+    the state the dataset was in before this existed.
+
+    **Which of simc's two item tables is the same question ``talent-trees`` answers**,
+    and it is answered the same way: the published manifest records whether the tier
+    was built against PTR data, and reading the wrong table would describe a different
+    game state while decoding perfectly. Measured on simc 22b442e on 2026-08-23, the
+    live and PTR tables give byte-identical tallies for MID2 (12,260 items carry an
+    ``id_set`` in both), so this changes nothing today -- which is exactly the kind of
+    agreement that stops being true without announcing itself.
+    """
+    from . import buffsweep, gearanchor
+
+    simc_dir = profiles_dir.parent
+    manifest_path = out_root / tier / "index.json"
+    ptr = False
+    if manifest_path.is_file():
+        ptr = bool(json.loads(manifest_path.read_text(encoding="utf-8")).get("simc", {}).get("ptr"))
+    try:
+        sets = buffsweep.parse_tier_sets(simc_dir, ptr=ptr)
+        item_sets = gearanchor.parse_item_sets(simc_dir, ptr=ptr)
+        reference = dataset.shipped_set_states(
+            profiles.discover(profiles_dir, tier, dps_only=False), tier, sets, item_sets
+        )
+    except (OSError, gearanchor.AnchorError) as exc:
+        logging.warning(
+            "cannot read simc's set tables under %s (%s); no build will be checked "
+            "against the tier's tier-set state",
+            simc_dir,
+            exc,
+        )
+        return None
+
+    written = ", ".join(
+        f"{count} at {'no set' if state == 0 else str(state) + 'pc'}"
+        for state, count in reference.tally
+    )
+    if reference.state is None:
+        logging.warning(
+            "tier %s has no majority tier-set state among its shipped profiles (%s); "
+            "no build will be flagged, because there is nothing to differ from",
+            tier,
+            written or "no profile votes",
+        )
+        return reference
+    logging.info("tier %s ships tier-set states: %s", tier, written)
+    return reference
+
+
 def cmd_build(args: argparse.Namespace) -> int:
     profiles_dir = Path(args.profiles)
     tier = _resolve_tier(profiles_dir, args.tier)
@@ -253,6 +327,11 @@ def cmd_build(args: argparse.Namespace) -> int:
     if reference_item_level:
         logging.info("tier %s ships item levels %s", tier, reference_item_level)
 
+    # The other systematic gear difference a tier can hold, derived the same way and
+    # from the same list. Read once here rather than per profile: the item table is
+    # 26 MB and parsing it is the whole cost of the answer.
+    reference_set = _tier_set_reference(profiles_dir, tier, Path(args.out))
+
     results: list[dataset.SpecResult] = []
     simc_meta: dict = {}
 
@@ -265,6 +344,7 @@ def cmd_build(args: argparse.Namespace) -> int:
             settings,
             timeout=args.timeout,
             reference_item_level=reference_item_level,
+            reference_set=reference_set,
         )
         if not result.cells:
             logging.error("  no successful sims for %s, skipping", profile.id)

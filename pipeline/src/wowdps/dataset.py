@@ -26,7 +26,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import equipment, gearsweep, simc_runner
+from . import equipment, gearanchor, gearsweep, simc_runner
+from .buffsweep import TierSet
 from .parse import Cell, parse_cell
 from .profiles import SpecProfile, tier_label
 from .scenarios import Scenario, SimSettings
@@ -55,6 +56,13 @@ class SpecResult:
     #: gap actually misleads -- a bar chart of absolute DPS -- is the one place that
     #: cannot see it.
     gear_comparable: bool = True
+    #: Set when this build's tier-set state could not be matched to the tier's. A
+    #: second flag rather than a second meaning for ``gear_comparable``, because the
+    #: two are different claims and a build can carry either without the other:
+    #: MID2's Arcane builds sit squarely inside the item-level band and wear none of
+    #: the tier set, while its disabled profiles carry both gaps at once. One boolean
+    #: would leave the sentence beside it guessing which it meant.
+    tier_set_comparable: bool = True
     errors: list[str] = field(default_factory=list)
 
     def add(self, scenario_id: str, cell: Cell) -> None:
@@ -122,6 +130,11 @@ class SpecResult:
             # Only when false, so a tier whose builds all wear the tier's gear
             # produces the bytes it did before this existed.
             out["gearComparable"] = False
+        if not self.tier_set_comparable:
+            # Same rule, same reason. MID1's 41 shipped profiles all wear four
+            # pieces, so that tier emits this key nowhere and its published bytes do
+            # not move at all.
+            out["tierSetComparable"] = False
         if self.profile.unvalidated:
             # Emitted only when true, so a tier of shipped profiles produces the
             # same bytes it did before this existed and a quiet night still has
@@ -217,6 +230,181 @@ def gear_caveat(profile: SpecProfile, band: tuple[int, int] | None) -> str | Non
     )
 
 
+@dataclass(frozen=True)
+class TierSetReference:
+    """The tier-set state the tier's own shipped profiles are in, plus every build's.
+
+    Built once per run by ``shipped_set_states`` and then read, so the 26 MB item
+    table is parsed once and each profile's gear lines are read once. ``gearanchor``
+    already paid for that lesson in the other direction -- ``derive_target`` was
+    called per profile and each call ran a whole tier tally -- and the cost here is
+    the same shape: the table is what is expensive, not the comparison.
+
+    ``state`` is a *state* (no bonus / the two-piece / the four-piece), never a piece
+    count, and the difference is not cosmetic. MID2's shipped profiles split 12 at
+    four pieces and 14 at five, which is a coin flip between two numbers that mean
+    exactly the same thing to the simulation; reduced to states it is 26 to 2 and
+    there is nothing to flip. ``gearanchor.set_state`` is the reduction, over the
+    thresholds simc's own table carries rather than an assumed 2 and 4.
+    """
+
+    tier: str
+    #: The state a strict majority of the tier's shipped profiles are in, or ``None``
+    #: when no state holds one.
+    state: int | None
+    #: state -> how many shipped profiles are in it. Published in the log so a split
+    #: tier reads as split rather than as a verdict.
+    tally: tuple[tuple[int, int], ...]
+    #: profile id -> that build's own state. ``None`` means the tier ships no set for
+    #: its class, which is not the same answer as "wears none of one".
+    states: dict[str, int | None]
+
+    @property
+    def voters(self) -> int:
+        return sum(count for _state, count in self.tally)
+
+    @property
+    def majority(self) -> int:
+        """How many shipped profiles are in ``state``. Zero when there is no majority."""
+        return next((count for state, count in self.tally if state == self.state), 0)
+
+
+def _state_phrase(state: int) -> str:
+    """How a set state reads in a sentence, over thresholds nobody wrote down.
+
+    ``set_state`` returns the threshold met, so the number is simc's own: of the 29
+    sets in ``item_set_bonus.inc`` on 69a46e1, seventeen carry a two-piece alone,
+    ``MID_UWP`` carries 2 and 3 and ``DF_RT`` carries 2, 4 and 6. Spelling "the
+    4-piece" from the threshold rather than from a word list is what keeps this true
+    for a tier whose set is shaped differently.
+    """
+    return "no set bonus" if state == gearanchor.SET_NONE else f"the {state}-piece bonus"
+
+
+def shipped_set_states(
+    profiles: list[SpecProfile],
+    tier: str,
+    sets: list[TierSet],
+    item_sets: dict[int, int],
+) -> TierSetReference:
+    """What tier-set state the tier's *shipped* profiles wear, and what each build wears.
+
+    Derived from the tier itself, the way ``shipped_item_levels`` derives its band and
+    ``spec_coverage`` derives its reference spec list. Nothing here names a spec, a
+    class or a set token, so a new season needs no edit: the sets come from simc's
+    ``item_set_bonus`` table, the membership of an equipped item from its ``id_set``
+    in simc's item table, and the reference state from a vote among the profiles simc
+    ships.
+
+    **Shard-safe, and it has to be.** Every input is something simc *publishes* for
+    the whole tier -- the profiles directory and two generated tables -- never the
+    slice a shard simulated. So all twelve shards compute the same reference, and
+    ``merge_shards`` keeping the newest manifest keeps a correct one. The same
+    property is why the caller passes every profile of the tier rather than its own
+    selection; passing a shard's slice would make the answer depend on the shard, and
+    it would do so silently.
+
+    Disabled profiles do not vote, for the same reason they are excluded from the
+    item-level band: MID2's twelve wear no tier set at all, so letting them vote would
+    drag the reference toward their own gap and quietly excuse it. They are still
+    *counted* -- ``states`` carries every profile handed in -- because the point of
+    the flag is to say so about them.
+
+    A profile whose class the tier ships no set for gets ``None`` rather than zero. A
+    class with no set cannot wear one, and calling that "wears none" would flag it for
+    a gap that does not exist. Neither MID1 nor MID2 has such a class, but a tier that
+    shipped a partial set list would otherwise flag exactly the classes it forgot.
+
+    **A strict majority, or no reference at all.** The flag's sentence is "this build
+    differs from what the tier wears", and a tier split down the middle has no such
+    thing -- naming one half the reference would flag the other half for disagreeing
+    with a coin toss. More than half is what the word means rather than a tolerance
+    somebody tuned, and the failure direction is the safe one: no majority means no
+    build is flagged. Note that this is deliberately *not* the tie rule
+    ``gearanchor.derive_set_pieces`` uses, which breaks toward the lower state; that
+    one has to answer with something because a computed build has to wear something,
+    and this one does not.
+    """
+    states: dict[str, int | None] = {}
+    tally: dict[int, int] = {}
+    for profile in profiles:
+        ids = gearanchor.set_ids_for(sets, tier, profile.wow_class)
+        if not ids:
+            states[profile.id] = None
+            continue
+        thresholds = _set_thresholds(sets, tier, ids) or gearanchor.DEFAULT_THRESHOLDS
+        pieces = gearanchor.count_set_pieces(gearanchor.read_kit(profile.path), ids, item_sets)
+        state = gearanchor.set_state(pieces, thresholds)
+        states[profile.id] = state
+        if not profile.unvalidated:
+            tally[state] = tally.get(state, 0) + 1
+
+    voters = sum(tally.values())
+    reference: int | None = None
+    for state, count in tally.items():
+        if count * 2 > voters:
+            reference = state
+            break
+    return TierSetReference(
+        tier=tier,
+        state=reference,
+        tally=tuple(sorted(tally.items())),
+        states=states,
+    )
+
+
+def _set_thresholds(sets: list[TierSet], tier: str, ids: frozenset[int]) -> tuple[int, ...] | None:
+    """The piece counts this tier's set ships a bonus for, off simc's own table."""
+    for entry in sets:
+        if entry.tier == tier and entry.set_id in ids and entry.thresholds:
+            return entry.thresholds
+    return None
+
+
+def tier_set_caveat(profile: SpecProfile, reference: TierSetReference | None) -> str | None:
+    """Say so when a build wears a different tier set state from the rest of the tier.
+
+    The same argument ``gear_caveat`` makes for item level, for the other systematic
+    gear difference a tier can contain. **Absolute DPS does not survive either one**,
+    and this project already states that for the tier axis -- a season-over-season
+    comparison has to be restricted to within-run ratios -- while the ranking draws
+    one tier's builds side by side as bars.
+
+    Measured on simc 22b442e over MID2's 28 shipped damage profiles: 14 wear five
+    pieces of this season's set, 12 wear four, and **two wear none** -- both Arcane
+    Mage builds. Their gear is otherwise the tier's, item level and all, and their own
+    action lists branch on ``set_bonus.midnight_season_2_4pc`` twice, so they run the
+    no-four-piece branch of their own rotation. Nothing on the site said so.
+
+    The gap is a property of the *equipped items*, not of an option: simc reads
+    ``dbc_item_data_t::id_set`` off each equipped piece (``set_bonus_t::initialize``)
+    and every MID2 profile's ``set_bonus=`` lines are commented out, all 35 of them,
+    which is simc's generator convention and not a spec disabling its own set. Fire
+    Mage wears ``primal_leywardens_manaflux`` where Arcane wears
+    ``ornaments_of_the_eternal_coil``; the former carries ``id_set`` 2060 and the
+    latter carries none, and Fire's tier pieces even redirect their base stats to the
+    exact ids Arcane equips.
+
+    Symmetric, like ``gear_caveat``: a build wearing the set in a tier that does not
+    is as incomparable as one going without in a tier that does. Which of those MID2
+    is does not need to be written down anywhere for this to fire.
+    """
+    if reference is None or reference.state is None:
+        return None
+    mine = reference.states.get(profile.id)
+    if mine is None or mine == reference.state:
+        # Unknown and equal are the same output and different states. Unknown is a
+        # class the tier ships no set for, or a build the reference was not built
+        # from; neither is something to accuse of a gap.
+        return None
+    return (
+        f"This build wears {_state_phrase(mine)} of {reference.tier}'s tier set, where "
+        f"{reference.majority} of the {reference.voters} profiles simc ships for the tier "
+        f"wear {_state_phrase(reference.state)}. Absolute damage does not survive that "
+        f"difference, so its position against those builds is partly gear rather than spec."
+    )
+
+
 def run_spec(
     simc: Path,
     profile: SpecProfile,
@@ -224,6 +412,7 @@ def run_spec(
     settings: SimSettings,
     timeout: int = 1800,
     reference_item_level: int | None = None,
+    reference_set: TierSetReference | None = None,
 ) -> SpecResult:
     """Run every scenario x target count for one spec."""
     result = SpecResult(profile=profile)
@@ -235,6 +424,16 @@ def run_spec(
         seen_caveats.add(gear)
         result.caveats.append(gear)
         result.gear_comparable = False
+
+    # A second caveat and a second flag, deliberately not folded into the first. An
+    # item-level gap and a set gap are different claims about the same bar, and MID2
+    # has a build with each one alone.
+    tier_set = tier_set_caveat(profile, reference_set)
+    if tier_set:
+        log.warning("  %s", tier_set)
+        seen_caveats.add(tier_set)
+        result.caveats.append(tier_set)
+        result.tier_set_comparable = False
 
     for scenario in scenarios:
         for targets in scenario.sims():
