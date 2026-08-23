@@ -99,6 +99,28 @@ export interface SpecSummary {
    */
   gearComparable?: boolean;
   /**
+   * False when this build's tier-set state is not the one a strict majority of the
+   * tier's shipped profiles wear. Absent when it matches, so a tier that agrees with
+   * itself emits nothing -- MID1's shipped profiles all wear four pieces and gain no
+   * key at all.
+   *
+   * **A second flag, never folded into `gearComparable`.** That one means item
+   * level; this one means set state, and a build can carry either without the other.
+   * MID2's two Arcane Mage builds have this one alone -- their gear sits squarely
+   * inside the tier's 334-344 band and they wear no set bonus at all, worth a
+   * measured +13.13% (Spellslinger) and +14.42% (Sunfury) at one target. The
+   * disabled profiles carry both. One boolean would leave the sentence beside it
+   * guessing which it meant, and an item-level bump would close one gap while
+   * leaving the other looking fixed.
+   *
+   * The flag is *symmetric* and says only "not the tier's state": wearing the set
+   * where the tier does not is as incomparable as going without where it does, and
+   * the tier ships more than two states (simc's own thresholds, not an assumed 2 and
+   * 4). Which way round it went for this build is in its `caveats`, never inferred
+   * from the boolean.
+   */
+  tierSetComparable?: boolean;
+  /**
    * True when this build came from a profile simc wrote into its generator and left
    * commented out -- complete, and not switched on for the tier. Absent, never
    * false, so a tier of shipped profiles produces the bytes it did before this

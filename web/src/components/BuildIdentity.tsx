@@ -59,6 +59,18 @@ export interface BuildLike {
    * ones beside it. A build can be either without being the other.
    */
   gearComparable?: boolean;
+  /**
+   * False when the build's tier-set state is not the one the tier's shipped profiles
+   * wear. A third claim, not a shade of the second: `gearComparable` is about item
+   * level, this is about set state, and MID2 has a build with each one alone -- the
+   * two Arcane Mage builds wear no set inside the tier's own item-level band, the
+   * disabled profiles are behind on both.
+   *
+   * Symmetric by construction, so the mark it draws must not name a direction: the
+   * flag fires equally on a build wearing the set in a tier that does not. The
+   * direction is a sentence, and sentences live in the build's own `caveats`.
+   */
+  tierSetComparable?: boolean;
 }
 
 /** "Frost Death Knight" -- the spec, without the hero tree in brackets. */
@@ -337,7 +349,10 @@ export function BuildIdentity({
 export function UnvalidatedMark({
   build,
 }: {
-  build: Pick<BuildLike, "unvalidated" | "gearComparable">;
+  build: Pick<
+    BuildLike,
+    "unvalidated" | "gearComparable" | "tierSetComparable"
+  >;
 }) {
   return (
     <>
@@ -354,6 +369,24 @@ export function UnvalidatedMark({
         // balance result unless it is said out loud.
         <Mark title="This profile's gear is not at the tier's item level, so its place in a ranking of absolute damage is partly gear rather than spec. The build's own page states the gap.">
           gear differs
+        </Mark>
+      ) : null}
+      {build.tierSetComparable === false ? (
+        // The other systematic gear difference a tier can hold, and a separate mark
+        // rather than a shade of the one above. Measured on MID2: both Arcane Mage
+        // builds wear no piece of the season's set where 33 of the 35 profiles simc
+        // ships wear the four-piece, which is +13.13% and +14.42% of their own damage
+        // at one target -- a deficit sitting in the ranking with nothing saying so.
+        //
+        // "tier set differs", not "wears no tier set". The dataset's flag is
+        // symmetric and multi-state: it fires on any build whose set state is not the
+        // tier's, so a build wearing the set where the tier does not carries the same
+        // boolean. A mark naming a direction the boolean does not carry would be the
+        // `inRotation` failure again -- a label promising more than its computation
+        // delivers, wrong in the direction nobody checks. The direction is a
+        // sentence, and it is on the build's own page.
+        <Mark title="This build's tier-set state is not the one the tier's shipped profiles wear, so its place in a ranking of absolute damage is partly gear rather than spec. The build's own page states which way round.">
+          tier set differs
         </Mark>
       ) : null}
     </>
@@ -574,7 +607,27 @@ export function makeBuildTick(
  * on its own, so what makes this legal is that three other channels say it in
  * words -- the caption under the chart, the badge in the table twin, and the
  * coverage panel.
+ *
+ * **Two flags, one channel, and that is deliberate rather than a merge.** The
+ * dataset keeps `gearComparable` (item level) and `tierSetComparable` (set state)
+ * apart because they are different claims, and this function does not flatten them:
+ * it answers the one question they share, *can this bar be ranked against the ones
+ * beside it*, which both of them answer no to. A second visual channel would have to
+ * be a colour, and class colour is the primary encoding here -- there is no slot
+ * left that thirteen class hues do not collide with. So the fade means "partly
+ * gear", the two marks in the table twin say which kind, and the caption names each
+ * reason in its own clause and only when a row actually carries it. What must never
+ * happen is the caption claiming one reason for a fade caused by the other; that is
+ * the failure the two-flag split exists to prevent.
+ *
+ * Without this, MID2's two Arcane builds would be flagged everywhere except the one
+ * place the flag matters: the Overview opens on the chart, so the ranking a reader
+ * sees first would show a 13-14% set deficit as an ordinary bar.
  */
-export function buildOpacity(build: Pick<BuildLike, "gearComparable">): number {
-  return build.gearComparable === false ? 0.45 : 1;
+export function buildOpacity(
+  build: Pick<BuildLike, "gearComparable" | "tierSetComparable">,
+): number {
+  return build.gearComparable === false || build.tierSetComparable === false
+    ? 0.45
+    : 1;
 }
