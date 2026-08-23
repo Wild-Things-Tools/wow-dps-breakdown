@@ -1023,3 +1023,34 @@ def test_an_item_with_no_slot_reaches_the_published_document(tmp_path, monkeypat
     assert document["source"]["encounters"][0]["itemsWithoutASlot"] == [250215]
     # The build itself still lands: the talents are readable even when the gear is not.
     assert document["specs"][0]["builds"][0]["sources"][0]["simcGear"] == []
+
+
+def test_the_sweep_actually_applies_the_difficulty_refusal():
+    """`check_difficulty` was written, tested and *not called* -- the defect family
+    this repository's notes name over and over: the code looks complete from every
+    angle except running it, and the document would have claimed one difficulty per
+    run while nothing enforced it."""
+    client = StubClient([("aBcD1234", 7)], [DPS_ROW])
+    original = client.encounter_rankings
+
+    def heroic_row(*args, **kwargs):
+        page = original(*args, **kwargs)
+        page["characterRankings"]["rankings"][0]["difficulty"] = 4
+        return page
+
+    client.encounter_rankings = heroic_row
+    settings = harvest.HarvestSettings(encounter_ids=(3470,), difficulty=5, reports=1)
+    with pytest.raises(harvest.DifficultyMixed) as caught:
+        harvest.harvest_encounter(client, 3470, settings, {}, harvest.QueryPlan())
+    assert "difficulty 4" in str(caught.value)
+    assert "asked for 5" in str(caught.value)
+
+
+def test_a_ranking_row_stating_no_difficulty_does_not_stop_the_sweep():
+    """Unknown is not wrong, and `characterRankings` is untyped -- whether a row
+    carries the field at all is not knowable from the schema."""
+    client = StubClient([("aBcD1234", 7)], [DPS_ROW])
+    settings = harvest.HarvestSettings(encounter_ids=(3470,), difficulty=5, reports=1)
+    found, summary, _ = harvest.harvest_encounter(client, 3470, settings, {}, harvest.QueryPlan())
+    assert summary["killsRead"] == 1
+    assert found

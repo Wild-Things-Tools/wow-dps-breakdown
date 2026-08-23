@@ -922,6 +922,21 @@ def observations_from_fight(
     return observations, buckets, tuple(unresolved)
 
 
+def stated_difficulty(entry: dict) -> object:
+    """The difficulty a ranking row states, or ``None`` if it states none.
+
+    ``characterRankings`` is an untyped JSON scalar, so whether a row carries this
+    at all is not knowable from the schema and is not assumed here. Returning
+    ``None`` for an absent field is what lets ``check_difficulty`` apply its
+    unknown-is-not-wrong rule instead of this function guessing one.
+    """
+    for key in ("difficulty", "difficultyID", "difficultyId"):
+        value = entry.get(key)
+        if value is not None:
+            return value
+    return None
+
+
 def check_difficulty(stated: object, wanted: int, where: str) -> None:
     """Refuse a fight that states a difficulty this harvest did not ask for.
 
@@ -974,6 +989,21 @@ def harvest_encounter(
     name = next(
         (page.get("name") for page in pages if page.get("name")), f"encounter {encounter_id}"
     )
+
+    # The rankings query is already scoped to one difficulty, so this can only fire
+    # when that scoping did not hold -- which is exactly why it is a refusal and not
+    # a filter. Checked here rather than after the kills are chosen, because a row
+    # dropped by `select_report_fights` would take its disagreement with it.
+    from .warcraftlogs import _ranking_entries
+
+    for page in pages:
+        for entry in _ranking_entries(page):
+            check_difficulty(
+                stated_difficulty(entry),
+                settings.difficulty,
+                f"a ranking row of encounter {encounter_id}",
+            )
+
     kills = warcraftlogs_select(pages, settings.reports, settings.order)
 
     observations: list[Observation] = []
