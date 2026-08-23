@@ -352,8 +352,8 @@ def test_the_set_state_comes_from_the_tier_not_from_the_kit(tmp_path):
     assert dict(target.set_tally) == {gearanchor.SET_NONE: 1, gearanchor.SET_FOUR: 2}
 
     bare = gearanchor.apply(target, gearanchor.parse_gear_lines(NO_PIECE))
-    assert "set_bonus=midnight_season_2_2pc=1" in bare.options()
-    assert "set_bonus=midnight_season_2_4pc=1" in bare.options()
+    assert "midnight_season_2_2pc=1" in bare.target.set_states()
+    assert "midnight_season_2_4pc=1" in bare.target.set_states()
 
 
 def test_a_tier_whose_profiles_wear_no_set_anchors_without_one(tmp_path):
@@ -370,8 +370,8 @@ def test_a_tier_whose_profiles_wear_no_set_anchors_without_one(tmp_path):
     target = gearanchor.derive_target(profiles, "MID2", MID2_SETS, item_sets, wow_class="Mage")
 
     assert target.set_pieces == gearanchor.SET_NONE
-    assert "set_bonus=midnight_season_2_2pc=0" in target.set_options()
-    assert "set_bonus=midnight_season_2_4pc=0" in target.set_options()
+    assert "midnight_season_2_2pc=0" in target.set_states()
+    assert "midnight_season_2_4pc=0" in target.set_states()
 
 
 def test_an_undeclared_set_state_is_none_rather_than_the_four_piece(tmp_path):
@@ -387,8 +387,8 @@ def test_an_undeclared_set_state_is_none_rather_than_the_four_piece(tmp_path):
     )
 
     assert bare.set_pieces == gearanchor.SET_NONE
-    assert "set_bonus=midnight_season_2_2pc=0" in bare.set_options()
-    assert "set_bonus=midnight_season_2_4pc=0" in bare.set_options()
+    assert "midnight_season_2_2pc=0" in bare.set_states()
+    assert "midnight_season_2_4pc=0" in bare.set_states()
 
 
 def test_a_split_tier_takes_the_lower_state(tmp_path):
@@ -428,8 +428,8 @@ def test_last_seasons_set_is_written_to_zero(tmp_path):
     target = gearanchor.derive_target(profiles, "MID2", MID2_SETS, item_sets, wow_class="Mage")
 
     assert target.zeroed_options == ("midnight_season_1",)
-    assert "set_bonus=midnight_season_1_2pc=0" in target.set_options()
-    assert "set_bonus=midnight_season_1_4pc=0" in target.set_options()
+    assert "midnight_season_1_2pc=0" in target.set_states()
+    assert "midnight_season_1_4pc=0" in target.set_states()
 
 
 def test_an_unnumbered_set_of_this_expansion_is_zeroed_too(tmp_path):
@@ -448,7 +448,7 @@ def test_an_unnumbered_set_of_this_expansion_is_zeroed_too(tmp_path):
     )
 
     assert "bite_of_zuljan" in target.zeroed_options
-    assert "set_bonus=bite_of_zuljan_2pc=0" in target.set_options()
+    assert "bite_of_zuljan_2pc=0" in target.set_states()
 
 
 def test_a_set_is_zeroed_only_at_the_piece_counts_it_actually_has(tmp_path):
@@ -466,9 +466,9 @@ def test_a_set_is_zeroed_only_at_the_piece_counts_it_actually_has(tmp_path):
         profiles, "MID2", [*MID2_SETS, CRAFTED_SET], item_sets, wow_class="Mage"
     )
 
-    assert "set_bonus=bite_of_zuljan_4pc=0" not in target.set_options()
+    assert "bite_of_zuljan_4pc=0" not in target.set_states()
     # The thresholds are read per set, so the raid tier beside it keeps both.
-    assert "set_bonus=midnight_season_1_4pc=0" in target.set_options()
+    assert "midnight_season_1_4pc=0" in target.set_states()
 
 
 def test_a_set_the_class_cannot_wear_is_not_written_at_all(tmp_path):
@@ -576,3 +576,24 @@ def test_the_description_says_what_moved_and_what_did_not(tmp_path):
     assert described["slotsAlreadyAtTarget"] == ["legs", "finger1"]
     assert described["preserved"]["enchants"] == ["head", "finger1"]
     assert "334" in gearanchor.describe(anchor)
+
+
+def test_the_set_states_go_on_one_line(tmp_path):
+    """simc appends a repeated ``set_bonus=`` and warns every time it does.
+
+    ``parse_set_bonus`` concatenates with a ``/`` and raises a MODERATE error on each
+    extra line, so forty-one zeroed states would be forty-one warnings per actor.
+    The two spellings are the same run, measured rather than assumed: Shadow Priest,
+    MID2, 1000 deterministic iterations, one target, the set switched off, two lines
+    gave **187,312.2** and the slash-delimited line gave **187,312.2** -- bit-identical
+    -- against 210,980.8 with the set left alone.
+    """
+    item_sets = gearanchor.parse_item_sets(write_items(tmp_path))
+    profiles = [profile(tmp_path, "a", FOUR_PIECE, item_level=334)]
+    target = gearanchor.derive_target(profiles, "MID2", MID2_SETS, item_sets, wow_class="Mage")
+    options = target.set_options()
+
+    assert len(options) == 1
+    assert options[0].startswith("set_bonus=")
+    assert options[0] == "set_bonus=" + "/".join(target.set_states())
+    assert "midnight_season_1_4pc=0" in options[0]

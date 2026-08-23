@@ -361,10 +361,14 @@ class SetToken:
     option: str
     thresholds: tuple[int, ...] = DEFAULT_THRESHOLDS
 
-    def options(self, pieces: int) -> tuple[str, ...]:
-        """``set_bonus=`` lines putting this set at ``pieces``, one per threshold."""
+    def states(self, pieces: int) -> tuple[str, ...]:
+        """``<token>_<N>pc=<0|1>`` clauses putting this set at ``pieces``.
+
+        Clauses rather than whole options, because simc wants them on **one**
+        ``set_bonus=`` line -- see ``AnchorTarget.set_options``.
+        """
         return tuple(
-            f"set_bonus={self.option}_{threshold}pc={1 if pieces >= threshold else 0}"
+            f"{self.option}_{threshold}pc={1 if pieces >= threshold else 0}"
             for threshold in self.thresholds
         )
 
@@ -588,20 +592,38 @@ class AnchorTarget:
         """The tokens written to zero, for display and for the published description."""
         return tuple(token.option for token in self.zeroed)
 
-    def set_options(self) -> tuple[str, ...]:
-        """``set_bonus=`` lines: this tier's set on, every other set off.
+    def set_states(self) -> tuple[str, ...]:
+        """Every ``<token>_<N>pc=<0|1>`` the anchor states, this tier's set first.
 
         Written in both directions for the reason ``buffsweep.crossover_variants``
         writes its zeroes: a profile already wearing either set would otherwise carry
         it into a state meant to be without it, and the anchor would be describing a
         kit it is not producing.
         """
-        options: list[str] = []
+        states: list[str] = []
         if self.set_option:
-            options.extend(SetToken(self.set_option, self.set_thresholds).options(self.set_pieces))
+            states.extend(SetToken(self.set_option, self.set_thresholds).states(self.set_pieces))
         for token in self.zeroed:
-            options.extend(token.options(SET_NONE))
-        return tuple(options)
+            states.extend(token.states(SET_NONE))
+        return tuple(states)
+
+    def set_options(self) -> tuple[str, ...]:
+        """One ``set_bonus=`` line carrying all of them, slash-delimited.
+
+        One line rather than one per state, because that is what simc asks for and
+        the ask is not cosmetic-looking until you read ``parse_set_bonus``: a repeated
+        ``set_bonus=`` **appends** with a ``/`` and raises a MODERATE error every time
+        it does. Forty-one zeroed states would be forty-one warnings per actor,
+        drowning the one that matters.
+
+        The two forms are otherwise the same run, measured rather than assumed --
+        Shadow Priest, MID2, 1000 deterministic iterations, one target, the set
+        switched off: two lines gave **187,312.2** and the slash-delimited line gave
+        **187,312.2**, bit-identical, against 210,980.8 with the set left alone. So
+        this is a change of spelling and not of state.
+        """
+        states = self.set_states()
+        return (f"set_bonus={'/'.join(states)}",) if states else ()
 
     def to_json(self) -> dict:
         return {
