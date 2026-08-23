@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .profiles import SpecProfile
@@ -83,6 +83,19 @@ class TierSet:
     option: str
     tier: str
     class_id: int
+    #: ``item_set_bonus_t::set_id``, which is what ``dbc_item_data_t::id_set`` on an
+    #: equipped item is matched against (``set_bonus_t::initialize``,
+    #: ``engine/player/set_bonus.cpp``). Carried so that *whether a kit already wears
+    #: the set* can be answered offline; nothing in this module needs it, and
+    #: ``to_json`` deliberately does not emit it, so no published byte moves.
+    set_id: int = 0
+    #: Every piece count this set ships a bonus for, ascending -- the ``bonus`` column
+    #: of the same rows. **Not always (2, 4)**: enumerated on simc 69a46e1, of the 29
+    #: sets in the table 17 carry a 2-piece alone, ``MID_UWP`` carries 2 and 3 and
+    #: ``DF_RT`` carries 2, 4 and 6. Carried so that anything writing
+    #: ``set_bonus=<token>_<N>pc=`` writes the ``N`` the set actually has, which is
+    #: what makes the emitted list reproduce simc's own ``generate_set_bonus_options``.
+    thresholds: tuple[int, ...] = ()
 
     def to_json(self) -> dict:
         return {"name": self.name, "option": self.option, "tier": self.tier}
@@ -97,16 +110,30 @@ def parse_tier_sets(simc_dir: Path, ptr: bool = False) -> list[TierSet]:
     name = "item_set_bonus_ptr.inc" if ptr else "item_set_bonus.inc"
     path = simc_dir / "engine" / "dbc" / "generated" / name
     found: dict[tuple[str, str, int], TierSet] = {}
+    thresholds: dict[tuple[str, str, int], set[int]] = {}
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         row = _SET_ROW.search(line)
         if not row:
             continue
-        set_name, option, tier, _enum, _set_id, _bonus, class_id, _spec = row.groups()
+        set_name, option, tier, _enum, set_id, bonus, class_id, _spec = row.groups()
         key = (option, tier, int(class_id))
         found.setdefault(
-            key, TierSet(name=set_name, option=option, tier=tier, class_id=int(class_id))
+            key,
+            TierSet(
+                name=set_name,
+                option=option,
+                tier=tier,
+                class_id=int(class_id),
+                set_id=int(set_id),
+            ),
         )
-    return sorted(found.values(), key=lambda entry: (entry.tier, entry.class_id, entry.name))
+        # One row per (set, class, threshold, spec), so the thresholds accumulate
+        # across rows the dedup above collapses.
+        thresholds.setdefault(key, set()).add(int(bonus))
+    entries = [
+        replace(entry, thresholds=tuple(sorted(thresholds[key]))) for key, entry in found.items()
+    ]
+    return sorted(entries, key=lambda entry: (entry.tier, entry.class_id, entry.name))
 
 
 def sets_for_tier(sets: list[TierSet], tier: str) -> list[TierSet]:

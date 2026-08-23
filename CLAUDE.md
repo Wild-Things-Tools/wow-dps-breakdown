@@ -599,6 +599,352 @@ carry the same `always()` publish job over an upload step with no condition. Whe
 their sweeps write partial output at all is a separate question from this one, so
 that is a finding for a human rather than a change made in passing.
 
+## The gear anchor: what a computed build wears
+
+`gearanchor.py` + `wowdps gear-anchor`. A build this project *computes* -- from a
+harvested player's kit, or a mutated talent hash -- has no gear of its own, so
+whatever kit it is handed is a second variable sitting beside the talents. This is
+the module that removes it.
+
+There are two standards of "equal gear" and they are not the same standard.
+
+- **Within one spec's search, gear must be byte-identical.** Not roughly equal: on
+  one ring the enchant is worth **+1.09%** and the gem **+0.44%** against **+0.09%**
+  for the whole ten-item-level step. A talent difference worth 2-3% sits underneath a
+  kit difference of that size. So the anchor emits one kit and every candidate wears
+  it; only `talents=` varies.
+- **Across specs, for ranking, the target is a band.** MID2's shipped profiles state
+  334 and 344, which is why `dataset.shipped_item_levels` derives a band rather than
+  fixing a value. The anchor lands inside it and says where.
+
+### Item level: the floor of the band, and the two rejected alternatives
+
+Both rejections are measurements, taken on simc `69a46e1` on 2026-08-23.
+
+- **Not the mode.** Across MID2's shipped profiles, the 301 gear lines that state an
+  item level split **133 at 344, 131 at 334** and 37 at 331. A two-line margin out of
+  301 flips on one profile being re-geared, and an anchor that moves by 10 item levels
+  for that reason is worse than one that never moves.
+- **Not the ceiling.** simc's own `# gear_ilvl` lines put the shipped profiles'
+  *average* item level at **336.75-339.25**. Anchoring at 344 would put every computed
+  build above every shipped build it is ranked beside -- the flattery
+  `SlotPool.baseline_ilevel` already refuses one layer down, for the same reason.
+
+The floor is the direction that cannot manufacture a win. It is applied by writing
+`ilevel=` onto **every** gear line, including lines that state none: measured by
+reading `gear.<slot>.ilevel` back out of simc's own json2, MID2's Windwalker Monk
+profile states no item level anywhere, simc resolves its fifteen slots to 285-289
+from the bonus ids, and the anchor moves all fifteen to 334. A normalizer that only
+*replaced* an existing value would leave that profile exactly where it was and report
+success.
+
+**Gems, enchants, crafted stats and bonus ids are preserved verbatim.** The first
+three because they carry the stats above; bonus ids because keeping them is free --
+an explicit `ilevel` overrides the scaling they would otherwise set, measured
+identical to the last digit on both a trinket and a ring -- and dropping them would
+generalise a two-slot measurement to sixteen slots.
+
+### simc's option parser takes more slot names than its data emits
+
+**The rule, which is repo-wide and not this module's:** *a reader accepts every alias
+simc accepts; an emitter writes what simc ships.* `util::slot_type_string` emits
+`shoulders`, `wrists`, `legs`, `feet`, `hands`, `finger1`, `finger2`.
+`player_t::create_options` (`engine/player/player.cpp:13276-13286`) *also* registers
+`shoulder`, `wrist`, `leg`, `foot`, `hand`, `ring1` and `ring2` against the same
+`items[SLOT_*]` entry, so **neither spelling is "the" correct one** and a reader that
+takes only one is silently reading half the population.
+
+Which population matters, measured on simc 69a46e1 on 2026-08-23:
+
+- **Every shipped MID2 profile writes the plural.** `^(shoulder|wrist)=` over the
+  shipped profiles returns nothing.
+- **The singular appears only in the disabled/materialised profiles** -- Feral Druid,
+  Havoc Aldrachi Reaver, Vengeance Aldrachi Reaver -- which is exactly the set the
+  gear anchor exists to make comparable.
+
+So `GEAR_SLOTS` keeps the names simc emits and `SLOT_ALIASES` adds the ones its parser
+also takes; nothing is renamed in either direction. `GearLine.slot` is canonical, so
+two spellings of one slot compare and deduplicate as one; `GearLine.alias` keeps the
+source's spelling so a line renders back byte-identically and every emitted line is
+one simc itself wrote.
+
+Both halves are load-bearing. Without the first, a kit written with `wrist=` gets an
+empty `wrists=` beside it, and the empty line comes last and wins -- the slot ends up
+bare. Without the alias reader at all, which is what shipped until 2026-08-23, Havoc
+kept its shoulder at item level **723** and its wrist at **720** against an anchor of
+334 while the description said "14 slot(s) normalized" and never mentioned the two it
+had not seen.
+
+`gearpool._EQUIP_LINE` had the same bug pointing the other way and is fixed
+separately -- see its own entry rather than this one.
+
+### Every other set is written to zero, not just the other seasons
+
+The zeroing used to be bounded to "other numbered tiers of the same expansion",
+expressed as `fullmatch("([A-Za-z]+)(\d+)")` on the tier label. Two things were
+wrong with that and both are measured on simc 69a46e1:
+
+- **The eight un-numbered Midnight tiers fail that regex on the underscore.**
+  `MID_BOZ`, `MID_VB`, `MID_AT` and five more are real 2-piece bonuses of this
+  expansion, and **ten of MID2's forty damage profiles wear two or more pieces of
+  one** -- `bite_of_zuljan` on all four Frost/Unholy Death Knight builds, Survival
+  Hunter, Outlaw Rogue and both Enhancement Shamans; `voidlight_bindings` on Balance
+  Druid.
+- **"This expansion" is the wrong bound anyway.** MID2's Havoc profile wears a full
+  `thewarwithin_season_3` set, from the expansion before.
+
+So everything but the anchor's own token is zeroed. Two things that has to get right,
+both checked against simc itself rather than reasoned about:
+
+- **Thresholds are per set.** Of the 29 sets in `item_set_bonus.inc`, 17 carry a
+  2-piece alone, `MID_UWP` carries 2 and 3, `DF_RT` carries 2, 4 and 6. `TierSet`
+  reads them, and the resulting 42 `(token, threshold)` pairs for MID2's Arcane Mage
+  are **the same 42** simc's own `generate_set_bonus_options()` prints. (simc does
+  tolerate `_4pc` on a 2-piece set -- measured, it runs -- so this is about writing
+  what exists, not about a crash.)
+- **The class is load-bearing.** `SL3` ships for twelve classes and not for Evoker,
+  and `set_bonus=shadowlands_season_3_2pc=0` on MID2's Devastation profile **exits 80
+  with no DPS**. And do not take simc's printed vocabulary as the class-safe list: it
+  is byte-identical for Mage and Evoker, so it advertises the option simc then
+  refuses.
+
+**All of it goes on one `set_bonus=` line, slash-delimited.** `parse_set_bonus`
+appends a repeated `set_bonus=` with a `/` *and* raises a MODERATE error each time,
+so 41 zeroed states would be 41 warnings per actor. Measured that the two spellings
+are the same run and not merely similar: Shadow Priest, 1000 deterministic
+iterations, one target, the set off -- two lines **187,312.2**, one slash-delimited
+line **187,312.2**, against 210,980.8 with the set left alone. Note the consequence
+for `buffsweep`, which writes its variants as separate lines: they accumulate
+correctly, so those numbers stand; they are merely noisy.
+
+### A slot the kit is silent about is not an anchored slot
+
+A profileset's options apply *on top of* the base profile, so a slot the kit does not
+mention keeps the base actor's item at the base actor's item level, inside something
+`options()` documents as "usable directly as a Profileset's options". MID2's
+Windwalker Monk kit has fifteen gear lines against Arcane Mage's sixteen.
+
+Measured on Arcane Mage, 1000 deterministic iterations, one target: adding a bare
+`off_hand=` to an otherwise inert profileset moved **176,582.7 to 158,651.4**, so an
+un-anchored slot is worth 10.2% there. Emptying two slots the profile does not use
+(`tabard=`, `shirt=`) returned **176,582.7** -- bit-identical -- so the empty lines
+cost nothing where there is nothing to clear. Every `GEAR_SLOTS` entry the kit lacks
+is now written empty, and an alias counts as its canonical slot so a kit carrying
+`wrist=` is not also handed an empty `wrists=` that would win by coming last.
+
+### An empty parse is a refusal, and the width test is equality
+
+`parse_item_sets` used to skip a malformed row and return what it had, so a simc
+struct change makes every row fail and the answer is `{}` -- which is not `None`, so
+`derive_target` accepted it, counted zero pieces on every profile, and published
+*"the state most of the tier's shipped profiles are in (28 shipped profile(s) wear
+none)"* as **derived evidence** for a kit with the set switched off. By this module's
+own measurement that is worth -13.13% on Arcane and -11.22% on Shadow.
+
+Two guards. Nothing decoded at all is a refusal -- 12,260 of simc's 115,470 items
+carry an `id_set` on 69a46e1, so none is a table that was not read. And the width
+test is `== 27`, not `>= 27`: **all 115,470 rows are exactly 27 fields**, and a lower
+bound passes a row with a field *inserted*, after which field 23 is silently its
+neighbour. The docstring used to claim both parsers of that table "check the field
+count" and so break loudly; both merely `continue`d.
+
+**The duplication itself is still there and that is deliberate.**
+`equipment.discover_items` decodes the same rows the same way for different columns.
+Sharing one decoder was written and backed out, to keep this branch clear of a
+parallel change to that module. So a simc struct change still has to be fixed in two
+places, and each now carries a comment pointing at the other.
+
+### The tier set is stated, and *which* state is derived too
+
+Same mechanism as `buffsweep.set_variants`, and the same reason for writing the
+zeroes: a kit that already wears the set, or last season's, would otherwise carry it
+in silently. What is new is that the **piece count is derived rather than assumed**,
+and the reason is a finding about MID2 itself.
+
+**MID2's shipped profiles disagree with each other about the tier set**, and *how
+many* disagree is a fact with a date on it. Counting pieces by
+`dbc_item_data_t::id_set` against `item_set_bonus_t::set_id` -- which is exactly what
+`set_bonus_t::initialize` does -- over the 28 shipped damage profiles:
+
+```
+simc 69a46e1, 2026-08-21    24 wear four or five, 4 wear none
+                            both Arcane and both Frost Mage builds
+simc 22b442e, 2026-08-22    26 wear four or five, 2 wear none
+                            both Arcane builds
+```
+
+**Both counts are true at their own revision** -- simc gave Frost Mage the set
+between the two -- and this file carried the first one undated, which is exactly the
+failure the talent-tree section already warns about. The published dataset was
+generated on **2026-08-22**, so at the revision that matters **only the two Arcane
+builds lack the set**. That difference is in the published ranking and nothing flags
+it.
+
+Note also that a profile can wear the set without *saying* so: Shadow Priest has no
+`set_bonus=` line at all and wears four pieces. That is why the count is taken from
+the equipped items rather than from the profile's options, and it is what makes the
+Arcane case below visible at all.
+
+Its size, profileset against profileset, 1000 deterministic iterations, one target:
+
+```
+Arcane Mage      0 pieces   forcing the 4-piece on   +13.13%   (2-piece alone +8.42%)
+Shadow Priest    4 pieces   forcing the 4-piece on   bit-identical
+Shadow Priest    4 pieces   forcing it off           -11.22%
+```
+
+So per-kit inheritance would hand the Arcane specs a kit 13% behind the field, and an
+unconditional four-piece would silently invert on a tier whose profiles ship without
+one. The anchor takes the **modal state** across the tier's shipped profiles -- reduced
+to a state (none/two/four) *before* the vote, because MID2's raw counts are 12 profiles
+at four pieces and 12 at five, a coin flip between two numbers that mean the same
+thing, where as states it is 24 to 4. A tie goes to the lower state, and the tally is
+published so a split tier reads as split.
+
+**The offline count is validated against simc's own behaviour on 13 of 13 profiles.**
+Every profile the `id_set` parse puts at four or more pieces returned DPS
+**bit-identical** under a forced four-piece; every profile it puts at zero moved. Two
+independent derivations agreeing on every row is the same check `talenttree`'s decode
+rests on.
+
+### Arcane's profile switches its own set off, and its rotation asks about it
+
+Worth its own entry because it is a property of **simc's shipped profile** and it is
+in the numbers on the live site today, not something this repository does.
+
+`MID2_Mage_Arcane.simc` and `MID2_Mage_Arcane_Sunfury.simc` carry, at lines 105-106
+on simc 22b442e:
+
+```
+# set_bonus=midnight_season_2_2pc=1
+# set_bonus=midnight_season_2_4pc=1
+```
+
+Commented out -- while the same file's action list branches on
+`set_bonus.midnight_season_2_4pc` twice, once in the Spellslinger list and once in
+the Sunfury one. So the rotation is written for a build wearing the four-piece and
+the character is simulated without it.
+
+Measured by the orchestrator, 1000 deterministic iterations, patchwerk one target,
+simc 69a46e1: **with the set 216,935.5 (+/-0.158%), without it 189,598.5
+(+/-0.147%) -- a 14.4% gap.**
+
+Two things follow. It is not a bug here and must not be "fixed" by editing simc's
+profile -- this project does not author profiles, and the whole claim of the dataset
+is that it is what simc ships. And it is exactly the kind of systematic difference
+`gearComparable` exists to flag: a build ranked against 26 others that wear their set
+is not being compared on rotation and talents alone. The gear anchor is the other
+half of the answer, for builds this project computes rather than ones simc ships.
+
+### What the anchor actually did
+
+**These numbers replace an earlier set, and the reason is finding #1 of the review
+that produced them**: `GEAR_SLOTS` omitted simc's singular slot aliases, so
+`shoulder=` and `wrist=` were never read and never anchored while `describe()`
+reported success on the slots it did see. Every figure that used to sit here was
+taken on kits whose shoulder and wrist had not moved. Do not copy figures across from
+an older revision of this file.
+
+**34 of MID2's 40 damage builds**, 28 shipped and 6 disabled, patchwerk one target,
+1000 deterministic iterations, simc 69a46e1, median cell error **0.192%**
+(0.109-0.360):
+
+```
+                    shipped range          disabled range         overlap
+as-is        173,888 .. 268,271     116,716 .. 134,319     none
+anchored     189,121 .. 253,475     189,477 .. 215,808     yes
+```
+
+The as-is row reproduces the documented failure exactly -- a clean separation with no
+overlap, which is never a balance finding. Anchored, **all six disabled builds land
+inside the shipped range**, the lowest of them (Devourer, 189,477) sitting 0.19%
+*above* the shipped floor where it sat 32.9% below it before.
+
+**Six builds are not in that count and each is a different reason.** Both Havoc and
+both Warrior builds are refused by simc's own talent parse ("Node 91020 is not a
+choice node but has index selection", "Selected node 110203 entry 136735 is not
+available to player's spec"), which `specindex.refused_profiles` already predicts
+offline. Both Windwalker builds return **0.000 DPS from any profileset at all**,
+including an inert one carrying no options -- their base actor sims fine at ~118k, so
+this is a property of that profile at this revision and not of the anchor. It is
+unexplained; the honest thing is that they are excluded and named.
+
+What the alias fix itself was worth, isolated on the one measurable build that uses
+those spellings -- Feral Druid, same run conditions, the pre-fix reader emulated by
+dropping the two aliased lines:
+
+```
+as-is                              133,099.1
+anchored, shoulder and wrist unread 194,205.5   +45.91%
+anchored, whole kit                 201,323.2   +51.26%
+                                    the fix alone: +3.67%
+```
+
+That **+45.91%** is exactly the bottom of the range this file used to publish for the
+disabled builds, which is the cleanest possible confirmation of what the old figures
+were measuring: a kit with two slots still 45-49 item levels behind the rest of it.
+Havoc Aldrachi Reaver is the worse case and cannot be simulated at all -- its
+shoulder stays at item level 723 and its wrist at 720 against an anchor of 334 -- so
+the description is the only evidence available there, and it now says 16 slots
+normalized rather than 14.
+
+Per-build ranges, same run:
+
+```
+shipped, wearing the set     -7.07 .. -3.01%
+shipped, no set (Arcane, Frost Mage)   +6.79 .. +10.11%
+disabled (289 -> 334 plus the set)    +49.64 .. +73.22%
+```
+
+Three things to carry away:
+
+- **The anchor does not "barely move" a shipped profile.** It costs up to 7.07% on a
+  build that already wears its set, because the shipped kits average 337-339 and the
+  anchor is 334. That is the price of comparability and it is the same price for
+  every build, which is the point -- but do not quote an anchored number beside a
+  published one.
+- **The builds that gain are the ones with no set**, and at this revision that is
+  both Arcane and both Frost Mage builds. Frost Mage gains 6.79-8.76% here and would
+  gain nothing at 22b442e, where simc has since given it the set. The anchor is
+  reading the tier, so it moves when the tier moves.
+- **The ranking order among the shipped builds is not preserved**, and the earlier
+  claim here that it was came from looking at eight builds. Over all 28, **20 change
+  rank** -- Frost Death Knight falls from 17th to 20th, Elemental Stormbringer rises
+  from 10th to 7th. What does hold at both ends is the extremes: Subtlety Rogue is
+  top as-is and anchored, Frost Mage Frostfire is bottom of both. And the gaps close
+  where the set was the difference: Arcane's deficit against the top goes from
+  -34.18% to -23.86%. So an anchored ranking is a different ranking, which is the
+  strongest form of "do not quote an anchored number beside a published one".
+
+### Two refusals
+
+- **A tier whose shipped profiles state no item level anywhere gets no anchor.**
+  Some profiles being silent is ordinary: six of MID2's twenty-eight shipped damage
+  profiles state none on any gear line -- both Assassination Rogue builds, both
+  Elemental and both Enhancement Shaman builds -- and simc resolves their gear from
+  the bonus ids regardless. Every profile being silent is a different thing: the tier
+  cannot then say what comparable means, and inventing a number would put every
+  computed build at a level nobody chose.
+- **A set token without simc's item table gets no anchor either.** The token says
+  which set exists; it does not say which state is comparable, and those two answers
+  are 13.13% apart on a real MID2 build. `derive_target` names the fix
+  (`item_sets=parse_item_sets(simc_dir)`) rather than defaulting.
+
+### What this does not do
+
+It normalizes item level and set state. It does **not** normalize the items
+themselves -- two kits anchored to one target still differ where the items differ,
+which is correct for "make this player's kit comparable" and is *not* a gear
+optimisation. Race, consumables, level and the action list are untouched: those are
+not gear, and a module called "gear anchor" that quietly reset a race would be the
+worst kind of surprise.
+
+And nothing here is wired into the published dataset yet. `wowdps gear-anchor` prints
+it; no sweep consumes it. That is deliberate -- an anchored number is not comparable
+to a published one (see the -3.65 to -6.17% above), so whatever consumes this has to
+publish the anchor's description beside the build, which `GearAnchor.to_json` exists
+for.
+
 ## Tier sets and Power Infusion, as differences rather than levels
 
 `buffsweep.py` + `wowdps buffs` -> `<tier>/buffs.json`, merged by
@@ -2209,7 +2555,20 @@ profile simc did not ship is drawn beside ones it did.
 
 `modal_item_level` takes the mode over a profile's gear lines rather than the mean: a
 weapon or a crafted back sits a few levels off the rest, and a mean reports a level
-nothing is actually at.
+nothing is actually at. Note what it cannot see: a profile that states no `ilevel=`
+on any gear line comes back `None` while its gear is genuinely at 289 -- measured by
+reading simc's own report back for MID2's Windwalker Monk. That is why the
+"states no item level" branch of `gear_caveat` is a caveat rather than a pass.
+
+**The caveat says a build cannot be ranked; the anchor is how a build stops needing
+it.** `gear_caveat` is the right answer for a profile *simc* wrote, which this project
+does not edit. For a build this project **computes**, the gear is ours to choose, and
+`gearanchor` chooses it -- measured over 34 of MID2's 40 damage builds to close the
+disabled-profile gap from 32.9% below the shipped floor to 0.19% *above* it, with
+all six disabled builds landing inside the shipped range. See "The gear anchor"
+above. The two are not
+alternatives: an anchored build still carries a description of what was anchored, and
+an un-anchored disabled profile still carries the caveat.
 
 **The chart needed a fourth channel, and it could not be words.** The Overview
 opens on the bar chart, whose axis ticks are SVG -- an HTML badge cannot live in
