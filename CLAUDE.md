@@ -646,29 +646,37 @@ generalise a two-slot measurement to sixteen slots.
 
 ### simc's option parser takes more slot names than its data emits
 
-**Read this before writing anything that reads a simc gear line.**
-`util::slot_type_string` emits `shoulders`, `wrists`, `legs`, `feet`, `hands`,
-`finger1`, `finger2`. `player_t::create_options` *also* registers `shoulder`,
-`wrist`, `leg`, `foot`, `hand`, `ring1` and `ring2` against the same
-`items[SLOT_*]` entry, so a profile may write either and simc does not care which.
+**The rule, which is repo-wide and not this module's:** *a reader accepts every alias
+simc accepts; an emitter writes what simc ships.* `util::slot_type_string` emits
+`shoulders`, `wrists`, `legs`, `feet`, `hands`, `finger1`, `finger2`.
+`player_t::create_options` (`engine/player/player.cpp:13276-13286`) *also* registers
+`shoulder`, `wrist`, `leg`, `foot`, `hand`, `ring1` and `ring2` against the same
+`items[SLOT_*]` entry, so **neither spelling is "the" correct one** and a reader that
+takes only one is silently reading half the population.
 
-Real profiles use both. On simc 69a46e1 three MID2 profiles write the singular form
--- Feral Druid and both Aldrachi Reaver Demon Hunters -- and **all three are profiles
-simc disabled**, which is exactly the set the gear anchor exists to make comparable.
-A reader keyed on the emitted names drops those lines and reports success on the
-rest, which is what the anchor did until 2026-08-23: Havoc kept its shoulder at item
-level 723 and its wrist at 720 against an anchor of 334, and the description said
-"14 slot(s) normalized" without mentioning the two it never saw.
+Which population matters, measured on simc 69a46e1 on 2026-08-23:
 
-**This bit twice, in opposite directions.** `gearpool._EQUIP_LINE` listed the
-*singular* names and not the plural, so it dropped precisely what `gearanchor` read:
-measured, it found 204 of MID2's 227 equipped item ids and 176 of MID1's 203 -- a
-tenth of the evidence behind `identify_tier_raid`. Two parsers, each blind to the
-other's half, neither saying so.
+- **Every shipped MID2 profile writes the plural.** `^(shoulder|wrist)=` over the
+  shipped profiles returns nothing.
+- **The singular appears only in the disabled/materialised profiles** -- Feral Druid,
+  Havoc Aldrachi Reaver, Vengeance Aldrachi Reaver -- which is exactly the set the
+  gear anchor exists to make comparable.
 
-There is now **one** parser: `gearanchor.parse_gear_lines`, which canonicalises the
-slot and keeps the source's spelling for the round trip. `gearpool.equipped_item_ids`
-and `equipment.read_adornments` both read through it. Do not add a third.
+So `GEAR_SLOTS` keeps the names simc emits and `SLOT_ALIASES` adds the ones its parser
+also takes; nothing is renamed in either direction. `GearLine.slot` is canonical, so
+two spellings of one slot compare and deduplicate as one; `GearLine.alias` keeps the
+source's spelling so a line renders back byte-identically and every emitted line is
+one simc itself wrote.
+
+Both halves are load-bearing. Without the first, a kit written with `wrist=` gets an
+empty `wrists=` beside it, and the empty line comes last and wins -- the slot ends up
+bare. Without the alias reader at all, which is what shipped until 2026-08-23, Havoc
+kept its shoulder at item level **723** and its wrist at **720** against an anchor of
+334 while the description said "14 slot(s) normalized" and never mentioned the two it
+had not seen.
+
+`gearpool._EQUIP_LINE` had the same bug pointing the other way and is fixed
+separately -- see its own entry rather than this one.
 
 ### Every other set is written to zero, not just the other seasons
 
@@ -738,8 +746,13 @@ carry an `id_set` on 69a46e1, so none is a table that was not read. And the widt
 test is `== 27`, not `>= 27`: **all 115,470 rows are exactly 27 fields**, and a lower
 bound passes a row with a field *inserted*, after which field 23 is silently its
 neighbour. The docstring used to claim both parsers of that table "check the field
-count" and so break loudly; both merely `continue`d. `equipment.iter_item_rows` now
-owns the decoding for both.
+count" and so break loudly; both merely `continue`d.
+
+**The duplication itself is still there and that is deliberate.**
+`equipment.discover_items` decodes the same rows the same way for different columns.
+Sharing one decoder was written and backed out, to keep this branch clear of a
+parallel change to that module. So a simc struct change still has to be fixed in two
+places, and each now carries a comment pointing at the other.
 
 ### The tier set is stated, and *which* state is derived too
 

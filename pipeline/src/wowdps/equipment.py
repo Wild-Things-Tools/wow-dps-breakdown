@@ -66,7 +66,6 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from importlib import resources
 from pathlib import Path
@@ -553,36 +552,29 @@ class SlotAdornment:
         return not self.gem_ids and self.enchant_id is None
 
 
+def _gear_line(socket: str) -> re.Pattern[str]:
+    return re.compile(rf"^{re.escape(socket)}\s*=(?P<rest>.*)$", re.MULTILINE)
+
+
 def read_adornments(profile_path: Path, slot: EquipmentSlot) -> dict[str, SlotAdornment]:
     """What this profile gems and enchants each of a slot's sockets with.
 
     Per socket rather than per slot, because a profile may gem one ring and not the
     other, and the comparison only has to be internally consistent: whatever the
     baseline wears in a socket, the candidate replacing it wears too.
-
-    Read through ``gearanchor.parse_gear_lines`` rather than a regex of its own. That
-    is the only parser of simc gear lines this repository keeps, and the reason is on
-    record in ``gearpool.equipped_item_ids``: when there were three, one of them
-    listed the slot aliases the others did not and each silently dropped what the
-    others read. Nothing in the pools' own sockets is spelled with an alias today,
-    so this is about the next slot rather than about this one.
     """
-    from .gearanchor import parse_gear_lines
-
-    lines = {
-        line.slot: line
-        for line in parse_gear_lines(profile_path.read_text(encoding="utf-8", errors="replace"))
-    }
+    text = profile_path.read_text(encoding="utf-8", errors="replace")
     found: dict[str, SlotAdornment] = {}
     for socket in slot.sockets:
-        line = lines.get(socket)
-        if line is None:
+        match = _gear_line(socket).search(text)
+        if not match:
             continue
-        gems = next((value for key, value in line.options if key == "gem_id"), "")
-        enchant = next((value for key, value in line.options if key == "enchant_id"), "")
+        rest = match.group("rest")
+        gems = re.search(r"\bgem_id=([\d/]+)", rest)
+        enchant = re.search(r"\benchant_id=(\d+)", rest)
         found[socket] = SlotAdornment(
-            gem_ids=tuple(int(gem) for gem in gems.split("/") if gem.isdigit()),
-            enchant_id=int(enchant) if enchant.isdigit() else None,
+            gem_ids=tuple(int(g) for g in gems.group(1).split("/") if g) if gems else (),
+            enchant_id=int(enchant.group(1)) if enchant else None,
         )
     return found
 
@@ -601,40 +593,6 @@ def adorn(item: GearItem, adornment: SlotAdornment | None) -> GearItem:
 _ITEM_ROW = re.compile(r'^\s*\{ "((?:[^"\\]|\\.)*)", (.*) \},\s*$')
 _EFFECT_ROW = re.compile(r"^\s*\{\s*\d+,\s*\d+,\s*(\d+),")
 _STAT_ROW = re.compile(r"^\s*\{\s*(-?\d+),\s*(-?\d+),\s*[-0-9.]+f\s*\},\s*$")
-
-#: Fields per ``dbc_item_data_t`` row, counting the name out separately as
-#: ``_ITEM_ROW`` does. Measured on simc 69a46e1: **all 115,470 rows are exactly this
-#: wide**, none narrower and none wider, which is why readers here test equality
-#: rather than a lower bound. A lower bound passes a row with a field *inserted*, and
-#: every positional index after the insertion point then reads its neighbour --
-#: silently, with plausible values.
-ITEM_FIELD_COUNT = 27
-
-
-def iter_item_rows(text: str) -> Iterator[tuple[str, list[str]]]:
-    """``(name, fields)`` for every ``dbc_item_data_t`` row in ``item_data.inc``.
-
-    Shared because the decoding is identical wherever the table is read and the
-    *columns* are what differ: this module wants item level, quality and inventory
-    type for the gear pools, ``gearanchor.parse_item_sets`` wants ``id_set``. Two
-    copies of the same regex and the same two substitutions meant a simc struct
-    change had to be found twice.
-
-    The two substitutions are what make a positional split possible at all: a socket
-    array and a stats pointer both contain commas, so each is collapsed to one token
-    before the row is split.
-
-    Rows of the wrong width are **yielded, not swallowed**, so each caller can decide
-    whether a malformed table is something to skip or something to refuse on. Nothing
-    here can tell those apart.
-    """
-    for line in text.splitlines():
-        match = _ITEM_ROW.match(line)
-        if not match:
-            continue
-        rest = re.sub(r"\{[^}]*\}", "SOCKETS", match.group(2))
-        rest = re.sub(r"&__item_stats_data\[(\d+)\]", r"STATS\1", rest)
-        yield match.group(1), [part.strip() for part in rest.split(",")]
 
 
 @dataclass(frozen=True)
@@ -682,8 +640,15 @@ def discover_items(simc_dir: Path, inventory_type: int) -> list[DiscoveredItem]:
             with_effects.add(int(row.group(1)))
 
     found: list[DiscoveredItem] = []
-    for name, fields in iter_item_rows(item_text):
-        if len(fields) != ITEM_FIELD_COUNT:
+    for line in item_text.splitlines():
+        match = _ITEM_ROW.match(line)
+        if not match:
+            continue
+        name, rest = match.group(1), match.group(2)
+        rest = re.sub(r"\{[^}]*\}", "SOCKETS", rest)
+        rest = re.sub(r"&__item_stats_data\[(\d+)\]", r"STATS\1", rest)
+        fields = [part.strip() for part in rest.split(",")]
+        if len(fields) < 27:
             continue
         try:
             item_id = int(fields[0])

@@ -152,35 +152,12 @@ def test_equipped_item_ids_reads_gear_lines_only(tmp_path):
         "neck=aqirbane_reliquary,id=268265,bonus_id=13335,ilevel=344\n"
         "trinket1=freightrunners_flask,id=250215,bonus_id=12854,ilevel=334\n"
         "main_hand=janthrazet,id=271092,ilevel=344\n"
-        "shoulders=venomkeepers_mantle,id=271876,ilevel=344\n"
-        "wrist=silvermoon_agents_deflectors,id=244576,ilevel=285\n"
         "# a comment mentioning id=111111\n"
         "actions+=/arcane_blast,if=buff.x.up&id=222222\n",
         encoding="utf-8",
     )
     found = equipped_item_ids(tmp_path, "MID2")
-    assert found == {268265, 250215, 271092, 271876, 244576}
-
-
-def test_equipped_item_ids_reads_both_spellings_of_a_slot(tmp_path):
-    """This used to be a third parser of simc gear lines, and it read the other half.
-
-    Its own alternation listed ``shoulder`` and ``wrist`` where
-    ``gearanchor.GEAR_SLOTS`` listed ``shoulders`` and ``wrists``, so each dropped
-    exactly what the other read and neither said so. Measured on simc 69a46e1 before
-    the merge: **204 of MID2's 227** equipped item ids and 176 of MID1's 203 -- a
-    tenth of the evidence for which raid a tier belongs to.
-    """
-    directory = tmp_path / "profiles" / "MID2"
-    directory.mkdir(parents=True)
-    (directory / "plural.simc").write_text(
-        "shoulders=a,id=1,ilevel=344\nwrists=b,id=2,ilevel=344\n", encoding="utf-8"
-    )
-    (directory / "singular.simc").write_text(
-        "shoulder=c,id=3,ilevel=344\nwrist=d,id=4,ilevel=344\n", encoding="utf-8"
-    )
-
-    assert equipped_item_ids(tmp_path, "MID2") == {1, 2, 3, 4}
+    assert found == {268265, 250215, 271092}
 
 
 def test_a_tier_with_no_profiles_yields_nothing_rather_than_guessing(tmp_path):

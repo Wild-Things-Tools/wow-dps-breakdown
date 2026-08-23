@@ -131,11 +131,11 @@ anchor moves numbers and a reader has to be able to see it rather than trust it.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .buffsweep import TierSet, sets_for_tier
-from .equipment import ITEM_FIELD_COUNT, iter_item_rows
 from .profiles import SpecProfile
 from .talenttree import CLASS_IDS
 
@@ -167,16 +167,18 @@ GEAR_SLOTS: tuple[str, ...] = (
 #: **simc's option parser accepts more slot names than ``slot_type_string`` emits**,
 #: and reading only the emitted ones is silent data loss rather than a parse error.
 #: Every alias here is a second ``add_option`` against the *same* ``items[SLOT_*]``
-#: entry in ``player_t::create_options`` (``engine/player/player.cpp``), so simc
-#: treats the two spellings as one slot and so must anything that reads a profile.
+#: entry in ``player_t::create_options`` (``engine/player/player.cpp:13276-13286``),
+#: so **neither spelling is the correct one** and the repo-wide rule is: a reader
+#: accepts every alias simc accepts, an emitter writes what simc ships.
 #:
-#: Real profiles use them. Measured on simc 69a46e1: three MID2 profiles write
-#: ``shoulder=`` and ``wrist=`` -- Feral Druid and both Aldrachi Reaver Demon
-#: Hunters -- and every one of the three is a profile simc *disabled*, which is
-#: exactly the set this module exists to make comparable. Dropping those two lines
-#: left Havoc's shoulder at item level 723 and its wrist at 720 against an anchor of
-#: 334, while the description reported the other fourteen slots as normalized and
-#: said nothing about the two it never saw.
+#: The two spellings split the population. Measured on simc 69a46e1: every *shipped*
+#: MID2 profile writes the plural, and the singular appears only in the profiles simc
+#: **disabled** -- Feral Druid and both Aldrachi Reaver Demon Hunters -- which is
+#: exactly the set this module exists to rescue. So ``GEAR_SLOTS`` above keeps what
+#: simc emits and nothing here renames anything; this only widens what is read.
+#: Dropping these lines left Havoc's shoulder at item level 723 and its wrist at 720
+#: against an anchor of 334, while the description reported the other fourteen slots
+#: as normalized and said nothing about the two it never saw.
 SLOT_ALIASES: dict[str, str] = {
     "shoulder": "shoulders",
     "leg": "legs",
@@ -406,12 +408,43 @@ class AnchorError(ValueError):
     """A tier or a table that cannot say what a comparable kit looks like."""
 
 
+_ITEM_ROW = re.compile(r'^\s*\{ "((?:[^"\\]|\\.)*)", (.*) \},\s*$')
+
 #: ``id_set`` is the 24th field of ``dbc_item_data_t`` (``engine/dbc/item_data.hpp``),
-#: counting the name out separately as ``equipment.iter_item_rows`` does. Read
-#: positionally for the same reason ``equipment.discover_items`` reads its fields
-#: positionally: the table is a plain C array and there is no simc command that lists
-#: items. The row *decoding* is shared with that module; only the column differs.
+#: counting the name out separately as the row regex does. Read positionally for the
+#: same reason ``equipment.discover_items`` reads its fields positionally: the table
+#: is a plain C array and there is no simc command that lists items.
 _ID_SET_FIELD = 23
+
+#: Fields per row, counting the name out separately. Measured on simc 69a46e1: **all
+#: 115,470 rows are exactly this wide**, none narrower and none wider, which is why
+#: ``parse_item_sets`` tests equality rather than a lower bound.
+ITEM_FIELD_COUNT = 27
+
+
+def iter_item_rows(text: str) -> Iterator[tuple[str, list[str]]]:
+    """``(name, fields)`` for every ``dbc_item_data_t`` row in ``item_data.inc``.
+
+    The two substitutions are what make a positional split possible at all: a socket
+    array and a stats pointer both contain commas, so each is collapsed to one token
+    before the row is split.
+
+    **``equipment.discover_items`` decodes the same rows the same way**, for different
+    columns -- it wants item level, quality and inventory type for the gear pools,
+    this wants ``id_set``. Sharing one decoder was written and then backed out, to
+    keep this branch clear of a parallel change to that module; a simc struct change
+    therefore still has to be fixed in both places, and this comment is the pointer
+    between them. Rows of the wrong width are yielded rather than swallowed, so the
+    caller decides whether that is something to skip or something to refuse on --
+    the two modules answer differently and neither can tell for the other.
+    """
+    for line in text.splitlines():
+        match = _ITEM_ROW.match(line)
+        if not match:
+            continue
+        rest = re.sub(r"\{[^}]*\}", "SOCKETS", match.group(2))
+        rest = re.sub(r"&__item_stats_data\[(\d+)\]", r"STATS\1", rest)
+        yield match.group(1), [part.strip() for part in rest.split(",")]
 
 
 def parse_item_sets(simc_dir: Path, ptr: bool = False) -> dict[int, int]:
