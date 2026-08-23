@@ -912,10 +912,14 @@ def cmd_gear_anchor(args: argparse.Namespace) -> int:
 
     try:
         sets: list[buffsweep.TierSet] | None = buffsweep.parse_tier_sets(simc_dir, ptr=args.ptr)
-        item_sets: dict[int, int] | None = gearanchor.parse_item_sets(simc_dir, ptr=args.ptr)
+        item_sets: dict[int, int] | None = None
         if sets is not None and not buffsweep.sets_for_tier(sets, tier):
             logging.warning("simc ships no set bonus labelled %s; anchoring gear alone", tier)
-            sets, item_sets = None, None
+            sets = None
+        if sets is not None:
+            # After the check, not before it: the item table is 115,470 rows and a
+            # tier with no set has no use for a single one of them.
+            item_sets = gearanchor.parse_item_sets(simc_dir, ptr=args.ptr)
 
         # Only the *set name* and the zeroed tokens vary by class; the item level, the
         # tally and the state do not. Deriving per profile re-ran the whole tier tally
