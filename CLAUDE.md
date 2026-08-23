@@ -2595,15 +2595,48 @@ With the argument passed, the same query returns
 'specIDs', 'stats', 'talentTree', 'talents']` and `17 readable, 1 skipped` gear
 entries on the first row.
 
-Two things about the gear payload that are **not** settled by that run:
+### The gem and the enchant do arrive, and reading one entry said they did not
 
-- the first entry's keys are `['bonusIDs', 'icon', 'id', 'itemLevel', 'name',
-  'quality', 'setID', 'slot']` -- **no `gems`, no `permanentEnchant`**. Those are what
-  `gear_from_row` reads for the two things this repository has measured to matter most
-  (+1.09% enchant, +0.44% gem, against +0.09% for a ten item level step). Most likely
-  Warcraft Logs omits a key with nothing in it and that entry is an unsocketed,
-  unenchanted slot; that is an inference, not a reading, and it needs one socketed
-  item in a payload to settle.
+**A correction, made the same day it was written.** The paragraph this replaces said
+`gems` and `permanentEnchant` were absent, citing *the first gear entry's keys*
+`['bonusIDs', 'icon', 'id', 'itemLevel', 'name', 'quality', 'setID', 'slot']`. The
+first entry of a kit is the **head slot** -- no socket, and usually no enchant -- so
+an entry without those keys is exactly what you see whether Warcraft Logs omits an
+empty key, never sends the key at all, or sends it under another name. One entry
+cannot separate those three. Seventeen can, and the run had already fetched them.
+
+Read over **every** entry (CI 32662112090, 2026-08-23, one Mythic kill of 53470,
+252 gear entries across 14 damage players):
+
+```
+union       bonusIDs gems icon id itemLevel name onUseEnchant onUseEnchantName
+            permanentEnchant permanentEnchantName quality setID slot
+            temporaryEnchant temporaryEnchantName
+
+gems              62 of 252 entries, all non-empty, slots 0 1 5 8 10 11
+permanentEnchant  94 of 252 entries, all non-empty, slots 0 2 4 6 7 10 11 15 16
+```
+
+So **both keys are sent, under exactly the names `gear_from_row` already reads**, and
+Warcraft Logs simply omits a key with nothing in it. Harvested gear is a runnable kit,
+adornments included -- not item ids needing `gearanchor` to supply the rest, which is
+what the wrong version of this paragraph implied. The reader is verified one layer up
+too: the probe reports how many *parsed* pieces carry a gem and an enchant, because a
+key present in the payload and read under a name Warcraft Logs does not use fails
+exactly as silently as a key that is never sent.
+
+**The lesson is about the sample, not the field.** An absence measured on the one
+entry least likely to carry the thing is not a measured absence. This file's rule for
+absences already demands a revision and a date; it needs the *sample* beside them, and
+"the first entry" is the sample that produces a false negative here by construction.
+
+Two things that follow and are deliberately **not** acted on:
+
+- **`onUseEnchant` and `temporaryEnchant`** (with their `*Name` twins) exist and
+  nothing here reads them. A temporary weapon enchant is a consumable rather than part
+  of a kit, and simc models that separately; writing an unknown-semantics id into a
+  gear line would be a guess in the one place a kit has to be exact. Recorded so the
+  next reader knows they were seen and skipped rather than missed.
 - the entry carries a **`slot`** field. This project derives the slot from simc's own
   item table on purpose and should keep doing so -- a positional array and a
   third-party label are both assertions about somebody else's payload -- but the field
@@ -2698,8 +2731,8 @@ would be comparable: a harvested character wears its own gear, which is the prob
 
 ### What is still unverified
 
-- **A socketed item in a real gear payload.** `gems` and `permanentEnchant` have not
-  been seen, and they carry the two effects this project has measured to matter most.
+- ~~**A socketed item in a real gear payload.**~~ Settled on 2026-08-23, see above:
+  62 of 252 entries carry `gems` and 94 carry `permanentEnchant`.
 - **Whether the twin resolution ever recovers a kill.** On MID2 it does not; it has
   never fired on a boss whose twin had parses.
 - **Whether `characterRankings` rows carry gear or talents** -- answered, and the

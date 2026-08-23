@@ -467,6 +467,70 @@ def describe_combatant_info(row: dict) -> str:
     return type(info).__name__
 
 
+#: The keys the *first* gear entry of the first live kill carried, on 2026-08-23.
+#: Recorded so ``describe_gear_keys`` can say what is present *beyond* them --
+#: which is the question that separates "Warcraft Logs omits a key with nothing in
+#: it" from "Warcraft Logs never sends this key at all".
+FIRST_ENTRY_KEYS = frozenset(
+    {"bonusIDs", "icon", "id", "itemLevel", "name", "quality", "setID", "slot"}
+)
+
+#: What ``gear_from_row`` reads and this repository has measured to matter: the
+#: enchant is worth +1.09% and the gem +0.44% against +0.09% for a ten item level
+#: step, so a kit read without them is wrong by an order of magnitude more than
+#: item level -- and silently, because the kit still looks complete.
+ADORNMENT_KEYS = ("gems", "permanentEnchant")
+
+
+def describe_gear_keys(rows: list[dict]) -> list[str]:
+    """What a gear entry actually carries, over **every** entry of a whole kill.
+
+    Written because the first version of this printed ``sorted(gear[0])`` and a
+    conclusion was drawn from it. The first entry of a kit is the head slot, which
+    has no socket and usually no enchant -- so an entry without ``gems`` or
+    ``permanentEnchant`` is exactly what you would see whether Warcraft Logs omits
+    an empty key, never sends the key, or sends it under another name. One entry
+    cannot separate those three, and a Mythic raider's rings, neck, back, chest and
+    weapon can.
+
+    So this reports the **union** across every entry rather than any one entry's
+    keys, counts the entries carrying each adornment key, and names the slot each
+    sits on. A key that appears nowhere in the union over a real kit is a measured
+    absence; a key that appears on some entries and not others is an omission of
+    the empty case, which is the ordinary shape of this payload.
+    """
+    entries = [
+        entry for row in rows for entry in (gear_array(row) or []) if isinstance(entry, dict)
+    ]
+    if not entries:
+        return ["  gear keys: no entries to read"]
+
+    union: set[str] = set()
+    for entry in entries:
+        union.update(entry)
+
+    lines = [
+        f"  gear keys, union over {len(entries)} entries of {len(rows)} dps row(s): "
+        f"{sorted(union)}",
+        f"  keys beyond the first entry's eight: {sorted(union - FIRST_ENTRY_KEYS) or 'none'}",
+    ]
+    for key in ADORNMENT_KEYS:
+        carrying = [entry for entry in entries if key in entry]
+        if not carrying:
+            lines.append(
+                f"  {key}: 0 of {len(entries)} entries -- absent from the whole kit, "
+                f"not merely from the first entry"
+            )
+            continue
+        slots = sorted({str(entry.get("slot")) for entry in carrying})
+        non_empty = sum(1 for entry in carrying if entry.get(key))
+        lines.append(
+            f"  {key}: {len(carrying)} of {len(entries)} entries carry the key "
+            f"({non_empty} non-empty), on slot(s) {', '.join(slots)}"
+        )
+    return lines
+
+
 def gear_from_row(row: dict) -> tuple[list[GearPiece], int]:
     """``(pieces, entries skipped)`` from a ``playerDetails`` row's combatant info.
 
@@ -1776,7 +1840,19 @@ def probe_shapes(details: object, codes: dict[int, str], rankings: dict | None) 
         )
         gear = gear_array(rows[0]) or []
         if gear and isinstance(gear[0], dict):
-            lines.append(f"  gear entry keys: {sorted(gear[0])}")
+            lines.append(f"  first gear entry keys: {sorted(gear[0])}")
+        # And every other entry, because the first one is the head slot and cannot
+        # answer whether the gem and enchant keys are ever sent.
+        lines.extend(describe_gear_keys(rows))
+        # Then the same question one layer up: a payload carrying a key proves
+        # nothing about whether *this* reader gets it out, since a key read under a
+        # name Warcraft Logs does not use fails exactly as silently as a key that is
+        # never sent. These two counts come from the parsed `GearPiece`s.
+        parsed = [piece for row in rows for piece in gear_from_row(row)[0]]
+        lines.append(
+            f"  parsed pieces: {len(parsed)}, of which {sum(1 for p in parsed if p.gem_ids)} "
+            f"carry a gem and {sum(1 for p in parsed if p.enchant_id)} an enchant"
+        )
 
     lines.append(f"talentImportCode: {len(codes)} of the fight's actors returned a code")
     if codes:
