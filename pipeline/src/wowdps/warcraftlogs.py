@@ -483,9 +483,21 @@ class WarcraftLogsClient:
         ).hexdigest()[:32]
         return self._cache_dir / f"{digest}.json"
 
-    def query(self, query: str, variables: dict | None = None, label: str = "query") -> dict:
+    def query(
+        self,
+        query: str,
+        variables: dict | None = None,
+        label: str = "query",
+        cache: bool = True,
+    ) -> dict:
+        """Send one document, or serve it from the response cache.
+
+        ``cache=False`` is for a query whose answer is *the present moment* rather
+        than a fact about a report -- see ``rate_limit``. Everything else is cached
+        on (query, variables), which is what makes iterating on an extraction free.
+        """
         variables = variables or {}
-        cached_at = self._cache_path(query, variables)
+        cached_at = self._cache_path(query, variables) if cache else None
         if cached_at and cached_at.is_file():
             payload = json.loads(cached_at.read_text(encoding="utf-8"))
             self.ledger.record(label, payload, cached=True)
@@ -516,12 +528,26 @@ class WarcraftLogsClient:
         return data
 
     def rate_limit(self) -> dict:
-        """The current point budget, as its own query.
+        """The current point budget, as its own query. **Never cached.**
 
         Taken once before and once after a pass, this brackets the whole run: the
         difference is exactly what the pass cost, with no attribution guesswork.
+
+        The cache bypass is what makes that true, and without it the whole
+        measurement is silently impossible. ``RATE_LIMIT_QUERY`` takes no variables,
+        so both bracketing readings hash to the same ``(query, {})`` -- the second
+        one is served from the first one's response, the two readings are equal by
+        construction, and the run reports ``pointsSpentThisRun = 0`` for any pass at
+        any size. Measured against a stub whose counter moved 100 -> 118: one HTTP
+        call, both readings 109.0, delta 0.0. And because the cache is a *directory*
+        that CI restores between runs, the first reading of a later run would be a
+        number the API returned hours ago.
+
+        A cached response is a record of *then*; this query asks about *now*. Those
+        are different kinds of answer and only one of them can be stored.
         """
-        return (self.query(RATE_LIMIT_QUERY, label="rateLimit").get("rateLimitData")) or {}
+        data = self.query(RATE_LIMIT_QUERY, label="rateLimit", cache=False)
+        return data.get("rateLimitData") or {}
 
     def fight_structure(self, code: str, encounter_id: int, difficulty: int) -> dict:
         """Fights, phase metadata and the report's actor/ability names, in one call."""

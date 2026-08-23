@@ -212,3 +212,85 @@ def test_the_boss_list_comes_from_the_tier_and_a_tier_with_none_is_a_refusal(
     # The way out is named, and so is the reason there is no fallback.
     assert "fight-zones" in message
     assert "previous" in message
+
+
+# --------------------------------------------------------------------------------
+# The bracketing readings must not go through the response cache
+# --------------------------------------------------------------------------------
+
+
+class _CountingTransport:
+    """A stub post() whose hourly counter moves with every real request.
+
+    The counter moving is the whole point: a client that serves the second reading
+    out of the first one's cache entry cannot see it move, and that is exactly the
+    failure this pins.
+    """
+
+    def __init__(self, start: float = 100.0, per_call: float = 9.0) -> None:
+        self.spent = start
+        self.per_call = per_call
+        self.posts = 0
+
+    def __call__(self, *args, **kwargs):
+        self.posts += 1
+        self.spent += self.per_call
+        payload = {
+            "data": {
+                "rateLimitData": {
+                    "limitPerHour": 3600,
+                    "pointsSpentThisHour": self.spent,
+                    "pointsResetIn": 900,
+                },
+                "reportData": {"report": {"code": "aBcD1234"}},
+            }
+        }
+        return type("Response", (), {"status_code": 200, "json": lambda self: payload})()
+
+
+def _client(tmp_path):
+    from wowdps.warcraftlogs import Credentials, WarcraftLogsClient
+
+    client = WarcraftLogsClient(Credentials("id", "secret"), cache_dir=tmp_path / "cache")
+    client._token = "token"
+    return client
+
+
+def test_the_bracketing_readings_bypass_the_response_cache(tmp_path):
+    """Without this the cost of a pass can never be measured, at any size.
+
+    `RATE_LIMIT_QUERY` takes no variables, so both readings hash to the same
+    (query, {}). Cached, the second is served from the first one's response, the
+    two readings are equal by construction, and `pointsSpentThisRun` is 0.0 for
+    every run -- which `describe_cost` correctly reports as UNMEASURED. The probe
+    exists to take exactly this measurement, and the workflow always passes
+    --cache, so the default mode could never produce the number it exists for.
+    """
+    client = _client(tmp_path)
+    transport = _CountingTransport()
+    client._client.post = transport
+
+    first = client.rate_limit()
+    last = client.rate_limit()
+
+    assert transport.posts == 2, "the second reading was served from the cache"
+    assert first["pointsSpentThisHour"] == 109.0
+    assert last["pointsSpentThisHour"] == 118.0
+    assert client.ledger.spent == 9.0
+    # And nothing was written to disk for them, so a later run cannot restore a
+    # reading the API returned hours ago and call it "before".
+    assert not list((tmp_path / "cache").glob("*.json"))
+
+
+def test_every_other_query_is_still_cached(tmp_path):
+    """The control. A bypass that leaked to the rest would make the cache useless
+    and every re-run of an extraction cost points again."""
+    client = _client(tmp_path)
+    transport = _CountingTransport()
+    client._client.post = transport
+
+    client.query("query Q { reportData { report { code } } }", {"code": "aBcD1234"})
+    client.query("query Q { reportData { report { code } } }", {"code": "aBcD1234"})
+
+    assert transport.posts == 1
+    assert len(list((tmp_path / "cache").glob("*.json"))) == 1
