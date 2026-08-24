@@ -3271,6 +3271,21 @@ The payload publishes `encountersRequested`, `encountersCollected` and `incomple
 so "this zone has nine bosses and we have all nine" reads differently from "we have
 all the ones we tried".
 
+**The point meter is a stamp too, and it defeated the settle for weeks.**
+`measurement.cost` is a reading of Warcraft Logs' hourly counter taken when the
+pass ran -- what it stood at, how long until it resets -- so five of its nine
+fields differ on every run by construction. Left in the comparison, the settle can
+never fire. Measured on 2026-08-24: three consecutive hourly probe commits, each
+titled "data: refresh fight shapes for MID2", each a one-line diff, and the only
+fields that moved were the two timestamps and `cost`. No encounter, no kill count,
+no aura window changed.
+
+That is the same failure as the one below, reached through a field nobody thinks
+of as provenance -- which is the general shape: **anything read off the clock or
+off a meter is a stamp, whatever it is called.** The block stays in the document
+rather than being dropped, because what a pass costs is the open question behind
+the event-budget decision and this is the only measurement of it anywhere.
+
 **A settle that misses a nested stamp settles nothing.** `write_fights` excluded the
 top-level `generatedAt` from its "did anything change" comparison but not
 `measurement.generatedAt`, so the two documents never compared equal, the settle never

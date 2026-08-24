@@ -911,3 +911,44 @@ def test_force_still_lets_a_measurement_go(tmp_path):
     write_fights(tmp_path, doc(None), force=True)
     written = json.loads((tmp_path / "fights.json").read_text())
     assert written["encounters"][0]["measured"] is None
+
+
+def test_the_point_meter_does_not_defeat_the_settle(tmp_path):
+    """The cost block is a reading of the run, not a fact about the fights.
+
+    Five of its fields are taken at the moment the pass ran -- what the hour's
+    counter stood at, how long until it resets -- so they differ on every run by
+    construction. Left in the comparison they make every probe commit, each one
+    saying "refresh fight shapes" over a document whose fight shapes are identical.
+
+    Observed on 2026-08-24 as three consecutive hourly commits with a one-line diff
+    apiece; the only fields that moved were the two stamps and `cost`.
+    """
+    from wowdps.fightdataset import write_fights
+
+    def doc(stamp, spent):
+        return {
+            "generatedAt": stamp,
+            "coverage": {"measured": 1},
+            "measurement": {
+                "generatedAt": stamp,
+                "cost": {"pointsSpentThisHour": spent, "pointsResetIn": 3600 - spent},
+            },
+            "encounters": [{"encounterId": 1, "name": "1", "measured": {"fightsSampled": 3}}],
+        }
+
+    path = write_fights(tmp_path, doc("2026-08-24T11:50:06+00:00", 80.84))
+    first = path.read_text()
+
+    # A later pass that read the same fights and spent different points.
+    write_fights(tmp_path, doc("2026-08-24T13:27:47+00:00", 22.0))
+    assert path.read_text() == first, "an unchanged document must not rewrite itself"
+
+    # A pass that actually read something new still writes, stamps and all.
+    changed = doc("2026-08-24T14:00:00+00:00", 30.0)
+    changed["encounters"][0]["measured"]["fightsSampled"] = 4
+    write_fights(tmp_path, changed)
+    written = json.loads(path.read_text())
+    assert written["encounters"][0]["measured"]["fightsSampled"] == 4
+    assert written["generatedAt"] == "2026-08-24T14:00:00+00:00"
+    assert written["measurement"]["cost"]["pointsSpentThisHour"] == 30.0

@@ -1204,6 +1204,23 @@ def build_document(
 _PROVENANCE_PATHS: tuple[tuple[str, ...], ...] = (
     ("generatedAt",),
     ("measurement", "generatedAt"),
+    # The point meter, and it belongs here for the same reason the timestamps do:
+    # it describes the *run*, not the fights. Five of its nine fields are readings
+    # taken at the moment the run happened -- what the hour's counter stood at,
+    # how long until it resets -- so they differ on every pass by construction and
+    # the settle can never fire.
+    #
+    # Measured on 2026-08-24: three consecutive hourly probe commits, each "data:
+    # refresh fight shapes for MID2", each a one-line diff, and the only fields
+    # that moved were the two stamps and `cost`. No encounter, no kill count, no
+    # aura window changed. That is exactly the failure the settle exists to
+    # prevent -- "any diff means something moved" stops being true -- reached
+    # through a field nobody thought of as a stamp.
+    #
+    # The block is kept in the document rather than dropped: what a pass costs is
+    # the open question behind the event-budget decision, and it is the only
+    # measurement of it anywhere.
+    ("measurement", "cost"),
 )
 
 
