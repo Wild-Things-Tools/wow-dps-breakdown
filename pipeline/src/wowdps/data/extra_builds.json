@@ -264,13 +264,29 @@
         "base": "MID2_Druid_Feral_Wildstalker",
         "heroTree": "Druid of the Claw",
         "origin": "computed",
-        "talents": "CcGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAjZwMzMzMmtFPwyMbzYGzMDAAAALBzGMmZUzYWYmZGjZmZAAAAAAAGAAAAzMLzyMzMAgFwMDwiZwAAAYmNMA",
+        "talents": "CcGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAjZwMzMzMmtNzyMbPwYGzMDAAAALBzGMmZUzYWYmZGjZmZAAAAAAAGAAAAzMLzyMzMAgFwMDwiZwAAAYmNMA",
         "specId": 103,
         "note": "Talents are computed: MID2_Druid_Feral_Wildstalker's shipped build moved onto Druid of the Claw with the hero tree filled from MID2_Druid_Guardian's build, then refined by a one-edit choice-node search on MID2_Druid_Feral_Wildstalker's own gear. simc ships no build for this tree; treat it as this project's estimate, not simc's answer.",
         "evidence": {
           "source": "talentedit.swap_hero_tree + local one-edit search",
           "donor": "MID2_Druid_Guardian",
-          "seededFrom": "MID2_Druid_Feral_Wildstalker"
+          "seededFrom": "MID2_Druid_Feral_Wildstalker",
+          "search": {
+            "method": "greedy one-edit climb on the materialised profile's own gear, tie rule per step",
+            "iterations": {
+              "climb": 1000,
+              "final": 3000
+            },
+            "steps": 2,
+            "lineage": [
+              "swap",
+              "rank 82115 -> 82110",
+              "choice node 82108 -> entry index 1"
+            ],
+            "seedDps": 131422.1,
+            "winnerDps": 135029.2,
+            "measuredOn": "2026-08-24, simc 625a591, patchwerk 1T, deterministic"
+          }
         }
       },
       {
@@ -278,13 +294,29 @@
         "base": "MID2_Hunter_Beast_Mastery",
         "heroTree": "Dark Ranger",
         "origin": "computed",
-        "talents": "C0PAAAAAAAAAAAAAAAAAAAAAAYxsMwAGwMsAMWAAwMMmZZmhZMzYGmZMmZYmxMmZxMzYGzgx0MAAAAgZAAAYMzMYmBM2gZBsNAMAA",
+        "talents": "C0PAAAAAAAAAAAAAAAAAAAAAAYzsMwAGwMsBMWAAwMMmZZmhZMzYGmZMmZYmxMmZxMzYGzgx0MAAAAgZAAAYMzMYmBM2gZBsNAM",
         "specId": 253,
         "note": "Talents are computed: MID2_Hunter_Beast_Mastery's shipped build moved onto Dark Ranger with the hero tree filled by taking every one of its nodes (no build anywhere plays it to donate from), then refined by a one-edit choice-node search on MID2_Hunter_Beast_Mastery's own gear. simc ships no build for this tree; treat it as this project's estimate, not simc's answer.",
         "evidence": {
           "source": "talentedit.swap_hero_tree + local one-edit search",
           "donor": null,
-          "seededFrom": "MID2_Hunter_Beast_Mastery"
+          "seededFrom": "MID2_Hunter_Beast_Mastery",
+          "search": {
+            "method": "greedy one-edit climb on the materialised profile's own gear, tie rule per step",
+            "iterations": {
+              "climb": 1000,
+              "final": 3000
+            },
+            "steps": 2,
+            "lineage": [
+              "swap",
+              "choice node 94957 -> entry index 1",
+              "choice node 94986 -> entry index 1"
+            ],
+            "seedDps": 189119.2,
+            "winnerDps": 198446.9,
+            "measuredOn": "2026-08-24, simc 625a591, patchwerk 1T, deterministic"
+          }
         }
       },
       {
@@ -292,13 +324,29 @@
         "base": "MID2_Hunter_Marksmanship",
         "heroTree": "Dark Ranger",
         "origin": "computed",
-        "talents": "C4PAAAAAAAAAAAAAAAAAAAAAAYxsMwAGwMsMgZBAAAAAAAAMjZMziZMzMmBjpZMYstMzMzMzMzMLMzygZAAAjZmxYmBwGMAbMz2MGAA",
+        "talents": "C4PAAAAAAAAAAAAAAAAAAAAAAYzsMwAGwMsNgZBAAAAAAAAMjZMziZMzMmBjpZMYstMzMzMzMzMLMzygZAAAjZmxYmBwGMAbMz2MG",
         "specId": 254,
         "note": "Talents are computed: MID2_Hunter_Marksmanship's shipped build moved onto Dark Ranger with the hero tree filled by taking every one of its nodes (no build anywhere plays it to donate from), then refined by a one-edit choice-node search on MID2_Hunter_Marksmanship's own gear. simc ships no build for this tree; treat it as this project's estimate, not simc's answer.",
         "evidence": {
           "source": "talentedit.swap_hero_tree + local one-edit search",
           "donor": null,
-          "seededFrom": "MID2_Hunter_Marksmanship"
+          "seededFrom": "MID2_Hunter_Marksmanship",
+          "search": {
+            "method": "greedy one-edit climb on the materialised profile's own gear, tie rule per step",
+            "iterations": {
+              "climb": 1000,
+              "final": 3000
+            },
+            "steps": 2,
+            "lineage": [
+              "swap",
+              "choice node 94957 -> entry index 1",
+              "choice node 94986 -> entry index 1"
+            ],
+            "seedDps": 199532.2,
+            "winnerDps": 206940.7,
+            "measuredOn": "2026-08-24, simc 625a591, patchwerk 1T, deterministic"
+          }
         }
       },
       {
@@ -349,13 +397,28 @@
         "base": "MID2_Rogue_Outlaw",
         "heroTree": "Fatebound",
         "origin": "computed",
-        "talents": "CQQAAAAAAAAAAAAAAAAAAAAAAAgx2MMzMmZmtZmZmZMmF4BmZbaZw2MAAAAAALLzMzwMzMziZmZbAAAAYmBMwCMjxMmNAbDswAgZmBGA",
+        "talents": "CQQAAAAAAAAAAAAAAAAAAAAAAAgx2MMzMmZmtZmZmZMmF4BmZbaZw2MAAAAAALLzMzwMzMziZmZbAAAAYmBMwGMjxMmNAbDswAgZmBG",
         "specId": 260,
         "note": "Talents are computed: MID2_Rogue_Outlaw's shipped build moved onto Fatebound with the hero tree filled from MID2_Rogue_Assassination_Fatebound's build, then refined by a one-edit choice-node search on MID2_Rogue_Outlaw's own gear. simc ships no build for this tree; treat it as this project's estimate, not simc's answer.",
         "evidence": {
           "source": "talentedit.swap_hero_tree + local one-edit search",
           "donor": "MID2_Rogue_Assassination_Fatebound",
-          "seededFrom": "MID2_Rogue_Outlaw"
+          "seededFrom": "MID2_Rogue_Outlaw",
+          "search": {
+            "method": "greedy one-edit climb on the materialised profile's own gear, tie rule per step",
+            "iterations": {
+              "climb": 1000,
+              "final": 3000
+            },
+            "steps": 1,
+            "lineage": [
+              "swap",
+              "choice node 95114 -> entry index 1"
+            ],
+            "seedDps": 238180.4,
+            "winnerDps": 241323.0,
+            "measuredOn": "2026-08-24, simc 625a591, patchwerk 1T, deterministic"
+          }
         }
       },
       {
