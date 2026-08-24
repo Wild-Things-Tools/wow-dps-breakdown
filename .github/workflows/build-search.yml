@@ -50,6 +50,9 @@ on:
       seed:
         description: 'PRNG seed. The run is reproducible from it, and it is published beside every candidate'
         default: '0'
+      harvest:
+        description: 'Path to a harvested-builds.json whose builds become seeds as well. Empty = simc''s own builds only'
+        default: ''
       commit:
         description: 'Commit the published document (publish mode only)'
         type: boolean
@@ -151,6 +154,14 @@ jobs:
             --seed "$SEED"
             --out "web/public/data")
           if [ -n "$BUILD" ]; then args+=(--build "$BUILD"); fi
+          # `wowdps build-search --harvest` has existed since the harvest landed and
+          # nothing invoked it: this workflow never passed the flag, so every run so
+          # far seeded from simc's own builds alone. That is not silent -- the
+          # document's own `notes` say no candidate came from a real player's build --
+          # but it meant a repaired hash could never be compared against a harvested
+          # one, which is the cross-check PR #38 recorded as not done. Empty keeps
+          # exactly the previous behaviour; a path opts a run into harvested seeds.
+          if [ -n "$HARVEST" ]; then args+=(--harvest "$HARVEST"); fi
           # `--write-calibration` in calibrate mode writes the document so the run's
           # evidence rides in the artifact. It is never committed: the Commit step
           # below requires `mode == publish`, because a blind run's numbers measure the
@@ -165,6 +176,7 @@ jobs:
           BREADTH: ${{ inputs.breadth }}
           CLIMB: ${{ inputs.climb_steps }}
           SEED: ${{ inputs.seed }}
+          HARVEST: ${{ inputs.harvest }}
           MODE: ${{ inputs.mode }}
 
       - name: Upload the run
