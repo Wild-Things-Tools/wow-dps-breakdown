@@ -4460,6 +4460,23 @@ enum values come from that mirror, not from the live server. So the first CI run
 and expect the `table` payload shape (`_table_entries` guesses between `entries`/`series`/
 `targets`) to need pinning against a real response.
 
+## The issue protocol: tracking that survives the session
+
+Standing instruction from the owner (2026-08-24): issues are created, updated
+and swept automatically, without him having to ask. What that means here:
+
+- Work that outlives a session, or waits on the owner's decision, gets a GitHub
+  issue. A PR body or a chat transcript is not durable tracking -- a caveat
+  written there is invisible three sessions later, which is how findings rot.
+- Every "could not verify" or deferred item in a merged PR either gets an issue
+  or is consciously dropped, and the PR text says which of the two happened.
+- Merging work closes the issues it resolves, with a comment linking the PR and
+  stating what was actually verified -- never a bare "done".
+- Before ending a session, and when picking one up: sweep the open issues for
+  staleness. Close what is done, with evidence; comment on what has changed.
+- Labels: `hub-plan` on everything; `agent-ready` only where no owner decision
+  is needed. Issue bodies are German, in the owner's vocabulary.
+
 ## Conventions
 
 - Dataset JSON is committed under `web/public/data/<tier>/`. Raw simc reports are not —
