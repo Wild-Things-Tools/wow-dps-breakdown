@@ -106,6 +106,7 @@ class SpecResult:
             "role": self.profile.role,
             "talentHash": self.profile.talent_hash,
             **({"unvalidated": True} if self.profile.unvalidated else {}),
+            **({"origin": self.profile.origin} if self.profile.origin else {}),
             "caveats": self.caveats,
             "errors": self.errors,
             "scenarios": {
@@ -140,6 +141,14 @@ class SpecResult:
             # same bytes it did before this existed and a quiet night still has
             # nothing to commit.
             out["unvalidated"] = True
+        if self.profile.origin:
+            # Same emitted-only-when-set rule. Where the build's *talents* come
+            # from, for a profile this project materialised: "repaired",
+            # "harvested" or "computed". The evidence sentence is the build's
+            # first caveat in its own spec file; the flag has to travel in the
+            # summary too, because the ranking reads the manifest and a build
+            # this project computed must not be drawn as one simc shipped.
+            out["origin"] = self.profile.origin
         if self.errors:
             out["errors"] = self.errors
 
@@ -417,6 +426,14 @@ def run_spec(
     """Run every scenario x target count for one spec."""
     result = SpecResult(profile=profile)
     seen_caveats: set[str] = set()
+
+    if profile.origin_note:
+        # First, so the provenance of the talents is the first sentence a reader
+        # gets on a build this project materialised. The note travels in the
+        # profile file itself (see ``extrabuilds``), so every shard publishes the
+        # same words.
+        seen_caveats.add(profile.origin_note)
+        result.caveats.append(profile.origin_note)
 
     gear = gear_caveat(profile, reference_item_level)
     if gear:
