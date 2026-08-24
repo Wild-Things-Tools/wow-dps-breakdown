@@ -134,6 +134,16 @@ jobs:
         env:
           TIER: ${{ inputs.tier }}
 
+      - name: Materialise the extra builds
+        # After the step above, because some cells supersede a refused
+        # materialised profile of the same filename. This is what puts the
+        # supplied (spec, hero tree) cells -- repaired, harvested, computed --
+        # into the search's build list, so `computed-builds.json` covers the
+        # same slots the ranking does.
+        run: wowdps extra-builds --tier "$TIER" --simc-source simc --write
+        env:
+          TIER: ${{ inputs.tier }}
+
       - name: Search
         id: run
         # `inputs.*` are bound in `env:` and never interpolated into `run:`. A
