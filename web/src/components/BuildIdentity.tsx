@@ -71,6 +71,18 @@ export interface BuildLike {
    * direction is a sentence, and sentences live in the build's own `caveats`.
    */
   tierSetComparable?: boolean;
+  /**
+   * Where the build's *talents* come from, for a profile this project materialised
+   * rather than one simc wrote: "repaired" (simc's own stored hash with the
+   * correction its trait table forces), "harvested" (a hash a real player was
+   * logged killing a boss with) or "computed" (a hero-tree swap of the shipped
+   * sibling plus a one-edit search). Absent on every build simc ships. A fourth
+   * claim beside the three above: it says whose answer the talents are, not
+   * whether the number can be ranked -- a computed second-tree build wears its
+   * sibling's gear and ranks fine, while a repaired build on a disabled character
+   * carries the gear flags too.
+   */
+  origin?: string;
 }
 
 /** "Frost Death Knight" -- the spec, without the hero tree in brackets. */
@@ -351,11 +363,20 @@ export function UnvalidatedMark({
 }: {
   build: Pick<
     BuildLike,
-    "unvalidated" | "gearComparable" | "tierSetComparable"
+    "unvalidated" | "gearComparable" | "tierSetComparable" | "origin"
   >;
 }) {
   return (
     <>
+      {build.origin ? (
+        // The word itself is the mark -- "repaired", "harvested", "computed" are
+        // three different claims and folding them into one label would promise
+        // less than the dataset knows. The full evidence sentence is the build's
+        // first caveat, on its own page; the title carries the short form.
+        <Mark title={ORIGIN_TITLES[build.origin] ?? "This build's talents were supplied by this project rather than shipped by SimulationCraft. The build's own page states the evidence."}>
+          {build.origin}
+        </Mark>
+      ) : null}
       {build.unvalidated ? (
         <Mark title="SimulationCraft wrote this profile and left it commented out for this tier — a real simulation of a character its authors have not signed off">
           unvalidated
@@ -392,6 +413,15 @@ export function UnvalidatedMark({
     </>
   );
 }
+
+const ORIGIN_TITLES: Record<string, string> = {
+  repaired:
+    "SimulationCraft's own stored build, with the correction its current talent table forces -- simc's parser refuses the original hash. The build's own page states the evidence.",
+  harvested:
+    "The talents are a real player's, read from a ranked kill in Warcraft Logs. The character (gear, race, consumables) is the profile's own, not the player's. The build's own page states which kill.",
+  computed:
+    "The talents were computed by this project: the shipped sibling build moved onto this hero tree and refined by a one-edit search. simc ships no build for this tree. The build's own page states the method.",
+};
 
 function Mark({ title, children }: { title: string; children: ReactNode }) {
   return (

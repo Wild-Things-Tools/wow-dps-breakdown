@@ -1,0 +1,449 @@
+{
+  "schemaVersion": 1,
+  "note": "Builds this project supplies for (spec, hero tree) cells simc ships nothing usable for -- the owner's requirement is every damage spec with two distinct valid hero-tree builds. Each cell names where its talents come from (origin: repaired | harvested | computed) and whose character it wears (base). Materialised into profile files by `wowdps extra-builds --write`; validated offline against the current trait table before every write, so a cell that rots is refused and reported rather than published. Evidence blocks are for readers; nothing in the pipeline consumes them.",
+  "tiers": {
+    "MID2": [
+      {
+        "profile": "MID2_Demon_Hunter_Havoc_Fel-Scarred",
+        "base": "MID2_Demon_Hunter_Havoc_Fel-Scarred",
+        "heroTree": "Fel-Scarred",
+        "origin": "repaired",
+        "talents": "CEkAAAAAAAAAAAAAAAAAAAAAAYgZmZMjZmZmhJjZGAAAAAAwsZMbzMmZmtZmx2MzDMDjxMWGYbWMjhZTTjZmxwGAAAAAAAAzMYAAAAYA",
+        "specId": 577,
+        "note": "Talents are simc's own stored build with the correction its current trait table forces -- simc's parser refuses the original hash. The character is MID2_Demon_Hunter_Havoc_Fel-Scarred's disabled generator profile.",
+        "evidence": {
+          "source": "computed-builds.json",
+          "id": "demon_hunter_havoc_fel_scarred",
+          "repairedFrom": "simc's refused generator hash"
+        },
+        "file": "MID2_Demon_Hunter_Havoc"
+      },
+      {
+        "profile": "MID2_Demon_Hunter_Havoc_Aldrachi_Reaver",
+        "base": "MID2_Demon_Hunter_Havoc_Fel-Scarred",
+        "heroTree": "Aldrachi Reaver",
+        "origin": "harvested",
+        "talents": "CEkAAAAAAAAAAAAAAAAAAAAAAYGMzMz2MmZmZmZmMMDAAAAAAY2MmlZYmZ2mZmZZm5BmBGGLzsNDGGbbMhxMjhFAAAgBAAAmZAGAAAAG",
+        "specId": 577,
+        "note": "Talents are a real player's: this exact build was logged on 2 ranked Mythic kill(s) of Nek'zali, the Soulcoiler in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The character -- gear, race, consumables -- is MID2_Demon_Hunter_Havoc_Fel-Scarred's (simc's disabled Aldrachi Reaver profile carries a mixed-expansion kit no character could wear), not the player's.",
+        "evidence": {
+          "source": "harvested-builds.json",
+          "buildKey": "0c3dc29088631bab",
+          "seenInKills": 2,
+          "reports": [
+            {
+              "report": "aHfPqydWjTVcLwtG",
+              "fightID": 8,
+              "actorID": 3,
+              "encounterID": 53470,
+              "encounterName": "Nek'zali, the Soulcoiler",
+              "difficulty": 5,
+              "killedAt": "2026-07-16T18:52:10+00:00"
+            },
+            {
+              "report": "gYmDTakQH8BXLVJh",
+              "fightID": 8,
+              "actorID": 20,
+              "encounterID": 53470,
+              "encounterName": "Nek'zali, the Soulcoiler",
+              "difficulty": 5,
+              "killedAt": "2026-07-16T18:52:09+00:00"
+            }
+          ]
+        }
+      },
+      {
+        "profile": "MID2_Paladin_Retribution_Templar",
+        "base": "MID2_Paladin_Retribution",
+        "heroTree": "Templar",
+        "origin": "harvested",
+        "talents": "CYEAAAAAAAAAAAAAAAAAAAAAAAAAAAANbbzMzyYmZAAAAAAYmyYGmZsNmthZ2mxYMGmxGbDAAgZm2mZ2mBAsBYAwYGmBzYMbYZGMMmxgB",
+        "specId": 70,
+        "note": "Talents are a real player's: this exact build was logged on 5 ranked Mythic kill(s) of Nek'zali, the Soulcoiler in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The character -- gear, race, consumables -- is MID2_Paladin_Retribution's, not the player's.",
+        "evidence": {
+          "source": "harvested-builds.json",
+          "buildKey": "58f8c5de0d930a30",
+          "seenInKills": 5,
+          "reports": [
+            {
+              "report": "WVCgH2xKwyptqTDk",
+              "fightID": 10,
+              "actorID": 65,
+              "encounterID": 53470,
+              "encounterName": "Nek'zali, the Soulcoiler",
+              "difficulty": 5,
+              "killedAt": "2026-07-16T18:44:20+00:00"
+            },
+            {
+              "report": "pfkrcn7xPdDL1jqH",
+              "fightID": 6,
+              "actorID": 14,
+              "encounterID": 53470,
+              "encounterName": "Nek'zali, the Soulcoiler",
+              "difficulty": 5,
+              "killedAt": "2026-07-16T18:44:17+00:00"
+            },
+            {
+              "report": "HPrGLV84XRJjCykN",
+              "fightID": 9,
+              "actorID": 30,
+              "encounterID": 53470,
+              "encounterName": "Nek'zali, the Soulcoiler",
+              "difficulty": 5,
+              "killedAt": "2026-07-16T18:43:26+00:00"
+            }
+          ]
+        }
+      },
+      {
+        "profile": "MID2_Paladin_Retribution_Herald",
+        "base": "MID2_Paladin_Retribution_Herald",
+        "heroTree": "Herald of the Sun",
+        "origin": "harvested",
+        "talents": "CYEAAAAAAAAAAAAAAAAAAAAAAAAAAAANbbzMzyYmZGAAAAAAjysMDzM2Gz2wMbzYmxYYGbsBgZZ2mZmtGAAAYBwAgxMMwMmZ2AmZGzYYwA",
+        "specId": 70,
+        "note": "Talents are a real player's: this exact build was logged on 2 ranked Mythic kill(s) of The Lost Explorers in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The character -- gear, race, consumables -- is MID2_Paladin_Retribution_Herald's, not the player's.",
+        "evidence": {
+          "source": "harvested-builds.json",
+          "buildKey": "74593ce5fe748927",
+          "seenInKills": 2,
+          "reports": [
+            {
+              "report": "7TYdmcv2ZK6WNDkR",
+              "fightID": 19,
+              "actorID": 5,
+              "encounterID": 53497,
+              "encounterName": "The Lost Explorers",
+              "difficulty": 5,
+              "killedAt": "2026-07-16T19:55:13+00:00"
+            },
+            {
+              "report": "gYmDTakQH8BXLVJh",
+              "fightID": 19,
+              "actorID": 4,
+              "encounterID": 53497,
+              "encounterName": "The Lost Explorers",
+              "difficulty": 5,
+              "killedAt": "2026-07-16T19:55:12+00:00"
+            }
+          ]
+        }
+      },
+      {
+        "profile": "MID2_Warrior_Arms",
+        "base": "MID2_Warrior_Arms",
+        "heroTree": "Slayer",
+        "origin": "repaired",
+        "talents": "CcEAAAAAAAAAAAAAAAAAAAAAAAzMzsMzMzMDAAAghphxYmxyMzMzgxMDAAAAgZWmZAZMWWGYBMgZYCZGsBMjNz2YwMGgZGAmBA",
+        "specId": 71,
+        "note": "Talents are simc's own stored build with the correction its current trait table forces -- simc's parser refuses the original hash. The character is MID2_Warrior_Arms's disabled generator profile. Note: the stored build spends 29 of the tier's usual 34 specialisation points; the shortfall is simc's stored profile, not the repair.",
+        "evidence": {
+          "source": "computed-builds.json",
+          "id": "warrior_arms_default",
+          "repairedFrom": "simc's refused generator hash"
+        }
+      },
+      {
+        "profile": "MID2_Warrior_Arms_Colossus",
+        "base": "MID2_Warrior_Arms",
+        "heroTree": "Colossus",
+        "origin": "harvested",
+        "talents": "CcEAAAAAAAAAAAAAAAAAAAAAAAzMzsMzYmZGAAAghphxwMbLzMzMjZGzMAAAAAGbzMwEALmxwGMwMsRjBLgZGGGMLzsNYmBAYGGA",
+        "specId": 71,
+        "note": "Talents are a real player's: this exact build was logged on 2 ranked Mythic kill(s) of The Lost Explorers in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The character -- gear, race, consumables -- is MID2_Warrior_Arms's, not the player's.",
+        "evidence": {
+          "source": "harvested-builds.json",
+          "buildKey": "be6b09884920aa17",
+          "seenInKills": 2,
+          "reports": [
+            {
+              "report": "7TYdmcv2ZK6WNDkR",
+              "fightID": 19,
+              "actorID": 3,
+              "encounterID": 53497,
+              "encounterName": "The Lost Explorers",
+              "difficulty": 5,
+              "killedAt": "2026-07-16T19:55:13+00:00"
+            },
+            {
+              "report": "gYmDTakQH8BXLVJh",
+              "fightID": 19,
+              "actorID": 2,
+              "encounterID": 53497,
+              "encounterName": "The Lost Explorers",
+              "difficulty": 5,
+              "killedAt": "2026-07-16T19:55:12+00:00"
+            }
+          ]
+        }
+      },
+      {
+        "profile": "MID2_Warrior_Fury",
+        "base": "MID2_Warrior_Fury",
+        "heroTree": "Slayer",
+        "origin": "repaired",
+        "talents": "CgEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgGDjxMsMzMzMDjZmZGzMzsMzMGzMbDzMAAQMWWGYBMBzwEYG2AmZ2Y2AAgZGDjZmhBA",
+        "specId": 72,
+        "note": "Talents are simc's own stored build with the correction its current trait table forces -- simc's parser refuses the original hash. The character is MID2_Warrior_Fury's disabled generator profile. Note: the stored build spends 30 of the tier's usual 34 specialisation points; the shortfall is simc's stored profile, not the repair.",
+        "evidence": {
+          "source": "computed-builds.json",
+          "id": "warrior_fury_default",
+          "repairedFrom": "simc's refused generator hash"
+        }
+      },
+      {
+        "profile": "MID2_Warrior_Fury_Mountain_Thane",
+        "base": "MID2_Warrior_Fury",
+        "heroTree": "Mountain Thane",
+        "origin": "harvested",
+        "talents": "CgEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgGDDzMz2yMzMzMMmZMjZMzyMzYMzsMmZGAAIMwGssY0YGAzCmxCwMDDAwMDghZZGjBjB",
+        "specId": 72,
+        "note": "Talents are a real player's: this exact build was logged on 1 ranked Mythic kill(s) of Nek'zali, the Soulcoiler in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The character -- gear, race, consumables -- is MID2_Warrior_Fury's, not the player's.",
+        "evidence": {
+          "source": "harvested-builds.json",
+          "buildKey": "5cae9dc4679bdf0e",
+          "seenInKills": 1,
+          "reports": [
+            {
+              "report": "dn6cbCpNM7B4xrWk",
+              "fightID": 9,
+              "actorID": 21,
+              "encounterID": 53470,
+              "encounterName": "Nek'zali, the Soulcoiler",
+              "difficulty": 5,
+              "killedAt": "2026-07-16T18:57:10+00:00"
+            }
+          ]
+        }
+      },
+      {
+        "profile": "MID2_Druid_Balance_Keeper",
+        "base": "MID2_Druid_Balance",
+        "heroTree": "Keeper of the Grove",
+        "origin": "harvested",
+        "talents": "CYGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWoMbNjxMDMmFzMzMLgZMLzsMWmxM2GLzYMzMsghBYAW2GbYamZZAAAAwGzMzMYzAjZAMzAADA",
+        "specId": 102,
+        "note": "Talents are a real player's: this exact build was logged on 3 ranked Mythic kill(s) of Nek'zali, the Soulcoiler in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The character -- gear, race, consumables -- is MID2_Druid_Balance's, not the player's.",
+        "evidence": {
+          "source": "harvested-builds.json",
+          "buildKey": "9af1b8fb46d2e68d",
+          "seenInKills": 3,
+          "reports": [
+            {
+              "report": "WVCgH2xKwyptqTDk",
+              "fightID": 10,
+              "actorID": 60,
+              "encounterID": 53470,
+              "encounterName": "Nek'zali, the Soulcoiler",
+              "difficulty": 5,
+              "killedAt": "2026-07-16T18:44:20+00:00"
+            },
+            {
+              "report": "pfkrcn7xPdDL1jqH",
+              "fightID": 6,
+              "actorID": 21,
+              "encounterID": 53470,
+              "encounterName": "Nek'zali, the Soulcoiler",
+              "difficulty": 5,
+              "killedAt": "2026-07-16T18:44:17+00:00"
+            },
+            {
+              "report": "HPrGLV84XRJjCykN",
+              "fightID": 9,
+              "actorID": 25,
+              "encounterID": 53470,
+              "encounterName": "Nek'zali, the Soulcoiler",
+              "difficulty": 5,
+              "killedAt": "2026-07-16T18:43:26+00:00"
+            }
+          ]
+        }
+      },
+      {
+        "profile": "MID2_Druid_Feral_Claw",
+        "base": "MID2_Druid_Feral_Wildstalker",
+        "heroTree": "Druid of the Claw",
+        "origin": "computed",
+        "talents": "CcGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAjZwMzMzMmtFPwyMbzYGzMDAAAALBzGMmZUzYWYmZGjZmZAAAAAAAGAAAAzMLzyMzMAgFwMDwiZwAAAYmNMA",
+        "specId": 103,
+        "note": "Talents are computed: MID2_Druid_Feral_Wildstalker's shipped build moved onto Druid of the Claw with the hero tree filled from MID2_Druid_Guardian's build, then refined by a one-edit choice-node search on MID2_Druid_Feral_Wildstalker's own gear. simc ships no build for this tree; treat it as this project's estimate, not simc's answer.",
+        "evidence": {
+          "source": "talentedit.swap_hero_tree + local one-edit search",
+          "donor": "MID2_Druid_Guardian",
+          "seededFrom": "MID2_Druid_Feral_Wildstalker"
+        }
+      },
+      {
+        "profile": "MID2_Hunter_Beast_Mastery_Dark_Ranger",
+        "base": "MID2_Hunter_Beast_Mastery",
+        "heroTree": "Dark Ranger",
+        "origin": "computed",
+        "talents": "C0PAAAAAAAAAAAAAAAAAAAAAAYxsMwAGwMsAMWAAwMMmZZmhZMzYGmZMmZYmxMmZxMzYGzgx0MAAAAgZAAAYMzMYmBM2gZBsNAMAA",
+        "specId": 253,
+        "note": "Talents are computed: MID2_Hunter_Beast_Mastery's shipped build moved onto Dark Ranger with the hero tree filled by taking every one of its nodes (no build anywhere plays it to donate from), then refined by a one-edit choice-node search on MID2_Hunter_Beast_Mastery's own gear. simc ships no build for this tree; treat it as this project's estimate, not simc's answer.",
+        "evidence": {
+          "source": "talentedit.swap_hero_tree + local one-edit search",
+          "donor": null,
+          "seededFrom": "MID2_Hunter_Beast_Mastery"
+        }
+      },
+      {
+        "profile": "MID2_Hunter_Marksmanship_Dark_Ranger",
+        "base": "MID2_Hunter_Marksmanship",
+        "heroTree": "Dark Ranger",
+        "origin": "computed",
+        "talents": "C4PAAAAAAAAAAAAAAAAAAAAAAYxsMwAGwMsMgZBAAAAAAAAMjZMziZMzMmBjpZMYstMzMzMzMzMLMzygZAAAjZmxYmBwGMAbMz2MGAA",
+        "specId": 254,
+        "note": "Talents are computed: MID2_Hunter_Marksmanship's shipped build moved onto Dark Ranger with the hero tree filled by taking every one of its nodes (no build anywhere plays it to donate from), then refined by a one-edit choice-node search on MID2_Hunter_Marksmanship's own gear. simc ships no build for this tree; treat it as this project's estimate, not simc's answer.",
+        "evidence": {
+          "source": "talentedit.swap_hero_tree + local one-edit search",
+          "donor": null,
+          "seededFrom": "MID2_Hunter_Marksmanship"
+        }
+      },
+      {
+        "profile": "MID2_Hunter_Survival_Pack_Leader",
+        "base": "MID2_Hunter_Survival",
+        "heroTree": "Pack Leader",
+        "origin": "harvested",
+        "talents": "C8PAAAAAAAAAAAAAAAAAAAAAAMgxMGWgNYGGawiZmZmZYZAAAAAAYGzYGbzYMjZwYaGAAAgBAGLLzMziZmZMGzMgZ2gNYMmZ2MAA",
+        "specId": 255,
+        "note": "Talents are a real player's: this exact build was logged on 3 ranked Mythic kill(s) of Nek'zali, the Soulcoiler in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The character -- gear, race, consumables -- is MID2_Hunter_Survival's, not the player's.",
+        "evidence": {
+          "source": "harvested-builds.json",
+          "buildKey": "5f60e520f3e0f6eb",
+          "seenInKills": 3,
+          "reports": [
+            {
+              "report": "WVCgH2xKwyptqTDk",
+              "fightID": 10,
+              "actorID": 55,
+              "encounterID": 53470,
+              "encounterName": "Nek'zali, the Soulcoiler",
+              "difficulty": 5,
+              "killedAt": "2026-07-16T18:44:20+00:00"
+            },
+            {
+              "report": "pfkrcn7xPdDL1jqH",
+              "fightID": 6,
+              "actorID": 4,
+              "encounterID": 53470,
+              "encounterName": "Nek'zali, the Soulcoiler",
+              "difficulty": 5,
+              "killedAt": "2026-07-16T18:44:17+00:00"
+            },
+            {
+              "report": "HPrGLV84XRJjCykN",
+              "fightID": 9,
+              "actorID": 20,
+              "encounterID": 53470,
+              "encounterName": "Nek'zali, the Soulcoiler",
+              "difficulty": 5,
+              "killedAt": "2026-07-16T18:43:26+00:00"
+            }
+          ]
+        }
+      },
+      {
+        "profile": "MID2_Rogue_Outlaw_Fatebound",
+        "base": "MID2_Rogue_Outlaw",
+        "heroTree": "Fatebound",
+        "origin": "computed",
+        "talents": "CQQAAAAAAAAAAAAAAAAAAAAAAAgx2MMzMmZmtZmZmZMmF4BmZbaZw2MAAAAAALLzMzwMzMziZmZbAAAAYmBMwCMjxMmNAbDswAgZmBGA",
+        "specId": 260,
+        "note": "Talents are computed: MID2_Rogue_Outlaw's shipped build moved onto Fatebound with the hero tree filled from MID2_Rogue_Assassination_Fatebound's build, then refined by a one-edit choice-node search on MID2_Rogue_Outlaw's own gear. simc ships no build for this tree; treat it as this project's estimate, not simc's answer.",
+        "evidence": {
+          "source": "talentedit.swap_hero_tree + local one-edit search",
+          "donor": "MID2_Rogue_Assassination_Fatebound",
+          "seededFrom": "MID2_Rogue_Outlaw"
+        }
+      },
+      {
+        "profile": "MID2_Rogue_Subtlety_Trickster",
+        "base": "MID2_Rogue_Subtlety",
+        "heroTree": "Trickster",
+        "origin": "harvested",
+        "talents": "CUQAAAAAAAAAAAAAAAAAAAAAAAgx2MAAAAAwsMGLTMbbjxMDjhZmZGzMbzYGbbzMzMzMjBjZ2GAAAAGMGwY2MMwAzCL0iNMDYmBzYA",
+        "specId": 261,
+        "note": "Talents are a real player's: this exact build was logged on 3 ranked Mythic kill(s) of Nek'zali, the Soulcoiler in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The character -- gear, race, consumables -- is MID2_Rogue_Subtlety's, not the player's.",
+        "evidence": {
+          "source": "harvested-builds.json",
+          "buildKey": "c0fd8566a98e9693",
+          "seenInKills": 3,
+          "reports": [
+            {
+              "report": "WVCgH2xKwyptqTDk",
+              "fightID": 10,
+              "actorID": 47,
+              "encounterID": 53470,
+              "encounterName": "Nek'zali, the Soulcoiler",
+              "difficulty": 5,
+              "killedAt": "2026-07-16T18:44:20+00:00"
+            },
+            {
+              "report": "pfkrcn7xPdDL1jqH",
+              "fightID": 6,
+              "actorID": 6,
+              "encounterID": 53470,
+              "encounterName": "Nek'zali, the Soulcoiler",
+              "difficulty": 5,
+              "killedAt": "2026-07-16T18:44:17+00:00"
+            },
+            {
+              "report": "HPrGLV84XRJjCykN",
+              "fightID": 9,
+              "actorID": 12,
+              "encounterID": 53470,
+              "encounterName": "Nek'zali, the Soulcoiler",
+              "difficulty": 5,
+              "killedAt": "2026-07-16T18:43:26+00:00"
+            }
+          ]
+        }
+      },
+      {
+        "profile": "MID2_Warlock_Demonology_Diabolist",
+        "base": "MID2_Warlock_Demonology_Soulharvester",
+        "heroTree": "Diabolist",
+        "origin": "harvested",
+        "talents": "CoQAAAAAAAAAAAAAAAAAAAAAAwMjZmpZjhZmxsNAAAAAAAgxMGWgB2GWohFjZGLz2MzMmBAmZMmZmZAmZGzMAAAjZmZmhhlZMgB",
+        "specId": 266,
+        "note": "Talents are a real player's: this exact build was logged on 3 ranked Mythic kill(s) of Nek'zali, the Soulcoiler in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The character -- gear, race, consumables -- is MID2_Warlock_Demonology_Soulharvester's, not the player's.",
+        "evidence": {
+          "source": "harvested-builds.json",
+          "buildKey": "6677de34cc7089ee",
+          "seenInKills": 3,
+          "reports": [
+            {
+              "report": "WVCgH2xKwyptqTDk",
+              "fightID": 10,
+              "actorID": 41,
+              "encounterID": 53470,
+              "encounterName": "Nek'zali, the Soulcoiler",
+              "difficulty": 5,
+              "killedAt": "2026-07-16T18:44:20+00:00"
+            },
+            {
+              "report": "pfkrcn7xPdDL1jqH",
+              "fightID": 6,
+              "actorID": 2,
+              "encounterID": 53470,
+              "encounterName": "Nek'zali, the Soulcoiler",
+              "difficulty": 5,
+              "killedAt": "2026-07-16T18:44:17+00:00"
+            },
+            {
+              "report": "HPrGLV84XRJjCykN",
+              "fightID": 9,
+              "actorID": 2,
+              "encounterID": 53470,
+              "encounterName": "Nek'zali, the Soulcoiler",
+              "difficulty": 5,
+              "killedAt": "2026-07-16T18:43:26+00:00"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

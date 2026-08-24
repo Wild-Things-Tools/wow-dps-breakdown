@@ -1012,6 +1012,48 @@ def cmd_unvalidated(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_extra_builds(args: argparse.Namespace) -> int:
+    """Materialise the builds this project supplies for missing (spec, tree) cells.
+
+    Runs after ``wowdps unvalidated`` and before ``wowdps build``, in every shard
+    and in the publish job, so the cells exist wherever profiles are discovered.
+    A cell whose hash fails offline validation is refused and reported; the other
+    cells are still written, and the exit code stays 0 unless ``--strict`` asks
+    otherwise -- one rotted cell must not cost the night, the same rule as
+    ``hero-trees``.
+    """
+    from . import extrabuilds
+
+    simc_dir = Path(args.simc_source)
+    tier = _resolve_tier(simc_dir / "profiles", args.tier)
+    cells = extrabuilds.load_cells(tier)
+    if not cells:
+        print(f"no extra builds are recorded for {tier}; nothing to do")
+        return 0
+
+    print(f"{len(cells)} extra build(s) recorded for {tier}:")
+    for cell in cells:
+        print(f"  [{cell.origin}] {cell.profile} (talents on {cell.base}'s character)")
+
+    if not args.write:
+        print("\nnothing written -- pass --write to materialise them")
+        return 0
+
+    out_dir = Path(args.out) if args.out else simc_dir / "profiles" / tier
+    report = extrabuilds.write_cells(simc_dir, tier, out_dir, cells)
+    print(f"\nwrote {len(report.written)} profile(s) into {out_dir}")
+    if report.unchecked:
+        print(
+            "WARNING: no trait table under the checkout, so the hashes were not "
+            "validated offline; simc itself is the only gate left."
+        )
+    for profile, reason in report.skipped:
+        print(f"  REFUSED {profile}: {reason}")
+    if report.skipped and args.strict:
+        return 1
+    return 0
+
+
 def cmd_gear_anchor(args: argparse.Namespace) -> int:
     """Show the normalized kit a computed build of this tier would wear.
 
@@ -2157,6 +2199,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_buffs.add_argument("--limit", type=int)
     p_buffs.add_argument("--shard")
     p_buffs.set_defaults(func=cmd_buffs)
+
+    p_extra = sub.add_parser(
+        "extra-builds",
+        help="materialise the builds this project supplies for missing (spec, hero tree) cells",
+    )
+    p_extra.add_argument("--tier", default="latest")
+    p_extra.add_argument("--simc-source", default="simc")
+    p_extra.add_argument(
+        "--out", default=None, help="destination directory (default: the tier's profile dir)"
+    )
+    p_extra.add_argument("--write", action="store_true")
+    p_extra.add_argument(
+        "--strict", action="store_true", help="exit non-zero when any cell is refused"
+    )
+    p_extra.set_defaults(func=cmd_extra_builds)
 
     p_unvalidated = sub.add_parser(
         "unvalidated",

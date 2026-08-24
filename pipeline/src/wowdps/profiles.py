@@ -77,6 +77,13 @@ _ROLE_LINE = re.compile(r"^role\s*=\s*(\S+)\s*$", re.MULTILINE)
 _TALENTS_LINE = re.compile(r"^talents\s*=\s*(\S+)\s*$", re.MULTILINE)
 _ILEVEL = re.compile(r"\bilevel=(\d+)")
 
+#: The talent-provenance markers ``extrabuilds`` writes into a profile it
+#: materialises. In the file rather than in a flag for the same reason
+#: ``unvalidated.MARKER`` is: a sharded run materialises these in every job, and a
+#: profile that says what it is cannot disagree with another shard about it.
+_ORIGIN_LINE = re.compile(r"^# wowdps-origin (\S+)\s*$", re.MULTILINE)
+_ORIGIN_NOTE_LINE = re.compile(r"^# wowdps-origin-note (.+?)\s*$", re.MULTILINE)
+
 
 def _titleize(token: str) -> str:
     """``beast_mastery`` -> ``Beast_Mastery`` (the form used in filenames)."""
@@ -142,6 +149,17 @@ class SpecProfile:
     #: so it is carried through every dataset and labelled wherever it is drawn.
     #: See ``unvalidated``.
     unvalidated: bool = False
+    #: Where this build's *talents* come from, for a profile this project
+    #: materialised rather than one simc wrote: ``repaired`` (simc's own stored
+    #: hash with the correction the trait table forces), ``harvested`` (a hash a
+    #: real player was logged killing a boss with) or ``computed`` (a hero-tree
+    #: swap of the shipped sibling plus a one-edit search). ``None`` for every
+    #: profile simc ships, so a tier without extra builds produces the bytes it
+    #: did before this existed. See ``extrabuilds``.
+    origin: str | None = None
+    #: The evidence sentence beside ``origin``, published as the build's first
+    #: caveat so the mark is never left to speak for itself.
+    origin_note: str | None = None
     #: The name the profile declares *inside* the file (``MID2_Rogue_Outlaw``), which
     #: is the key ``herotrees`` resolves against. Kept because it is not always the
     #: filename: simc renames the build without renaming the file.
@@ -230,6 +248,8 @@ def parse_profile(
             hero_overrides.get(profile_name) or hero_overrides.get(path.stem) or hero_talent
         )
 
+    origin_match = _ORIGIN_LINE.search(text)
+    note_match = _ORIGIN_NOTE_LINE.search(text)
     return SpecProfile(
         path=path,
         tier=tier,
@@ -241,6 +261,8 @@ def parse_profile(
         name_hero=name_hero,
         profile_name=profile_name,
         unvalidated=text.startswith(unvalidated.MARKER),
+        origin=origin_match.group(1) if origin_match else None,
+        origin_note=note_match.group(1) if note_match else None,
         item_level=modal_item_level(text),
     )
 

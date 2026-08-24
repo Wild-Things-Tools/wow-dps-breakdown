@@ -65,6 +65,12 @@ export interface SpecDetail {
    * label rather than folded into the ranking silently.
    */
   unvalidated?: boolean;
+  /**
+   * Where this build's *talents* come from, for a profile this project
+   * materialised: "repaired" | "harvested" | "computed". Absent on every build
+   * simc ships. The evidence sentence is the first entry of `caveats`.
+   */
+  origin?: string;
   caveats: string[];
   errors: string[];
   scenarios: Record<string, ScenarioCells>;
@@ -129,6 +135,13 @@ export interface SpecSummary {
    * label rather than folded into the ranking silently.
    */
   unvalidated?: boolean;
+  /**
+   * Where this build's *talents* come from, for a profile this project
+   * materialised: "repaired" | "harvested" | "computed". Absent on every build
+   * simc ships, so a tier without extra builds produces the bytes it did before
+   * this existed. The evidence sentence is in the build's own spec file.
+   */
+  origin?: string;
 }
 
 export interface ScenarioMeta {

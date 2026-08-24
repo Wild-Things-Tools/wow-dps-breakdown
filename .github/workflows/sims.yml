@@ -55,6 +55,9 @@ on:
       include_unvalidated:
         description: "Also simulate the profiles simc wrote and left commented out. They are labelled everywhere they appear"
         default: 'true'
+      include_extra_builds:
+        description: "Also simulate the builds this project supplies for missing (spec, hero tree) cells -- repaired, harvested or computed talents, labelled with their origin everywhere they appear"
+        default: 'true'
 
 concurrency:
   group: sims
@@ -233,6 +236,23 @@ jobs:
             --simc-source bundle \
             --write
 
+      # The builds this project supplies for (spec, hero tree) cells simc ships
+      # nothing usable for -- repaired, harvested or computed talents on a stated
+      # base character, from `data/extra_builds.json`. After the unvalidated
+      # materialisation, because some cells deliberately supersede a refused
+      # materialised profile of the same filename; the provenance travels in the
+      # written file (`# wowdps-origin ...`), so every shard labels its builds
+      # identically, exactly like the unvalidated marker above. A cell whose hash
+      # no longer validates against the current trait table is refused and
+      # reported rather than written -- one rotted cell must not cost the night.
+      - name: Materialise the extra builds
+        if: ${{ (inputs.include_extra_builds || 'true') == 'true' }}
+        run: |
+          wowdps -v extra-builds \
+            --tier "${{ matrix.tier }}" \
+            --simc-source bundle \
+            --write
+
       # Which hero tree each build plays, decoded from its own talent hash against
       # simc's trait table. Ordering is the whole point of putting it here: every
       # shard reads `hero_trees.json` through `profiles.discover`, so it has to be
@@ -377,6 +397,21 @@ jobs:
           print(' '.join(t['id'] for t in index['tiers']))
           "); do
             wowdps -v unvalidated --tier "$tier" --simc-source simc-src --write
+          done
+
+      # The same extra-build materialisation the shards did, for the same reason
+      # the unvalidated one runs here twice: `spec-index` and `hero-trees` read
+      # the profiles back in this job, and a build the shards simulated must not
+      # be drawn as "simc ships no profile for this tree" beside its own row.
+      - name: Materialise the extra builds
+        if: ${{ (inputs.include_extra_builds || 'true') == 'true' }}
+        run: |
+          for tier in $(python3 -c "
+          import json, pathlib
+          index = json.loads(pathlib.Path('web/public/data/tiers.json').read_text())
+          print(' '.join(t['id'] for t in index['tiers']))
+          "); do
+            wowdps -v extra-builds --tier "$tier" --simc-source simc-src --write
           done
 
       # Same step the shards ran, and -- because the checkout above is pinned to the
