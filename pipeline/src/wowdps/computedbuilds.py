@@ -286,9 +286,27 @@ class SpecEntry:
     runner_up: dict | None
     anchor: dict
     caveats: list[str]
+    #: True when this build's seed was a REPAIRED hash -- simc ships one, simc's own
+    #: parser refuses it, and this is that hash with the correction the trait table
+    #: forces.
+    #:
+    #: A separate field because nothing else in the document carries it. The winning
+    #: contender's ``origin`` is ``search`` on a repaired build exactly as it is on a
+    #: genuinely searched one -- the search does run, and its winner is what gets
+    #: published -- so ``origin`` cannot tell the two apart, and neither can
+    #: ``simc: null``, which marks the three builds where no search ran at all
+    #: (measured on the committed MID2 document: those are two Retribution builds and
+    #: Havoc Aldrachi Reaver, a disjoint set from the three repaired ones).
+    #:
+    #: Until now the only signal was the caveat SENTENCE, and a reader deriving a
+    #: badge by matching prose gets a badge that vanishes the day the sentence is
+    #: reworded. The two claims are genuinely different -- "we found better talents"
+    #: against "simc will not load its own hash and this is the forced correction" --
+    #: so the document says which.
+    repaired_seed: bool = False
 
     def to_json(self) -> dict:
-        return {
+        entry = {
             "id": self.build_id,
             "scenario": self.scenario,
             "targets": self.targets,
@@ -299,6 +317,11 @@ class SpecEntry:
             "anchor": self.anchor,
             "caveats": self.caveats,
         }
+        # Only when true, so a tier with no repaired build produces the bytes it did
+        # before this field existed -- the same rule `unvalidated` follows.
+        if self.repaired_seed:
+            entry["repairedSeed"] = True
+        return entry
 
 
 def build_document(
