@@ -393,15 +393,20 @@ def test_a_checkout_without_the_table_names_nothing_rather_than_raising(tmp_path
 
 def test_a_node_the_spec_may_not_take_is_refused_in_simcs_own_words():
     """The wording and the ids are simc's: its 2026-08-22 CI log says "Selected node
-    110203 entry 136735 is not available to player's spec" for Arms Warrior, and this
-    is what lets the site say *which* profile will not load without running simc."""
+    110203 entry 136735 is not available to player's spec." for Arms Warrior, and this
+    is what lets the site say *which* profile will not load without running simc.
+
+    **The final full stop is simc's too**, and this string carried it for months without
+    one. That is the difference between a line a reader can grep out of a real run's
+    stderr and one that looks like it should match and does not.
+    """
     nodes = {
         10: [trait(10, 100, spec_ids=(71,))],
         20: [trait(20, 200, spec_ids=(72,))],
     }
     loadout = decode_loadout(encode(header_bits(71) + [1, 1, 0, 0, 1, 1, 0, 0]), nodes)
     assert spec_rule_violation(loadout, nodes) == (
-        "Selected node 20 entry 200 is not available to player's spec"
+        "Selected node 20 entry 200 is not available to player's spec."
     )
 
 

@@ -805,15 +805,45 @@ def _framed(bits: list[int], framing: Framing | None) -> list[int]:
     return framed
 
 
+#: simc's own wordings for the three refusals a stale talent hash produces, copied
+#: from the format literals in ``parse_traits_hash`` at 69a46e1, **punctuation
+#: included** so they can be matched against a real run's stderr. They live here, once,
+#: because a second spelling of one of simc's lines is how a prediction and the thing
+#: it predicts drift apart -- and this project has already published a "refusal" simc
+#: never emits (issue #43).
+#:
+#: Which of the two choice wordings applies is decided by the node, not by the index:
+#: simc says the first when the choice bit is set on a node that is not a choice node,
+#: and the second when a real choice node is given an index past its last entry.
+SIMC_CHOICE_ON_PLAIN = "Node {node} is not a choice node but has index selection."
+SIMC_CHOICE_INDEX_OUT_OF_BOUNDS = "Index {index} for choice node {node} out of bounds."
+SIMC_SPEC_RULE = "Selected node {node} entry {entry} is not available to player's spec."
+
+
+def simc_choice_refusal(overflow: ChoiceOverflow) -> str:
+    """simc's own line for a choice index the tree cannot hold.
+
+    Both of simc's wordings are reachable and the node type is what chooses between
+    them, so this is derived rather than assumed -- every overflow measured on MID2 and
+    MID1 so far is on a *plain* node (a choice node that lost an entry), and writing
+    only that one would be right today and wrong without warning.
+    """
+    if overflow.node_type in (NODE_CHOICE, NODE_SELECTION):
+        return SIMC_CHOICE_INDEX_OUT_OF_BOUNDS.format(
+            index=overflow.written_index, node=overflow.node_id
+        )
+    return SIMC_CHOICE_ON_PLAIN.format(node=overflow.node_id)
+
+
 def spec_rule_violation(loadout: Loadout, nodes: dict[int, list[Trait]]) -> str | None:
     """simc's own refusal of a decoded loadout, in simc's own words, or None.
 
     ``parse_traits_hash`` rejects a **non-hero** node whose ``id_spec`` does not
-    contain the player's spec, and says so as *"Selected node N entry M is not
-    available to player's spec"*. That is one of the two wordings a stale talent hash
-    produces; the other -- *"Node N is not a choice node but has index selection"* --
-    is a decode failure and comes out of ``decode_loadout`` as a
-    ``TalentDecodeError`` naming the same node.
+    contain the player's spec, and says so as ``SIMC_SPEC_RULE`` -- simc's literal,
+    final full stop included, which it did not used to be. That is one of the two
+    wordings a stale talent hash produces; the other -- ``SIMC_CHOICE_ON_PLAIN`` --
+    is a decode failure and comes out of ``decode_loadout`` as a ``TalentDecodeError``,
+    whose message is **this project's** and not simc's.
 
     Together those two are enough to say **which** of simc's shipped profiles will
     not load, and why, **without running simc**. Checked against simc's own CI output
@@ -827,7 +857,7 @@ def spec_rule_violation(loadout: Loadout, nodes: dict[int, list[Trait]]) -> str 
     if not offenders:
         return None
     first = offenders[0]
-    return f"Selected node {first.node_id} entry {first.entry_id} is not available to player's spec"
+    return SIMC_SPEC_RULE.format(node=first.node_id, entry=first.entry_id)
 
 
 def spec_rule_offenders(loadout: Loadout, nodes: dict[int, list[Trait]]) -> tuple[Selection, ...]:

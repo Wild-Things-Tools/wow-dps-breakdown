@@ -271,14 +271,10 @@ def refused_profiles(
         if class_id is None or not profile.talent_hash:
             continue
         nodes = nodes_by_class.setdefault(class_id, talenttree.nodes_for_class(traits, class_id))
-        try:
-            loadout = talenttree.decode_loadout(profile.talent_hash, nodes)
-        except talenttree.TalentDecodeError as exc:
-            reason = str(exc)
-        else:
-            reason = talenttree.spec_rule_violation(loadout, nodes) or ""
-        if not reason:
+        refusal = _refusal(profile.talent_hash, nodes)
+        if refusal is None:
             continue
+        reason, simc_message = refusal
         refused.append(
             {
                 "class": profile.wow_class,
@@ -287,9 +283,118 @@ def refused_profiles(
                 "heroTree": profile.hero_talent,
                 "unvalidated": profile.unvalidated,
                 "reason": reason,
+                # simc's own line for the first thing it trips on, punctuation
+                # included, or None where nothing can be quoted. Separate from
+                # `reason` on purpose: see `_refusal`.
+                "simcMessage": simc_message,
             }
         )
     return refused
+
+
+def _refusal(
+    talent_hash: str, nodes: dict[int, list[talenttree.Trait]]
+) -> tuple[str, str | None] | None:
+    """Why simc will refuse this hash, in our words, and in simc's -- or None.
+
+    Two fields because they are two claims, and publishing one of them as the other is
+    the defect this replaces (issue #43). The site's coverage panel prints *"simc will
+    not load it: <reason>"*, and what stood in `reason` for four of MID2's six refused
+    profiles was `decode_loadout`'s own message -- "choice index 1 out of bounds for
+    node 91020 (1 entries)" -- a sentence simc **never emits**. simc's line for that
+    node is one of its other refusals entirely ("Node 91020 is not a choice node but has
+    index selection."), so a reader grepping a real run's stderr for the published text
+    found nothing and could not tell our misprediction from a simc change.
+
+    So `reason` is deliberately, visibly **ours**: lower-case prose that reads on from
+    the panel's own lead-in and never impersonates simc. `simcMessage` is simc's, from
+    the one place its literals live (`talenttree.SIMC_*`), for anyone matching output.
+
+    **And the count is part of being true.** `decode_loadout` and
+    `spec_rule_violation` both stop at the *first* failure, so a reason naming one node
+    read as "one node is wrong" when the real figures on MID2 are 5 for Havoc Aldrachi
+    Reaver, 7 and 4 for the two Retribution builds and 2 each for Arms and Fury. The
+    wording carries the number, and where it comes from reading on past the point simc
+    stops at, it says so -- that reading is `decode_lenient`, which is out of step with
+    whoever wrote the hash by definition, so the figure is the extent of the problem
+    rather than a tally to be quoted elsewhere.
+    """
+    try:
+        loadout = talenttree.decode_loadout(talent_hash, nodes)
+    except talenttree.TalentDecodeError as exc:
+        return _decode_refusal(talent_hash, nodes, exc)
+    offenders = talenttree.spec_rule_offenders(loadout, nodes)
+    if not offenders:
+        return None
+    first = offenders[0]
+    simc_message = talenttree.SIMC_SPEC_RULE.format(node=first.node_id, entry=first.entry_id)
+    named = f"node {first.node_id} ({first.name or 'unnamed'}, entry {first.entry_id})"
+    if len(offenders) == 1:
+        return (
+            f"{named} belongs to another specialisation, so this build cannot take it",
+            simc_message,
+        )
+    return (
+        f"{len(offenders)} of the selected nodes belong to another specialisation; the "
+        f"first is {named}, which is where simc stops",
+        simc_message,
+    )
+
+
+def _node_name(nodes: dict[int, list[talenttree.Trait]], node_id: int) -> str:
+    """What the trait table calls a node, for a reason a person has to read.
+
+    A bare id says nothing to anyone who is not holding the table; the name is the
+    half that makes the sentence checkable against the game.
+    """
+    entries = nodes.get(node_id) or []
+    return entries[0].name if entries and entries[0].name else "unnamed"
+
+
+def _decode_refusal(
+    talent_hash: str,
+    nodes: dict[int, list[talenttree.Trait]],
+    exc: talenttree.TalentDecodeError,
+) -> tuple[str, str | None]:
+    """A hash the strict reader will not finish, described without pretending to be simc.
+
+    The lenient read is what turns "one node" into the real extent, and it is also the
+    only thing that can say *which* of simc's two choice wordings applies -- that is
+    decided by the node's type, not by the index. Where even the lenient reader raises,
+    there is nothing to quote and nothing to count, and the raise itself is the evidence.
+    """
+    try:
+        _loadout, overflows = talenttree.decode_lenient(talent_hash, nodes)
+    except talenttree.TalentDecodeError:
+        overflows = ()
+    if not overflows:
+        # Not a choice overflow at all -- a version, an alphabet or a length failure.
+        # Ours entirely: simc has its own line for each and this reader has not
+        # established which one, so quoting any of them would be a guess.
+        return f"this project's reader cannot decode the hash: {exc}", None
+
+    first = overflows[0]
+    if first.node_type in (talenttree.NODE_CHOICE, talenttree.NODE_SELECTION):
+        what = (
+            f"the hash takes option {first.written_index + 1} at node {first.node_id} "
+            f"({_node_name(nodes, first.node_id)}), and this tier's tree gives that node "
+            f"only {first.entries} to choose from"
+        )
+    else:
+        what = (
+            f"the hash chooses between options at node {first.node_id} "
+            f"({_node_name(nodes, first.node_id)}), which this tier's tree gives a single "
+            f"entry and no choice"
+        )
+    if len(overflows) == 1:
+        return f"{what} -- and it is the only node in the hash written that way", (
+            talenttree.simc_choice_refusal(first)
+        )
+    return (
+        f"{what}; reading on past the point simc stops at finds {len(overflows)} nodes "
+        f"written that way, so the hash is stale in more than one place",
+        talenttree.simc_choice_refusal(first),
+    )
 
 
 #: How a damage spec stands in this tier, in the manifest coverage block's own words.
