@@ -385,6 +385,64 @@ def test_the_command_writes_a_dump_a_json_file_and_a_measured_cost(tmp_path, mon
     assert "Lightblinded Vanguard" in text and "profile vs measurement" in text
 
 
+def test_every_setting_the_resume_checks_is_written_onto_the_encounter(tmp_path, monkeypatch):
+    """The check and the record are two halves, and only the record is reachable
+    from a real run.
+
+    `is_complete` reads `order`, `eventBudget` and `difficulty` off the entry. If
+    the writing half is dropped, every unit test of `is_complete` still passes --
+    it is handed hand-built dicts -- while the check is inoperative against any
+    payload the command actually produces. That is the `seen_difficulties` failure
+    this repository already shipped once: a guard present and unable to fire.
+    Verified by deleting each line in turn; without this test nothing goes red.
+    """
+    from wowdps import cli, warcraftlogs
+
+    stub = StubClient(
+        structure=structure_payload(),
+        events={"DamageTaken": [damage(s, a) for a in (10, 11, 12) for s in (0.5, 299.0)]},
+        tables={},
+    )
+    monkeypatch.setattr(
+        warcraftlogs.Credentials,
+        "from_env",
+        classmethod(lambda cls: warcraftlogs.Credentials("i", "s")),
+    )
+    monkeypatch.setattr(fightprobe, "WarcraftLogsClient", lambda *a, **k: stub)
+
+    args = cli.build_parser().parse_args(
+        [
+            "fight-probe",
+            "--tier",
+            VOIDSPIRE_TIER,
+            "--encounter",
+            "3180",
+            "--reports",
+            "1",
+            "--difficulty",
+            "4",
+            "--out",
+            str(tmp_path),
+        ]
+    )
+    assert fightprobe.cmd_fight_probe(args) == 0
+
+    import json
+
+    payload = json.loads((tmp_path / f"fight-probe-{VOIDSPIRE_TIER}.json").read_text())
+    entry = payload["encounters"][0]
+    # Per encounter, not only on the document: the payload-level field says what the
+    # *last* run asked for, and every resumed run carries entries it did not collect.
+    assert entry["difficulty"] == 4
+    assert entry["order"] == args.order
+    assert isinstance(entry["eventBudget"], int)
+
+    # And the resume agrees with itself: the entry this run wrote counts as done for
+    # the same settings and as outstanding for another difficulty.
+    assert fightprobe.is_complete(entry, 1, entry["eventBudget"], entry["order"], 4) is True
+    assert fightprobe.is_complete(entry, 1, entry["eventBudget"], entry["order"], 5) is False
+
+
 def test_first_kills_are_taken_by_date_across_gathered_pages():
     """WCL sorts rankings by damage, so the earliest kills sit deep in the list. The
     selector reads the startTime every row carries and takes the earliest, across
@@ -529,6 +587,35 @@ def test_an_encounter_with_no_recorded_budget_is_left_alone():
     from wowdps.fightprobe import is_complete
 
     assert is_complete({"fightsSampled": 30}, 30, 8 * 10000) is True
+
+
+def test_a_different_difficulty_reopens_an_encounter_that_has_enough_fights():
+    """Heroic Sszorak and Mythic Sszorak are different fights, not two samples of one.
+
+    The failure this prevents is worse than the `order` and `max_pages` ones it sits
+    beside, and it is not a no-op: a Heroic run against a Mythic payload replaces the
+    encounters it reaches, leaves the rest on Mythic, and stamps `difficulty: 4` over
+    the whole document. A target band pooled across two difficulties is a wrong answer
+    wearing a right one's label, and nothing downstream can tell.
+    """
+    from wowdps.fightprobe import is_complete
+
+    collected = {"fightsSampled": 30, "difficulty": 5}
+    assert is_complete(collected, 30, None, None, 5) is True
+    assert is_complete(collected, 30, None, None, 4) is False
+    # Asking about nothing in particular is not asking for a different difficulty.
+    assert is_complete(collected, 30, None, None, None) is True
+
+
+def test_an_encounter_with_no_recorded_difficulty_is_left_alone():
+    """Same "unknown is not zero" rule the budget and the order already follow.
+
+    Every payload written before 2026-08-25 is in this state, and reading the absence
+    as a mismatch would re-open every zone for everybody on the next hourly run.
+    """
+    from wowdps.fightprobe import is_complete
+
+    assert is_complete({"fightsSampled": 30}, 30, None, None, 4) is True
 
 
 def test_the_fight_count_still_wins_regardless_of_budget():
