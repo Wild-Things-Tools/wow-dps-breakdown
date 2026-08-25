@@ -592,10 +592,33 @@ def _settle_provenance(manifest: dict, path: Path) -> dict:
 
     settled = dict(manifest)
     for key in _PROVENANCE:
-        if key in published:
-            settled[key] = published[key]
+        if key not in published:
+            continue
+        if _describes_a_different_shape(published[key], manifest.get(key)):
+            # A published block that predates a field cannot be settled onto one that
+            # has it, or the field never appears: the settle would keep the old block
+            # on every quiet run and the new key would wait for the numbers to move.
+            # Issue #42 is the case -- `simc.dataSource` and a corrected `simc.ptr`
+            # would have sat behind an unchanged dataset indefinitely.
+            log.info("published %s has other fields than this run's; taking this run's", key)
+            continue
+        settled[key] = published[key]
     log.info("dataset unchanged; keeping generatedAt %s", settled.get("generatedAt"))
     return settled
+
+
+def _describes_a_different_shape(published: object, produced: object) -> bool:
+    """Do two provenance blocks carry different *fields*, never mind their values?
+
+    Values are what the settle exists to keep still -- `simc.gitRevision` moves every
+    night and says nothing about the data. A field appearing or disappearing is the
+    opposite: it is the only evidence in the document that the producer changed.
+    """
+    return (
+        isinstance(published, dict)
+        and isinstance(produced, dict)
+        and set(published) != set(produced)
+    )
 
 
 def _median(errors: list[float]) -> float | None:

@@ -50,7 +50,16 @@ import {
   samplingError,
 } from "../lib/format";
 import { classColor } from "../lib/palette";
+import {
+  bestBuildFor,
+  bestBuildMark,
+  computedScope,
+  findComputedSpec,
+  type BestBuild,
+  type ComputedScope,
+} from "../lib/bestBuild";
 import type {
+  ComputedBuildsDataset,
   Manifest,
   ScenarioMeta,
   SpecIndex,
@@ -69,7 +78,21 @@ interface Row {
   id: string;
   label: string;
   build: SpecSummary;
+  /**
+   * The value the row is ranked and drawn by: simc's own measurement, unless a
+   * computed build beat it outside the tie band. See `lib/bestBuild.ts` -- a
+   * marked row carries a projection, never a measurement, and `best.simcDps`
+   * keeps the measured figure beside it.
+   */
   dps: number;
+  /** Which build won, and what that costs. Never null. */
+  best: BestBuild;
+  /** The part of the bar that is simc's own measurement. */
+  simcDps: number;
+  /** The projected remainder, stacked on top of it. Zero on an unmarked row. */
+  uplift: number;
+  /** "computed +2.20%", or null on a row simc still owns. */
+  mark: string | null;
   funnelGain?: number;
   priorityShare?: number;
 }
@@ -78,6 +101,8 @@ export function OverviewView({
   manifest,
   scenario,
   specIndex,
+  computedBuilds,
+  computedSettled,
   onScenarioChange,
   onOpenSpec,
 }: {
@@ -89,6 +114,15 @@ export function OverviewView({
    * `wowdps spec-index` existed -- the panel then falls back to spec-level coverage.
    */
   specIndex: SpecIndex | null;
+  /**
+   * Builds this project computed, beside simc's own. Optional by contract:
+   * absent is the state of every tier that has never been through
+   * `wowdps build-search`, and the ranking then draws simc's numbers exactly
+   * as it did before this document was read.
+   */
+  computedBuilds: ComputedBuildsDataset | null;
+  /** True once the question "does that document exist?" has been answered. */
+  computedSettled: boolean;
   onScenarioChange: (id: string) => void;
   onOpenSpec: (id: string) => void;
 }) {
@@ -105,9 +139,17 @@ export function OverviewView({
     : (available[0] ?? 1);
 
   const rows = useMemo(
-    () => buildRows(manifest.specs, scenario.id, effectiveTargets),
-    [manifest.specs, scenario.id, effectiveTargets],
+    () =>
+      buildRows(manifest.specs, scenario.id, effectiveTargets, computedBuilds),
+    [manifest.specs, scenario.id, effectiveTargets, computedBuilds],
   );
+
+  const scope: ComputedScope = computedScope(
+    computedBuilds,
+    scenario.id,
+    effectiveTargets,
+  );
+  const computedRows = rows.filter((row) => row.best.projected).length;
 
   const best = rows[0]?.dps ?? 0;
 
@@ -184,6 +226,48 @@ export function OverviewView({
           under a few percent as a tie — the sampling error alone is around{" "}
           {samplingError(manifest.settings)}. Bars carry each build's class
           colour; the icon and the name beside it are what identify it.
+          {/* Three sentences, not one. "No talent search has run at this target
+              count" and "a search ran and simc's builds all held" are different
+              claims, and `computed-builds.json` covers Patchwerk at one target
+              only today. Collapsing them would publish a finding nobody made. */}
+          {scope === "searched" && computedRows > 0 ? (
+            <>
+              {" "}
+              <strong className="font-medium text-ink-secondary">
+                Ranked by the best build known for each row.
+              </strong>{" "}
+              {computedRows} {computedRows === 1 ? "build is" : "builds are"}{" "}
+              ranked by talents this project computed rather than the ones
+              SimulationCraft ships, because they beat simc&rsquo;s by more than
+              the two runs&rsquo; combined sampling error. Those bars carry a
+              paler segment at the end &mdash; that segment is the gain, and it
+              is a projection rather than a measurement: the gain was measured
+              with both builds on one normalised kit, then carried forward onto
+              simc&rsquo;s own published figure, which the table beside this
+              chart prints next to it. Every other row is
+              SimulationCraft&rsquo;s build, unchanged.
+            </>
+          ) : scope === "searched" ? (
+            <>
+              {" "}
+              A talent search ran for this scenario at this target count and beat
+              none of SimulationCraft&rsquo;s own builds by more than the
+              combined sampling error, so every row here is simc&rsquo;s build.
+            </>
+          ) : scope === "not-searched" ? (
+            <>
+              {" "}
+              No talent search has run for this scenario at this target count, so
+              every row is SimulationCraft&rsquo;s own build. That is not a
+              finding about these builds &mdash; nobody has looked here yet.
+            </>
+          ) : computedSettled ? (
+            <>
+              {" "}
+              This season carries no computed-build document, so every row is
+              SimulationCraft&rsquo;s own build.
+            </>
+          ) : null}
           {faded > 0 ? (
             <>
               {" "}
@@ -235,21 +319,35 @@ function buildRows(
   specs: SpecSummary[],
   scenarioId: string,
   targets: number,
+  computedBuilds: ComputedBuildsDataset | null,
 ): Row[] {
   const rows: Row[] = [];
   for (const spec of specs) {
     const entry = spec.scenarios[scenarioId];
     const dps = entry?.dps[String(targets)];
     if (typeof dps !== "number") continue;
+    // Joined on (id, scenario, targets), never on the id alone: a verdict is a
+    // statement about one scenario at one target count.
+    const best = bestBuildFor(
+      dps,
+      findComputedSpec(computedBuilds, spec.id, scenarioId, targets),
+    );
     rows.push({
       id: spec.id,
       label: spec.displayName,
       build: spec,
-      dps,
+      dps: best.rankDps,
+      best,
+      simcDps: best.simcDps,
+      uplift: best.rankDps - best.simcDps,
+      mark: bestBuildMark(best),
       funnelGain: entry?.funnelGain,
       priorityShare: entry?.priorityShare,
     });
   }
+  // Ranked by the best build known for each row -- the whole reason this view
+  // carries the computed document. Rows nobody computed a build for are ranked
+  // by simc's number, unchanged.
   rows.sort((a, b) => b.dps - a.dps);
   return rows;
 }
@@ -312,10 +410,25 @@ function RankingChart({
                   rows={[
                     {
                       id: "dps",
-                      label: "DPS",
+                      label: row.best.projected ? "DPS, best build" : "DPS",
                       color: classColor(row.build.class),
                       value: fullNumber(row.dps),
+                      ...(row.best.projected
+                        ? {
+                            hint: "simc's own figure carried forward by the measured talent gain — not a run of its own",
+                          }
+                        : {}),
                     },
+                    ...(row.best.projected
+                      ? [
+                          {
+                            id: "simc",
+                            label: "SimulationCraft's own build",
+                            value: fullNumber(row.simcDps),
+                            hint: `${row.mark}, measured with both builds on one normalised kit`,
+                          },
+                        ]
+                      : []),
                     ...(row.funnelGain !== undefined
                       ? [
                           {
@@ -333,10 +446,19 @@ function RankingChart({
           />
           {/* Class colour, per the site's identity rule: the bar length carries the
               magnitude, the hue carries which class it belongs to, and the icon and
-              name on the axis carry which build. */}
+              name on the axis carry which build.
+
+              Two stacked segments rather than one, because the two halves are not
+              the same kind of number. The solid part is simc's own measurement;
+              the paler part is the projected talent gain, which nobody has
+              simulated on this gear. A single solid bar would present the sum as
+              one measured figure -- the whole failure `lib/bestBuild.ts` exists to
+              prevent, restated in pixels. It is never the only channel: the row's
+              tooltip prints both numbers, the table twin repeats them, and the
+              note under the chart says it in words. */}
           <Bar
-            dataKey="dps"
-            radius={[0, 4, 4, 0]}
+            dataKey="simcDps"
+            stackId="dps"
             barSize={16}
             isAnimationActive={false}
             onClick={(entry: unknown) => {
@@ -354,6 +476,26 @@ function RankingChart({
                 // the coverage panel exists to prevent. Class colour stays the
                 // identity channel; the axis tick carries the words.
                 fillOpacity={buildOpacity(row.build)}
+              />
+            ))}
+          </Bar>
+          <Bar
+            dataKey="uplift"
+            stackId="dps"
+            radius={[0, 4, 4, 0]}
+            barSize={16}
+            isAnimationActive={false}
+            onClick={(entry: unknown) => {
+              const row = (entry as { payload?: Row } | undefined)?.payload;
+              if (row) onOpenSpec(row.id);
+            }}
+          >
+            {rows.map((row) => (
+              <Cell
+                key={row.id}
+                cursor="pointer"
+                fill={classColor(row.build.class)}
+                fillOpacity={buildOpacity(row.build) * 0.42}
               />
             ))}
           </Bar>
@@ -386,6 +528,9 @@ function RankingTable({
             <th scope="col" className="px-4 py-2.5 text-right font-medium">
               DPS
             </th>
+            <th scope="col" className="px-4 py-2.5 font-medium">
+              Build shown
+            </th>
             <th scope="col" className="px-4 py-2.5 text-right font-medium">
               vs top
             </th>
@@ -412,6 +557,27 @@ function RankingTable({
               </td>
               <td className="tnum px-4 py-2 text-right font-medium text-ink">
                 {fullNumber(row.dps)}
+              </td>
+              {/* simc's own figure stays on screen wherever a computed build
+                  replaced it, so the substitution can always be undone by a
+                  reader. That is the difference between showing the better
+                  build and showing it silently. */}
+              <td className="px-4 py-2 text-ink-secondary">
+                {row.best.projected ? (
+                  <>
+                    <span className="inline-flex items-center rounded-full border border-hairline px-1.5 py-px text-[11px] whitespace-nowrap text-ink-secondary">
+                      {row.mark}
+                    </span>
+                    <span className="mt-0.5 block text-[11.5px] text-ink-muted">
+                      simc&rsquo;s own build:{" "}
+                      <span className="tnum">{fullNumber(row.simcDps)}</span>
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-[11.5px] text-ink-muted">
+                    SimulationCraft&rsquo;s build
+                  </span>
+                )}
               </td>
               <td className="tnum px-4 py-2 text-right text-ink-secondary">
                 {percent(row.dps / best, 0)}

@@ -93,6 +93,8 @@ from .talenttree import (
     NODE_SELECTION,
     NODE_TIERED,
     RANK_BITS,
+    SIMC_CHOICE_INDEX_OUT_OF_BOUNDS,
+    SIMC_CHOICE_ON_PLAIN,
     TREE_CLASS,
     TREE_HERO,
     TREE_SELECTION,
@@ -836,7 +838,7 @@ def _hash_findings(loadout: Loadout, nodes: dict[int, list[Trait]]) -> list[Find
                 found.append(
                     Finding(
                         code="choice_on_plain",
-                        message=f"Node {node_id} is not a choice node but has index selection.",
+                        message=SIMC_CHOICE_ON_PLAIN.format(node=node_id),
                         node_id=node_id,
                         simc_refuses=True,
                     )
@@ -847,9 +849,8 @@ def _hash_findings(loadout: Loadout, nodes: dict[int, list[Trait]]) -> list[Find
                 found.append(
                     Finding(
                         code="choice_index_out_of_bounds",
-                        message=(
-                            f"Index {selection.choice_index} for choice node {node_id} "
-                            f"out of bounds."
+                        message=SIMC_CHOICE_INDEX_OUT_OF_BOUNDS.format(
+                            index=selection.choice_index, node=node_id
                         ),
                         node_id=node_id,
                         simc_refuses=True,

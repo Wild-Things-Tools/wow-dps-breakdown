@@ -969,15 +969,17 @@ explicit `--ptr` and falls back to a manifest under an `--out` that **is** the
 published dataset, while `cmd_build`'s `--out` is where this run writes. A docstring
 describing a mechanism the code does not implement, again.
 
-### `manifest.simc.ptr` does not mean "built against PTR data"
+### `manifest.simc.ptr` means "this run read PTR data", and it used to mean nothing
 
-The deeper reason that manifest could not have answered it, and it is worth knowing
-before anything else reaches for the field. Measured on simc 625a591, 2026-08-23:
+Read this before reaching for the field, and note that the sentence above changed on
+**2026-08-25**: until then `simc.ptr` was `report["ptr_enabled"]`, and that answers a
+different question from the one every one of its readers was asking.
 
-- `simc.ptr` is `report["ptr_enabled"]`, which `engine/report/json/report_json.cpp`
-  sets to **`SC_USE_PTR`** -- a compile-time constant, defined as 1 in
-  `engine/config.hpp` on simc's midnight branch. It is true of every binary this
-  project builds and says only that the binary *carries* PTR data.
+- `report["ptr_enabled"]` is what `engine/report/json/report_json.cpp:1390` sets to
+  **`SC_USE_PTR`** -- a compile-time constant, defined as 1 in `engine/config.hpp:161`
+  on simc's midnight branch. It is true of every binary this project builds and says
+  only that the binary *carries* PTR data. As a published field it is a constant, and a
+  constant cannot distinguish one run from another.
 - What a run *used* is `sim.players[].dbc.version_used`, and against the exact argv
   `simc_runner.build_command` produces it is **`Live`**. Nothing here passes `ptr=1`.
 - And the option only bites **before** the profile path: simc copies the sim's dbc
@@ -992,18 +994,43 @@ before anything else reaches for the field. Measured on simc 625a591, 2026-08-23
 So the tier-set check reads the **live** tables, which is what the sims read, and the
 default follows `simc_runner.USES_PTR_DATA` rather than being written down twice.
 `test_build_command_never_enables_ptr_data` fails if a scenario ever starts asking for
-PTR data. The accidental old default happened to be the right table; it just was not
-chosen, and the next person to reach for `simc.ptr` would have "fixed" it to the
-wrong one.
+PTR data.
 
-**Two things deliberately not changed.** `simc_metadata` still publishes `ptr: true`
-and reads the tier's `wowVersion`/`hotfixDate` out of the report's **PTR** dbc block
-(69382) while the actor used the Live one (69404, hotfix 2026-08-22) -- so the patch
-panel is naming a build the numbers were not produced against. And `talent-trees`
-still picks its trait table from that same field. Both are findings for a human, not
-changes made in passing: correcting either moves published data, and simc's live and
-PTR tables agree today in all three places (12,260 items with an `id_set` and 376 set
-rows, equal maps, on both 22b442e and 625a591).
+**What the compile flag cost while it was published (issue #42).** Four readers wanted
+the data source and all four got the constant:
+
+| reader | what it did |
+|---|---|
+| `simc_runner._game_build` | `"PTR" if ptr_enabled and "PTR" in dbc` -- so always PTR. The published MID2 manifest carries `wowVersion 12.1.0.69382` / `wowBuild 69382` from the **PTR** block while the actor read the **Live** one (69404, hotfix 2026-08-22) |
+| `PatchState.tsx` | prints "from the PTR data set" from `simc.ptr` -- so the panel built to answer *which build are these numbers from* named a build they are not from |
+| `cli.cmd_spec_index` | picks `trait_data*.inc` from it |
+| `cli.cmd_hero_trees`, `cli.cmd_talent_trees` | same |
+
+**The correction is the field's meaning, not a second field beside it.** `simc.ptr` is
+now derived from `version_used`, so it says what every reader already assumed, and the
+patch panel is right with no change to the view. `simc.dataSource` carries simc's own
+word (`"Live"`, `"PTR"`, or `null` when a report names none) beside the boolean, because
+a boolean with no evidence in the document is how this one stayed wrong for months --
+and `null` is published rather than folded into `"Live"`, since unknown is not an answer.
+
+`simc_runner.manifest_used_ptr_data` is the one reader of that pair, used by all three
+commands. A manifest without `dataSource` predates the fix and its `ptr` is the compile
+constant, so it falls back to `USES_PTR_DATA` rather than to that field -- reading `ptr`
+there would reproduce the bug for exactly the documents that have it.
+
+**The settle nearly buried all of it.** `simc` is provenance, so `_settle_provenance`
+keeps the *published* block on any run whose dataset did not change -- which would have
+kept `ptr: true` and build 69382 indefinitely on a quiet tier. It now settles values but
+not *shape*: a published block missing a field this run produces is replaced. Values
+still settle, which is what stops `gitRevision` churning nightly.
+
+**What moves in the published data, and when.** Nothing until a run regenerates it.
+`wowVersion`, `wowBuild` and `hotfixDate` change to the Live block's values, `ptr` goes
+`true` -> `false`, and `dataSource` appears; the DPS numbers do not move at all, because
+simc's live and PTR tables agree today in all three places (12,260 items with an
+`id_set` and 376 set rows, equal maps, on both 22b442e and 625a591). The `beta` field is
+still `report["beta_enabled"]` and is untouched -- same shape of question, nobody has
+measured it, and guessing would be the same mistake again.
 
 **What it flags today**, MID2 at 22b442e: 14 of the 40 damage builds simc ships or has
 written down -- the two Arcane ones, plus all twelve disabled profiles, which wear no
@@ -2094,12 +2121,16 @@ entry instead. The two agree on everything shipped and would disagree on a choic
 whose entries differ in spec; left alone rather than changed in passing, and recorded
 here so nobody re-derives it as a bug.
 
-**Number 5's wording here is missing simc's final full stop.** simc's format string ends
-`player's spec.`; `spec_rule_violation` returns it without the period, and a test pins
-the shorter form. Not corrected, because the string is published in `spec-index.json`
-and rewriting it churns data for one character -- but it means the published reason is
-not byte-comparable with simc's own output. `talentedit._hash_findings` uses simc's
-exact wording, so the two differ by that period until somebody decides.
+**Number 5's wording used to be missing simc's final full stop, and now is not.** It was
+left alone for months because the string was published in `spec-index.json` and
+rewriting it churned data for one character. Issue #43 settled that from the other end:
+the published `reason` is this project's own sentence now and simc's line is a separate
+`simcMessage`, so the quote exists *only* to be matched against a run's stderr and a
+missing period defeats its whole purpose. All three of simc's literals live in
+`talenttree.SIMC_CHOICE_ON_PLAIN`, `SIMC_CHOICE_INDEX_OUT_OF_BOUNDS` and
+`SIMC_SPEC_RULE`, and `talentedit._hash_findings` reads the same constants -- one
+spelling each, which is what stops a prediction and the thing it predicts drifting
+apart.
 
 ### The encoder, and what round-trips
 
@@ -2800,13 +2831,31 @@ cheap query when it does, and is the right address whenever a filed id really is
 wrong one -- a state this tier has been in before and will be in again at the next
 season boundary.
 
-**The name check is measurably strict, and the case is on this tier.** Warcraft Logs
-names 53470 *"Nek'zali, the Soulcoiler"* and 3470 *"Nek'zali the Soulcoiler"*: the pair
-differs by a comma, and that substitution would be **refused**. It never comes up today
-because 53470 has parses of its own. Left strict on purpose -- a refusal costs one
-boss's kills and prints both names for a person to read, a false accept files a full
-set of real builds under the wrong fight and nothing downstream can detect it.
-Loosening it to ignore punctuation is a human's decision with the two names in view.
+**The name check ignores punctuation, and the case that decided it is on this tier.**
+Warcraft Logs names 53470 *"Nek'zali, the Soulcoiler"* and 3470 *"Nek'zali the
+Soulcoiler"*: the pair differs by a comma, and the strip-and-casefold comparison
+**refused** the substitution over it. The owner's decision (issue #40, 2026-08-25) is
+"einfach so wie der Boss wirklich heisst" -- so `names_agree` compares the *words* of a
+name: case, surrounding space and every Unicode punctuation mark are dropped first.
+
+**Only punctuation, and each mark becomes a space rather than being deleted.** The two
+normalisations differ and the choice is pinned by a test: spacing keeps word boundaries,
+so two names agree when their words agree and no pair of names can be joined into a
+string a third name also produces -- deleting would merge `Fallen-King` into
+`Fallenking`, a wider claim than one comma needed. The price is that a twin dropping an
+apostrophe outright (`Nekzali`) is still refused, which is the direction this check is
+allowed to fail in.
+
+**The asymmetry that made it strict has not changed and is what bounds any further
+loosening.** A refusal costs one boss's kills and prints both names for a person to
+read; a false accept files a full set of real builds under the wrong fight and nothing
+downstream can detect it. So fuzzy distance, prefix matching and ignoring a word are all
+still out, and the guard is not the loosening but
+`test_two_different_bosses_are_still_refused_after_the_loosening` -- six pairs including
+a one-letter near-miss and a prefix, each of which a looser rule would have accepted.
+
+It still recovers nothing on MID2 today: 53470 has parses of its own, so the
+substitution never fires there.
 
 ### What a harvest covers, measured rather than hoped
 
@@ -3100,12 +3149,69 @@ are not the same claim as "simc has not signed this off".
 
 `specindex.refused_profiles` decides it **offline** -- see `spec_rule_violation` in
 the talent-tree section for the check and its verification against simc's own CI
-output -- so the panel prints "simc will not load it: Selected node 110203 entry
-136735 is not available to player's spec" rather than an unexplained absence. The
+output -- so the panel prints a reason rather than an unexplained absence. The
 reason travels per (spec, hero tree) cell, and a refusal naming a tree beats one that
 names none: Retribution's two builds are refused at two different nodes and one of
 them is unnamed, so taking the first match printed the wrong node against the named
 build's tree.
+
+#### The reason is ours, the quote is simc's, and they are two fields
+
+Issue #43, decided by the owner on 2026-08-25: *"gerne eigene Aussagen kreieren, diese
+muessen natuerlich stimmen"*. Two things were wrong in the same field and both were
+published.
+
+**The reason was our decoder speaking under simc's name.** Four of MID2's six refused
+profiles carried `choice index 1 out of bounds for node 91020 (1 entries)`, which is
+`decode_loadout`'s message. simc's line for that node is a *different one of its eleven
+refusals* -- `Node 91020 is not a choice node but has index selection.` -- so somebody
+grepping a real run's stderr for the published text found nothing and could not tell our
+misprediction from a simc change.
+
+**"One node" was an artifact of stopping.** Both `decode_loadout` and
+`spec_rule_violation` return at the first failure. Measured on simc 22b442e, reading on
+with `decode_lenient` / `spec_rule_offenders`, MID2's real figures are:
+
+| profile | nodes |
+|---|---|
+| Havoc Aldrachi Reaver | **5** overflowing |
+| Havoc Fel-Scarred | 1 overflowing |
+| Retribution, both builds | **7** and **4** overflowing |
+| Arms, Fury | **2** spec-rule offenders each |
+
+So `refused_profiles` now publishes both claims separately:
+
+- **`reason`** is *ours*, and visibly so -- lower-case prose that reads on from the
+  panel's own "simc will not load it:", naming the node, what the tree says about it,
+  and how many nodes are in that state. It never impersonates simc's sentence, because
+  a quote that no run emits is worse than no quote.
+- **`simcMessage`** is *simc's*, from `talenttree.SIMC_CHOICE_ON_PLAIN`,
+  `SIMC_CHOICE_INDEX_OUT_OF_BOUNDS` and `SIMC_SPEC_RULE` -- the only place its literals
+  live, so a second spelling cannot drift. `None` where nothing can be quoted: a version
+  or alphabet failure is another of simc's refusals and this reader has not established
+  which, and guessing would be the whole defect again.
+
+Three things in that which are decisions rather than formatting:
+
+- **Which choice wording applies is decided by the node type, not by the index.** simc
+  says "not a choice node" when the choice bit is set on a plain node and "index out of
+  bounds" when a real choice node is given an index past its last entry. Every overflow
+  measured across MID1 and MID2 is the *first* kind, so a version writing only that one
+  would be right today and wrong without warning; `simc_choice_refusal` derives it.
+- **The overflow count says where it comes from.** It is read past the point simc stops
+  at, by a reader that is out of step with whoever wrote the hash by definition -- the
+  same `decode_lenient` whose limits `talentrepair`'s soundness screen exists for. So
+  the sentence carries "reading on past the point simc stops at", and the number is the
+  extent of the problem rather than a tally to be quoted elsewhere. A spec-rule count
+  comes from a *strict* decode and carries no such hedge.
+- **`SIMC_SPEC_RULE` gained simc's final full stop**, which this file had flagged as
+  open. It is the difference between a line that can be matched against real stderr and
+  one that looks like it can.
+
+**What moves in the published data.** MID1's `spec-index.json` carries 17 refusals and
+MID2's carries 1 today, and every one of them gets a new `reason` and a new
+`simcMessage` field the next time `wowdps spec-index` runs -- which the nightly publish
+job does. Nothing else in the document moves, and no DPS number is involved.
 
 ### Coverage is now per hero tree, which is the half a spec-level count hides
 
@@ -4788,3 +4894,177 @@ document never exists** — the same failure `hero_trees.json` shipped. A commit
 document survives the nightly: `dataset.merge_shards` creates its output directory and
 writes into it, with no `rmtree` and no directory replacement, so a file it did not
 produce is left alone.
+
+## The ranking presents the best build, and never presents it silently
+
+`web/src/lib/bestBuild.ts` + `OverviewView`, and the same module again as
+`util/dps-best-build.ts` in wtt-frontend. The owner's rule, restated on
+2026-08-25: *"wenn es etwas komplettes von simc gibt, dann sollte das verwendet
+werden, außer etwas errechnetes ist besser. dann möchte ich aber auch, dass ich
+das explizit angezeigt bekomme."*
+
+`computed-builds.json` had one consumer -- wtt-frontend's spec-detail panel --
+and the published site read it not at all, so the Overview showed simc's build
+on every row including the twelve where a computed build beats it. That is the
+complaint, and it was accurate.
+
+### The number the ranking uses is a projection, and that is the whole decision
+
+**The two documents do not measure the same character.** `index.json` measures
+each build on simc's own shipped gear; `computed-builds.json` measures both
+contenders on a **gear anchor** -- one normalised kit, so the only difference
+between them is the talents. Measured against the committed MID2 data on
+2026-08-25, Frost Death Knight reads 232,961 published and 217,042 anchored:
+the anchor sits at the floor of the tier's 334-344 band, and this file's own
+gear-anchor section puts a shipped build at -3.01 to -7.07% there.
+
+So substituting `best.dps` into the ranking would move a **winning** build
+*down* while claiming it had been improved. What travels between the two
+documents is the **ratio**, which is exactly what the computed run measures, so
+a winning row is ranked by `publishedDps × (1 + margin)`.
+
+That product is a projection and is drawn as one -- the bar is stacked, solid
+for simc's measurement and pale for the gain, and simc's own figure is printed
+in the table twin beside it. Nobody has run the computed talents on simc's
+shipped gear; the assumption is that a talent gain measured on the anchor holds
+a few item levels above it. It is a smaller assumption than mixing the two
+absolutes and it is the only one that leaves every *unmarked* row byte-for-byte
+what it was. **Do not quote a marked row's figure as a simulated result.**
+
+### The join is in the view, on purpose
+
+Both frontends do the join themselves rather than the pipeline writing a field
+into the summary row. Three reasons, and the second is this project's own rule:
+
+- `index.json` never moves, so no published byte changes and MID1 -- which has
+  no computed document at all -- is untouched by construction. The "only write
+  a field when it is set" trap cannot fire because no field is written.
+- **The verdict stays derived from the numbers printed beside it.**
+  `dps-computed.ts` already states why: a published `beatsSimc` boolean could
+  disagree with the figures on screen and nothing would reveal it.
+- The document is already optional, already fetched, and its absence is already
+  a supported state.
+
+### Three states for a view with no marks
+
+`computed-builds.json` covers **patchwerk at one target** and nothing else, so
+every other scenario and target count has no computed build. That is
+`not-searched` -- *nobody has looked* -- and it is a different claim from
+`searched` with no winner, which is *a search ran and simc's builds held*, and
+different again from the tier having no such document. Collapsing them would
+publish a finding no run ever made. The join key is `(id, scenario, targets)`
+for the same reason.
+
+### What it does on the real data
+
+MID2, patchwerk, the committed dataset on 2026-08-25 (52 summary rows, 42
+computed entries):
+
+```
+1 target    12 rows marked, 13 of 52 change position
+3/5/10      0 marked, ranking unchanged to the DPS
+```
+
+Windwalker Monk (Conduit of the Celestials) climbs 13 -> 9 on +1.43%; Havoc
+Demon Hunter (Fel-Scarred) and Devourer (Annihilator) each gain a place.
+**17 builds are numerically ahead and only 12 clear the tie band**, which is
+the argument for the tie rule over a fixed percentage stated as a count.
+
+Two things this leaves open, both filed as issues rather than papered over.
+Nobody has run the computed talents on simc's own gear, so the projection's
+assumption is untested (#52). And `web/` has **no unit-test runner at all** --
+no `*.test.*` under `web/src` and no `test` script -- so the module that decides
+the published site's ranking order is guarded in CI by `tsc` alone (#54). For
+this change it was compiled standalone and run against the committed MID2
+documents, with two canaries confirmed red; that was a session, not a gate.
+
+## The Ulria sheet: an independent check that mostly agrees
+
+Read on **2026-08-25**. The owner asked how far this project's numbers sit from
+"the Ulria sheet"; it is *Ulria's tier piece + PI sims (feat Mazz) S2 Midnight*,
+a published Google Sheet that Wowhead links each season. It is **not** a DPS
+ranking site -- its subject is tier-set and Power Infusion gains, which is
+`buffs.json`'s subject -- but it carries a `Raw SIM DPS` tab, so both halves of
+this project have something to compare against.
+
+Its numbers are Raidbots runs of **simc's own MID2 profiles** (its per-row CSV
+names `MID2_Priest_Shadow_Archon` and the rest), on "close to bis" gear, with
+per-build talent trees the author maintains by hand. It states no simc revision,
+no iteration count and no fight length, and on the day it was read its own
+banner said **"SHEET IS CURRENTLY BEING RESIMMED"**.
+
+### Tier-set gains agree to about a twentieth of a percentage point
+
+28 builds in both documents, our `buffs.json` against its `DPS Tier set (0p-4p)`
+tab:
+
+```
+2-piece gain    median difference -0.06 pts   range -2.01 .. +0.51
+0p -> 4p gain   median difference -0.04 pts   range -2.59 .. +0.85
+```
+
+That is two independent pipelines, run by different people on different
+hardware through different front ends, agreeing on 28 builds. It is the
+strongest external confirmation the buff sweep has.
+
+The outliers are both explainable and neither is a defect here: **both Frost
+Death Knight builds** (-2.0 and -2.6 pts) and **Outlaw Rogue's 4-piece**
+(-1.21 pts). Frost Death Knight is the spec whose shipped profiles spend **10
+class points** -- the `_THIN_CLASS_TREE` caveat this file already publishes --
+and the sheet uses its own hand-maintained tree instead. Its raw DPS runs the
+other way for the same reason: ours reads 1.043x theirs.
+
+### The DPS ranking agrees on every build this project says is comparable
+
+52 damage builds join one-to-one. Read naively the agreement looks terrible --
+Spearman **0.188** over all 52 -- and the whole of that is our own flagged
+builds:
+
+| population | n | Spearman | our DPS / theirs |
+|---|---|---|---|
+| every build | 52 | **0.188** | median 0.982, min 0.373 |
+| builds this project does **not** flag | 34 | **0.911** | median **0.9936**, range 0.898-1.064 |
+
+**Every one of the 16 builds where we read under 70% of Ulria's is a build our
+own dataset already flags** as `unvalidated` or `gearComparable: false` -- simc's
+switched-off profiles, 45 item levels behind and wearing no tier set. Fury
+Warrior at 0.373 and Arms at 0.432 are the extremes. The comparability flags
+are doing exactly what they were built for, checked from outside for the first
+time.
+
+The two remaining flagged builds are the sharpest result in the comparison, and
+they are the only two whose ratio sits between the two populations rather than
+in either. **Arcane Spellslinger reads 0.884 of Ulria's and Arcane Sunfury
+0.880** -- the two builds this project flags `tierSetComparable: false`, because
+simc ships them wearing no tier set. This file measures that four-piece deficit
+at **+13.13% for Spellslinger and +14.42% for Sunfury**, i.e. ratios of 0.884
+and 0.874 if the set were the entire difference. Spellslinger lands on its
+figure exactly; Sunfury reads 0.006 high, which is the size of everything else
+the two runs differ by. Take the agreement as confirmation that the tier-set
+flag is measuring a real gap of about the size claimed, not as a decomposition:
+nothing here isolates the set from the gear and the talents.
+
+### Where the two genuinely differ, and why that is allowed
+
+Among the 34 comparable builds nothing moves more than 11 places and the median
+gap is 0.6%. The widest:
+
+```
+Subtlety Rogue (Trickster)     ours 0.943x, 6 -> 17
+Survival Hunter (Pack Leader)  ours 0.898x, 22 -> 33
+Elemental Shaman (Farseer)     ours 1.064x, 12 -> 3
+Frost DK (Deathbringer)        ours 1.043x, 19 -> 12
+```
+
+The differences that are permitted without either side being wrong, all of them
+real between these two documents: **different talents** (the sheet maintains its
+own trees per build, this project runs the hash simc ships -- which is the whole
+subject of `build-search`), **different gear** ("close to bis" against simc's
+shipped profile), a **different simc revision** and a different sampling budget
+(the sheet states neither), and **no external buffs** on our side. A rank
+disagreement is only a finding when the conditions match, and here they do not.
+
+Do not treat any of this as a target to converge on. The claim of this dataset
+is that it is what simc ships, byte-reproducibly; the sheet's claim is that it
+is a maintainer's best current build. Those are different questions and the
+0.9936 median says they answer them compatibly.

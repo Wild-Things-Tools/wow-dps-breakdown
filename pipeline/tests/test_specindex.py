@@ -233,6 +233,175 @@ def test_no_hero_tree_coverage_at_all_rather_than_every_spec_reported_uncovered(
     assert hero_tree_coverage(manifest([]), TREES, SPEC_IDS, {}) is not None
 
 
+# --------------------------------------------------------------------------------
+# Why a profile is refused: our sentence and simc's, and the count in both
+# --------------------------------------------------------------------------------
+
+_BASE64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+
+def _trait(node_id, entry_id, **kw):
+    from wowdps.talenttree import TREE_CLASS, Trait
+
+    return Trait(
+        tree_index=kw.get("tree", TREE_CLASS),
+        class_id=1,
+        entry_id=entry_id,
+        node_id=node_id,
+        max_ranks=1,
+        req_points=0,
+        spell_id=1000 + entry_id,
+        row=1,
+        col=1,
+        selection_index=100,
+        name=kw.get("name", f"Talent {entry_id}"),
+        spec_ids=kw.get("spec_ids", ()),
+        sub_tree=0,
+        node_type=kw.get("node_type", 0),
+    )
+
+
+def _hash(spec_id: int, node_bits: list[int], version: int = 2) -> str:
+    """A loadout string, packed the way Blizzard's exporter does.
+
+    Built here rather than through ``encode_loadout`` on purpose: the strings this
+    tests are ones the *encoder refuses to write*, so going through it would make the
+    fixture impossible to state.
+    """
+    bits = [(version >> i) & 1 for i in range(8)]
+    bits += [(spec_id >> i) & 1 for i in range(16)]
+    bits += [0] * 128 + node_bits
+    text = ""
+    for start in range(0, len(bits), 6):
+        chunk = bits[start : start + 6]
+        text += _BASE64[sum(bit << index for index, bit in enumerate(chunk))]
+    return text
+
+
+#: One node, selected and purchased, at full rank, carrying a choice index.
+def _picked(index: int) -> list[int]:
+    return [1, 1, 0, 1] + [(index >> i) & 1 for i in range(2)]
+
+
+#: One node, selected and purchased, at full rank, carrying no choice index.
+_PLAIN = [1, 1, 0, 0]
+
+
+def test_a_refusal_reason_is_our_sentence_and_simcs_line_is_beside_it_not_inside_it():
+    """Issue #43. What was published as the reason for four of MID2's six refused
+    profiles was ``decode_loadout``'s own message -- "choice index 1 out of bounds for
+    node 91020 (1 entries)" -- a sentence simc never emits. simc's line for that node
+    is a different one of its refusals entirely, so a reader grepping a real run's
+    stderr for the published text finds nothing.
+
+    Two fields, two claims: ``reason`` is ours and reads on from the panel's own "simc
+    will not load it:", ``simcMessage`` is simc's with simc's punctuation.
+    """
+    from wowdps.specindex import _refusal
+
+    nodes = {10: [_trait(10, 100, name="Unbound Chaos")]}
+    reason, simc_message = _refusal(_hash(577, _picked(1)), nodes)
+
+    assert simc_message == "Node 10 is not a choice node but has index selection."
+    # Ours, and not simc's dressed up as ours: it must not be that string.
+    assert reason != simc_message
+    assert "10" in reason and "Unbound Chaos" in reason
+    assert "no choice" in reason
+    # And nothing that reads as a decoder's internal complaint.
+    assert "out of bounds" not in reason
+
+
+def test_the_reason_carries_how_many_nodes_are_stale_not_just_the_first():
+    """ "One node" was an artifact: ``decode_loadout`` stops at the first failure. Read
+    on and MID2's real figures are 5 for Havoc Aldrachi Reaver, 7 and 4 for the two
+    Retribution builds, 2 each for Arms and Fury.
+
+    Where the count comes from reading past the point simc stops at, the sentence says
+    so -- that reader is out of step with whoever wrote the hash by definition, so the
+    number is the extent of the problem and not a tally to quote elsewhere.
+    """
+    from wowdps.specindex import _refusal
+
+    nodes = {
+        10: [_trait(10, 100)],
+        20: [_trait(20, 200)],
+        30: [_trait(30, 300)],
+    }
+    reason, _ = _refusal(_hash(577, _picked(1) + _picked(1) + _picked(1)), nodes)
+    assert "3 nodes" in reason
+    assert "reading on past the point simc stops at" in reason
+
+    # One really is one, and says so rather than being silent about the number.
+    single = {10: [_trait(10, 100)], 20: [_trait(20, 200)]}
+    reason, _ = _refusal(_hash(577, _picked(1) + _PLAIN), single)
+    assert "only node" in reason
+    assert "3 nodes" not in reason
+
+
+def test_a_real_choice_node_given_too_high_an_index_gets_simcs_other_wording():
+    """simc has two lines here and the node decides which, not the index. Every
+    overflow measured on MID1 and MID2 so far is a plain node, so a version that only
+    ever wrote that one would be right today and wrong without warning.
+    """
+    from wowdps.specindex import _refusal
+    from wowdps.talenttree import NODE_CHOICE
+
+    nodes = {
+        10: [
+            _trait(10, 100, node_type=NODE_CHOICE, name="Either"),
+            _trait(10, 101, node_type=NODE_CHOICE, name="Or"),
+        ]
+    }
+    reason, simc_message = _refusal(_hash(577, _picked(3)), nodes)
+    assert simc_message == "Index 3 for choice node 10 out of bounds."
+    assert "only 2 to choose from" in reason
+
+
+def test_a_spec_rule_refusal_counts_its_offenders_and_quotes_simc_exactly():
+    """The other half of the same defect. This count is from a *strict* decode, so it
+    is not a reading past a failure and carries no hedge -- but it is still not one.
+    """
+    from wowdps.specindex import _refusal
+
+    nodes = {
+        10: [_trait(10, 100, spec_ids=(71,))],
+        20: [_trait(20, 200, spec_ids=(72,), name="Odyn's Fury")],
+        30: [_trait(30, 300, spec_ids=(72,), name="Rend")],
+    }
+    reason, simc_message = _refusal(_hash(71, _PLAIN * 3), nodes)
+
+    assert simc_message == "Selected node 20 entry 200 is not available to player's spec."
+    assert "2 of the selected nodes" in reason
+    assert "Odyn's Fury" in reason and "where simc stops" in reason
+
+    # And a single offender is not inflated into a plural.
+    nodes.pop(30)
+    reason, _ = _refusal(_hash(71, _PLAIN * 2), nodes)
+    assert reason.startswith("node 20 (Odyn's Fury, entry 200) belongs to another")
+
+
+def test_a_hash_that_is_not_a_choice_overflow_quotes_nothing_at_all():
+    """A version, alphabet or length failure is a different one of simc's refusals and
+    this reader has not established which, so there is nothing to put in
+    ``simcMessage`` -- and inventing one would be the whole of issue #43 again.
+    """
+    from wowdps.specindex import _refusal
+
+    nodes = {10: [_trait(10, 100)]}
+    reason, simc_message = _refusal(_hash(577, _PLAIN, version=1), nodes)
+    assert simc_message is None
+    assert reason.startswith("this project's reader cannot decode the hash")
+    assert "serialization version" in reason
+
+
+def test_a_hash_that_loads_is_not_reported_as_refused():
+    """The control. A reason generator that fires on everything says nothing."""
+    from wowdps.specindex import _refusal
+
+    nodes = {10: [_trait(10, 100, spec_ids=(71,))]}
+    assert _refusal(_hash(71, _PLAIN), nodes) is None
+
+
 def test_refused_profiles_tolerates_a_tier_simc_no_longer_ships(tmp_path):
     """`build_index` already tolerates it, and `tiers.json` outlives simc's profile
     directories -- so raising here crashes the publish loop on a stale tier."""

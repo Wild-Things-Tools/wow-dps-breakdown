@@ -32,6 +32,143 @@ def test_simc_metadata_carries_the_game_build_the_reader_needs():
     assert meta["hotfixDate"] == "2026-08-12"
 
 
+#: The two blocks of the published MID2 run, which differ by a patch. The actor read
+#: the first and the manifest published the second -- issue #42, in two numbers.
+_MID2_LIVE = {"build_level": 69404, "wow_version": "12.1.0.69404", "hotfix_date": "2026-08-22"}
+_MID2_PTR = {"build_level": 69382, "wow_version": "12.1.0.69382", "hotfix_date": "2026-08-23"}
+
+
+def _report(version_used: str | None, *, ptr_enabled: bool = True) -> dict:
+    """A json2 report carrying both dbc blocks, and simc's own word for which it read.
+
+    ``ptr_enabled`` is True by default because that is the only value this project
+    ever sees: it is ``SC_USE_PTR``, defined as 1 on simc's midnight branch, so every
+    binary built here reports it. A fixture that set it False would test a report
+    nobody has.
+    """
+    dbc: dict = {"Live": dict(_MID2_LIVE), "PTR": dict(_MID2_PTR)}
+    if version_used is not None:
+        dbc["version_used"] = version_used
+    return {"version": "1210-01", "ptr_enabled": ptr_enabled, "sim": {"players": [{"dbc": dbc}]}}
+
+
+def test_the_published_build_is_the_one_the_run_read_not_the_one_the_binary_carries():
+    """Issue #42. ``ptr_enabled`` is ``SC_USE_PTR``, true of every binary built here,
+    so choosing the dbc block with it chose PTR always -- and the published MID2
+    manifest named build 69382 while its actor had read 69404.
+
+    The fixture carries both blocks and disagrees with itself on purpose: a reader
+    taking the compile flag gets the PTR numbers, a reader taking ``version_used``
+    gets the Live ones, and only one of them describes the sim.
+    """
+    from wowdps.simc_runner import simc_metadata
+
+    meta = simc_metadata(_report("Live"))
+    assert (meta["wowBuild"], meta["wowVersion"]) == (69404, "12.1.0.69404")
+    assert meta["hotfixDate"] == "2026-08-22"
+    # And the flag beside it says the same thing rather than the opposite.
+    assert meta["ptr"] is False
+    assert meta["dataSource"] == "Live"
+
+
+def test_a_run_that_did_read_ptr_data_is_published_as_ptr():
+    """The control: the correction is not "always say Live". Nothing here passes
+    ``ptr=1`` today, but the field has to be able to say so if anything ever does.
+    """
+    from wowdps.simc_runner import simc_metadata
+
+    meta = simc_metadata(_report("PTR"))
+    assert meta["ptr"] is True and meta["dataSource"] == "PTR"
+    assert meta["wowBuild"] == 69382
+
+
+def test_a_report_naming_no_data_source_publishes_none_rather_than_live():
+    """Unknown and Live are different answers, and folding them together is how the
+    field this replaces stayed wrong without anybody being able to see it.
+
+    The build still has to come from somewhere, and Live is what every run of this
+    pipeline has read -- so the numbers fall back and the *claim* does not.
+    """
+    from wowdps.simc_runner import simc_metadata
+
+    meta = simc_metadata(_report(None))
+    assert meta["dataSource"] is None
+    assert meta["ptr"] is False
+    assert meta["wowBuild"] == 69404
+
+
+def test_a_manifest_written_before_the_fix_is_not_read_as_a_ptr_run():
+    """``spec-index``, ``hero-trees`` and ``talent-trees`` all pick a generated trait
+    table out of the manifest, and every manifest published so far carries
+    ``ptr: true`` from the compile flag. Falling back to that field would reproduce
+    the bug for exactly the documents that have it.
+
+    ``USES_PTR_DATA`` is the answer for those, and it is not a guess: every manifest
+    was written by this pipeline and ``build_command`` has never passed ``ptr=1``.
+    """
+    from wowdps.simc_runner import USES_PTR_DATA, manifest_used_ptr_data
+
+    assert manifest_used_ptr_data({"simc": {"ptr": True}}) is USES_PTR_DATA is False
+    # With the evidence present it is simply read.
+    assert manifest_used_ptr_data({"simc": {"dataSource": "PTR", "ptr": False}}) is True
+    assert manifest_used_ptr_data({"simc": {"dataSource": "Live", "ptr": True}}) is False
+    # Nothing at all is not a reason to raise: a tier can be published before it exists.
+    assert manifest_used_ptr_data(None) is False
+    assert manifest_used_ptr_data({}) is False
+
+
+def test_the_settle_keeps_a_stale_provenance_block_but_not_a_stale_shape(tmp_path):
+    """The settle exists so a quiet night leaves nothing to commit, and it very nearly
+    buried this correction: ``simc`` is provenance, so a run whose numbers did not move
+    keeps the *published* block -- including a ``ptr`` and a ``wowBuild`` this run has
+    since learned are wrong, and without the ``dataSource`` that says so.
+
+    Values still settle, which is the whole point of it: ``gitRevision`` moves every
+    night and says nothing about the data. A field appearing is the opposite -- it is
+    the only evidence in the document that the producer changed -- so it is not settled
+    away.
+    """
+    import json
+
+    from wowdps.dataset import _settle_provenance
+
+    dataset = {"tier": "MID2", "specs": [1, 2, 3]}
+    published = dict(
+        dataset,
+        generatedAt="2026-08-01T00:00:00+00:00",
+        simc={"gitRevision": "aaaaaaa", "ptr": True, "wowBuild": 69382},
+    )
+    path = tmp_path / "index.json"
+    path.write_text(json.dumps(published), encoding="utf-8")
+
+    # Same fields, different values: the published block is kept, revision churn and all.
+    quiet = dict(
+        dataset,
+        generatedAt="2026-08-25T00:00:00+00:00",
+        simc={"gitRevision": "bbbbbbb", "ptr": True, "wowBuild": 69382},
+    )
+    settled = _settle_provenance(quiet, path)
+    assert settled["simc"] == published["simc"]
+    assert settled["generatedAt"] == "2026-08-01T00:00:00+00:00"
+
+    # A field this run produces and the published block does not have: taken from this
+    # run, or the correction waits for the numbers to move and may wait forever.
+    corrected = dict(
+        dataset,
+        generatedAt="2026-08-25T00:00:00+00:00",
+        simc={
+            "gitRevision": "bbbbbbb",
+            "ptr": False,
+            "dataSource": "Live",
+            "wowBuild": 69404,
+        },
+    )
+    settled = _settle_provenance(corrected, path)
+    assert settled["simc"] == corrected["simc"]
+    # `generatedAt` is a string and describes the *data*, which did not move.
+    assert settled["generatedAt"] == "2026-08-01T00:00:00+00:00"
+
+
 def test_a_report_without_a_dbc_block_leaves_the_game_build_null_not_absent():
     """Null tells a reader "no build in this report"; absent looks like a bug."""
     from wowdps.simc_runner import simc_metadata

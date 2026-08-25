@@ -1335,6 +1335,61 @@ def test_an_unnamed_requested_encounter_can_never_verify_a_twin():
     assert harvest.names_agree(" nek'zali the soulcoiler ", NEKZALI) is True
 
 
+def test_the_comma_in_nekzalis_name_no_longer_refuses_its_own_twin():
+    """Issue #40, and it is one comma. Warcraft Logs writes the same encounter as
+    ``Nek'zali, the Soulcoiler`` under the PTR id 53470 and ``Nek'zali the Soulcoiler``
+    under the live id 3470, and the strict comparison refused the substitution over
+    the punctuation alone.
+
+    Nothing about the resolution moves except the comparison: the id is still checked
+    for the PTR shape, the twin is still looked up, and the name is still what decides.
+    """
+    ptr_name = "Nek'zali, the Soulcoiler"
+    assert harvest.names_agree(ptr_name, NEKZALI) is True
+
+    choice = harvest.choose_encounter_id(NEKZALI_PTR, ptr_name, False, {NEKZALI_LIVE: NEKZALI}.get)
+    assert choice.used == NEKZALI_LIVE
+    assert choice.substituted is True
+
+
+def test_two_different_bosses_are_still_refused_after_the_loosening():
+    """The guard, and the point of the change is that this list keeps failing.
+
+    Dropping punctuation is allowed to make *one* boss's two spellings agree. It must
+    not make two bosses agree, so every pair below is a way a looser rule could have
+    gone wrong: a near-miss on one letter, a name that is a prefix of the other, a
+    different second word, and a wholly unrelated boss from this same tier.
+    """
+    different = [
+        ("Nek'zali the Soulcoiler", "Nek'zali the Soulbinder"),
+        ("Nek'zali the Soulcoiler", "Nek'zali"),
+        ("The Twin Fangs", "The Twin Fang"),
+        ("Vaelgor & Ezzorak", "Vaelgor"),
+        ("Sszorak", "Ula'tek"),
+        ("Entombed Sentinels", "Lightblinded Vanguard"),
+    ]
+    for left, right in different:
+        assert harvest.names_agree(left, right) is False, (left, right)
+        # And the refusal is what the caller sees, not just what the predicate says.
+        choice = harvest.choose_encounter_id(NEKZALI_PTR, left, False, {NEKZALI_LIVE: right}.get)
+        assert choice.refused and choice.used is None, (left, right)
+        assert "different boss" in choice.reason
+
+
+def test_punctuation_is_dropped_as_a_separator_and_not_as_a_deletion():
+    """Which of the two normalisations is in force, pinned, because they differ.
+
+    Each mark becomes a space, so word boundaries survive a name being punctuated
+    differently -- and two names cannot be joined into one string that a third name
+    could also produce. The consequence is stated rather than hidden: a twin that
+    drops an apostrophe outright still disagrees, and that is the safe direction.
+    """
+    assert harvest.names_agree("Fallen-King Salhadaar", "Fallen King Salhadaar") is True
+    assert harvest.names_agree("Nek'zali the Soulcoiler", "Nekzali the Soulcoiler") is False
+    # Whitespace differences alone were already tolerated and still are.
+    assert harvest.names_agree("  Ula'tek\t", "ula'tek") is True
+
+
 def test_a_live_id_with_no_parses_has_no_twin_to_try():
     """A boss nobody has killed yet is an ordinary state, and it is reported as
     itself rather than as a resolution failure."""
