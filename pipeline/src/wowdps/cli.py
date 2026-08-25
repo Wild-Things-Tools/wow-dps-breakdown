@@ -849,7 +849,10 @@ def cmd_spec_index(args: argparse.Namespace) -> int:
             talents_path,
         )
 
-    ptr = bool((manifest or {}).get("simc", {}).get("ptr"))
+    # Which generated trait table the sims read -- never `simc.ptr` directly, which
+    # was `SC_USE_PTR` until issue #42 and is a compile constant in every manifest
+    # published before it. See `simc_runner.manifest_used_ptr_data`.
+    ptr = simc_runner.manifest_used_ptr_data(manifest)
     # Which of this tier's profiles simc will refuse, decided offline: the reason and
     # the node id come out of the trait table without a binary. See
     # `specindex.refused_profiles`; `wowdps check-profiles` is the version that asks
@@ -1688,12 +1691,12 @@ def cmd_hero_trees(args: argparse.Namespace) -> int:
     if ptr is None:
         manifest_path = Path(args.out) / tier / "index.json"
         if manifest_path.is_file():
-            ptr = bool(
-                json.loads(manifest_path.read_text(encoding="utf-8")).get("simc", {}).get("ptr")
+            ptr = simc_runner.manifest_used_ptr_data(
+                json.loads(manifest_path.read_text(encoding="utf-8"))
             )
         else:
             logging.info("no manifest at %s; reading simc's live trait table", manifest_path)
-            ptr = False
+            ptr = simc_runner.USES_PTR_DATA
 
     result = herotrees.resolve_tier(
         profiles_dir,
@@ -1876,8 +1879,8 @@ def cmd_talent_trees(args: argparse.Namespace) -> int:
     ptr = args.ptr
     manifest_path = root / tier / "index.json"
     if not ptr and manifest_path.is_file():
-        recorded = (json.loads(manifest_path.read_text(encoding="utf-8")).get("simc") or {}).get(
-            "ptr"
+        recorded = simc_runner.manifest_used_ptr_data(
+            json.loads(manifest_path.read_text(encoding="utf-8"))
         )
         if recorded:
             logging.info("%s was simulated against simc's PTR data; reading that table", tier)
