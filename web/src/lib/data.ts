@@ -2,6 +2,7 @@
 
 import type {
   BuffDataset,
+  ComputedBuildsDataset,
   FightsDataset,
   GearDataset,
   LogsVerification,
@@ -133,6 +134,22 @@ export async function loadTalents(tier: string): Promise<TalentDataset | null> {
 export async function loadTalentTrees(tier: string): Promise<TalentTreeDataset | null> {
   try {
     return await fetchJson<TalentTreeDataset>(`${tier}/talent-trees.json`)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Builds this project computed, beside simc's own. Absent until
+ * `wowdps build-search` has run for the tier, which is why this is its own
+ * fetch and why every reader treats `null` as "no computed build" rather than
+ * as an error.
+ */
+export async function loadComputedBuilds(
+  tier: string,
+): Promise<ComputedBuildsDataset | null> {
+  try {
+    return await fetchJson<ComputedBuildsDataset>(`${tier}/computed-builds.json`)
   } catch {
     return null
   }
