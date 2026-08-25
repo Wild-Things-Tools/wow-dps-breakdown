@@ -1,4 +1,7 @@
-import { defineConfig } from 'vite'
+// `vitest/config`, not `vite`: vite's own `defineConfig` does not know the
+// `test` key and rejects it at type level, which fails `npm run build`
+// (it runs `tsc --noEmit` first). Same function, wider type.
+import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
@@ -13,5 +16,14 @@ export default defineConfig({
   // never invalidates the app chunk.
   build: {
     outDir: 'dist',
+  },
+  // `node`, not `jsdom`: what needs covering here is the pure logic under
+  // `src/lib/` -- the rules that decide what the published page claims -- and a
+  // DOM environment would be a dependency bought for nothing. A test that needs
+  // a document should say so with `// @vitest-environment jsdom` and bring the
+  // package with it.
+  test: {
+    environment: 'node',
+    include: ['src/**/*.test.ts'],
   },
 })
