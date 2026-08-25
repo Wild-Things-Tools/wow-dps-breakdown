@@ -69,17 +69,39 @@ on:
         description: 'Distinct kills to read per encounter (the main cost dial). Larger is what makes the aggregate band meaningful'
         default: '30'
       order:
-        description: "Which kills: 'first' (earliest, alike, intended tuning) or 'top' (speed kills)"
-        default: 'first'
+        description: "Which kills. 'public' searches the logs uploaded for the zone in a time window (reportData.reports) — not restricted to ranked parses, so it can see a public kill the rankings never carried. 'first' takes the earliest among the ranking pages gathered, which are sorted by damage. 'top' is the rankings' damage order, i.e. speed kills"
+        default: 'public'
+      lookback_days:
+        description: "--order public: how far back from the earliest ranked kill the report search reaches. Nothing in the schema says when a raid opened, so the ranked sample anchors the window"
+        default: '10'
+      forward_days:
+        description: '--order public: how far forward from that anchor'
+        default: '14'
+      report_pages:
+        description: '--order public: pages of the report search to read, at 100 reports each. Measured: this search is the first thing in the project to move the point counter at all, so keep it small until a full pass has been costed'
+        default: '5'
       rankings_pages:
-        description: 'Ranking pages to gather before choosing the first kills'
-        default: '8'
+        description: 'Ranking pages to gather before choosing the first kills. This is the window "first" is measured inside: Warcraft Logs sorts rankings by damage, so a slow first-night kill sits deep in the list and a narrow window silently returns later kills instead. Pages are cheap next to the per-fight event streams'
+        # 40, not 8. The pages are a rounding error against a pass, and the failure a
+        # narrow window produces is invisible: the sample is still truthfully "the
+        # earliest kills we gathered", just gathered from the top parses. The kill
+        # dates are published now, so this can be checked rather than believed.
+        default: '40'
       page:
         description: 'Rankings page to sample from; 1 is the world best, which is not a typical pull'
         default: '1'
       max_pages:
         description: 'Event pages per stream per fight. This is what decides whether a kill is read to the end -- a band needs whole fights, not just many of them. Raising it re-opens encounters whose stored budget was smaller'
-        default: '3'
+        # 20, and this default is load-bearing rather than a preference. A scheduled
+        # run gets no `inputs.*`, so it takes whatever is written here -- and a
+        # continuation that runs with a *smaller* budget than the pass it continues
+        # does not merely fail to help, it goes silently inert: `is_complete` only
+        # re-opens an encounter whose recorded budget is smaller than the one now
+        # asked for, so every encounter already read at 12 or 20 pages counts as
+        # done at 3, the hourly run fetches nothing, and the pass never finishes.
+        # Observed exactly that on 2026-08-16: a 20-page dispatch left 8 of 9
+        # encounters outstanding and each hourly continuation was a no-op.
+        default: '20'
       no_resume:
         description: 'Ignore the collected payload and re-read every encounter. Needed once for a payload written before the event budget was recorded'
         type: boolean
@@ -154,10 +176,13 @@ jobs:
           TIER: ${{ inputs.tier || 'MID2' }}
           DIFFICULTY: ${{ inputs.difficulty || '5' }}
           REPORTS: ${{ inputs.reports || '30' }}
-          ORDER: ${{ inputs.order || 'first' }}
-          RANKINGS_PAGES: ${{ inputs.rankings_pages || '8' }}
+          ORDER: ${{ inputs.order || 'public' }}
+          LOOKBACK_DAYS: ${{ inputs.lookback_days || '10' }}
+          FORWARD_DAYS: ${{ inputs.forward_days || '14' }}
+          REPORT_PAGES: ${{ inputs.report_pages || '5' }}
+          RANKINGS_PAGES: ${{ inputs.rankings_pages || '40' }}
           PAGE: ${{ inputs.page || '1' }}
-          MAX_PAGES: ${{ inputs.max_pages || '3' }}
+          MAX_PAGES: ${{ inputs.max_pages || '20' }}
           POINT_CEILING: ${{ inputs.point_ceiling || '0.8' }}
           CHEAP: ${{ inputs.cheap }}
           NO_RESUME: ${{ inputs.no_resume }}
@@ -178,6 +203,9 @@ jobs:
             --difficulty "$DIFFICULTY" \
             --reports "$REPORTS" \
             --order "$ORDER" \
+            --lookback-days "$LOOKBACK_DAYS" \
+            --forward-days "$FORWARD_DAYS" \
+            --report-pages "$REPORT_PAGES" \
             --rankings-pages "$RANKINGS_PAGES" \
             --page "$PAGE" \
             --max-pages "$MAX_PAGES" \
@@ -216,7 +244,24 @@ jobs:
             exit 0
           fi
           git commit -m "data: refresh fight shapes for ${TIER} $(date -u +%Y-%m-%d)"
-          git push
+          # Rebase before pushing. These workflows commit into one branch and run
+          # concurrently with each other and with a person's own pushes, so a bare
+          # push loses the race and fails a run whose actual work succeeded --
+          # observed three times on 2026-08-16/17, each time discarding a completed
+          # probe pass for a reason that had nothing to do with it. The commits are
+          # data-only and touch disjoint files, so rebasing is safe; --autostash
+          # covers anything the run left in the tree.
+          # github.ref_name rather than `git rev-parse --abbrev-ref HEAD`: a
+          # checkout is detached for some event types and would resolve to "HEAD".
+          pushed=false
+          for attempt in 1 2 3; do
+            git pull --rebase --autostash origin "${{ github.ref_name }}" || true
+            if git push origin "HEAD:${{ github.ref_name }}"; then pushed=true; break; fi
+            echo "push attempt $attempt lost the race; retrying"
+            sleep $((attempt * 5))
+          done
+          # Losing three times is a real failure, not something to exit 0 on.
+          [ "$pushed" = true ]
         env:
           TIER: ${{ inputs.tier || 'MID2' }}
 

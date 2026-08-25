@@ -1,0 +1,256 @@
+name: Build search
+
+# Search for talent builds, calibrate the search against the specs where simc already
+# has an answer, and publish `web/public/data/<tier>/computed-builds.json`.
+#
+# **Something has to invoke this or the document never exists.** The site's panel
+# (wtt-frontend#130) reads that file and draws nothing without it, and this repository
+# has already shipped the same failure once: CLAUDE.md records `hero_trees.json` being
+# written on 2026-08-16 and `sims.yml` never invoking the command, so three profiles sat
+# mislabelled until somebody looked. This workflow is the invocation, and it commits its
+# own output the way `harvest-builds.yml` does.
+#
+# `workflow_dispatch` only, and no schedule. The reason is the same arithmetic
+# `gear.yml` records: a search costs CPU-hours and talent builds change when a tuning
+# pass or a season changes, not nightly. A committed document survives the nightly
+# merge untouched -- `dataset.merge_shards` only creates its output directory and writes
+# into it, so a file it did not produce is left alone -- so running rarely and
+# committing once is sufficient.
+#
+# The calibration is a **gate**, not a report: with `mode: calibrate` nothing is
+# published, and the step fails (exit 2) when the search does not clear the criterion
+# fixed in `computedbuilds.PASS_MIN_NOT_BEHIND` / `PASS_MAX_LOSS`. Run it first; publish
+# only after it passes.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'calibrate = blind run against simc''s own builds, publishes nothing. publish = the real pass'
+        type: choice
+        options: [calibrate, publish]
+        default: calibrate
+      tier:
+        description: 'Tier to search'
+        default: 'MID2'
+      build:
+        description: 'Only builds whose id contains this. Empty = every damage build in the tier'
+        default: ''
+      targets:
+        description: 'Target count. One row per (build, scenario, targets) -- a verdict at one target is not an answer at ten'
+        default: '1'
+      iterations:
+        description: 'Final-round iterations. 3000 measures at ~0.05%'
+        default: '3000'
+      breadth:
+        description: 'Neighbours generated per seed and per climb step. 24 covers a whole one-edit neighbourhood on every MID2 build'
+        default: '24'
+      climb_steps:
+        description: 'How many real one-edit improvements the opening phase chases. Bounds how far a blind search can travel'
+        default: '12'
+      seed:
+        description: 'PRNG seed. The run is reproducible from it, and it is published beside every candidate'
+        default: '0'
+      harvest:
+        description: 'Path to a harvested-builds.json whose builds become seeds as well. Empty = simc''s own builds only'
+        default: ''
+      commit:
+        description: 'Commit the published document (publish mode only)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: build-search-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  # The binary is the expensive part, so it is built once and cached on the simc
+  # revision. Same shape as `sims.yml`.
+  simc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      sha: ${{ steps.rev.outputs.sha }}
+    steps:
+      - name: Resolve the simc revision
+        id: rev
+        run: |
+          set -euo pipefail
+          sha=$(git ls-remote https://github.com/simulationcraft/simc.git HEAD | cut -f1)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "simc at $sha"
+
+      - name: Restore the cached build
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: simc
+          key: simc-${{ steps.rev.outputs.sha }}
+
+      - name: Build simc
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/simulationcraft/simc.git simc
+          cmake -B simc/build -S simc -DCMAKE_BUILD_TYPE=Release -DSC_NO_NETWORKING=ON -DBUILD_GUI=OFF
+          cmake --build simc/build -j"$(nproc)"
+
+  # One job, not a matrix, and that is a measurement rather than a simplification.
+  # Timed over a whole MID2 publish pass on a 4-core box: 42 builds, 39 of them
+  # searched, 1,237 variants, **153.7 CPU-minutes** in 48m12s of wall clock -- 3.9
+  # CPU-minutes per searched build. That is under an hour on a 4-vCPU runner and
+  # comfortably inside `timeout-minutes`. Sharding would buy nothing and would need a
+  # merge step, which is a second document shape to keep in agreement with the site.
+  #
+  # Budget a *calibration* run higher, not lower: it starts from a scrambled build and
+  # has to climb, where a seeded publish run frequently takes no climb step at all.
+  search:
+    needs: simc
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore the cached simc
+        uses: actions/cache@v4
+        with:
+          path: simc
+          key: simc-${{ needs.simc.outputs.sha }}
+          fail-on-cache-miss: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install the pipeline
+        run: pip install -e pipeline
+
+      - name: Materialise the profiles simc wrote and switched off
+        # Without this the four specs with no number anywhere have no profile to
+        # search from at all -- they live in the generator, commented out.
+        run: wowdps unvalidated --tier "$TIER" --simc-source simc --write
+        env:
+          TIER: ${{ inputs.tier }}
+
+      - name: Materialise the extra builds
+        # After the step above, because some cells supersede a refused
+        # materialised profile of the same filename. This is what puts the
+        # supplied (spec, hero tree) cells -- repaired, harvested, computed --
+        # into the search's build list, so `computed-builds.json` covers the
+        # same slots the ranking does.
+        run: wowdps extra-builds --tier "$TIER" --simc-source simc --write
+        env:
+          TIER: ${{ inputs.tier }}
+
+      - name: Search
+        id: run
+        # `inputs.*` are bound in `env:` and never interpolated into `run:`. A
+        # dispatched value carrying a quote and a semicolon would otherwise become
+        # script, in a job holding `contents: write`. `fight-probe.yml` already does
+        # this and says why; there is one pattern here, not two.
+        run: |
+          set -euo pipefail
+          args=(build-search
+            --tier "$TIER"
+            --profiles simc/profiles
+            --simc-source simc
+            --simc simc/build/simc
+            --targets "$TARGETS"
+            --iterations "$ITERATIONS"
+            --breadth "$BREADTH"
+            --climb-steps "$CLIMB"
+            --seed "$SEED"
+            --out "web/public/data")
+          if [ -n "$BUILD" ]; then args+=(--build "$BUILD"); fi
+          # `wowdps build-search --harvest` has existed since the harvest landed and
+          # nothing invoked it: this workflow never passed the flag, so every run so
+          # far seeded from simc's own builds alone. That is not silent -- the
+          # document's own `notes` say no candidate came from a real player's build --
+          # but it meant a repaired hash could never be compared against a harvested
+          # one, which is the cross-check PR #38 recorded as not done. Empty keeps
+          # exactly the previous behaviour; a path opts a run into harvested seeds.
+          if [ -n "$HARVEST" ]; then args+=(--harvest "$HARVEST"); fi
+          # `--write-calibration` in calibrate mode writes the document so the run's
+          # evidence rides in the artifact. It is never committed: the Commit step
+          # below requires `mode == publish`, because a blind run's numbers measure the
+          # search rather than answer anything about the tier.
+          if [ "$MODE" = "calibrate" ]; then args+=(--calibrate --write-calibration); fi
+          wowdps -v "${args[@]}" 2>&1 | tee search.log
+        env:
+          TIER: ${{ inputs.tier }}
+          BUILD: ${{ inputs.build }}
+          TARGETS: ${{ inputs.targets }}
+          ITERATIONS: ${{ inputs.iterations }}
+          BREADTH: ${{ inputs.breadth }}
+          CLIMB: ${{ inputs.climb_steps }}
+          SEED: ${{ inputs.seed }}
+          HARVEST: ${{ inputs.harvest }}
+          MODE: ${{ inputs.mode }}
+
+      - name: Upload the run
+        # `always()`, not the default `success()`. The two failures an upload exists
+        # for -- a non-zero exit (which a failed calibration deliberately is) and a
+        # `timeout-minutes` kill -- are exactly the two where the default skips it.
+        # `gear.yml` shipped that bug; do not repeat it.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-search
+          path: |
+            web/public/data/**/computed-builds.json
+            search.log
+          if-no-files-found: ignore
+
+      - name: Summary
+        # `always()`: a failed calibration is the single most useful thing this
+        # workflow can report, and the default `success()` would skip exactly it.
+        if: always()
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, os, pathlib
+          tier = os.environ["TIER"]
+          path = pathlib.Path("web/public/data") / tier / "computed-builds.json"
+          if not path.is_file():
+              print("No document was produced.")
+              raise SystemExit(0)
+          doc = json.loads(path.read_text())
+          cov = doc.get("coverage", {})
+          print(f"## Computed builds -- {tier}\n")
+          print(f"Covers **{cov.get('specs')} of {cov.get('specsAvailable')}** builds.\n")
+          cal = doc.get("calibration")
+          if cal:
+              print(f"### Calibration -- {'PASSED' if cal['passed'] else 'FAILED'}\n")
+              print(f"_{cal['criterion']}_\n")
+              print("| build | simc | search | margin | tie band | verdict |")
+              print("|---|---:|---:|---:|---:|---|")
+              for row in cal["rows"]:
+                  m = "n/a" if row["margin"] is None else f"{row['margin']:+.3%}"
+                  b = "n/a" if row["tieBand"] is None else f"{row['tieBand']:.3%}"
+                  s = "n/a" if row["searchDps"] is None else f"{row['searchDps']:,.0f}"
+                  print(f"| {row['build']} | {row['simcDps']:,.0f} | {s} | {m} | {b} | {row['verdict']} |")
+              print(f"\n{cal['summary']}\n")
+          PY
+        env:
+          TIER: ${{ inputs.tier }}
+
+      - name: Commit
+        # Publish mode only, and only when the operator asked. A calibration run must
+        # never be able to commit: it is blind, so its numbers are a measurement of the
+        # search rather than an answer about the tier.
+        if: inputs.commit && inputs.mode == 'publish'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/public/data
+          if git diff --cached --quiet; then
+            echo "nothing changed"
+            exit 0
+          fi
+          git commit -m "data: computed builds for ${TIER}"
+          git push
+        env:
+          TIER: ${{ inputs.tier }}

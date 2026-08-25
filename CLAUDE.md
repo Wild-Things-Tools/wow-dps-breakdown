@@ -297,12 +297,22 @@ thing by an order of magnitude, and against an unenchanted baseline every candid
 would "win" by the enchant. `GearItem` carries `gem_ids` and `enchant_id` for that
 reason; `bonus_ids` stays because it costs nothing, not because anything needs it.
 
-Ring and neck pools have the same structural shape as the trinket pools, from
-`wowdps gear-candidates`: **4 epic rings at base ilevel 219** and 7 rares at 108,
-against 15 and 25 trinkets. Small enough that a full pairwise sweep is affordable
-where it was not for trinkets -- but two finger slots and two neck gems mean the
-baseline construction is a different problem, not the trinket one with a new slot
-name.
+Ring and neck pools have the same structural shape as the trinket pools. The
+enumeration `wowdps gear-candidates` prints is not what the sweep runs, though --
+the shipped pools are journal-derived, and the numbers that matter are the split by
+source, read out of `gear_pools.json`:
+
+| slot | Mythic+ | raid | total |
+|---|---|---|---|
+| finger | 8 | 3 | 11 |
+| neck | 4 | 3 | 7 |
+| trinket | 27 | 15 | 42 |
+
+Small enough that a full pairwise sweep is affordable for rings and necks where it
+was not for trinkets -- and it is now what they run, over the *whole* pool rather
+than the Mythic+ half. See "The baseline is the best combination" and "The ceiling"
+below. Two finger sockets and two neck gems still mean the baseline construction is
+a different problem, not the trinket one with a new slot name.
 
 ### Compare profilesets to profilesets, never to the base actor
 
@@ -318,15 +328,231 @@ Also measured, same run:
   why the "Standard" baseline is itself a profileset. This is the single easiest way
   to get a wrong-by-0.1% answer here.
 
+### The baseline is the best *combination*, where that is affordable
+
+The owner's objection, and it is correct: picking the two best items measured
+*alone* is not the same question as picking the best pair. The additive
+approximation was measured on trinkets and holds to about 3% -- close enough to
+rank a clear winner, and not close enough at the cut, where two items that
+individually place third and fourth beat the top two together because the top two
+overlap (two procs competing for the same global cooldowns, two on-use effects
+that cannot both be pressed).
+
+So step 1 now fills the sockets **every possible way** and runs each, and the
+baseline is the combination that actually won. `MAX_BASELINE_COMBINATIONS` (120)
+is the ceiling on how many are run.
+
+**The counts in the table that used to sit here were wrong, and in a way worth
+naming.** It read "neck 7 -> 7, finger 11 -> 55", which are the *pool* sizes
+combined -- but only the Mythic+ half of a pool forms a baseline, so the real
+figures were 4 -> 4 and 8 -> 28. The number was never load-bearing (both fit the
+budget either way), and it is the shape of error to watch for: a table of
+plausible arithmetic over the wrong column.
+
+The counts against MID2's derived pools, with the enumeration the sweep now runs:
+
+| slot | baseline (Mythic+ only) | full (whole pool, per item level) | method |
+|---|---|---|---|
+| neck | 4 | 10 | exhaustive |
+| finger | 28 | 82 | exhaustive |
+| trinket | 351 | 1371 | additive -- about 28 CPU-hours across the tier for the baseline alone |
+
+The two budgets are checked **separately**, so a pool that can afford a measured
+baseline but not a measured ceiling keeps the baseline. Trinkets are over the line
+on the first one, so nothing about them changed; they stay additive until somebody
+decides to pay for it, and the dataset says which method produced each baseline
+rather than leaving it to be assumed.
+
+**Measured on the first exhaustive ring sweep, MID2, one target, 1000
+deterministic iterations: the two methods disagree on 13 of 26 builds.** Half the
+tier gets a different pair from "fill the sockets every way and run it" than from
+"take the two best measured alone" -- Frost DK, both Hunters, Arcane and Frost
+Mage, Shadow and seven more. So the additive approximation was not merely
+imprecise at the cut, it was picking the wrong rings on half the builds, and the
+owner's objection to it was right in the way that matters rather than in
+principle.
+
+Two things this does *not* say, and neither is measurable from the published file:
+how much DPS the wrong pair costs (the per-pair numbers are not published, only
+per-item), and whether trinkets behave the same (their 351 combinations are still
+out of budget, so they remain additive and say so).
+
+The solo run still happens either way, because a reader needs to see a close call
+at the cut. What changes is the *ranking* of the runners-up: under the exhaustive
+method an item is ranked by the best full combination containing it, not by its
+standalone value, since ranking by standalone would contradict the baseline the
+run just picked.
+
+### The candidate replaces the *measured* weakest item, not the last one
+
+A correction to numbers that are **published right now**, not a bug caught before
+shipping. `5c9c731` made the baseline the best measured combination; `replaced =
+baseline_items[-1]` was left as it was. Under the additive rule that was correct by
+accident -- `entries` is sorted by standalone value, so the last of the chosen is
+the weakest. Under the exhaustive rule `baseline_items` comes out of
+`itertools.combinations(worn, ...)`, which follows **`gear_pools.json` order**, and
+the last member of the winning pair is whichever one sorts later in the file.
+
+Measured against the committed `web/public/data/MID2/gear.json` (written
+2026-08-17 by `a9bc652`):
+
+| slot | method | `replaces` is not the weakest |
+|---|---|---|
+| finger | exhaustive | **10 of 26 builds** |
+| trinket | additive | 0 of 26 |
+| neck | one socket | not expressible |
+
+So on ten ring builds every published candidate gain is priced against throwing
+away the *better* of the two rings the build wears. Enhancement Shaman (Totemic) is
+the widest: it discards a ring worth 20,036 alone where the weakest is worth
+16,300. A drop that is a real upgrade can publish as a downgrade, and the Loot view
+compounds it -- the "Kept" and "Replaced by candidates" columns name the two the
+wrong way round.
+
+**The right answer is measured and was already in the run.** For two sockets,
+dropping B leaves A alone and dropping A leaves B alone, so the one to drop is the
+one whose partner scores higher by itself -- the lower standalone value, which the
+solo variants measure. Ties break on position so a re-run picks the same socket.
+
+Two things the fix carries with it:
+
+- **The candidate is substituted in place**, not appended after the survivors. The
+  baseline and the candidate then differ in exactly one socket, and each surviving
+  item keeps the socket it was measured in -- which matters because a profile's two
+  ring sockets carry *different gems* (`finger1 gem_id=240906`, `finger2
+  gem_id=240916`), so moving the survivor across would change two things and call
+  the difference the drop's.
+- **`replaces` is published on the baseline block.** The view was deriving it as
+  "the last item", which is the same wrong reasoning one layer up; it now reads the
+  field. Do not re-derive it anywhere.
+
+Re-run the finger sweep before trusting any ring number in the published file.
+**How wrong it gets** -- Elemental Shaman, MID2, one target, 1,000 iterations, the
+same six-build sample run before and after the fix:
+
+| ring at 344 | as published | corrected | |
+|---|---|---|---|
+| Apex Brute's Claw Ring | +0.60% | **+1.06%** | understated by 0.46 pts |
+| Vile Alchemist's Band | -2.03% | **-0.87%** | overstated as a loss by 1.16 pts |
+| Alluring Bubbleband | -0.30% | -0.82% | |
+
+Its two rings are 21,312 and 22,242 alone, so the file order named the *better* one
+and every drop was priced against losing it. And the fix moved a published
+conclusion: Elemental Shaman's ceiling used to look unreachable by the per-item view
+and now is exactly what the per-item view finds.
+
+### The ceiling: one enumeration, ranked twice
+
+The owner's second objection, and the same shape as the first. Picking the best
+Mythic+ pair and *then* swapping one raid drop into it is a **two-step search**, and
+a two-step search cannot reach an optimum that needs both steps at once. The best
+set overall may pair a raid ring with a Mythic+ ring the baseline never named, or
+fill both sockets from the raid -- and neither step would ever propose it, however
+many item levels it tries.
+
+So the enumeration covers the **whole** pool, Mythic+ and raid together, and one
+run is read twice:
+
+- over the Mythic+ subset -> the **baseline**, "what the character already wears",
+  which is what the owner asked to see;
+- over all of it, per candidate item level -> the **ceiling**, "what should end up
+  in this slot".
+
+Published as `bestSets` on each target result, one entry per item level, with the
+winning set, its gain over the baseline, the runner-up set and `isBaseline`. The
+per-item comparison is untouched and still answers the other question -- *is this
+particular drop an upgrade today* -- which is what a loot council asks on the night.
+
+Four things in it that are decisions rather than arithmetic:
+
+- **A drop is offered at every item level it can drop at; a farmed item at one.**
+  That is `baseline_ilevel`'s rule applied per item (`SlotPool.wearable_levels`).
+  Pricing a Mythic+ ring at the raid's top level is exactly the flattery that rule
+  exists to prevent, one layer down.
+- **One variant never mixes two drop item levels.** A ring at 334 beside a ring at
+  344 is a third question, and the view has one item-level control, not two. It also
+  keeps the count at 82 rather than 88.
+- **Absent is not equal.** A pool over budget publishes no `bestSets` at all rather
+  than the baseline, because "the baseline is the ceiling" is a claim that nothing
+  in an unrun enumeration supports.
+- **The winner's runner-up is published, and the tie rule applies to sets.** The
+  `pool` entries are per *item*, so two pairs a tenth of a percent apart looked like
+  a settled answer from outside the file. This is the gap the previous note here
+  named ("only per-item numbers are published, not per-pair") and it is closed for
+  both the baseline and the ceiling.
+
+**What it cost.** 98 profilesets per spec per target count for finger against the
+44 the Mythic+-only enumeration ran -- 1 empty, 8 solo, 82 combinations, then the
+baseline and 6 candidates in the second invocation. Measured on Arcane Mage,
+MID2, one target, 300 deterministic iterations: **63.5 CPU-seconds against 135.5**,
+same machine, same simc, and both runs returned the *same baseline to the DPS*.
+At the shipped 1,000 iterations, two runs of the same six specs on four cores cost
+**47m58s and 48m53s of CPU** -- about **8.1 CPU-minutes per spec**, which puts a
+full 26-build single-target ring pass near **210 CPU-minutes**. Quote the CPU figure
+rather than wall clock: the same six specs spread 109-247 seconds of wall clock
+across the two runs purely on how busy the box was, so a wall-clock range read as a
+per-spec cost is a measurement of the machine.
+
+Pet specs are not the outlier the trinket arithmetic assumes. Beast Mastery came in
+under two of the three casters on the first run and mid-pack on the second, so the
+2.5x multiplier does not carry over to a slot whose variants differ only in two
+rings.
+
+### What the ceiling found: the two-step answer is low on most builds
+
+MID2 finger, one target, 1,000 deterministic iterations, six builds
+(2026-08-21, simc 1210-01 at 69a46e1). Every ceiling below is at item level 344:
+
+| build | best single drop, from the per-item view | ceiling | understated by |
+|---|---|---|---|
+| Destruction Warlock | +0.24% | **+0.80%** | 0.55 pts |
+| Frost Death Knight | +0.24% | **+0.78%** | 0.54 pts |
+| Shadow Priest | +0.36% | **+0.70%** | 0.35 pts |
+| Arcane Mage | +0.18% | +0.23% | 0.05 pts -- a tie |
+| Beast Mastery Hunter | +0.26% | +0.26% | 0 -- the same set |
+| Elemental Shaman | +1.06% | +1.06% | 0 -- the same set |
+
+Median candidate `gainError` on that run is **0.136%**, so the three gaps at the top
+are three to four times the noise floor and the three at the bottom are not.
+
+**Four of the six ceilings are sets the per-item comparison could not have
+proposed**, and all four wear *two* raid rings, which no single swap reaches. Beast
+Mastery and Elemental Shaman are the controls: their ceilings *are* the two-step
+answer, to the DPS, so the machinery is not simply inventing distance.
+
+**These numbers replace an earlier set that the `replaces` defect produced, and the
+way they moved is the lesson.** Before that fix this read "five of six", with
+Elemental Shaman as the showpiece -- a ceiling that kept the ring the candidate step
+throws away. That build's candidate step was throwing away the *wrong* ring, so the
+example was an artifact of the bug rather than a property of the method. Corrected,
+its per-item answer finds the same +1.06% the ceiling does. Every ring number in
+this file was re-measured after the fix; do not copy figures across it.
+
+Two things this does not say. It is six builds of twenty-six, at one target count,
+and it is a different simc revision from the published dataset -- these numbers
+justify the method, they are not the tier's answer. And the *baseline* choice itself
+is frequently inside the noise: on three of the six the runner-up pair is a tie, and
+Arcane picked a different pair at 300 iterations than at 1,000 for exactly that
+reason. That is not an argument against enumerating; it is the argument for
+publishing the runner-up set, which is how it became visible at all.
+
 ### Standalone trinket value is additive to about 3%
 
 Arcane Mage, one target, both sockets empty = 159,026 DPS. Freightrunner's Flask
 alone adds 13,342; Gebbo's Bottomless Bag alone adds 14,646; the two together add
 28,804 where the sum of the singles is 27,988 -- the pair is worth **2.9% more** than
-its parts. So ranking by standalone value picks the right pair unless two candidates
-sit within a few percent of each other at the cut, which is why the runners-up are
-published rather than dropped. Pairwise would be N(N-1)/2 -- about 120 variants per
-spec instead of 16 -- for a correction of that size.
+its parts.
+
+**This is the trinket measurement, and it is still why trinkets are additive.**
+Pairwise there is N(N-1)/2 over 27 farmable trinkets -- 351 variants per spec per
+target count against 16 -- for a correction of that size, so trinkets rank by
+standalone value and publish their runners-up so a near-tie at the cut is visible.
+
+It was also, for a while, the argument for ranking *rings* that way, and there it
+was wrong twice. The pool is a third the size, so pairwise costs 82 variants rather
+than 351; and the correction is not small -- measured, the two methods name a
+different pair on 13 of 26 builds. A number measured on one slot is not a fact about
+the slot next to it. Do not carry this one back to rings.
 
 ### Cost, measured
 
@@ -350,6 +576,704 @@ dataset carries its own `coverage` count. A sweep that is interrupted at spec 9 
 leaves a dataset that is smaller *and* honest about being smaller. The view prints
 "covers N of M builds in the tier" from that field -- never from the array length,
 which would be the same number with none of the meaning.
+
+**This entry described something the code did not do**, from whenever it was written
+until 2026-08-21: `write_gear` was called once, after the loop over specs, so an
+interrupted sweep left *nothing* rather than a smaller dataset. It does now write per
+spec, which is the cheaper of the two fixes and the one that keeps the sentence true.
+Worth knowing about this file: a claim here can be a description of intent that the
+code never grew into, and this one survived a sweep being extended twice without
+anybody re-reading the loop it was about.
+
+**And the workflow threw the result away anyway.** A step with no `if:` defaults to
+`if: success()`, so `gear.yml`'s shard `upload-artifact` was skipped on exactly the
+two failures the per-spec write exists for -- a non-zero `wowdps gear` and a shard
+hitting `timeout-minutes: 350`. The `publish` job below it already carried
+`if: always() && needs.sweep.result != 'cancelled'` with a comment about publishing
+whatever finished, so the intent was there and was defeated at the first hop. It is
+`if: always()` now, with `if-no-files-found: ignore` for a shard that died before
+its first spec.
+
+**`buffs.yml` and `sims.yml` have the same shape and are not touched here.** Both
+carry the same `always()` publish job over an upload step with no condition. Whether
+their sweeps write partial output at all is a separate question from this one, so
+that is a finding for a human rather than a change made in passing.
+
+## The gear anchor: what a computed build wears
+
+`gearanchor.py` + `wowdps gear-anchor`. A build this project *computes* -- from a
+harvested player's kit, or a mutated talent hash -- has no gear of its own, so
+whatever kit it is handed is a second variable sitting beside the talents. This is
+the module that removes it.
+
+There are two standards of "equal gear" and they are not the same standard.
+
+- **Within one spec's search, gear must be byte-identical.** Not roughly equal: on
+  one ring the enchant is worth **+1.09%** and the gem **+0.44%** against **+0.09%**
+  for the whole ten-item-level step. A talent difference worth 2-3% sits underneath a
+  kit difference of that size. So the anchor emits one kit and every candidate wears
+  it; only `talents=` varies.
+- **Across specs, for ranking, the target is a band.** MID2's shipped profiles state
+  334 and 344, which is why `dataset.shipped_item_levels` derives a band rather than
+  fixing a value. The anchor lands inside it and says where.
+
+### Item level: the floor of the band, and the two rejected alternatives
+
+Both rejections are measurements, taken on simc `69a46e1` on 2026-08-23.
+
+- **Not the mode.** Across MID2's shipped profiles, the 301 gear lines that state an
+  item level split **133 at 344, 131 at 334** and 37 at 331. A two-line margin out of
+  301 flips on one profile being re-geared, and an anchor that moves by 10 item levels
+  for that reason is worse than one that never moves.
+- **Not the ceiling.** simc's own `# gear_ilvl` lines put the shipped profiles'
+  *average* item level at **336.75-339.25**. Anchoring at 344 would put every computed
+  build above every shipped build it is ranked beside -- the flattery
+  `SlotPool.baseline_ilevel` already refuses one layer down, for the same reason.
+
+The floor is the direction that cannot manufacture a win. It is applied by writing
+`ilevel=` onto **every** gear line, including lines that state none: measured by
+reading `gear.<slot>.ilevel` back out of simc's own json2, MID2's Windwalker Monk
+profile states no item level anywhere, simc resolves its fifteen slots to 285-289
+from the bonus ids, and the anchor moves all fifteen to 334. A normalizer that only
+*replaced* an existing value would leave that profile exactly where it was and report
+success.
+
+**Gems, enchants, crafted stats and bonus ids are preserved verbatim.** The first
+three because they carry the stats above; bonus ids because keeping them is free --
+an explicit `ilevel` overrides the scaling they would otherwise set, measured
+identical to the last digit on both a trinket and a ring -- and dropping them would
+generalise a two-slot measurement to sixteen slots.
+
+### simc's option parser takes more slot names than its data emits
+
+**The rule, which is repo-wide and not this module's:** *a reader accepts every alias
+simc accepts; an emitter writes what simc ships.* `util::slot_type_string` emits
+`shoulders`, `wrists`, `legs`, `feet`, `hands`, `finger1`, `finger2`.
+`player_t::create_options` (`engine/player/player.cpp:13276-13286`) *also* registers
+`shoulder`, `wrist`, `leg`, `foot`, `hand`, `ring1` and `ring2` against the same
+`items[SLOT_*]` entry, so **neither spelling is "the" correct one** and a reader that
+takes only one is silently reading half the population.
+
+Which population matters, measured on simc 69a46e1 on 2026-08-23:
+
+- **Every shipped MID2 profile writes the plural.** `^(shoulder|wrist)=` over the
+  shipped profiles returns nothing.
+- **The singular appears only in the disabled/materialised profiles** -- Feral Druid,
+  Havoc Aldrachi Reaver, Vengeance Aldrachi Reaver -- which is exactly the set the
+  gear anchor exists to make comparable.
+
+So `GEAR_SLOTS` keeps the names simc emits and `SLOT_ALIASES` adds the ones its parser
+also takes; nothing is renamed in either direction. `GearLine.slot` is canonical, so
+two spellings of one slot compare and deduplicate as one; `GearLine.alias` keeps the
+source's spelling so a line renders back byte-identically and every emitted line is
+one simc itself wrote.
+
+Both halves are load-bearing. Without the first, a kit written with `wrist=` gets an
+empty `wrists=` beside it, and the empty line comes last and wins -- the slot ends up
+bare. Without the alias reader at all, which is what shipped until 2026-08-23, Havoc
+kept its shoulder at item level **723** and its wrist at **720** against an anchor of
+334 while the description said "14 slot(s) normalized" and never mentioned the two it
+had not seen.
+
+`gearpool._EQUIP_LINE` had the same bug pointing the other way and is fixed
+separately -- see its own entry rather than this one.
+
+### Every other set is written to zero, not just the other seasons
+
+The zeroing used to be bounded to "other numbered tiers of the same expansion",
+expressed as `fullmatch("([A-Za-z]+)(\d+)")` on the tier label. Two things were
+wrong with that and both are measured on simc 69a46e1:
+
+- **The eight un-numbered Midnight tiers fail that regex on the underscore.**
+  `MID_BOZ`, `MID_VB`, `MID_AT` and five more are real 2-piece bonuses of this
+  expansion, and **ten of MID2's forty damage profiles wear two or more pieces of
+  one** -- `bite_of_zuljan` on all four Frost/Unholy Death Knight builds, Survival
+  Hunter, Outlaw Rogue and both Enhancement Shamans; `voidlight_bindings` on Balance
+  Druid.
+- **"This expansion" is the wrong bound anyway.** MID2's Havoc profile wears a full
+  `thewarwithin_season_3` set, from the expansion before.
+
+So everything but the anchor's own token is zeroed. Two things that has to get right,
+both checked against simc itself rather than reasoned about:
+
+- **Thresholds are per set.** Of the 29 sets in `item_set_bonus.inc`, 17 carry a
+  2-piece alone, `MID_UWP` carries 2 and 3, `DF_RT` carries 2, 4 and 6. `TierSet`
+  reads them, and the resulting 42 `(token, threshold)` pairs for MID2's Arcane Mage
+  are **the same 42** simc's own `generate_set_bonus_options()` prints. (simc does
+  tolerate `_4pc` on a 2-piece set -- measured, it runs -- so this is about writing
+  what exists, not about a crash.)
+- **The class is load-bearing.** `SL3` ships for twelve classes and not for Evoker,
+  and `set_bonus=shadowlands_season_3_2pc=0` on MID2's Devastation profile **exits 80
+  with no DPS**. And do not take simc's printed vocabulary as the class-safe list: it
+  is byte-identical for Mage and Evoker, so it advertises the option simc then
+  refuses.
+
+**All of it goes on one `set_bonus=` line, slash-delimited.** `parse_set_bonus`
+appends a repeated `set_bonus=` with a `/` *and* raises a MODERATE error each time,
+so 41 zeroed states would be 41 warnings per actor. Measured that the two spellings
+are the same run and not merely similar: Shadow Priest, 1000 deterministic
+iterations, one target, the set off -- two lines **187,312.2**, one slash-delimited
+line **187,312.2**, against 210,980.8 with the set left alone. Note the consequence
+for `buffsweep`, which writes its variants as separate lines: they accumulate
+correctly, so those numbers stand; they are merely noisy.
+
+### A slot the kit is silent about is not an anchored slot
+
+A profileset's options apply *on top of* the base profile, so a slot the kit does not
+mention keeps the base actor's item at the base actor's item level, inside something
+`options()` documents as "usable directly as a Profileset's options". MID2's
+Windwalker Monk kit has fifteen gear lines against Arcane Mage's sixteen.
+
+Measured on Arcane Mage, 1000 deterministic iterations, one target: adding a bare
+`off_hand=` to an otherwise inert profileset moved **176,582.7 to 158,651.4**, so an
+un-anchored slot is worth 10.2% there. Emptying two slots the profile does not use
+(`tabard=`, `shirt=`) returned **176,582.7** -- bit-identical -- so the empty lines
+cost nothing where there is nothing to clear. Every `GEAR_SLOTS` entry the kit lacks
+is now written empty, and an alias counts as its canonical slot so a kit carrying
+`wrist=` is not also handed an empty `wrists=` that would win by coming last.
+
+### An empty parse is a refusal, and the width test is equality
+
+`parse_item_sets` used to skip a malformed row and return what it had, so a simc
+struct change makes every row fail and the answer is `{}` -- which is not `None`, so
+`derive_target` accepted it, counted zero pieces on every profile, and published
+*"the state most of the tier's shipped profiles are in (28 shipped profile(s) wear
+none)"* as **derived evidence** for a kit with the set switched off. By this module's
+own measurement that is worth -13.13% on Arcane and -11.22% on Shadow.
+
+Two guards. Nothing decoded at all is a refusal -- 12,260 of simc's 115,470 items
+carry an `id_set` on 69a46e1, so none is a table that was not read. And the width
+test is `== 27`, not `>= 27`: **all 115,470 rows are exactly 27 fields**, and a lower
+bound passes a row with a field *inserted*, after which field 23 is silently its
+neighbour. The docstring used to claim both parsers of that table "check the field
+count" and so break loudly; both merely `continue`d.
+
+**The duplication itself is still there and that is deliberate.**
+`equipment.discover_items` decodes the same rows the same way for different columns.
+Sharing one decoder was written and backed out, to keep this branch clear of a
+parallel change to that module. So a simc struct change still has to be fixed in two
+places, and each now carries a comment pointing at the other.
+
+### The tier set is stated, and *which* state is derived too
+
+Same mechanism as `buffsweep.set_variants`, and the same reason for writing the
+zeroes: a kit that already wears the set, or last season's, would otherwise carry it
+in silently. What is new is that the **piece count is derived rather than assumed**,
+and the reason is a finding about MID2 itself.
+
+**MID2's shipped profiles disagree with each other about the tier set**, and *how
+many* disagree is a fact with a date on it. Counting pieces by
+`dbc_item_data_t::id_set` against `item_set_bonus_t::set_id` -- which is exactly what
+`set_bonus_t::initialize` does -- over the 28 shipped damage profiles:
+
+```
+simc 69a46e1, 2026-08-21    24 wear four or five, 4 wear none
+                            both Arcane and both Frost Mage builds
+simc 22b442e, 2026-08-22    26 wear four or five, 2 wear none
+                            both Arcane builds
+```
+
+**Both counts are true at their own revision** -- simc gave Frost Mage the set
+between the two -- and this file carried the first one undated, which is exactly the
+failure the talent-tree section already warns about. The published dataset was
+generated on **2026-08-22**, so at the revision that matters **only the two Arcane
+builds lack the set**. That difference is in the published ranking and nothing flags
+it.
+
+Note also that a profile can wear the set without *saying* so: Shadow Priest has no
+`set_bonus=` line at all and wears four pieces. That is why the count is taken from
+the equipped items rather than from the profile's options, and it is what makes the
+Arcane case below visible at all.
+
+Its size, profileset against profileset, 1000 deterministic iterations, one target:
+
+```
+Arcane Mage      0 pieces   forcing the 4-piece on   +13.13%   (2-piece alone +8.42%)
+Shadow Priest    4 pieces   forcing the 4-piece on   bit-identical
+Shadow Priest    4 pieces   forcing it off           -11.22%
+```
+
+So per-kit inheritance would hand the Arcane specs a kit 13% behind the field, and an
+unconditional four-piece would silently invert on a tier whose profiles ship without
+one. The anchor takes the **modal state** across the tier's shipped profiles -- reduced
+to a state (none/two/four) *before* the vote, because MID2's raw counts are 12 profiles
+at four pieces and 12 at five, a coin flip between two numbers that mean the same
+thing, where as states it is 24 to 4. A tie goes to the lower state, and the tally is
+published so a split tier reads as split.
+
+**The offline count is validated against simc's own behaviour on 13 of 13 profiles.**
+Every profile the `id_set` parse puts at four or more pieces returned DPS
+**bit-identical** under a forced four-piece; every profile it puts at zero moved. Two
+independent derivations agreeing on every row is the same check `talenttree`'s decode
+rests on.
+
+### Arcane wears no tier set, and the commented `set_bonus=` line is not why
+
+Worth its own entry because it is a property of **simc's shipped profile** and it is
+in the numbers on the live site today, not something this repository does. **The
+heading and the first half of this entry used to state the wrong mechanism**, and the
+wrong one is the plausible one, which is why it is corrected here in place rather
+than deleted.
+
+`MID2_Mage_Arcane.simc` and `MID2_Mage_Arcane_Sunfury.simc` carry, at lines 105-106
+on simc 22b442e:
+
+```
+# set_bonus=midnight_season_2_2pc=1
+# set_bonus=midnight_season_2_4pc=1
+```
+
+That reads like a profile switching its own set off. **It is not.** Measured on
+22b442e, 2026-08-23: **35 MID2 profiles carry that line and all 35 carry it
+commented; exactly zero profiles anywhere in the tier carry an active `set_bonus=`
+line.** It is simc's generator convention -- Fire, Frost, Shadow, both Shamans and
+every other build wearing four or five pieces carries the identical commented pair.
+A mechanism that is present on the whole tier cannot explain a difference between two
+builds and the other twenty-six.
+
+**The set comes from the equipped items**, which is what `set_bonus_t::initialize`
+reads: `dbc_item_data_t::id_set` on each equipped piece, matched against
+`item_set_bonus_t::set_id`. Side by side, the armour lines of the two Mage profiles:
+
+```
+Fire     shoulders=primal_leywardens_manaflux,id=271562,...,redirected_base_stats=268241
+Arcane   shoulders=ornaments_of_the_eternal_coil,id=268241,...
+```
+
+Both at item level 334 with the same bonus ids. 271562 carries `id_set` 2060
+(*Primal Leywarden's Attire*, the Mage set); 268241 carries none -- and Fire's tier
+piece **redirects its base stats to the very id Arcane equips**, so the two are the
+same stats with and without set membership. Same story in head, chest, hands and
+legs. Arcane is not opting out of a set it owns; it is wearing four different items.
+
+The rotation half of the old entry stands and is worth keeping: both Arcane action
+lists branch on `set_bonus.midnight_season_2_4pc` twice, at lines 61 and 71, so the
+rotation is written for a build wearing the four-piece and the character is simulated
+without it.
+
+**The magnitude, re-measured**, profileset against profileset (never against the base
+actor), 1000 deterministic iterations, patchwerk one target, simc 22b442e,
+2026-08-23:
+
+```
+Arcane Spellslinger   none 176,582.7   2pc 191,443.9 (+8.42%)   4pc 199,763.3  +13.13%
+Arcane Sunfury        none 189,598.5   2pc 207,145.3 (+9.25%)   4pc 216,935.5  +14.42%
+Shadow Priest         none 185,952.9   2pc 196,567.4 (+5.71%)   4pc 209,675.3  +12.76%
+```
+
+Per-profileset error is 0.11-0.31%, so the tie band on the four-piece gain is at
+worst 0.44% and every figure is thirty times outside it.
+
+**Two numbers were in circulation for "Arcane" and both are right** -- this file said
+14.4% and `gearanchor`'s docstring says 13.13%, and neither said which build. They are
+the two Arcane builds: 13.13% is Spellslinger and 14.42% is Sunfury, reproduced here
+to the tenth on a different simc revision from the one either was taken on. Write the
+build name beside a per-build number.
+
+**Shadow Priest is the control**, and it is what makes the offline piece count usable:
+it already wears four pieces, and forcing the four-piece on returns 209,675.3 against
+a base actor of 209,682.5 -- 0.003% apart, inside its own 0.11% error. So a profile the
+`id_set` count puts at four does not move when the set is forced on, and one it puts at
+zero moves 13-14%. Two independent derivations agreeing is the same check the talent
+decode rests on.
+
+Two things follow. It is not a bug here and must not be "fixed" by editing simc's
+profile -- this project does not author profiles, and the whole claim of the dataset
+is that it is what simc ships. And it is exactly the kind of systematic difference a
+comparability flag exists to state: a build ranked against 26 others that wear their
+set is not being compared on rotation and talents alone. `tierSetComparable` is that
+flag (see below); the gear anchor is the other half of the answer, for builds this
+project computes rather than ones simc ships.
+
+### `tierSetComparable`: the second gear caveat, and why it is not the first
+
+`dataset.shipped_set_states` + `dataset.tier_set_caveat` + `cli._tier_set_reference`.
+Exactly the shape of `shipped_item_levels` + `gear_caveat` one paragraph up, for the
+other systematic gear difference a tier can hold.
+
+**Two flags, not one, and MID2 is why.** Its two Arcane builds sit squarely inside the
+334-344 band and wear no set; its twelve disabled profiles carry *both* gaps. One
+boolean would leave the sentence beside it guessing which claim it carried, and -- the
+sharper reason -- an `ilevel` bump would close one and leave the other looking fixed.
+So `gearComparable` keeps meaning item level and `tierSetComparable` means set state.
+Both are emitted **only when false**, so MID1, whose 50 shipped profiles all wear four
+pieces, produces the bytes it did before this existed.
+
+Four decisions in the derivation, all of them the item-level band's decisions applied
+to a categorical variable:
+
+- **The reference is voted for, never written down.** No spec name, no set token, no
+  class. The sets come from `item_set_bonus.inc`, an equipped item's membership from
+  `item_data.inc`, and the reference state from the tier's own shipped profiles.
+- **States, not piece counts.** Reduced through `gearanchor.set_state` before the vote,
+  over the thresholds simc's table carries rather than an assumed 2 and 4. MID2's raw
+  counts are 12 profiles at four pieces and 14 at five -- a coin flip between two
+  numbers that mean the same thing to the simulation -- where as states it is 26 to 2.
+  Same reduction `gearanchor.derive_set_pieces` makes, for the same reason.
+- **A strict majority, or no reference and no flag.** "This build differs from what the
+  tier wears" needs a tier that wears one thing; naming one half of a split tier the
+  reference would flag the other half for disagreeing with a coin toss. More than half
+  is what the word means rather than a tuned tolerance, and the failure direction is
+  the safe one. Note this is deliberately *not* `derive_set_pieces`'s tie rule, which
+  breaks toward the lower state -- that one has to answer with something, because a
+  computed build has to wear something, and this one does not.
+- **A class the tier ships no set for is `None`, not zero.** `count_set_pieces` over an
+  empty id set correctly returns zero, and reading that as "wears none" would flag
+  exactly the classes a partial set list forgot. Neither MID1 nor MID2 has such a
+  class; the guard is for the tier that does.
+
+**Shard safety is structural rather than conventional.** `_tier_set_reference` takes a
+profiles directory and discovers the tier itself, the way `spec_coverage` does -- there
+is no parameter a shard could hand its own slice through. Passing `cmd_build`'s
+`all_profiles` would be right today and one refactor away from passing `selected`, and
+a per-shard majority would be a full set of plausible flags on the wrong builds.
+Tanks are discovered too, which makes the answer independent of `--include-tanks` as
+well as of the shard: measured on 22b442e, MID2 tallies 33 at the four-piece against 2
+at none with tanks and 26 against 2 without -- the same verdict from a wider base.
+
+**Which of simc's two item tables is stated on the command line** (`wowdps build
+--ptr/--no-ptr`), the way `gear-anchor` states it. It used to be read out of
+`<--out>/<tier>/index.json`, and that is the first of the two defects below.
+
+### It worked locally and could not work in CI, twice over
+
+Both found on 2026-08-23, the day after the flag shipped, and neither ever raised.
+The published MID2 dataset carried `tierSetComparable` on **0 of 36** rows while a
+local run over the same profiles flagged two -- which is the signature of this class
+of defect: the feature is not broken, it is simply never reached.
+
+**The shard bundle carried none of the tables.** `_tier_set_reference` derives the
+simc checkout as `profiles_dir.parent`, and the nightly runs `wowdps build --profiles
+bundle/profiles`, so it looks in `bundle/engine/dbc/generated` -- where `sims.yml`
+copied `trait_data*.inc` and nothing else. `parse_tier_sets` then raised
+`FileNotFoundError`, the function warned and returned `None` (correctly: a missing
+table must never cost a night of simulations), and no build was flagged anywhere.
+`sims.yml` copies `item_set_bonus*.inc` and `item_data*.inc` too now.
+
+**Both variants, and the cost is not the raw size.** Measured on 625a591:
+`item_data.inc` and `item_data_ptr.inc` are 52.5 MB raw, which roughly triples a
+bundle already holding a ~30 MB stripped binary -- but the tables are text and
+deflate 11.4:1, so the *artifact*, which is what twelve shards actually download,
+grows by **4.64 MB** (`item_set_bonus*` adds 28 KB). Carrying one variant would save
+2.3 MB and reintroduce the failure: which one is read is a run-time choice, and a
+bundle holding only the other fails by warning and flagging nothing. Same glob shape
+as `trait_data*.inc`, for the same reason. Copying the whole of
+`engine/dbc/generated`, as `gear.yml` and `buffs.yml` do, is 157 MB raw and 15 MB
+compressed -- so the targeted copy is the cheap option, not the expensive one.
+
+**The PTR flag was read from a file that cannot exist.** `<--out>/<tier>/index.json`,
+where the nightly passes `--out shard`, a fresh empty directory -- so `ptr` was never
+anything but `False`. The docstring called this *"the same question `talent-trees`
+answers, and it is answered the same way"*, and it is not: `cmd_talent_trees` takes an
+explicit `--ptr` and falls back to a manifest under an `--out` that **is** the
+published dataset, while `cmd_build`'s `--out` is where this run writes. A docstring
+describing a mechanism the code does not implement, again.
+
+### `manifest.simc.ptr` does not mean "built against PTR data"
+
+The deeper reason that manifest could not have answered it, and it is worth knowing
+before anything else reaches for the field. Measured on simc 625a591, 2026-08-23:
+
+- `simc.ptr` is `report["ptr_enabled"]`, which `engine/report/json/report_json.cpp`
+  sets to **`SC_USE_PTR`** -- a compile-time constant, defined as 1 in
+  `engine/config.hpp` on simc's midnight branch. It is true of every binary this
+  project builds and says only that the binary *carries* PTR data.
+- What a run *used* is `sim.players[].dbc.version_used`, and against the exact argv
+  `simc_runner.build_command` produces it is **`Live`**. Nothing here passes `ptr=1`.
+- And the option only bites **before** the profile path: simc copies the sim's dbc
+  into the player while parsing the profile, so `simc PROFILE ptr=1` is silently a
+  no-op. Measured on MID2 Arcane, 1000 deterministic iterations, Patchwerk at one
+  target: `version_used` is `Live`, `Live`, `PTR` for no option / after / before --
+  and the DPS is **176,364.3 in all three**, because the two tables agree today.
+  A first attempt at this line quoted 169,135 against 188,911 from *one-iteration*
+  runs and read it as "a different game"; that was Monte Carlo noise, and it is the
+  exact mistake this file's own convention about uncertainty exists to prevent.
+
+So the tier-set check reads the **live** tables, which is what the sims read, and the
+default follows `simc_runner.USES_PTR_DATA` rather than being written down twice.
+`test_build_command_never_enables_ptr_data` fails if a scenario ever starts asking for
+PTR data. The accidental old default happened to be the right table; it just was not
+chosen, and the next person to reach for `simc.ptr` would have "fixed" it to the
+wrong one.
+
+**Two things deliberately not changed.** `simc_metadata` still publishes `ptr: true`
+and reads the tier's `wowVersion`/`hotfixDate` out of the report's **PTR** dbc block
+(69382) while the actor used the Live one (69404, hotfix 2026-08-22) -- so the patch
+panel is naming a build the numbers were not produced against. And `talent-trees`
+still picks its trait table from that same field. Both are findings for a human, not
+changes made in passing: correcting either moves published data, and simc's live and
+PTR tables agree today in all three places (12,260 items with an `id_set` and 376 set
+rows, equal maps, on both 22b442e and 625a591).
+
+**What it flags today**, MID2 at 22b442e: 14 of the 40 damage builds simc ships or has
+written down -- the two Arcane ones, plus all twelve disabled profiles, which wear no
+set at all. **Ten of those reach the published file**, because simc refuses four of the
+disabled profiles' talent hashes and they produce no row at all; count against
+`index.json`'s 36 builds rather than against the 40, or the arithmetic is over the
+wrong column. That second group is
+the other half of the pair "45 item levels behind **and** none of this season's tier
+set" that the unvalidated section already names, and it is now stated as its own flag
+rather than folded into the item-level one. Of the tier's 28 *shipped* damage builds
+only the two Arcane ones are flagged. MID1 flags nothing shipped -- all 50 of its
+profiles wear four pieces -- so no published byte moves there.
+
+**The view draws it now**, and the three edits the pull request named are done:
+`BuildLike`/`types.ts` carry the field, `UnvalidatedMark` draws a third `Mark`, and
+`buildOpacity` fades on either flag with `OverviewView`'s caption rewritten so the
+fade no longer claims an item-level gap it may not have.
+
+Two decisions in that follow-up are not the obvious ones and are worth keeping:
+
+- **The mark reads "tier set differs", not "wears no tier set"**, which is what the
+  pull request suggested and what MID2's two builds actually do. The flag is
+  *symmetric* and multi-state -- it fires on any build whose state is not the tier's,
+  so a build wearing the set where the tier does not carries the identical boolean.
+  Naming a direction the boolean does not carry is the `inRotation` failure exactly: a
+  label promising more than its computation delivers, wrong in the direction nobody
+  checks. The direction is a sentence and it is in the build's own `caveats`, which
+  the spec page already renders. The parallel wording with "gear differs" is a bonus
+  rather than the reason -- same shape, different subject, so the two-flag split reads
+  at a glance.
+- **`buildOpacity` covers both flags, and that is not a merge of the two claims.** It
+  answers the one question they share -- *can this bar be ranked against the ones
+  beside it* -- which both answer no to. A second visual channel would have to be a
+  colour, and class colour is the primary encoding with no slot free. Without the
+  widening the two Arcane builds are flagged everywhere except the place the flag
+  matters: the Overview opens on the chart, so the first thing a reader sees would
+  draw a 13-14% set deficit as an ordinary bar. The caption then names each reason in
+  its own clause, drawn only when a row on screen carries that flag.
+
+  It names them rather than counting them, on purpose. The reasons **overlap** -- the
+  disabled profiles are behind on item level *and* wear no set -- so on MID2 the counts
+  are 8 and 10 over 10 faded bars, and a reader who added them would get 18.
+
+**Nothing on the site changes until a run regenerates the data.** Measured
+2026-08-23 against the committed dataset at `f02f23b`: `tierSetComparable` appears on
+**zero of MID2's 36 rows** and in none of the spec files. PR #35 landed the pipeline
+and no `wowdps build` has run since, so the finding is invisible for a second reason
+underneath the one this follow-up fixes -- the field is not published yet. The view was
+verified against a locally injected copy of the ten rows the pipeline would flag; the
+committed data was restored untouched.
+
+### What the anchor actually did
+
+**These numbers replace an earlier set, and the reason is finding #1 of the review
+that produced them**: `GEAR_SLOTS` omitted simc's singular slot aliases, so
+`shoulder=` and `wrist=` were never read and never anchored while `describe()`
+reported success on the slots it did see. Every figure that used to sit here was
+taken on kits whose shoulder and wrist had not moved. Do not copy figures across from
+an older revision of this file.
+
+**34 of MID2's 40 damage builds**, 28 shipped and 6 disabled, patchwerk one target,
+1000 deterministic iterations, simc 69a46e1, median cell error **0.192%**
+(0.109-0.360):
+
+```
+                    shipped range          disabled range         overlap
+as-is        173,888 .. 268,271     116,716 .. 134,319     none
+anchored     189,121 .. 253,475     189,477 .. 215,808     yes
+```
+
+The as-is row reproduces the documented failure exactly -- a clean separation with no
+overlap, which is never a balance finding. Anchored, **all six disabled builds land
+inside the shipped range**, the lowest of them (Devourer, 189,477) sitting 0.19%
+*above* the shipped floor where it sat 32.9% below it before.
+
+**Six builds are not in that count and each is a different reason.** Both Havoc and
+both Warrior builds are refused by simc's own talent parse ("Node 91020 is not a
+choice node but has index selection", "Selected node 110203 entry 136735 is not
+available to player's spec"), which `specindex.refused_profiles` already predicts
+offline. Both Windwalker builds return **0.000 DPS from any profileset at all**,
+including an inert one carrying no options -- their base actor sims fine at ~118k, so
+this is a property of that profile at this revision and not of the anchor. It is
+unexplained; the honest thing is that they are excluded and named.
+
+What the alias fix itself was worth, isolated on the one measurable build that uses
+those spellings -- Feral Druid, same run conditions, the pre-fix reader emulated by
+dropping the two aliased lines:
+
+```
+as-is                              133,099.1
+anchored, shoulder and wrist unread 194,205.5   +45.91%
+anchored, whole kit                 201,323.2   +51.26%
+                                    the fix alone: +3.67%
+```
+
+That **+45.91%** is exactly the bottom of the range this file used to publish for the
+disabled builds, which is the cleanest possible confirmation of what the old figures
+were measuring: a kit with two slots still 45-49 item levels behind the rest of it.
+Havoc Aldrachi Reaver is the worse case and cannot be simulated at all -- its
+shoulder stays at item level 723 and its wrist at 720 against an anchor of 334 -- so
+the description is the only evidence available there, and it now says 16 slots
+normalized rather than 14.
+
+Per-build ranges, same run:
+
+```
+shipped, wearing the set     -7.07 .. -3.01%
+shipped, no set (Arcane, Frost Mage)   +6.79 .. +10.11%
+disabled (289 -> 334 plus the set)    +49.64 .. +73.22%
+```
+
+Three things to carry away:
+
+- **The anchor does not "barely move" a shipped profile.** It costs up to 7.07% on a
+  build that already wears its set, because the shipped kits average 337-339 and the
+  anchor is 334. That is the price of comparability and it is the same price for
+  every build, which is the point -- but do not quote an anchored number beside a
+  published one.
+- **The builds that gain are the ones with no set**, and at this revision that is
+  both Arcane and both Frost Mage builds. Frost Mage gains 6.79-8.76% here and would
+  gain nothing at 22b442e, where simc has since given it the set. The anchor is
+  reading the tier, so it moves when the tier moves.
+- **The ranking order among the shipped builds is not preserved**, and the earlier
+  claim here that it was came from looking at eight builds. Over all 28, **20 change
+  rank** -- Frost Death Knight falls from 17th to 20th, Elemental Stormbringer rises
+  from 10th to 7th. What does hold at both ends is the extremes: Subtlety Rogue is
+  top as-is and anchored, Frost Mage Frostfire is bottom of both. And the gaps close
+  where the set was the difference: Arcane's deficit against the top goes from
+  -34.18% to -23.86%. So an anchored ranking is a different ranking, which is the
+  strongest form of "do not quote an anchored number beside a published one".
+
+### Two refusals
+
+- **A tier whose shipped profiles state no item level anywhere gets no anchor.**
+  Some profiles being silent is ordinary: six of MID2's twenty-eight shipped damage
+  profiles state none on any gear line -- both Assassination Rogue builds, both
+  Elemental and both Enhancement Shaman builds -- and simc resolves their gear from
+  the bonus ids regardless. Every profile being silent is a different thing: the tier
+  cannot then say what comparable means, and inventing a number would put every
+  computed build at a level nobody chose.
+- **A set token without simc's item table gets no anchor either.** The token says
+  which set exists; it does not say which state is comparable, and those two answers
+  are 13.13% apart on a real MID2 build. `derive_target` names the fix
+  (`item_sets=parse_item_sets(simc_dir)`) rather than defaulting.
+
+### What this does not do
+
+It normalizes item level and set state. It does **not** normalize the items
+themselves -- two kits anchored to one target still differ where the items differ,
+which is correct for "make this player's kit comparable" and is *not* a gear
+optimisation. Race, consumables, level and the action list are untouched: those are
+not gear, and a module called "gear anchor" that quietly reset a race would be the
+worst kind of surprise.
+
+And nothing here is wired into the published dataset yet. `wowdps gear-anchor` prints
+it; no sweep consumes it. That is deliberate -- an anchored number is not comparable
+to a published one (see the -3.65 to -6.17% above), so whatever consumes this has to
+publish the anchor's description beside the build, which `GearAnchor.to_json` exists
+for.
+
+## Tier sets and Power Infusion, as differences rather than levels
+
+`buffsweep.py` + `wowdps buffs` -> `<tier>/buffs.json`, merged by
+`dataset.merge_buff_shards`, drawn by `views/BuffsView.tsx`.
+
+Both are profileset sweeps against the spec's *own* profile, so both are exact
+differences: two profilesets with identical options return bit-identical DPS, and
+the base actor is deliberately not the reference because it runs a different
+iteration count and lands ~0.09% away. Same rule as the gear sweep.
+
+`item_set_bonus.inc` carries every set. **MID2 ships 13, one per class, all sharing
+the option token `midnight_season_2`**, so the class join is needed only for the
+set's name.
+
+Three decisions the numbers rest on:
+
+- **The set-less variant is an override**, `set_bonus=..._2pc=0` passed explicitly.
+  A spec whose shipped profile already wears the set would otherwise have it in the
+  baseline and every gain would come out near zero.
+- **The four-piece is reported over the two-piece.** Nobody chooses between four
+  pieces and none; they choose whether the third and fourth are worth their slots.
+- **Power Infusion is a usage pattern, not a count.**
+  `external_buffs.power_infusion` takes a list of *times*. One cast at the pull
+  would flatter a spec whose own cooldowns line up there, so the default is on
+  cooldown from the pull -- (0, 120, 240) for a 300s fight -- and the seconds are
+  published beside the number.
+
+### The season boundary: three states, not a gain
+
+Keeping last season's four-piece is the incumbent option, so "what is the new set
+worth" is never the question on its own. `crossover_variants` runs the three states
+a player actually chooses between:
+
+```
+prev4   last season's 2 + 4          keep what you have
+split   last season's 2 + this season's 2
+cur4    this season's 2 + 4          fully changed over
+```
+
+`split` is the state a player passes *through* -- the first two new pieces replace
+the old four-piece before the third and fourth arrive -- and whether that step is an
+upgrade or a loss is what the whole boundary turns on.
+
+Published as **levels rather than gains**, because the three are alternatives to
+each other and there is no natural baseline among them; which one is the reference
+is exactly the question. The three ratios a reader wants
+(`splitOverPreviousFour`, `currentFourOverSplit`, `currentFourOverPreviousFour`)
+sit beside them.
+
+Every set token is written in all three variants, zeroes included: a profile
+already wearing either set would otherwise carry it into a variant meant to be
+without it. Same reason the single-season sweep overrides rather than trusts the
+shipped profile. The previous tier is resolved through `profiles.previous_tier`, so
+this keeps meaning "last season" after the next one lands, and a first tier
+publishes `crossover: null` rather than a comparison against nothing.
+
+### What the boundary sweep found
+
+MID2 against MID1, one target, 3000 deterministic iterations, all 28 builds, median
+error 0.056%. Both halves of the answer are things a single "the new set is worth
+X%" number cannot say.
+
+**Changing over is worth between nothing and 11.9%.** Outlaw Rogue +11.92%,
+Arcane Sunfury +10.17%, Elemental Stormbringer +10.11% at the top; **Beast Mastery
+Hunter -0.03%**, which is inside its own tie band and therefore *no reason to change
+sets at all*. A spread that wide over one decision is the argument for publishing it
+per build rather than as a tier headline.
+
+**The split step is a real loss on two builds**: Beast Mastery -0.72% and Subtlety
+Rogue -0.18%, both outside the tie band. Those are the builds that get *worse* when
+the first two new pieces replace the old four-piece, and stay worse until the third
+and fourth drop -- which is exactly the state the middle column exists to show and
+the one a gain-over-nothing number hides completely.
+
+**Front-loaded and back-loaded survive the boundary, and they reverse the advice.**
+Ten of 28 get more from the first two new pieces than from the last two. Arcane
+Sunfury takes +8.02% then +1.99%: swap the moment two pieces drop. Outlaw Rogue takes
++1.36% then +10.41%: the split is nearly pointless and only the finished set matters.
+Same total ballpark on neither, but the *sequence* is opposite, and it is what a
+player actually acts on during a changeover.
+
+Set and Power Infusion run as **two invocations**. Combined, Power Infusion would
+be measured on whichever set state the shipped profile carries, answering neither
+question.
+
+### What the first sweep found
+
+MID2, one target, 3000 deterministic iterations, all 26 builds, no errors.
+
+**Power Infusion spans 1.80% to 5.17%** -- Subtlety Rogue at the bottom, Elemental
+Shaman at the top, a factor of 2.9. That range is the answer to "who should the
+Priest press it on", and it is wide enough for the question to have one.
+
+**Tier sets span 5.96% to 23.19%** in total, and the split is the interesting half:
+
+```
+Arcane Mage (Sunfury)            2pc 14.76%   4pc  8.43%    front-loaded
+Elemental Shaman (Stormbringer)  2pc  5.24%   4pc 15.27%    back-loaded
+Subtlety Rogue (Deathstalker)    2pc  4.72%   4pc 15.51%    back-loaded
+Beast Mastery Hunter             2pc  1.65%   4pc  4.31%    small either way
+```
+
+Two builds land within 0.11 points of the same total by opposite routes. A single
+"the set is worth X%" would hide that completely, which is what the two-column
+split is for: back-loaded means the third and fourth pieces are the ones worth
+chasing, front-loaded means two is most of it.
+
+Absolute and relative are both published. A percentage alone hides that 1% on a
+600k build is worth more raid damage than 2% on a 300k one, which is the decision
+a raid leader is actually making.
 
 ## Loot sources, derived rather than asserted
 
@@ -450,6 +1374,12 @@ Three things it has to get right, all tested:
   is what keeps that out, and it is reported as `legacy` rather than dropped silently.
 - **Only gear lines count.** `id=` appears in other profile options too, and reading
   those would place items nobody wears.
+- **The slot list has to carry every alias simc accepts.** It did not: `_EQUIP_LINE`
+  listed `shoulder` and `wrist` where simc's shipped profiles write `shoulders=` and
+  `wrists=`, so `equipped_item_ids` matched 14 of MID2 Arcane Mage's 16 gear lines and
+  had been dropping two slots of every profile since it was written. Measured
+  2026-08-23; see "simc accepts two spellings of five slot names" in the harvest
+  section for the whole alias list and which side writes which.
 
 Two labels that are not the same thing, and the Fights view currently shows this:
 the *gear* side of MID2 is the upcoming tier, while the *fights* side is the raid
@@ -808,12 +1738,52 @@ but ships a spec's *default* build unnamed (`MID2_Death_Knight_Frost`), which us
 surface as a build with no hero tree -- which cannot exist. It has one; the name just
 did not say so.
 
-`herotrees.py` + `wowdps hero-trees` resolve it: run each unnamed profile for one
-iteration and read which hero-tree-gated abilities fired (the APL branches on
-`hero_tree.<slug>`, so only the taken tree produces damage and buffs). The result is
-written per tier to `data/hero_trees.json` and read back by `profiles.discover`.
-Detected from simc, not hand-typed, so a new tier needs a re-run and not an edit; a
-spec whose signatures are missing stays unnamed and the run says which.
+`herotrees.py` + `wowdps hero-trees` resolve it, and **the method changed on
+2026-08-22 because simc started shipping the table it needed.** The old one ran each
+unnamed profile for one iteration and read which hero-tree-gated abilities fired,
+against a hand-written table of ability slugs per spec. It worked, and it had the two
+costs a hand table always has: a compiled simc plus a simulation per profile, and an
+answer only for the eight specs somebody had typed signatures for. When simc shipped
+MID2 profiles for Balance Druid, Windwalker Monk and Outlaw Rogue, all three arrived
+as `Default` and **nothing in the pipeline could resolve them** -- which is exactly
+the regression the owner reported.
+
+The replacement is a pure join and needs **no binary, no simulation and no hand
+table**: a profile's talent hash decodes to exactly one sub-tree id
+(`talenttree.Loadout.sub_tree`, the SELECTION node), and
+`trait_data.inc`'s `__trait_sub_tree_data` names all 41 trees. So a sparse checkout
+of `engine/dbc/generated` plus `profiles` is the whole input, and it answers for
+every spec rather than for a maintained list.
+
+**Verified against the method it replaces**, simc `22b442e`, 2026-08-22: all five
+builds the signature detector had resolved for MID2 resolve identically -- Frost DK
+Deathbringer, Beast Mastery Pack Leader, Marksmanship and Survival Sentinel, Subtlety
+Deathstalker -- and the three it could not resolve at all come out Trickster (Outlaw),
+Elune's Chosen (Balance) and Shado-Pan (Windwalker). Two independent derivations
+agreeing five of five is the same check `talenttree`'s docstring rests on, run the
+other way round. Over MID2's 51 profiles (35 shipped plus 16 materialised) it names
+**47 and refuses 4**, and live and PTR give **identical** answers today.
+
+**"Identical today" is the whole of what that last clause promises**, and reading it
+as more cost a real bug. simc names the array `__trait_sub_tree_data` in the live
+file and `__ptr_trait_sub_tree_data` in the PTR one, and the first version of
+`parse_sub_tree_names` anchored on the live name -- so in PTR mode, which is the mode
+the current tier runs in, it found nothing, fell back to live, and logged that PTR
+ships no such table. False, and invisible, because the two tables' rows are
+byte-identical on 22b442e (only the array name and the build number above it differ,
+12.1.0.69382 against .69404). The moment they diverge a PTR-only tree comes back
+unnamed -- the `Default` regression, returned -- or a renamed tree publishes the
+stale live name. It matches the shared suffix now, exactly as `parse_spec_list` does
+for `class_spec_id`, and there is no fallback left to hide behind. Note the shape:
+there was a log line reporting the exact failure and nothing acted on it.
+
+It now names **every** build, not only the unnamed ones, because a profile name
+carries whatever abbreviation simc's file naming used and two of MID2's are not the
+tree's name: `SC` for Scalecommander and `Soulharvester` for Soul Harvester. Both are
+fixed on the site by this; the ids `evoker_devastation_sc` and
+`warlock_demonology_soulharvester` are untouched, so nothing that joins on a build id
+moves. A profile whose hash does not decode -- simc's two disabled Havoc builds, and
+15 of MID1's 51 -- stays on whatever its own name said and the run reports it.
 
 **The resolution feeds the *display*, never the id.** `SpecProfile.name_hero` is the
 suffix simc's profile name carried (None for an unnamed build) and the id is built
@@ -821,15 +1791,52 @@ from that -- `death_knight_frost_default` stays `death_knight_frost_default`, so
 fights, logs and talents keep joining on it. `hero_talent` carries the resolved tree
 (`Deathbringer`), which is what `displayName`, the `heroTalent` field and every icon
 use. The id names simc's build *slot*; `hero_talent` names the *tree* it plays; both
-are true and neither moves the joins. MID2's five unnamed builds resolve to
-Deathbringer (Frost DK), Pack Leader (BM), Sentinel (MM and Survival) and Deathstalker
-(Sub Rogue).
+are true and neither moves the joins. MID2's eight unnamed builds resolve to
+Deathbringer (Frost DK), Pack Leader (BM), Sentinel (MM and Survival), Deathstalker
+(Sub Rogue), Trickster (Outlaw), Elune's Chosen (Balance) and Shado-Pan (Windwalker).
 
-`heroTreeIconUrl` returns a real atlas element for every one of the 39 trees, so once
-the tree is named the icon appears in every table -- the missing-icon rows were the
-unnamed builds, not a gap in the map. `heroTalent === 'Default'` therefore only
-appears now for a tier that has not been through `wowdps hero-trees` yet; the pill and
-prose still handle it as a fallback but it is no longer expected.
+**It has to be re-run, and until 2026-08-22 nothing re-ran it.** `hero_trees.json`
+was written once on 2026-08-16 and `sims.yml` never invoked the command, so the three
+profiles simc shipped afterwards sat as `Default` until somebody looked. It is in the
+nightly now, in two places and for two reasons: **in each sim shard**, after the
+disabled profiles are materialised and before `wowdps build`, because every shard
+reads the file through `profiles.discover` and a build materialised later would
+otherwise not be in the map; and **in the publish job**, because that is the job that
+commits and because `spec-index` reads the names back. The trait table rides in the
+simc bundle (`bundle/engine/dbc/generated/trait_data*.inc`, 686 KB against a 30 MB
+binary) so a shard needs no second clone.
+
+Two things about that arrangement worth keeping:
+
+- **The publish job's simc checkout is pinned to the build job's revision.** It was an
+  unpinned `--depth 1` clone taken hours later, and simc merges through the night, so
+  `talent-trees`, `spec-index` and `hero-trees` could all describe a *newer* simc than
+  the spec files published beside them -- including a build the shards were never
+  handed. `git fetch --depth 1 origin <sha>` works against github.com (verified
+  2026-08-22 by fetching `22b442e` into a fresh shallow clone), and the step falls
+  back to HEAD **with a warning** rather than failing, because a one-revision drift is
+  a smaller harm than losing the night's simulations.
+- **`wowdps hero-trees` must not exit non-zero on "nothing resolved".** It runs in a
+  `for tier in ...; done` loop under `bash -e`, so a failure there aborts the publish
+  job *before the commit step* and discards the whole night -- over a file whose
+  absence costs only the canonical name. `--strict` is the gate for anyone who wants
+  one, and a tier simc no longer ships (a `tiers.json` entry outliving simc's profile
+  directory) is skipped rather than raised on, in `cmd_hero_trees` and in
+  `specindex.refused_profiles` alike.
+
+`heroTreeIconUrl` covers **40 of simc's 41 trees**, so once the tree is named the icon
+appears in every table -- the missing-icon rows were the unnamed builds, not a gap in
+the map. `heroTalent === 'Default'` therefore only appears now for a tier that has not
+been through `wowdps hero-trees` yet; the pill and prose still handle it as a fallback
+but it is no longer expected.
+
+The two Midnight Demon Hunter trees were the gap. **Annihilator was added by
+measurement** (`talents-heroclass-demonhunter-annihilator` returns 200 at 16,742
+bytes, checked 2026-08-22 against `felscarred` on the same run). **Void-Scarred is
+deliberately still absent**: eleven names a pattern suggests -- `voidscarred`,
+`void-scarred`, `thevoidscarred` and eight more -- all 404, and this file's own rule
+says the element name is `TraitSubTree.UiTextureAtlasElementID` and must not be
+guessed. That build wears the lettered tile, which is what the tile is for.
 
 ### Boss icons come from Warcraft Logs, and that is not laziness
 
@@ -897,6 +1904,73 @@ same class and the same spec. The hero-tree emblem, its name, and `buildDash` on
 line chart are what separate them. Never invent a second colour for the second
 build.
 
+## The spec picker draws the whole game, and the shape is the data
+
+`specindex.py` + `wowdps spec-index` + `components/ClassSpecPicker.tsx`.
+
+The picker shows all thirteen classes and all forty specs, not the tier's build
+list, for the same reason the coverage panel exists: a spec that is absent has to
+*read* as absent rather than as a bad result. Four sources, one question each:
+
+| What | From |
+|---|---|
+| class -> its specs, in the game's order | `sc_spec_list.inc` |
+| spec name -> canonical spec id | `sc_specialization_data.inc` |
+| role, and whether this tier ships a profile | `profiles/<tier>/*.simc`, the `role=` line |
+| which hero trees a spec can play | `trait_data.inc`, the hero nodes' `sub_tree` + `id_spec` |
+
+Measured on 2026-08-16: 13 classes, 40 specs, **26 damage, 6 tank, 8 unknown**,
+41 hero trees. Midnight's new Demon Hunter spec (Devourer, 1480) is in it without
+an edit, which is the argument against a hand-written table stated as a fact.
+
+### Geometry that is not decoration
+
+Each hero tree is available to **exactly two specs** of its class, and each spec to
+exactly two trees, so a class's specs and trees form a cycle. The picker therefore
+puts specs on a polygon's vertices -- a triangle for three, a square for Druid's
+four -- and each tree on the **edge between the two specs that share it**. Verified
+against the trait table: Warrior's Arms=[60,62], Fury=[60,61], Protection=[61,62]
+closes exactly. Any other layout would hide the one structural fact a reader needs
+when choosing between builds.
+
+`vertices()` takes the count rather than branching on 3 and 4, so a class gaining a
+spec needs no edit.
+
+### The two things simc does not carry, and how each is handled
+
+- **Role.** There is no role column in `sc_specialization_data.inc` and no role
+  table under `generated/` (checked). It comes from a profile's `role=` line, so a
+  spec no tier has ever shipped is `unknown` -- and since simc ships **no healing
+  profiles at all**, every healer lands there. The picker greys it and says "simc
+  ships no profile for this spec in any season" rather than claiming it is a
+  healer, which is a fact this project cannot derive. Tanks *are* named, because
+  simc profiles them.
+- **Hero tree names -- this absence has ended, and the note it replaces is worth
+  keeping.** The SELECTION rows that identify a tree still carry the literal string
+  `"0"`, so the name used to come from a join: a build's decoded loadout gives the
+  sub-tree id, and the build knows its tree name from `herotrees`. That named **24 of
+  41 trees for MID2** and left every tree belonging to a spec nobody profiles blank
+  -- which is precisely the set a coverage panel has to be able to name. **As of simc
+  `22b442e`, checked 2026-08-22**, simc ships the `trait_sub_tree_data` array in the
+  same generated file (id, name, class, all 41), so names are derived like everything
+  else and the join survives only as a cross-check: a build calling a tree something
+  else is logged and the table wins. Measured that day, **41 of 41 named**. That is a
+  dated fact in both directions -- the absence it replaces was recorded here without a
+  date and read as permanent for months.
+
+  **The PTR file names the array `__ptr_trait_sub_tree_data`**, and this project reads
+  the PTR table for the current tier (`manifest.simc.ptr` is true on simc's Midnight
+  branch). Match the shared suffix, the way `parse_spec_list` does for
+  `class_spec_id`; anchoring on the live name reads the wrong file's names and cannot
+  tell you it did.
+
+### Four states, all derived
+
+`selectable` (profile this tier and builds in the dataset), `absent` (profiled in
+another tier, not this one -- lightly dimmed, expected back), `never` (no profile
+in any tier), and `tank`. The two dim levels carry the distinction that matters:
+"not this season" and "never simulated" are different sentences.
+
 ## The talent tree, decoded from simc and nothing else
 
 `talenttree.py` + `wowdps talent-trees` + `components/TalentTree.tsx`. The obvious
@@ -944,6 +2018,298 @@ Against MID2's 26 real hashes, with no API call:
   right. simc models this the same way with `player_sub_trees`.
 - **`id_spec` is a 4-array padded with zeros.** Keep the zeros and "no spec
   restriction" stops being expressible as an empty tuple.
+
+### Two things it now answers that it did not
+
+- **What a hero tree is called.** `parse_sub_tree_names` reads the
+  `trait_sub_tree_data` array -- `{id, "name", class id}` for all 41 trees.
+
+  **This is a dated fact, and its predecessor was one too.** Until some point between
+  2026-08-16 and **2026-08-22**, when it was first observed here on simc `22b442e`,
+  simc shipped no such table, and *that* absence was asserted in three places in this
+  file as though it were permanent -- "hero tree names are not in simc's data at all",
+  "`TraitSubTree` is not shipped", "the same absence as item source". Each of those is
+  now corrected in place with the date it stopped being true. Write every claim about
+  what simc's data does *not* contain with the revision and the day it was checked;
+  an undated absence is what let the 2026-08-15 coverage figure sit here misleading
+  people for a week. It is the whole reason `herotrees` no longer needs a compiled
+  simc or a hand-written table.
+- **Whether simc will refuse a profile, and at which node.** `spec_rule_violation`
+  applies simc's own rule -- a non-hero node whose `id_spec` excludes the player's
+  spec -- and returns simc's own wording. Together with the `TalentDecodeError` a
+  choice-index overflow raises, that covers the two phrasings a *stale profile*
+  produces, **decided offline** -- but see the refusal table below: those two are not
+  all of them, and this file said they were. Checked against simc's own 2026-08-22 CI
+  output:
+  it names node 91020 for Havoc Aldrachi Reaver and node 110203 entry 136735 for Arms
+  Warrior, and this reproduces both ids exactly. Control: all 35 shipped MID2
+  profiles pass, so it is not simply refusing everything. `wowdps check-profiles`
+  remains the version that asks simc itself; this is the version a run with no binary
+  can afford, and it is what puts a *reason* on the coverage panel.
+
+### simc's refusals, all eleven, read out of its parser
+
+**"Both of simc's two phrasings" was wrong**, and it is worth naming the shape of the
+error rather than just fixing the count. Two phrasings are what a *stale shipped
+profile* produces, which is the only thing anybody had generated when that sentence was
+written; they are not what `parse_traits_hash` can say. A hash this project *builds*
+can reach nine more. Read out of `engine/player/player.cpp` at simc **`69a46e1`**, on
+**2026-08-23**, with the exact punctuation, because these are matched against a run's
+stderr:
+
+| # | wording | when |
+|---|---|---|
+| 1 | `Invalid character '{}' found.` | outside the base64 alphabet |
+| 2 | `Not enough characters.` | shorter than the 152-bit header |
+| 3 | `Invalid serialization version.` | version is not 2 |
+| 4 | `Wrong specialization.` | header spec id is not the player's |
+| 5 | `Selected node {} entry {} is not available to player's spec.` | a non-hero node another spec owns |
+| 6 | `Hero tree selection node {} entry {} is not for the player's spec, ignoring.` | **the selection node of a different spec** |
+| 7 | `Non-choice node {} has multiple entries.` | a partial rank on a multi-entry non-tiered node |
+| 8 | `{} ranks selected for node {}, {} ranks max.` | rank above `max_ranks` |
+| 9 | `Partial rank for node {} but all {} ranks are allocated.` | the partial bit with nothing partial about it |
+| 10 | `Node {} is not a choice node but has index selection.` | the choice bit on a plain node |
+| 11 | `Index {} for choice node {} out of bounds.` | choice index past the last entry |
+
+Three things in that table are traps.
+
+**Number 6 says "ignoring" and does not ignore.** `do_error` is
+`throw std::invalid_argument`, so every one of these aborts the parse and the
+`throwaway = true` branch below it is unreachable. Measured, not inferred: a hash
+carrying another spec's selection node exits **81** with exactly that line. It is the
+one a hero-tree swap hits, because the obvious way to move a build onto another tree is
+to copy the hero records out of a build that already plays it -- and those records name
+the *donor's* selection node. A class has one selection node **per spec**: Rogue's are
+99842 (Subtlety, 261), 99843 (Outlaw, 260) and 99844 (Assassination, 259), and all 80
+selection-node entries in the table carry exactly one spec id. `swap_hero_tree` routes
+through `selection_node_for_spec` for this reason, and the test that pins it uses a
+fixture where the *wrong* node sorts first -- the first version of that test passed
+against a broken implementation because the right node happened to sort first, which is
+the same accident the real Rogue data does not grant you.
+
+**Number 5 tests the node's first entry, not the chosen one.** simc reads
+`node.front().first` before it has read the choice index, so a choice node is judged on
+entry 0 whichever entry the loadout ends up on. `spec_rule_violation` tests the *chosen*
+entry instead. The two agree on everything shipped and would disagree on a choice node
+whose entries differ in spec; left alone rather than changed in passing, and recorded
+here so nobody re-derives it as a bug.
+
+**Number 5's wording here is missing simc's final full stop.** simc's format string ends
+`player's spec.`; `spec_rule_violation` returns it without the period, and a test pins
+the shorter form. Not corrected, because the string is published in `spec-index.json`
+and rewriting it churns data for one character -- but it means the published reason is
+not byte-comparable with simc's own output. `talentedit._hash_findings` uses simc's
+exact wording, so the two differ by that period until somebody decides.
+
+### The encoder, and what round-trips
+
+`encode_loadout` in `talenttree.py` is the inverse of `decode_loadout`; `talentedit.py`
+is the layer above it -- the mutations a talent search makes and the legality check that
+says whether the result is a build a player could have.
+
+**The bar is byte-identity, and it is met.** Measured on simc `69a46e1`, 2026-08-23,
+against every talent hash in both tiers: **72 of 72 decodable hashes come back byte for
+byte** -- all 35 MID2 profiles and 37 of MID1's 50. The other 13 MID1 hashes raise
+`TalentDecodeError` and so have no round trip to test; they are the tier rot this file
+already documents, a stored hash that no longer fits the tree, and the desync surfaces
+as a choice index pointing past a single-entry node. The check lives in
+`test_every_shipped_profile_round_trips_byte_identically` and is skipped unless
+`WOWDPS_SIMC_DIR` names a checkout, because the 686 KB trait table is not committed.
+
+Four wire facts the encoder cannot derive. **Two readings of the corpus exist and they
+differ by an order of magnitude, so each figure says which one produced it** -- a
+*complete* decode covers only the 72 hashes that decode, while reading all 85 means
+reading the 13 rotted MID1 ones past the point `decode_loadout` raises, where the stream
+has lost sync and is describing itself. Both are below, measured on 69a46e1, 2026-08-23:
+
+- **The purchased bit is not "rank > 1".** A node the game *grants* is selected without
+  being purchased and sits at one rank, which is where most single-rank talents sit too.
+  **232 of the 5,433 selected records** in the 72 decodable profiles are granted, spread
+  over every one of them (277 of 6,422 reading all 85). Writing the bit anyway adds a
+  partial-rank bit and a choice bit behind it and desynchronises everything after.
+- **The choice bit is not "is this a choice node".** Ten choice nodes written *without*
+  the bit and three plain nodes written *with* it, all in MID1, over the decodable
+  corpus -- 78 and 89 reading all 85, which is mostly the desynced streams and not
+  evidence about profiles. Thirteen real cases is enough: the encoder is told, never
+  infers, and `Selection.choice_index` is `None` when no bit was written.
+- **The partial bit is derived from the rank, except when it disagrees.** simc's
+  exporter writes `rank == max_rank -> 0`, so `partial=None` (derive) is right for
+  anything built by hand. One MID1 hash sets the bit on a node holding all its ranks --
+  refusal 9 above -- and it is one of the 13, so that record is only visible past the
+  raise. Reproducing it still needs the recorded bit.
+- **The 128-bit tree hash is zeros.** simc's own exporter does `put_bit( tree_bits, 0 )`,
+  commented "0-filled to bypass validation, as GetTreeHash() is unavailable externally".
+  Zero in all 85 hashes, so writing zeros loses nothing.
+
+The corrected figures are the ones a reader gets by re-running the corpus test's own
+route (`profiles.discover` plus `decode_loadout`); the larger pair needs a decoder that
+ignores the choice-index bound, which nothing here ships. That is the whole reason for
+stating the method: the numbers had been carried as "the 85 shipped profiles", which no
+complete decode can produce, and a re-measurement would have read as data that moved.
+
+**Framing is the fifth, and it is not padding pedantry.** The format has no length
+field, so a string can be longer or shorter than the shortest one carrying its loadout,
+and both occur: **three MID2 profiles -- all three Hunters -- carry a whole extra
+character of zeros** (the exporter knew nodes simc's table does not), and one MID1
+profile ends one bit *before* its node stream does, relying on the reader returning
+zeros. `Framing` records the source's length and tail and the encoder replays them;
+without it those four are the only hashes that do not round-trip. The replay trims back
+to the source length **only when the trimmed bits are zero**, so a mutation that selects
+a node late in the tree gets a longer string rather than a silently truncated one.
+
+### The mutation whose hash is the build it started from
+
+**The worst failure available to this module, and it is not a crash.** A node the game
+*grants* is written selected-but-not-purchased and its record **ends there**: the format
+writes it no rank and no choice index, and simc reads it back as the node's **first
+entry at one rank**. So a granted choice node flipped to its other entry encoded to a
+string byte-identical to the unmutated build's. `decode` read the original entry back,
+`validate_loadout` returned legal with zero findings, and a talent search would have
+attributed the base build's DPS to a variant it never simulated. Nothing downstream
+could see it, because there is nothing wrong with the hash.
+
+Both layers refuse it now -- `_selection` will not build a granted selection carrying an
+entry or a rank, `encode_loadout` will not write one -- and the escape is to *purchase*
+the node, which is a different edit and spends a point. The property is stated as a test
+over 600 seeded mutations rather than examples, because every example anybody wrote
+passed: mutate, encode, decode, assert the round trip takes what the mutant takes and
+that a mutant taking something different encodes differently.
+
+**No shipped profile is in this state**, which is why nothing caught it: over both tiers
+232 selected records are granted and **none of them is a multi-entry node**. The
+end-to-end run below constructs one, because a state simc accepts and no profile happens
+to occupy is exactly where a search goes first.
+
+The same rule covers the smaller cases: `encode_loadout` bounds the choice index against
+the node's entry count (the bound `decode_loadout` already enforced inbound), and
+`_with` no longer carries the donor string's `spare_bits` onto a mutation. `framing` *is*
+carried, deliberately -- the encoder replays it and that is what makes an unchanged build
+come back byte-identical -- and the two fields look alike and are opposite.
+
+**A rank move preserves each tree's total, asserted rather than trusted.** `move_rank`
+broke that promise two ways at once: on the diagonal (`source == target`) it read the
+target's rank before deselecting the source and the tree *gained* points, and across two
+hero sub-trees the same-tree guard passed on `tree_index` while the rank landed outside
+`in_tree(TREE_HERO)` and a point was *destroyed*. Both produced builds `validate_loadout`
+called legal, and the budget check cannot catch the first because `derive_point_budget`
+is a ceiling from the observed maximum -- 35 class points becoming 36 clears it. Both are
+now refused by name, and `_totals_preserved` asserts the arithmetic afterwards: the named
+guards are a list of the cases somebody thought of.
+
+### What the validator checks, because simc does not
+
+simc validates the eleven things above and **nothing else** -- no unlock edges, no point
+gates, no point budget. It will simulate for ten minutes a build that cannot exist. So
+`validate_loadout` splits the question **three** ways, and the split is the honesty rule
+rather than taxonomy:
+
+| flag | claim | whose words the `message` is |
+|---|---|---|
+| `simc_refuses` | simc will not load this hash | **simc's**, punctuation included, so it can be grepped out of a run's stderr |
+| `unencodable` | `encode_loadout` will not write it, so simc is never asked | **ours** -- there is no simc line to quote |
+| neither | a build simc runs happily and a player could not have | ours |
+
+They are independent, not exclusive: a choice index past the node's last entry is both.
+The two-way split shipped three findings carrying `simc_refuses` with wordings simc
+**never emits** -- "Node N is not a node of this class." among them, which
+`parse_traits_hash` cannot say at all because `generate_tree_nodes` hands it the class's
+own nodes. A caller matching real stderr against the prediction then finds nothing and
+cannot tell its own misprediction from a simc version change.
+
+Two more things the validator has to say and did not. The **serialization version** is
+checked: it is the cheapest of the eleven to predict and the only one this encoder can
+introduce by itself, and a `Loadout(version=1, ...)` produced a well-formed hash that
+`validate_loadout` called legal. And a **rank the hash never carries** -- an over-max
+rank with the partial bit clear -- is reported once, as `rank_not_written`, and is *not*
+a simc refusal: simc reads a legal build at full rank and refuses nothing, so a search
+skipping `simc_refusals` was discarding builds simc accepts.
+
+**The hero sub-tree can be indeterminate, and that is not the same as legal.**
+`Loadout.in_tree(TREE_HERO)` narrows hero nodes to the tree the SELECTION node names and
+falls back to keeping *everything* when no node names one, or two disagree. Right for the
+tree view, wrong for a gate or a budget, which then measure a spend pooled from two
+trees. Measured on `MID2_Rogue_Outlaw`: dropping its selection node takes the hero spend
+from **14 to 15**, pooled over sub-trees 51 and 52 -- the build carries a node the
+narrowing was correctly excluding. Neither check can say which tree it should have used
+and neither is worth refusing over (a build with no selection node is an intermediate
+state of a hero swap), so it goes in `Validation.unchecked` beside the unlock edges.
+
+**`req_points` was parsed all along and never read.** Column 6 of `trait_data.inc`,
+values 0/1/8/20/23 in MID2. Run over the 35 shipped MID2 profiles: 1,614 selections sit
+behind a non-zero gate and exactly **2** violate it -- both `Rune Mastery` (gate 23) in
+the two Frost Death Knight profiles that spend **10** class points. Those are the same
+two builds `_THIN_CLASS_TREE` flags by a completely different route, so the gate check
+reproduces a known finding rather than inventing one, and the other 33 profiles pass.
+Counting the tree's spend *including* the gated node is the weaker of the two readings;
+both were measured and both flag the same two builds, so the weaker one is taken because
+it under-claims.
+
+**Point budgets are derived, never typed.** `derive_point_budget` takes the largest
+spend observed in builds somebody trusts. Over the 35 shipped MID2 profiles that is
+**37 class / 34 spec / 14 hero** (class: 35 on 27 builds, 36 on 4, 37 on 2, 10 on 2;
+spec: 34 on all 35; hero: 14 on 33, 11 on 1, 12 on 1). It is a ceiling, deliberately not
+a floor -- the minimum would enshrine the two 10-point Frost Death Knight trees as the
+rule.
+
+**Unlock edges are absent and are reported as absent.** Checked on simc `69a46e1` on
+**2026-08-23**: `engine/dbc/generated/` ships three trait arrays -- `__trait_data_data`,
+`__trait_definition_effect_data` and `__trait_sub_tree_data` -- and no edge table, and
+`trait_data_t` in `engine/dbc/trait_data.hpp` carries no edge field. That is why the
+tree is drawn without connector lines. **The date is not decoration**: this file's own
+rule says an absence in simc's data is written with the revision and the day it was
+checked, and it records having been wrong three times about `trait_sub_tree_data`
+because nobody dated it.
+
+The absence has the same *shape* as the item-source one, one level further in, and that
+is the thing to re-check rather than the sentence above: the DB2 table exists and simc's
+**extraction toolchain knows its schema** -- `dbc_extract3/formats/12.1.0.68209.json`
+declares `TraitEdge` with `id_left_trait_node` / `id_right_trait_node`, and
+`dbc_extract3/dbc/__init__.py` names it -- but nothing generates it into the shipped
+data. So a simc release could start shipping edges without any announcement, exactly as
+it started shipping hero tree names between 2026-08-16 and 2026-08-22. Re-check
+`engine/dbc/generated/` before believing this paragraph.
+
+The sibling `wtt-backend` has them
+from Blizzard's talent-tree API (`TalentTree.tree_data`, per-node `unlocks`), but the
+only copy reachable as a *file* rather than a live credentialed call is
+`docs/api_structure/game_data_api/talent_api/talent_tree_nodes.json`: **one tree (786,
+Shaman) of thirteen classes, 209 nodes of which 30 carry unlocks, captured 2026-01-14**.
+Its node ids do join to simc's (183 of 209 are in simc's player-node set), so the join
+key is sound and this is a coverage problem, not a schema one. `UnlockEdges` is
+therefore shipped **unpopulated** and `Validation.unchecked` says so, because "no
+findings" and "nothing was looked at" are different answers and only one of them is
+honest about an unreachable capstone. Populating it is a mapping of node id to unlocked
+nodes plus a `source` string; nothing else changes.
+
+**Verified against simc end to end**, not only by unit test. Builds generated through
+these primitives from `MID2_Rogue_Outlaw`, each run as `simc PROFILE.simc talents=HASH
+iterations=1000 threads=4 deterministic=1` on simc 1210-01 (`69a46e1`), 2026-08-23:
+
+| case | validator | simc | DPS |
+|---|---|---|---|
+| base (unmutated) | legal | exit 0 | 256,698 |
+| node 90638 written as **granted** at entry 0 (Echoing Reprimand) | legal | exit 0 | 248,722 |
+| the same node **bought** at entry 0 -- the control | legal | exit 0 | 248,722 |
+| the same node **bought** at entry 1 (Forced Induction) | legal | exit 0 | **256,698** |
+| choice flip, node 90655 | legal | exit 0 | 244,636 |
+| rank move 90644 -> 90641 | legal | exit 0 | 243,924 |
+| deselect 90645, select 90643 | legal | exit 0 | 241,932 |
+| hero swap -> Fatebound, own selection node | legal | exit 0 | 197,838 |
+| hero swap via the **donor's** selection node | simc refuses | **exit 81** | -- |
+| gate breach: 12 class points under a 23 gate | illegal | exit 0 | 163,007 |
+
+Every build the validator called legal was accepted, and the refused one printed
+`Hero tree selection node 99844 entry 123375 is not for the player's spec, ignoring.` --
+**verbatim what the validator predicted**, punctuation included, and exit 81 rather than
+the "ignoring" the wording promises. The gate breach is a build no player could have,
+accepted and simulated, which is the whole argument for the validator existing.
+
+The four granted-node rows are the severe finding above, demonstrated: flipping that node
+is now **refused by the editor**, and the string the old encoder produced for the flip is
+byte-identical to the granted build's own hash -- checked in the run, not asserted. The
+control matters as much as the mutation: buying entry 0 changes the *record* and returns
+248,722 to the DPS, so the number moves with the entry and not with the purchased bit.
+Buying entry 1 gives a different hash, reads back as entry 112523, and returns 256,698.
 
 ### What is not drawn, and why
 
@@ -1007,6 +2373,624 @@ Two things that would otherwise bite:
   step therefore clones `--filter=blob:none --no-checkout --depth 400`, which is
   metadata only and takes seconds.
 
+## Harvesting the missing characters from Warcraft Logs
+
+`harvest.py` + `wowdps harvest-builds` + `.github/workflows/harvest-builds.yml`.
+
+The section below says the missing artefact for the nine unprofiled damage specs is a
+**character** -- gear plus talents somebody has signed off -- and that this project
+will not author one, because an invented profile would be our opinion published on a
+site whose whole claim is that its numbers come from simc. Top players already run
+good characters and Warcraft Logs exposes them, which turns "which of the billions of
+talent arrangements is good" into "rank what real players actually ran".
+
+### The three fields, and where they were read
+
+Read out of the published v2 schema as mirrored by three independent third-party
+clients on **2026-08-23** -- `ToppleTheNun/mchammer`, `svenliebig/wcl-blame`,
+`math280h/go-wcl` -- which agree word for word:
+
+| Field | On | What it gives |
+|---|---|---|
+| `talentImportCode(actorID: Int!): String` | `ReportFight` | *"The import/export code for a Retail Dragonflight talent build"* -- exactly what `talents=` consumes and `talenttree.decode_loadout` reads |
+| `playerDetails(fightIDs: [Int], ...): JSON` | `Report` | *"specs, talents, gear, etc. This data is not considered frozen"* -- untyped, read defensively |
+| `characterRankings` | `Encounter` | boss -> `(report code, fight id)`, already used by `fightprobe` |
+
+**Nothing here has been sent to the live service.** There were no Warcraft Logs
+credentials in the environment this was written in, so the first CI run is a schema
+check as much as a harvest -- the same position `fightprobe` and `lootsources` were in.
+What *was* checked offline: both new documents validate against all three mirrors
+(`graphql-core`), and so do three queries this repo has already run live
+(`RANKINGS_QUERY`, `REPORT_KILLS_QUERY`, `FIGHT_STRUCTURE_QUERY`), which is the control
+showing the mirrors are a fair judge.
+
+### Two queries per kill, not two per player
+
+The cost shape is the whole design. `playerDetails` returns **every player in the
+pull**, and every actor's talent code is fetched in **one** request by aliasing
+`talentImportCode` once per actor inside a single `fights` selection. So:
+
+```
+queries = 2 (bracketing rate-limit readings) + rankings pages + 2 per sampled kill
+```
+
+A sampled kill costs the same whether one spec is wanted out of it or twenty, which is
+what makes harvesting for nine missing specs affordable at all.
+
+**`--spec` does not only narrow the file, and reading it that way was a real gap.**
+Kills come from `characterRankings`, i.e. the top *overall* damage parses, and the
+specs this command exists for -- Havoc, Arms, Fury, Feral, Devourer -- are the ones
+least likely to be in a top guild's roster. A filter applied after the rows are built
+can only narrow what those kills happened to contain, so `--spec havoc_demon_hunter`
+over ten kills could come back with zero observations and an empty `specs` array with
+nothing saying why. It now asks `spec_rankings` for *that spec's* parses, which costs
+one extra ranking query per spec -- the cheap kind -- and nothing per kill.
+
+The claim decays silently -- move the talent fetch one loop deeper and it becomes one
+request per player, the sweep still works, and the cost goes up twentyfold with
+nothing to show for it. `test_the_sweep_runs_end_to_end_and_costs_two_report_queries_per_kill`
+asserts the exact call sequence for that reason.
+
+**What that costs in points is unmeasured and this code does not guess it.** Warcraft
+Logs publishes no cost formula; the repo's rule is to read `rateLimitData`. So
+`--probe` is a first-class mode and the **workflow's default**: one kill of one
+encounter, prints the payload shapes and what the counter did, writes nothing. A
+counter that did not move is reported as **UNMEASURED**, never as zero -- the exact
+mistake that shipped here once. A per-kill figure, when one exists, is labelled
+`(measured)` and anything multiplied out of it is labelled `EXTRAPOLATION`.
+
+### The gear slot is derived, never read off the array index
+
+Warcraft Logs hands gear back as a **positional array whose meaning is stated nowhere
+in its schema**. A table saying "index 12 is the first trinket" would be an assertion
+about somebody else's payload, and the failure mode is the quiet one: a ring published
+as a neck still looks like a plausible row.
+
+An item's slot is a property of the item and simc already ships it, so
+`equipment.inventory_types` reads `item_data.inc` and the index is kept only as
+evidence. Measured on simc `22b442e`: **115,470 items parsed in 2.2 s**, and against
+the journal-derived pools in `gear_pools.json` -- **2,885 distinct item ids, zero
+disagreements** (1,253 trinkets to `trinket`, 707 necks to `neck`, 925 fingers to
+`finger`). An item simc has never heard of gets **no slot** and is published in
+`coverage.itemsWithoutASlot` rather than guessed at.
+
+The one thing the item table genuinely cannot answer is *which* of two interchangeable
+items goes in the first socket -- which ring is `finger1`, which of a dual-wielder's
+two one-handers is the main hand. That is not a property of either item, so those are
+settled by order of appearance, which is the only orderable fact available.
+
+**The hands are two sockets and were one.** Most modern one-handers are
+`INVTYPE_WEAPON` (13) for *both* copies a character carries, so a table mapping an
+inventory type to a single option name emitted `main_hand=` twice and the second
+overwrote the first in the profile -- a Rogue, Havoc, Fury, Enhancement or Frost DK
+build published wearing its off-hand as its main hand, which is exactly the "a ring
+published as a neck still looks plausible" failure this design is for. 15/17/21/26
+collapsed the same way. `INVENTORY_TYPE_SLOTS` therefore maps a type to the *sockets*
+it can occupy and `resolve_slots` allocates: constrained items first (a shield or a
+main-hand-only weapon names one socket; a one-hander names two, and a two-hander names
+two because Fury carries two), stable order within a freedom class, and a third weapon
+is reported as unplaced rather than overwriting a hand.
+
+### simc accepts two spellings of five slot names, and this repo has used both
+
+Measured **2026-08-23** against simc's `midnight` branch, because two modules here got
+this wrong in opposite directions within a day of each other:
+
+- `engine/player/player.cpp:13276-13286` registers **both** spellings of five slots:
+  `shoulders` and `shoulder`, `wrists` and `wrist`, `hands`/`hand`, `legs`/`leg`,
+  `feet`/`foot` -- plus `ring1`/`ring2` beside `finger1`/`finger2`. simc rejects
+  neither.
+- Every shipped MID2 profile writes the **plural**: `shoulders=ornaments_of_the_
+  eternal_coil,...`, `wrists=martyrs_bindings,...`, checked in five class profiles.
+
+So the rule is: **a reader accepts every alias, an emitter writes the one simc ships.**
+Both halves had been got wrong. `gearpool._EQUIP_LINE` listed only the singular and
+therefore matched **14 of the 16** gear lines of `MID2_Mage_Arcane.simc`, silently
+dropping every profile's shoulders and wrists from `equipped_item_ids` -- which is the
+authority for which raid a tier belongs to. And a slot table that omits the singular
+aliases cannot read a hand-written profile that uses them. Neither failure is loud:
+one under-collects and one mis-reads, and both produce a plausible-looking result.
+
+The emitted simc line carries `ilevel`, `gem_id` and `enchant_id` and **not** bonus
+ids. That split is this file's own measurement applied, not a style choice: bonus ids
+are inert for rings and trinkets alike, while the enchant is worth twelve times a ten
+item level step.
+
+### What a harvested build is evidence of
+
+**That a real player killed that boss at that difficulty with it.** Nothing more. Four
+things travel with every row so the claim cannot be read as larger than it is: the
+encounter, the difficulty, the date range of the sampled kills, and the report code
+plus fight id so any row can be re-opened. `characterRankings` holds **ranked parses
+only** -- a privately logged kill is invisible at any depth, which is Warcraft Logs'
+rule and not a bound of this code -- and that sentence is written into the document
+rather than left to be rediscovered.
+
+**One difficulty per run, and a foreign one is a refusal rather than a filter.** The
+rankings query is already scoped, so a fight arriving with another difficulty means the
+scoping did not hold; dropping it quietly would hide that while still producing a
+plausible file. A fight stating *no* difficulty is allowed through -- unknown is not
+the same as wrong, the same three-way rule `firstkills.kills_from_report` uses.
+
+**Character and server names are never collected.** The artefact is a build, not a
+person; report + fight + actor id identifies the observation completely. They are
+dropped at extraction rather than filtered at publication, so they never reach disk.
+
+### Dedup is on the decoded loadout, and the count is the finding
+
+simc writes the 128-bit tree hash as zeros and skips it on parse, so two exports of one
+build need not be the same string. `loadout_key` hashes the decoded content -- spec id
+plus every `(node, entry, rank)` -- because keying on the string would report thirty
+copies of one build as thirty builds, which is precisely the number this command exists
+to produce. `distinctBuilds` per spec is the headline: one means a settled spec, ten
+over ten kills means there is no consensus to harvest.
+
+**A hash that does not decode is published, never dropped.** It is the most valuable
+thing a harvest can turn up -- either the loadout format moved or the bit reader is
+desynchronised -- and a silent drop would present a thin harvest as a complete one.
+Four rejection reasons, each a different finding: no code returned, will not decode,
+the hash's spec id disagrees with the log's spec name, and simc's own spec rule (via
+`talenttree.spec_rule_violation`, so a build simc would refuse is caught **offline**
+rather than after a downstream sweep has paid for it).
+
+### Verified against real hashes, since real harvested ones do not exist yet
+
+A shipped talent hash and a harvested one are the same kind of object, so MID2's own
+committed builds are the only real corpus available without credentials. Measured on
+simc `22b442e` against the dataset at `453049d`:
+
+- **36 of 36 committed MID2 hashes pass all four checks**, across 22 distinct
+  (class, spec) pairs.
+- The hero tree the harvest names agrees with the dataset's own `heroTalent` on
+  **36 of 36** -- an independent cross-check, since those names came from
+  `herotrees.py` by a different route.
+- Control, so this is not simply saying yes: an Arcane hash labelled Fire comes back
+  `spec_mismatch | hash states spec 62, the log says Fire (63)`.
+
+`test_every_committed_build_hash_survives_the_harvest_validator` keeps that repeatable;
+it skips unless `WOWDPS_SIMC_SOURCE` names a checkout, because the pinned tests above it
+are hermetic on purpose.
+
+### Warcraft Logs spells a class and a spec without spaces. simc spells them with.
+
+**This is the one that decided whether the feature worked at all, and it is not
+visible from any angle except running it.** WCL sends `DeathKnight`, `DemonHunter`,
+`BeastMastery`; `talenttree.CLASS_IDS` is keyed on `Death Knight` and simc's spec
+table says `Beast Mastery`. Executed against the first version:
+
+```
+talenttree.CLASS_IDS.get("DeathKnight")          -> None
+talenttree.CLASS_IDS.get("DemonHunter")          -> None
+spec_ids.get(("Hunter", "BeastMastery"))         -> None
+```
+
+So **every** Death Knight and Demon Hunter observation came back `unknown_class` and
+every Beast Mastery one `unknown_spec` -- Havoc and Devourer being two of the nine
+specs the harvest exists for -- and `Observation.spec_key` emitted
+`deathknight_frost`, an id nothing else in this repository has ever written, so the
+file could not be joined to the dataset and `--spec death_knight_frost` matched
+nothing. This repo already knew: `warcraftlogs.spec_rankings` does
+`class_name.replace(" ", "")` before sending, and `profiles.CLASS_TOKENS` carries
+exactly the reverse mapping and was unused.
+
+The join runs through a fold (`harvest.fold_name`: lowercase, drop everything
+non-alphanumeric) and nothing is *stored* folded -- an observation carries simc's
+spelling, because that is what the ids are built from. It is applied at extraction
+**and** inside `validate`, so an observation built by hand downstream cannot lose it.
+
+**The fixtures are why nobody noticed**: the default `playerDetails` row said
+`"type": "Mage"`, where both spellings are the same string. The default row is a
+multi-word *class* now (`DeathKnight`/Frost) and the second standard row a multi-word
+*spec* (`Hunter`/`BeastMastery`). Any fixture in this file that is single-word on both
+axes is not testing the join.
+
+### Two things to know before extending it
+
+- **`spec_ids` is derived, not written down.** Warcraft Logs names a spec in English
+  and the hash states a number, so `sc_spec_list` + `sc_specialization_data` are joined
+  the same way the picker does it. Midnight adds a Demon Hunter spec; a hand table
+  would go stale in the patch where it matters most. Measured: **40 specs joined, 41
+  hero trees named**.
+- **`fightprobe._check_budget` is now `fightprobe.check_budget`.** The harvest enforces
+  the same point ceiling and a second copy of that rule is exactly what this file warns
+  about elsewhere.
+
+### What a stopped pass keeps, and what the probe says about itself
+
+Three failures of the same family -- a thing computed, documented, and then discarded
+one frame up -- all of which shipped in the first version:
+
+- **A budget abort discarded the encounter it stopped in.** `PointBudgetExhausted`
+  escaped `harvest_encounter` rather than returning what it had, so kills 1-8 of the
+  ninth encounter were lost after being paid for and the encounter got no summary --
+  the opposite of `fightprobe.probe_encounter`, which that function's own docstring
+  cited as the contract it followed. The reason now travels on the summary as
+  `stoppedBy`, deliberately not as a fourth return value.
+- **`DifficultyMixed` was caught nowhere.** It went through a loop handling only
+  `PointBudgetExhausted` and `WarcraftLogsError` and out of `cli.main`, which has no
+  handler, so a pass eight encounters in printed a traceback and wrote no file. It is
+  a refusal, so the run stops -- but every encounter that ran clean is written (all at
+  the difficulty that was asked for, so nothing is pooled) and the exit code says a
+  person has to read it.
+- **The probe re-fetched what the sweep had already paid for.** Rankings, player
+  details and talent codes again: eight client calls while printing "queries sent: 5",
+  so measured points were attributed to five queries and one kill and the extrapolation
+  came out ~1.6x too large -- enough to call an affordable pass unaffordable, which is
+  the one decision the probe informs. `ProbeCapture` keeps the responses. It also fixes
+  *what* it prints: handed the parsed result it said the least in exactly the case it
+  exists to diagnose, and a `--spec` probe that filtered its one kill out read as a
+  failed schema check.
+
+**Exit codes**: 0 clean, 1 the one-difficulty refusal (the workflow fails the step, so
+nothing is committed), 2 the point ceiling (a warning, as in `fight-probe.yml`). The
+step needs `set -o pipefail`, because `| tee` otherwise makes tee's status the
+pipeline's and a refusal reports as a clean run.
+
+### Workflow inputs are bound in `env:`, never interpolated into `run:`
+
+`${{ inputs.x }}` is substituted into the script **before bash parses it**, so a
+dispatched value carrying a quote and a semicolon becomes script -- in a job holding
+`contents: write` and `WCL_CLIENT_SECRET`. `harvest-builds.yml` had six such
+substitutions in its command line and three more in Summary and Commit.
+`fight-probe.yml` already does the opposite and says why; there is one pattern here,
+not two. An environment variable is data to bash however it is spelled.
+
+### `rate_limit()` must never go through the response cache
+
+`RATE_LIMIT_QUERY` takes no variables, so both bracketing readings hash to the same
+`(query, {})`. Cached, the second is served from the first one's response, the two
+readings are equal **by construction**, and `pointsSpentThisRun` is 0.0 for any pass at
+any size -- which `describe_cost` correctly reports as UNMEASURED. Measured against a
+stub whose counter moved 100 -> 118: one HTTP call, both readings 109.0.
+
+Two things make that worse than it sounds. `harvest-builds.yml` always passes
+`--cache`, so the **default probe mode could never produce the number it exists for**;
+and the cache is an `actions/cache` restored between runs, so the *first* reading would
+be a number the API returned hours ago and the delta would be wrong rather than merely
+zero. `WarcraftLogsClient.query` takes a `cache` flag and `rate_limit` is the one
+caller passing False: a cached response is a record of *then* and this query asks about
+*now*.
+
+**There are then two kinds of UNMEASURED and the output says which.** The readings are
+honest, but if the pass *between* them was served from the response cache it really did
+spend nothing, and no re-run against that cache will say more. `harvest-builds.yml`
+restores a previous run's cache, so the second probe dispatch is exactly when this
+happens; `describe_cost` prints how many queries were cache hits and that an empty
+`--cache` directory is what takes the measurement.
+
+### The first live runs, 2026-08-23 -- and an omitted argument again
+
+**This section replaces "nothing has been sent".** It has now been sent, and the two
+things it found are both the same shape: a run in which every visible number is
+healthy and the thing being collected is not there.
+
+**The gear was never asked for.** `Report.playerDetails` takes
+`includeCombatantInfo`, **default `false`**, and when it is false the server answers
+with each row's `combatantInfo` present and *empty* -- serialised `[]`, not an absent
+key. So the first probe (CI 32660348582) read 14 dps rows, got 14 talent codes, and
+reported `gear entries: 0 readable, 0 skipped`. Nothing looked broken.
+
+This was **introspected, not guessed**: `wowdps wcl-schema --type Report`
+(CI 32660759853) prints the argument list with its defaults, and the mirrors this
+feature was written against do not carry that argument at all -- so no amount of
+re-reading them would have found it. `Encounter` was introspected in the same run:
+`id: Int!`, `name: String!`, and `characterRankings` carries an
+`includeCombatantInfo` of its own that nothing here uses.
+
+Third time for the general rule, so treat it as settled: **an omitted argument is a
+default, not nothing.** `hostilityType`, `includeResources` and now this.
+
+**The probe's own display hid it.** It printed `combatantInfo keys: list` -- a type
+name standing where keys belong -- so an argument that was not sent read exactly like
+a payload shape the parser had failed on, and the first diagnosis was of the wrong
+problem. It now names the empty list for what it is and counts how many rows carried
+no gear array at all. A **non-empty** `combatantInfo` list is described and
+deliberately not parsed: nobody has observed one, and a branch for an unobserved
+shape is a guess with the authority of code.
+
+With the argument passed, the same query returns
+`combatantInfo: dict, keys ['artifact', 'factionID', 'gear', 'heartOfAzeroth',
+'specIDs', 'stats', 'talentTree', 'talents']` and `17 readable, 1 skipped` gear
+entries on the first row.
+
+### The gem and the enchant do arrive, and reading one entry said they did not
+
+**A correction, made the same day it was written.** The paragraph this replaces said
+`gems` and `permanentEnchant` were absent, citing *the first gear entry's keys*
+`['bonusIDs', 'icon', 'id', 'itemLevel', 'name', 'quality', 'setID', 'slot']`. The
+first entry of a kit is the **head slot** -- no socket, and usually no enchant -- so
+an entry without those keys is exactly what you see whether Warcraft Logs omits an
+empty key, never sends the key at all, or sends it under another name. One entry
+cannot separate those three. Seventeen can, and the run had already fetched them.
+
+Read over **every** entry (CI 32662112090, 2026-08-23, one Mythic kill of 53470,
+252 gear entries across 14 damage players):
+
+```
+union       bonusIDs gems icon id itemLevel name onUseEnchant onUseEnchantName
+            permanentEnchant permanentEnchantName quality setID slot
+            temporaryEnchant temporaryEnchantName
+
+gems              62 of 252 entries, all non-empty, slots 0 1 5 8 10 11
+permanentEnchant  94 of 252 entries, all non-empty, slots 0 2 4 6 7 10 11 15 16
+```
+
+So **both keys are sent, under exactly the names `gear_from_row` already reads**, and
+Warcraft Logs simply omits a key with nothing in it. Harvested gear is a runnable kit,
+adornments included -- not item ids needing `gearanchor` to supply the rest, which is
+what the wrong version of this paragraph implied. The reader is verified one layer up
+too: the probe reports how many *parsed* pieces carry a gem and an enchant, because a
+key present in the payload and read under a name Warcraft Logs does not use fails
+exactly as silently as a key that is never sent.
+
+**The lesson is about the sample, not the field.** An absence measured on the one
+entry least likely to carry the thing is not a measured absence. This file's rule for
+absences already demands a revision and a date; it needs the *sample* beside them, and
+"the first entry" is the sample that produces a false negative here by construction.
+
+Two things that follow and are deliberately **not** acted on:
+
+- **`onUseEnchant` and `temporaryEnchant`** (with their `*Name` twins) exist and
+  nothing here reads them. A temporary weapon enchant is a consumable rather than part
+  of a kit, and simc models that separately; writing an unknown-semantics id into a
+  gear line would be a guess in the one place a kit has to be exact. Recorded so the
+  next reader knows they were seen and skipped rather than missed.
+- the entry carries a **`slot`** field. This project derives the slot from simc's own
+  item table on purpose and should keep doing so -- a positional array and a
+  third-party label are both assertions about somebody else's payload -- but the field
+  exists and is the obvious cross-check if anyone wants one.
+
+### What the point cost actually is
+
+Measured, cold cache, so no query was served from disk:
+
+| pass | kills | queries | points | per kill |
+|---|---|---|---|---|
+| probe, one kill of 53470 | 1 | 5 | 6.2 | 6.15 |
+| full MID2 pass, all 8 encounters, `--reports 15` | **20** | **58** | **99.9** | **5.00** |
+
+Budget is **18,000 points an hour**, so the full pass above cost **0.55%** of one
+hour. Quote the n=20 figure: the probe's is one kill carrying the pass's fixed
+overhead. At 5.00 a kill, 240 kills is about 1,200 points, under 7% of an hour --
+so the cost was never the constraint here, and `--reports` can be raised freely.
+
+The query count is exactly the plan's arithmetic: 2 rate-limit + 12 rankings (8 filed,
+4 twins) + 4 encounter names + 20 `playerDetails` + 20 talent-code = 58. Average 1.72
+points a query.
+
+**`--cache` was passed unconditionally by the workflow**, which meant the mode whose
+purpose is to measure could never measure -- a cached query really does spend nothing.
+`cache: false` on the dispatch is what takes the reading, and it skips the
+`actions/cache` step so the measured run does not seed a cache either.
+
+### MID2's PTR encounter ids: the fix is right and the premise was not
+
+`fight_profiles.json` files MID2's bosses under PTR ids (53420, 53421, 53429, 53445,
+53455, 53470, 53492, 53497) and that is deliberate -- the tier was seeded from zone 54
+and CLAUDE.md relies on the PTR-ness riding in the id. **Do not renumber them.**
+The harvest's *addressing* moves instead: an encounter with no ranked parses resolves
+to its live twin by stripping the leading `5`, and the twin is used only when
+`worldData.encounter` gives it the **same name**.
+
+**What a full pass measured (CI 32661537069, Mythic, 2026-08-23):**
+
+| filed | resolution | kills | players |
+|---|---|---|---|
+| 53420 Sszorak | read as 3420, name verified | 0 | 0 |
+| 53421 The Twin Fangs | read as 3421, name verified | 0 | 0 |
+| 53429 The Coiled Altar | read as 3429, name verified | 0 | 0 |
+| 53445 Entombed Sentinels | harvested as filed | 7 | 96 |
+| 53455 Vashnik the Malignant | harvested as filed | 2 | 28 |
+| 53470 Nek'zali, the Soulcoiler | harvested as filed | 7 | 98 |
+| 53492 Ula'tek | read as 3492, name verified | 0 | 0 |
+| 53497 The Lost Explorers | harvested as filed | 4 | 56 |
+
+**Four of the eight PTR ids have ranked parses and harvest fine.** The four that do
+not have live twins that are equally empty. So on this tier today the substitution
+recovers **nothing**, and "a PTR id cannot be harvested" is false.
+
+The observation that motivated it -- *53420 returns 0 kills, 3470 returns 100 rows* --
+compares **two different bosses**: 53420 is Sszorak, 3470 is Nek'zali. Worth keeping
+as the shape of the error rather than as a fact: two ids that differ by a leading 5
+are the same boss, two ids that do not are not comparable at all, and the second
+reading is what makes a coincidence look like a cause.
+
+Keep the resolution anyway. It fires only for an id with nothing to read, costs one
+cheap query when it does, and is the right address whenever a filed id really is the
+wrong one -- a state this tier has been in before and will be in again at the next
+season boundary.
+
+**The name check is measurably strict, and the case is on this tier.** Warcraft Logs
+names 53470 *"Nek'zali, the Soulcoiler"* and 3470 *"Nek'zali the Soulcoiler"*: the pair
+differs by a comma, and that substitution would be **refused**. It never comes up today
+because 53470 has parses of its own. Left strict on purpose -- a refusal costs one
+boss's kills and prints both names for a person to read, a false accept files a full
+set of real builds under the wrong fight and nothing downstream can detect it.
+Loosening it to ignore punctuation is a human's decision with the two names in view.
+
+### What a harvest covers, measured rather than hoped
+
+Same pass, 20 kills, 278 damage players, **0 rejected**: **168 distinct builds across
+25 specs**. Every one of the four damage specs that has *no number at all* on the site
+-- their stored simc hash is refused by simc's own talent parser -- came back with
+usable builds:
+
+```
+demon_hunter_havoc     4 builds from  8 kills
+paladin_retribution    6 builds from 12 kills
+warrior_arms           7 builds from 12 kills
+warrior_fury           3 builds from  4 kills
+```
+
+A harvested hash is current and legal by construction, so this is the direct route to
+publishing those four. What it does **not** establish is that the resulting number
+would be comparable: a harvested character wears its own gear, which is the problem
+`gearanchor` exists for.
+
+### What is still unverified
+
+- ~~**A socketed item in a real gear payload.**~~ Settled on 2026-08-23, see above:
+  62 of 252 entries carry `gems` and 94 carry `permanentEnchant`.
+- **Whether the twin resolution ever recovers a kill.** On MID2 it does not; it has
+  never fired on a boss whose twin had parses.
+- **Whether `characterRankings` rows carry gear or talents** -- answered, and the
+  answer is no: the row keys are `amount, bracketData, class, duration, faction,
+  hardModeLevel, name, report, spec, startTime`. A whole query per kill is necessary.
+
+## Why specs are missing: simc wrote the profiles and switched them off
+
+`unvalidated.py` + `wowdps unvalidated`.
+
+The obvious explanation for MID2 shipping 15 of 26 damage specs is stale action
+lists. **It is not that.** Action lists live in simc's class modules and exist for
+every spec; a profile is only a character -- gear, talents, race -- pointing at
+one. What `profiles/generators/MID2/<Class>.simc` contains for each missing spec is
+a *complete* profile, talent hash and every gear slot with gems and enchants and
+the `save=` line naming its file, **with every line commented out**. Measured on
+2026-08-17:
+
+```
+Warrior       0 active,  3 commented        18 disabled profiles across the tier,
+Monk          0 active,  3 commented        15 of them damage specs -- including
+Druid         0 active,  2 commented        Devourer, Midnight's new one
+Evoker        0 active,  2 commented
+Demon Hunter  1 active,  5 commented
+```
+
+simc's authors disable a generator entry while the profile or the rotation is not
+validated for the tier. So the data exists and carries a warning, which is a
+different state from absent, and anybody publishing an all-spec chart is supplying
+profiles rather than waiting for simc to switch these on.
+
+**A number from one of these is not the same claim as one from a shipped profile.**
+Shipped means simc's authors saying "this is the spec this season"; disabled means
+"this is the character we had written down when we stopped". Both are useful and
+presenting them as one number would not be, so anything drawn from them has to be
+labelled -- a fourth coverage state beside `simulated`, `broken` and `missing`.
+
+**That state is built, and the way it travels is the part worth keeping.** The
+label is written **into the profile** as a header comment (`unvalidated.MARKER`),
+not passed as a flag: a sharded run materialises these separately in twelve jobs,
+so a flag would have to be threaded through all of them and could be set in one and
+forgotten in another -- which publishes an unvalidated build as a shipped one
+silently, because the number itself looks fine. A file that says what it is cannot
+disagree with another shard. `parse_profile` reads it back into
+`SpecProfile.unvalidated`, `SpecResult` emits `unvalidated: true` (and *only* true,
+so a tier of shipped profiles produces the bytes it did before this existed), and
+`BuildIdentity`/`BuildChip` draw the mark wherever a build is named in HTML.
+
+`spec_coverage` subtracts these specs from **both** `shipped` and `missing`. Both
+of the wrong answers are worth naming: counting them as shipped publishes an
+unfinished profile as this season's answer, and counting them as missing says the
+data does not exist while it sits in the generator. The panel's headline stays the
+shipped count and the unvalidated ones are a separate `+K`, because adding them
+would make one number out of two different claims and the weaker one would vanish
+into it.
+
+### They wear a whole tier less gear, and the first run published that as balance
+
+The run that included them, MID2 on 2026-08-21: **all eight resulting builds landed
+below all twenty-eight shipped ones, with no overlap** -- 112k-134k against
+177k-268k. A separation that clean is never a balance finding; it is the signature
+of a systematic difference, and this one is gear.
+
+simc's *disabled* profiles are routinely a whole tier behind its shipped ones.
+Measured against the checkout:
+
+| | item level |
+|---|---|
+| shipped MID2 profiles | **334-344** (13 at 344, 7 at 334, 8 state none) |
+| six disabled ones | **289** -- 45 below the band |
+| Havoc Aldrachi Reaver | **723** -- a War Within number, 379 *above* |
+| five disabled ones | state none at all |
+
+So the gap is not even always downward, and the file this project already tells you
+not to trust across tiers ("absolute DPS does not travel between tiers -- the gap is
+mostly item level, not balance") has the same problem *inside* one tier the moment a
+profile simc did not ship is drawn beside ones it did.
+
+`shipped_item_levels` + `gear_caveat` in `dataset.py`. Three decisions:
+
+- **The anchor is the band, not the mode.** A tolerance around 344 flagged seven of
+  MID2's own shipped builds as incomparable with themselves, because the tier
+  genuinely spans two item levels. The band is derived from the shipped profiles for
+  the same reason the coverage reference list is: a fixed tolerance is a magic number
+  that goes wrong in the season nobody re-checks it.
+- **Disabled profiles are excluded from the band**, or one drags the anchor toward
+  itself and quietly excuses its own gap.
+- **An unstated item level is flagged for an unvalidated build and not for a shipped
+  one.** Absence is not comparability, so saying nothing would let exactly the builds
+  that *cannot* be checked pass as checked -- but eight shipped MID2 profiles omit
+  `ilevel=` too, and flagging a third of the tier for a convention simc uses
+  everywhere is the other wrong answer.
+
+`modal_item_level` takes the mode over a profile's gear lines rather than the mean: a
+weapon or a crafted back sits a few levels off the rest, and a mean reports a level
+nothing is actually at. Note what it cannot see: a profile that states no `ilevel=`
+on any gear line comes back `None` while its gear is genuinely at 289 -- measured by
+reading simc's own report back for MID2's Windwalker Monk. That is why the
+"states no item level" branch of `gear_caveat` is a caveat rather than a pass.
+
+**The caveat says a build cannot be ranked; the anchor is how a build stops needing
+it.** `gear_caveat` is the right answer for a profile *simc* wrote, which this project
+does not edit. For a build this project **computes**, the gear is ours to choose, and
+`gearanchor` chooses it -- measured over 34 of MID2's 40 damage builds to close the
+disabled-profile gap from 32.9% below the shipped floor to 0.19% *above* it, with
+all six disabled builds landing inside the shipped range. See "The gear anchor"
+above. The two are not
+alternatives: an anchored build still carries a description of what was anchored, and
+an un-anchored disabled profile still carries the caveat.
+
+**The chart needed a fourth channel, and it could not be words.** The Overview
+opens on the bar chart, whose axis ticks are SVG -- an HTML badge cannot live in
+one. So for a run the eight builds sat in the ranking as ordinary bars while the
+panel *underneath* explained they were not comparable, which is the failure that
+panel exists to prevent, happening above it. A third line of tick text was tried
+and collided with the row below: the tick's height is the chart's row spacing and
+it already carries two lines. The answer is `buildOpacity` -- the bar is drawn
+faded, never recoloured and never dropped -- with the sentence in the chart's
+caption, where its other qualifications already live. Opacity alone is a weak
+channel; what makes it legal is that the caption, the table twin's badge and the
+coverage panel all say it in words.
+
+**The flag has to travel separately from the sentence.** The caveat text lives in the
+build's own `<spec>.json`; the ranking reads `index.json`. So without
+`gearComparable: false` in the *summary*, the one place a gear gap actually misleads
+-- a bar chart of absolute DPS -- is the one place that cannot see it.
+`BuildIdentity` draws it as a second mark beside `unvalidated`, because they are
+different claims: one says simc has not signed the profile off, the other says this
+number cannot be ranked against the ones beside it, and a build can be either without
+being the other.
+
+The materialisation runs in `sims.yml` behind `include_unvalidated` (default
+`true`), twice: once per sim shard, and once in the publish job before `spec-index`
+-- without the second, a spec this run simulated from a disabled profile would be
+drawn as "simc ships no profile for this spec" while its build sat in the ranking,
+the coverage panel contradicting the chart beside it.
+
+One parse detail that cost a wrong answer: generator blocks separate the header,
+the gear and the `save=` line with **blank lines**, and the first version treated a
+blank as the end of a block. It returned zero profiles from files containing
+eighteen -- and "zero" reads exactly like "simc has no disabled profiles", which is
+the wrong answer stated confidently.
+
+### What the profiles do and do not vary
+
+Worth knowing before anyone asks for per-target-count builds: a shipped profile
+carries **exactly one `talents=` line**. simc ships one build per (spec, hero
+tree) -- `MID2_Mage_Arcane` and `MID2_Mage_Arcane_Sunfury` are hero-tree variants,
+not one-target and ten-target variants.
+
+What *does* adapt is the rotation. The action lists branch on `active_enemies` and
+`spell_targets` throughout: Shadow Priest calls a whole `aoe` list at
+`active_enemies>2`, Arcane gates `prismatic_bolt` on `active_enemies>=variable.aoe_count`.
+So at ten targets the spec plays its AoE rotation on its single-target talents.
+
+That is the honest shape of every multi-target number in this project, and it is
+the same gap `talentsweep.py` runs into from the other side: the variants it can
+build are the hero builds, because those are the hashes simc hands us. A real
+AoE-talent build would need a hash nobody in this pipeline has.
+
 ## Spec coverage: a missing spec looks exactly like a bad one
 
 `profiles.spec_coverage` + `components/SpecCoverage.tsx`, on the Overview above the
@@ -1014,12 +2998,30 @@ patch panel. simc ships its tier profiles as they are written, so early in a sea
 the set is incomplete -- and a ranking can only draw what it has, so "no profile" and
 "ranks last" are indistinguishable on it. The second is a conclusion somebody acts on.
 
-Measured on 2026-08-15: **MID2 ships 15 of 26 damage specs**, against MID1's 26. Six
-whole classes are absent -- Demon Hunter (Devourer, Havoc), Druid (Balance, Feral),
-Evoker (Devastation), Monk (Windwalker), Paladin (Retribution), Rogue (Outlaw),
-Warlock (Demonology), Warrior (Arms, Fury). Note *31* profile files but *26* damage
-builds and only *15* distinct specs: files include tanks and healers, and several
-specs ship two hero-tree builds.
+**The figures here were stale by a week and are re-measured, not edited to a guess.**
+The line that stood was "MID2 ships 15 of 26 damage specs" from 2026-08-15. Measured
+again on **2026-08-22** against simc `22b442e`, and after the `unvalidated` regex fix
+below:
+
+| | 2026-08-15 | 2026-08-22 |
+|---|---|---|
+| damage specs with a shipped profile | 15 of 26 | **17 of 26** |
+| damage builds published | 26 | **36** |
+| profile files (incl. tanks) | 31 | 35 |
+| `unvalidated` (written, switched off) | -- | **9** |
+| `missing` (nothing anywhere) | 11 | **0** |
+
+Outlaw Rogue and Demonology Warlock now ship; **Balance Druid and Windwalker Monk
+arrived between 21 and 22 August** (a checkout at `69a46e1`, 2026-08-21, has 35 MID2
+profiles and neither of them; the 2026-08-22 nightly produced 36 builds including
+both). That is the argument for deriving this panel from what simc ships right now
+rather than copying anyone's list, stated as a date.
+
+The nine damage specs with no *shipped* MID2 profile are Devourer and Havoc Demon
+Hunter, Balance and Feral Druid, Devastation Evoker, Windwalker Monk, Retribution
+Paladin, Arms and Fury Warrior -- and every one of them has a profile written and
+switched off, so `missing` is now **empty**. Note the file counts: files include tanks
+and healers, and several specs ship two hero-tree builds.
 
 **The reference list is derived, never written down.** "All damage specs" is the union
 of what simc has shipped for *any* tier in the checkout. A hard-coded table would need
@@ -1029,11 +3031,152 @@ never been profiled in any tier cannot be reported missing, because nothing here
 it exists; that is the right direction to fail, since it under-claims rather than
 inventing a spec list.
 
+### Three coverage states, because two published a wrong claim
+
+The panel used to answer "does simc ship a profile for this spec". On the day MID1
+was first published that read **26 of 26 -- complete** over a dataset containing no
+Mage, no Hunter, no Warrior, no Havoc, no Retribution and no Elemental Shaman,
+because 16 of MID1's 41 profiles no longer load. A reader then has exactly one
+reading available for the absent classes, and it is the wrong one -- the same "a
+missing spec looks exactly like a bad one" failure this panel exists to prevent,
+now stated with more confidence than before it existed.
+
+Measured on 2026-08-16, both tiers, from simc's own profiles directory:
+
+| | simulated | broken | missing |
+|---|---|---|---|
+| MID1 | 15 of 26 | **11** | 0 |
+| MID2 | 15 of 26 | 0 | **11** |
+
+Both seasons are equally thin and for opposite reasons, which the old two-state
+panel actively hid: it called MID1 complete. Only four specs are absent from both
+(Havoc, Retribution, Arms, Fury), and **eight specs have a working build in both
+seasons** -- that eight is the real size of any season-over-season comparison, and
+it is smaller than either tier's spec count suggests.
+
+`spec_coverage` cannot compute `broken` itself, and that is not an oversight: it is
+called from a shard, which simulated one slice, so subtracting that slice would
+report every other shard's specs as broken. It emits `shipped` -- what simc ships
+for *this* tier, which is shard-safe for the same reason the counts are -- and
+`dataset.apply_simulated_coverage` settles the split where the whole run is known
+(`merge_shards`, or `cmd_build` when unsharded). Same correction shape as
+`medianDpsError`: a number describing a fraction of the run, presented as
+describing all of it.
+
+A manifest with no `shipped` is left alone rather than guessed at. Without knowing
+what the tier shipped, "broken" and "missing" cannot be told apart, and inventing
+the split would be the same error in the other direction.
+
 `spec_coverage` is safe to call from a shard: it reads what simc *ships*, which is the
 whole profiles directory, and has nothing to do with which slice a run simulated. So
 every shard computes the same answer and `merge_shards` keeping the newest manifest
 keeps a correct one. Do not confuse it with `manifest.specs`, which is what this run
 *simulated* -- the two differ when a spec fails.
+
+### The quotes in one regex published a spec as missing that simc had written twice
+
+`unvalidated._OPEN` required the commented player line to be **quoted**. simc's
+generators write both forms, and `MID2_Generate_Paladin.simc` writes it unquoted:
+
+```
+# paladin=MID2_Paladin_Retribution_Herald      <- found by nothing
+# paladin="MID2_Paladin_Retribution_Herald"    <- what every other generator writes
+```
+
+Measured 2026-08-22: **14 disabled blocks found where 17 exist**. The three missed
+were both Retribution Paladin builds and Guardian Druid, so the site said *"simc has
+no profile for Retribution at all"* while simc shipped two complete ones in the
+generator -- the exact wrong answer this panel exists to prevent, produced inside the
+coverage code. Fixing it empties the `missing` list entirely. Do not tighten the
+quotes back; a test pins the unquoted form.
+
+### The fourth state: written, and simc will not load it
+
+Six of MID2's seventeen disabled blocks carry a talent hash the current tree refuses
+-- both Havoc builds and both Retribution builds on choice-node overflow, Arms and
+Fury on simc's spec rule. Those are the four damage builds `wowdps list` offers and
+the nightly gets nothing out of ("no successful sims for <id>, skipping"), and they
+are not the same claim as "simc has not signed this off".
+
+`specindex.refused_profiles` decides it **offline** -- see `spec_rule_violation` in
+the talent-tree section for the check and its verification against simc's own CI
+output -- so the panel prints "simc will not load it: Selected node 110203 entry
+136735 is not available to player's spec" rather than an unexplained absence. The
+reason travels per (spec, hero tree) cell, and a refusal naming a tree beats one that
+names none: Retribution's two builds are refused at two different nodes and one of
+them is unnamed, so taking the first match printed the wrong node against the named
+build's tree.
+
+### Coverage is now per hero tree, which is the half a spec-level count hides
+
+A spec plays two hero trees and a tier routinely ships a build for one of them.
+Measured 2026-08-22: **35 of 53 (damage spec x hero tree) pairs have a build**, where
+the spec-level count reads 17 of 26. Survival Hunter is simulated and Pack Leader
+Survival is not, and only the finer number says so -- six specs are in that state
+(both Hunters and Survival for Dark Ranger/Pack Leader, both Rogues, Demonology).
+
+53 rather than 52 because the pairing is read out of the trait table rather than
+assumed: Havoc carries three trees there today (Fel-Scarred, Aldrachi Reaver and
+Midnight's Void-Scarred), so "every spec plays two" is a rule about the game that
+nothing here encodes. And one build plays a tree the table places on **no** spec --
+Annihilator carries no `id_spec` on any of its nodes -- which is reported as
+`unplaced` rather than counted or dropped.
+
+It lives in `spec-index.json` (`heroTreeCoverage`), not in the manifest, because that
+is where the trait table already is; each cell carries the state of its *spec* from
+the manifest's own coverage block, so the three reasons a spec can be absent are not
+re-derived and cannot drift from the panel above them. `SpecCoverage.tsx` takes the
+already-fetched `specIndex` and degrades to the spec-level lists without it.
+
+**Placing a build in a tree needs `talent-trees.json`, and without it the answer is
+nothing rather than zero.** `hero_tree_coverage` originally answered anyway, which
+over the real MID2 manifest returned `cells=53, covered=0` and listed all 34 shipped
+specs as having no build for *either* tree -- so the panel would have said "Arcane
+Mage: no Sunfury build, no Spellslinger build" directly above both of them in the
+ranking. It refuses now when the manifest carries builds and none of them can be
+placed, and the CLI says which happened. The general shape is this project's
+signature defect: the warning already said "coverage stays at the spec level" and the
+code did not do that. A message describing a fallback the code does not take is worse
+than no message.
+
+### What the panel links to, and what it must not imply
+
+The owner asked for links to simc. They are not the same target per state, and one of
+them would be wrong:
+
+| state | link | why |
+|---|---|---|
+| no profile at all | the tier's generator file for that class | that is where a profile is contributed |
+| written, switched off | the same file | as *evidence* that it exists, not as a call for help -- nobody outside simc can switch it on |
+| shipped, one tree missing | `profiles/<tier>` | the profile that exists, so the gap is visible |
+
+Both halves of the URL are derived rather than typed: the branch comes from
+`manifest.simc.gitBranch` (`midnight`, confirmed as simc's default branch by
+`git ls-remote --symref`), and the file naming -- capitalise the first letter, drop
+the space, so `Deathknight` and `Demonhunter` -- matched all thirteen generator files
+in the checkout. No link is drawn when the manifest names no branch. github.com is
+403 to curl through this sandbox's proxy, so that is how the URLs were checked rather
+than by fetching them.
+
+**The missing artefact is a character, not a rotation**, and the panel says so: simc
+maintains a current action list for these specs in the same checkout (a third-party
+sim input for Devourer carries an inline APL 151 of 153 lines identical to simc's own
+`devourer.simc`). What is missing is gear plus talents somebody has signed off.
+
+Two things that stay out of it, both deliberate. The disabled profiles are ~45 item
+levels behind **and** wear none of this season's tier set -- two systematic
+differences, not one, and an `ilevel` bump would close the first and leave the second
+looking fixed. And this project does not author profiles for the missing specs: the
+number would be our opinion about how a spec is geared and played, published on a
+site whose whole claim is that its numbers are derived from simc and
+byte-reproducible.
+
+**The derived reference list under-claims, and the note says so.** bloodmallet lists
+eleven missing MID2 specs where this derives nine. The two extras are Guardian Druid
+(a tank; this site filters tanks) and **Augmentation Evoker, which has never had a
+profile in any tier**, so the union-of-shipped-tiers reference cannot know it exists.
+That is `spec_coverage`'s documented under-claim firing for real. It is the right
+direction to fail and it is not a reason to hard-code a spec list.
 
 ## Patch state: two dates, and only one of them is the cutoff
 
@@ -1083,6 +3226,20 @@ the payload rather than from the trigger.
 
 Three things that would otherwise bite:
 
+- **An encounter that can never reach `--reports` must not be re-opened forever,
+  and a bounded pass must not always restart at the top.** Both halves cost MID2
+  two days: every hourly run began at the first encounter, spent the point ceiling
+  re-reading the four it already had, and never reached the other four, which sat
+  at `sampled: null` while the raid was open. The zone simply has fewer than thirty
+  kills of those bosses, so no number of runs would have finished them.
+
+  Two fixes, and they are different rules. A report search that ended because it
+  ran out of reports -- rather than on a page limit or the point ceiling -- records
+  `searchExhausted`, and that counts as done however few kills it found; a
+  truncated or aborted one does not, because then more may exist. And `remaining`
+  is sorted so encounters with no data at all go first: one boss with nothing is
+  worth more than one more kill on a boss that already has some. The sort is
+  stable, so a run stays reproducible.
 - **Raising `--reports` re-opens every encounter**, on purpose: somebody raising it
   wants a bigger sample, not a skip. **So does raising `--max-pages`**, and that one is
   not cosmetic. The number of kills is only half of what the band needs; the other half
@@ -1094,6 +3251,15 @@ Three things that would otherwise bite:
   encounter with no recorded budget is left alone rather than re-fetched -- treating
   unknown as zero would re-open a whole zone for everybody -- so a payload written before
   this needs one `--no-resume` run to pick the budget up.
+- **A continuation with a *smaller* event budget is silently inert, not merely
+  useless.** `max_pages` was the one input whose default did not match what a real
+  pass runs at: the form said 3 while the Option C dispatch passed 20. `is_complete`
+  re-opens an encounter only when its recorded budget is *smaller* than the one now
+  asked for, so at 3 every encounter already read at 12 or 20 pages counts as done,
+  the hourly run fetches nothing, exits 0, and the pass never finishes. Measured on
+  2026-08-16: the 20-page dispatch left 8 of 9 encounters outstanding and every
+  hourly continuation after it was a no-op. The defaults are the settings the
+  schedule actually runs at -- treat them as configuration, not as form hints.
 - **`inputs.*` is empty on a scheduled run**, so every input in the workflow now
   carries the same default the dispatch form shows. A continuation has to run with the
   settings of the pass it continues or it re-opens all of them.
@@ -1104,6 +3270,21 @@ Three things that would otherwise bite:
 The payload publishes `encountersRequested`, `encountersCollected` and `incomplete`,
 so "this zone has nine bosses and we have all nine" reads differently from "we have
 all the ones we tried".
+
+**The point meter is a stamp too, and it defeated the settle for weeks.**
+`measurement.cost` is a reading of Warcraft Logs' hourly counter taken when the
+pass ran -- what it stood at, how long until it resets -- so five of its nine
+fields differ on every run by construction. Left in the comparison, the settle can
+never fire. Measured on 2026-08-24: three consecutive hourly probe commits, each
+titled "data: refresh fight shapes for MID2", each a one-line diff, and the only
+fields that moved were the two timestamps and `cost`. No encounter, no kill count,
+no aura window changed.
+
+That is the same failure as the one below, reached through a field nobody thinks
+of as provenance -- which is the general shape: **anything read off the clock or
+off a meter is a stamp, whatever it is called.** The block stays in the document
+rather than being dropped, because what a pass costs is the open question behind
+the event-budget decision and this is the only measurement of it anywhere.
 
 **A settle that misses a nested stamp settles nothing.** `write_fights` excluded the
 top-level `generatedAt` from its "did anything change" comparison but not
@@ -1149,6 +3330,12 @@ time to establish, all read out of the shipped script or measured in a browser o
 - It enriches `document.links` and bails on anything whose `nodeName` is not `A` or
   `AREA`. An SVG `<a>` is in neither, so **Recharts axis labels can never carry a
   Wowhead tooltip**. Any chart naming items needs a table beside it that does.
+- **Ability and aura names are spell links, so they carry icons.** The ability
+  breakdown and the Fights view's aura table both already had simc's spell id per
+  row, and `GameLink` already took `kind`, so this was one substitution each --
+  which is what the note below predicted. A row with no id stays plain text rather
+  than linking to nothing: simc merges some stat entries by name and those have no
+  single spell behind them.
 - **simc has no icon data.** `dbc_item_data_t` (`engine/dbc/item_data.hpp`) has no
   icon field, and neither does anything in `generated/`. For *items* the icon name
   exists only in Wowhead's tooltip JSON, so putting one in the dataset would import an
@@ -1198,6 +3385,15 @@ helper, both of which cost time to work out:
 - A sandbox that routes egress through a proxy needs `--proxy-server=$HTTPS_PROXY`
   passed to Chromium, and `waitUntil: 'networkidle'` never settles once third-party
   requests are in play — use `domcontentloaded` plus a fixed wait.
+- **The proxy must be bypassed for localhost, or the page is blank.** Chromium sends
+  the preview server's own requests through it too and gets **405 Method Not
+  Allowed** on every one, so the app shell loads and no dataset does. It looks
+  exactly like a data bug: the chart renders empty and the console shows only two
+  405s. Playwright's launch option is `proxy: { server, bypass: 'localhost,127.0.0.1' }`.
+- **The Overview opens on Chart, so `tr` count is zero and proves nothing.** A check
+  that looks for the table twin's badges finds none because the table is not in the
+  DOM until the Chart/Table toggle is switched. Assert against the chart, or flip
+  the toggle first.
 - Even with the proxy the icon CDN may be unreachable, in which case every icon
   renders as its fallback tile and the shots tell you nothing about the icons. Point
   `SHOT_ICON_CACHE` at a directory of `<slug>.jpg` / `<element>.webp` files fetched
@@ -1274,7 +3470,7 @@ Two things nearly threw it away, both fixed, both worth not reintroducing:
   This is the same bug as the `targetError` one below, in a different disguise: a number
   describing a fraction of the run, presented as describing all of it.
 
-## The tier axis## The tier axis
+## The tier axis
 
 - Datasets are namespaced: `web/public/data/<tier>/index.json` and `<tier>/specs/*.json`,
   with `tiers.json` at the root naming which tiers exist and which is current. There is no
@@ -1331,6 +3527,150 @@ Two things nearly threw it away, both fixed, both worth not reintroducing:
   hides its switcher when only one tier exists; the Fights view instead states the
   season as a label, because there it is the subject rather than context.
 
+### The season switch is built; what was missing is a second season
+
+Worth knowing before building anything for it: `tiers.json`, the header's `Season`
+select and `FightsView`'s own `Season` control are **complete and wired to one piece
+of state**. The switcher does not appear because `write_tier_index` found one tier
+directory, and the header hides a control with nothing to switch to. So "add a season
+switch" is not the work -- **publishing a second dataset is**, and that is one
+`workflow_dispatch` of `sims.yml` with `tiers: latest previous`.
+
+What that run costs and what it buys is measured, not guessed: 15 of MID1's 41 damage
+profiles no longer load, so the old season publishes as roughly two thirds of a tier.
+That is the right failure shape rather than a reason not to run it -- `spec_coverage`
+already names every spec simc has shipped for *any* tier, so the missing eleven read
+as "no profile", not as "ranks last". Do not turn the *schedule* back on; the cadence
+argument in the cron comment is unchanged.
+
+### The nine bosses filed under MID2 are last season's raid
+
+The same error `identify_tier_raid` made on the Blizzard side, one API further out,
+and it is worth stating as a rule: **any boss list written down during the week a
+season turns describes the raid that is ending.** Warcraft Logs only has kills for a
+raid that has been open, so "the newest zone with rankings" and "the tier simc ships
+profiles for" name different raids for as long as the gap lasts -- which is exactly
+when somebody sits down to write the list.
+
+Concretely, MID2 in `fight_profiles.json` carries Imperator Averzian, Vorasius,
+Vaelgor & Ezzorak, Fallen-King Salhadaar, Lightblinded Vanguard, Crown of the Cosmos,
+Belo'ren, Midnight Falls and Chimaerus. Blizzard's journal places those in The
+Voidspire. MID2's *gear* side -- derived from what its own simc profiles wear -- is
+The Venomous Abyss plus The Tidebound Grotto, whose bosses are The Lost Explorers,
+Vashnik the Malignant, Nek'zali the Soulcoiler, Sszorak, Ula'tek, The Twin Fangs, The
+Coiled Altar, Entombed Sentinels and Nymrissa Wavecaller. Three independent lines
+agree and none of them is the fight profile file.
+
+`fightzones.py` + `wowdps fight-zones` + `fight-zones.yml` are the repair, and the
+shape is the one that worked for the loot pools: stop typing the list.
+`worldData.zones` is **one document** carrying every raid, its encounters, their ids
+and a `frozen` flag, so a season's boss list is a fetch rather than an edit and the
+encounter ids come from the service that will be asked about them.
+
+Four things in it that are deliberate:
+
+- **`locate` finds the mis-filing without anybody asserting the right answer.** The
+  ids in the file are Warcraft Logs ids, so the service can say which raid they came
+  from; a tier whose bosses all sit in a **frozen** zone is a tier describing a season
+  that has ended. It needs no knowledge of what the tier *should* contain.
+
+  **But the frozen test is silent during exactly the gap it was built for, measured
+  on 2026-08-16.** The first live run puts MID2's nine encounters in zone
+  `VS / DR / MQD` -- and reports it **not frozen**, as the newest of three unfrozen
+  zones. Warcraft Logs freezes a zone when the *next* one opens, so in the days
+  before a season turns the outgoing raid is still the currently-ranked one and the
+  flag says nothing. No Season 2 raid zone exists in the list yet at all, which is
+  consistent with it opening on the Tuesday.
+
+  So the check is necessary and not sufficient: a frozen hit is proof of a
+  mis-filing, an unfrozen one is **not** proof of correct filing. The gear-side
+  derivation (`identify_tier_raid`, from what the tier's own simc profiles wear) is
+  what settles it in the gap, because profiles ship before kills exist. Sequencing
+  that follows: **do not move a tier's encounters while its raid has no zone.** Once
+  Season 2's zone appears, `VS / DR / MQD` freezes, `locate` flags MID2's filed ids
+  by itself, and the move carries its own evidence.
+- **`worldData.zones` is not an enumeration of every zone.** Measured on
+  2026-08-17: it returns 42 zones topping out at id 50, and zone **54** -- Season
+  2's PTR zone, which `warcraftlogs.com/zone/reports?zone=54` serves -- is not in
+  it. `zones` takes an `expansion_id` argument, which is the likelier cause than
+  PTR-specific hiding, but either way "not in the list" must mean *ask directly*
+  and never *does not exist*. `worldData.zone(id:)` reaches any zone and carries
+  the same `encounters`, so `--seed <id>` falls back to it. Two wrong conclusions
+  came out of treating the list as complete, one after the other -- first the
+  ordering, then the membership -- so the rule is worth stating plainly: this list
+  answers "what is currently ranked", not "what exists".
+- **A PTR encounter id is its live id with a `5` in front, and that is the
+  provenance signal.** Scanning ids 44-75 on 2026-08-17 turned up pairs:
+
+  ```
+  [46] VS / DR / MQD          live      3176 Imperator Averzian ...
+  [48] VS / DR / MQD (Beta)   frozen   53176 Imperator Averzian ...
+  [53] The Venomous Abyss     frozen    3470 Nek'zali ... 3379 Nymrissa (9 bosses)
+  [54] The Venomous Abyss     live     53470 Nek'zali ...          (8 bosses)
+  ```
+
+  Two independent zone pairs, same rule. So a measurement taken against 53470
+  **cannot be mistaken for** one taken against 3470 -- the id carries the PTR-ness,
+  and no separate flag is needed to stop PTR data masquerading as progress data.
+  That is worth more than the `ptr` field this was going to grow.
+
+  What the *name* does not tell you: zones 51, 56 and 49 are suffixed `(PTR)` or
+  `(Beta)`, and **zone 54 is not** -- it is plain "The Venomous Abyss", live, and
+  unlisted. Name-based PTR detection would miss exactly the zone in use. The
+  derivable signal is absence from `worldData.zones`; that a zone is *PTR* is an
+  assertion, and on 2026-08-17 it is the owner's.
+
+  Consequence for MID2: it is seeded from zone 54, so it carries the eight PTR
+  encounters. **Nymrissa Wavecaller is not among them** -- the PTR zone genuinely
+  has eight bosses where the frozen zone 53 has nine -- so there is nothing to seed
+  for her yet, and zone 57 ("The Tidebound Grotto", frozen) has **zero** encounters.
+- **The report search needs no zone list at all.** `reportData.reports(zoneID:)`
+  takes an id directly, so `--order public` can read a PTR zone that `zones` never
+  returns. That is the route to a season's logs before the season has a listed zone.
+- **The zone list arrives newest-first, and this code had it backwards.** The
+  original note called the array order "load-bearing" and read the last entry as
+  the newest zone. Measured on 2026-08-16 by asking for the last four: Highmaul,
+  Siege of Orgrimmar, Throne of Thunder, Challenge Modes -- ids 6, 5, 4, 3, all
+  Warlords- and Pandaria-era. So "current season" was nominating the oldest zone in
+  the game. The fix does not flip the assumption, it removes it: Warcraft Logs
+  allocates **zone ids in ascending order as content ships**, so the newest zone is
+  the highest id whichever way the list arrives, and the test drives it both ways.
+  Same lesson as `ReportFight.startTime` and the report search -- an ordering that
+  is only ever inferred from position is an ordering waiting to invert.
+- **The zone → tier join does not exist and is not invented.** `MID2` is a directory
+  in simc's profiles and means nothing to Warcraft Logs. `suggest_current_zone` offers
+  the newest unfrozen zone *with its reasoning printed* and refuses to apply it;
+  `--seed`/`--move` take the decision from a person. A wrong guess here silently
+  relabels a whole season, which is the failure being repaired.
+- **`move_tier` carries the facts across.** The owner's hand facts are about the
+  fight, and the fight did not change -- only the label on it was wrong. A destination
+  that already holds an encounter keeps its own copy and the source's is left behind
+  and counted, so a move can never overwrite an assertion.
+- **Seeding never deletes.** An encounter the tier has and the zone does not is kept
+  and reported: it may be a boss the zone list has not caught up with, and dropping it
+  would take its hand facts with it. Re-running is therefore free, which is what a
+  scheduled run would need.
+
+**Done on 2026-08-17.** Zone 54 -- *The Venomous Abyss*, live, eight encounters --
+is what settled it, and the owner had to point at it because
+`worldData.zones` does not return it. Its bosses are exactly the eight the owner
+named (Sszorak, The Twin Fangs, The Coiled Altar, Entombed Sentinels, Vashnik the
+Malignant, Nek'zali the Soulcoiler, Ula'tek, The Lost Explorers); the ninth,
+Nymrissa Wavecaller, is in The Tidebound Grotto, which is a second zone -- and
+that is the *same* two-instance split `identify_tier_raid` found on the Blizzard
+side from what MID2's profiles wear. Three independent routes agree, and the only
+source that disagreed was the hand-typed list being replaced.
+
+So MID1 now holds the nine Voidspire encounters with every fact intact -- the
+owner's Vanguard assertions and the 21 promoted measurements travelled with them
+-- and MID2 holds the eight Venomous Abyss encounters with no facts yet. Tests
+that load those nine by tier say `VOIDSPIRE_TIER = "MID1"` with a note, because
+"MID2" reads like a typo to anyone who has not read this section.
+
+One consequence to expect and not mistake for a bug: once the nine move to MID1, MID2
+has no fight profiles until its raid opens, so the Fights view's empty state is the
+**correct** reading of a season whose first kills have not happened yet.
+
 ## The logs cross-check: what 192 comparisons are actually for
 
 The user's objection when this data first landed was right: "einfach nur zeigen, dass
@@ -1355,6 +3695,17 @@ So the honest headline is: **a single-target ranking predicts almost nothing abo
 tops the meters on a specific boss**, and the biggest single factor in the sim/logs gap
 is which boss, not which spec. That is also the strongest argument the repository has
 for the per-boss scenarios on the Fights view.
+
+**The 192 rows are Season 1 kills under a Season 2 heading.** `cmd_verify` used to
+pick its bosses as "the newest zone Warcraft Logs is ranking", which is the same
+raid as the tier's for most of a season and a different one for the week either
+side of a turn -- precisely when somebody runs it. So the published MID2 file
+compares Season 2 sim output against The Voidspire, with nothing in it saying so.
+The boss list now comes from the tier's own `fight_profiles.json`, the one registry
+of which bosses a season has, so the Fights view and this cannot disagree about
+what a season is. A tier with no fight profiles is a **refusal**, not a fallback:
+a raid that has not opened has no kills, and substituting another season's raid
+produces a full set of plausible numbers answering a question nobody asked.
 
 Things not to redo:
 
@@ -1557,7 +3908,42 @@ that are easy to get wrong a second time:
   something different for each.
 - `write_fights` keeps `generatedAt` when the rest of the document is unchanged, for the
   same reason `_settle_provenance` does in the manifest.
-- **The scenario can be run now, and is not run by default.** `wowdps build
+- **The boss scenarios are in the nightly run as of 2026-08-16**, which they were
+  not before, and the reason they were not is worth keeping: the profiles carried
+  only the 300s fallback, so `boss_3180` and `patchwerk` at three targets returned
+  **486,157 DPS both** -- the same simc invocation with a different label. What
+  changed is not the scenario machinery but the data behind it: `fight-promote
+  --from-fights` wrote a measured fight length into all nine encounters (139s to
+  493s) and a target count into the two whose event fetch ran to the end. Nine
+  extra cells per build, about 15% on a run.
+- **An empty `bosses` expansion is fatal only when it is the whole request.** As
+  one entry in a scenario list it is an ordinary state: a season whose raid has not
+  opened yet has no boss to sim. Treating it as an error took down **all twelve
+  shards** of the nightly run on 2026-08-18, one day after the re-file moved MID2's
+  asserted bosses to MID1 and left MID2 with eight factless encounters -- a run that
+  had four other scenarios to do failed on the fifth. Asking for `bosses` alone and
+  getting none is still an error, because then nothing was asked for that exists.
+- **`--no-resume` publishes an unreached encounter as never-probed**, and the
+  whole-document guard cannot see it. The payload level already works the right way
+  -- "a run contributes what it managed; everything else comes back from the
+  previous payload untouched" -- but `--no-resume` clears that previous payload by
+  design, so an encounter the run does not reach vanishes and writes
+  `measured: null`. That is not a smaller claim than `fightsSampled: 0`, it is a
+  different one, and the view says something different for each. Measured on
+  2026-08-21: a `--no-resume` pass moved four of MID2's eight encounters from
+  "probed, read nothing" to "never probed" while the other four kept theirs, so
+  `coverage.measured` stayed non-zero and the refusal above never fired.
+  `_keep_measurements` carries an encounter's block forward per encounter, which is
+  the same union rule `merge_gear_shards` uses. The carried block is older, so
+  `measurement.generatedAt` bounds the newest measurement rather than every entry --
+  the lesser inaccuracy against asserting a boss was never looked at.
+- **`wowdps fights` with no `--probe`, run over a directory that already holds a
+  probe's results, is silent data loss** -- 30 sampled kills per boss replaced by
+  nulls, and the command reports success. Done exactly that by hand, one command
+  after promoting the facts those measurements produced. `write_fights` now
+  refuses when the published file has measurements and the new document has none;
+  `--force` is the way through.
+- **The scenario can be run alone** `wowdps build
   --scenario bosses` expands to every boss whose profile has a `hand` or `logs` fact;
   `--scenario boss_<encounterId>` picks one. The default scenario set is untouched, so
   the nightly run's cost and content do not move until somebody decides they should.
@@ -1617,6 +4003,28 @@ is where adds die off, a partial read systematically **overstates** how many tar
 were up at the end -- holding flat exactly the fall the curve should show. The count
 kept is published so a thin band reads as thin. `medianLengthSeconds` is meaningful precisely
 because the first-kills sample has alike timings -- one length fits them all.
+
+**"First kills" is bounded by the ranking window, and that bound was invisible.**
+`select_report_fights` sorts by kill date, but only over the rows it was handed,
+and Warcraft Logs sorts rankings **by damage**. A guild that killed the boss on the
+first night with a slow, scrappy pull ranks low and sits deep in that list, so a
+narrow gather returns *the earliest of the best parses* -- a sample that is
+truthfully "the earliest kills we saw" and systematically later than the one asked
+for. Nothing in the payload said when the sampled kills happened, so there was no
+way to notice.
+
+Two changes, and the first matters more than the second. `FightObservation` now
+carries `started_at` from the ranking row, `EncounterObservation.killed_between`
+pools it, and `killedBetween` (first, last, spanDays) is published per encounter
+and printed in the caveat and on the Fights view. **Widening the window is the
+lever; publishing the dates is what makes the lever's effect checkable.**
+`--rankings-pages` defaults to 40 rather than 8 -- ranking pages are a rounding
+error against the per-fight event streams, which are the real cost.
+
+One bound no setting reaches: `characterRankings` contains **ranked parses only**.
+A kill logged privately, or one Warcraft Logs declined to rank, is not in that list
+at any depth. That is their rule, not a limit of this project, and it is worth
+stating when somebody asks why a specific early kill is missing.
 
 **Default `--reports` is 30, up from 3.** The band needs a real sample; 30 is a
 starting point, not a ceiling, and `--point-ceiling` gates the WCL cost. The per-fight
@@ -1770,6 +4178,54 @@ starting around 84s, 112s and 136s. Magnitude is never in the API, so the 20% st
 an assertion either way. Per this file's own rule the disagreement is a finding and
 the profile is untouched.
 
+### The validation case passed, and the carrier has a name
+
+The one thing this whole subsystem was built to check. The owner asserted, from
+playing it, that one of Lightblinded Vanguard's three targets takes roughly 20%
+extra damage for roughly the first 20 seconds. Measured over 30 kills on
+2026-08-16:
+
+```
+ability 1246385  "Avenging Wrath"
+start     0.508s  (0.403-2.004, n=30)
+duration 20.011s  (19.996-20.047, n=30)
+carried by Commander Venel Lightblood, 30 of 30 fights, 1 instance
+```
+
+Start and duration match the assertion; the carrier is named, which is the
+question that was put to the owner twice and could not be answered from a
+statement. Magnitude is still an assertion and always will be -- no field in the
+API says what an aura does.
+
+**Do not mistake this for the old bug.** CLAUDE.md records Avenging Wrath being
+nominated once before, as a *Paladin cooldown* that the player-aura filter had
+missed. This is a different thing with the same name: Lightblinded Vanguard is a
+Light-themed boss trio and its own NPC casts an ability called Avenging Wrath. The
+aura sits on an **enemy** actor, `sourced` 30/30, and the filter is working. The
+name collision is exactly the shape that would make somebody revert a correct
+fix, so check `carriedBy` before believing the name.
+
+### Promoting without the 160 MB artifact
+
+`fight-promote --from-fights web/public/data/<tier>/fights.json` rebuilds the
+proposals from the published document instead of the probe payload, which is a CI
+attachment nobody has to hand. `fights.json` carries `Promotion.to_json()`
+verbatim, so nothing is recomputed and a stale document promotes stale facts --
+the command prints the measurement's own timestamp for that reason.
+
+This is what made the manual step reachable, and the manual step stays manual: an
+automatic promotion would consume the single most valuable output of this
+subsystem -- a disagreement between an assertion and the log reader -- on the way
+past.
+
+**Run on 2026-08-16, 21 facts promoted across all nine encounters.** Every profile
+now carries a measured fight length and raid size; Crown of the Cosmos and
+Chimaerus also carry a target count, the two whose event fetch ran to the end. The
+consequence is the one that matters: **`restates_a_static_sweep()` is now False for
+all nine**, where before MID2's only asserted boss reproduced Patchwerk at three
+targets to the unit. Fight lengths run 139s to 493s against the 300s default, so a
+boss scenario is now a different simulation rather than a differently-labelled one.
+
 ### Which enemy carries an aura, and which enemy is the boss
 
 `nominate_priority_enemy` answers "is this the priority target or an add", in three
@@ -1834,6 +4290,182 @@ Still unverified:
   produced them yet, so `fights.json` has no `promotions` key at all and the view
   says so rather than showing an empty panel.
 
+### `ReportFight.startTime` is relative to the report, and 100% was the tell
+
+The first `--order public` run that got far enough to measure anything reported
+**89 of 89** kills on one boss and **102 of 102** on another as earlier than the
+ranked sample. That is not a finding, it is a unit error: `ReportFight.startTime`
+counts milliseconds from the *report's* start, not from the epoch. Used as-is
+every kill is a number near zero, which sorts before every real date, so a "which
+kills are earliest" search returns everything and reads as a spectacular result.
+
+`report_kills` therefore returns `(report start, fights)` as a pair -- the base is
+not context, it is the time base, and returning them together is what stops them
+being used apart. `kills_from_report` adds it, and refuses any kill that still
+lands before the year 2000: a row whose time base is unknown cannot be ranked
+against rows whose base is known, and keeping it would put it at the head of a
+"who killed it first" list every time.
+
+The general lesson is the one worth keeping: **a unanimous answer to a question
+about a distribution is a bug report.** "Did the rankings hide earlier kills"
+cannot honestly come back 100% yes on every boss, and noticing that was faster
+than reading the code.
+
+### The report search is the first thing here that actually costs points
+
+Every earlier measurement in this file says `pointsSpentThisHour` did not move and
+records the cost as UNMEASURED. The first `--order public` run moved it to **2880
+of 3600** and hit the 80% ceiling. So the counter does work, the rankings route
+really is close to free, and this one is not.
+
+Two causes, both fixed, and the first was the expensive one:
+
+- **The kills query was filtered by encounter**, so a zone's report list was walked
+  nine times with nine different variable sets and nine cache misses. It is
+  unfiltered now: `Report.fights(killType: Kills)` per report, encounter filtering
+  in `firstkills.kills_from_report` where it already happened anyway. Identical
+  variables mean the response cache answers bosses two through nine for nothing --
+  a 9x reduction from one line.
+- **`report_pages` defaulted to 20**, i.e. up to 2000 reports per zone. Now 5.
+
+And one bug of the same afternoon's family: **`PointBudgetExhausted` escaped
+`_public_first_kills`** and took the whole pass down, losing eight encounters that
+had already been read. `probe_encounter` has always treated a budget abort as
+"return what was read and say why"; the new code path simply sat outside that
+guard. `SearchOutcome.aborted` now carries it, and a stopped search reports "none
+earlier **so far**, but the search did not finish" rather than the flat "none
+earlier" that would read as a finding about the zone.
+
+### `--order public`: kills chosen by date, off the report search
+
+Built on the introspection below. `firstkills.py` (pure) + `_public_first_kills` in
+`fightprobe.py`. `--order public` is now the workflow default; `first` and `top`
+still exist and mean what they always did.
+
+The route is `reportData.reports(zoneID, startTime, endTime, limit, page)` for the
+logs, then `Report.fights(encounterID, killType: Kills)` per report, then the
+earliest N by `startTime`. Nothing downstream changes -- `ReportFight` already
+carries everything `_probe_fight` reads.
+
+Five things it is built around, and the first two are because the pagination
+envelope is the one part of the route the server would **not** introspect:
+
+- **Nothing assumes an order.** Every kill found is sorted locally by its own start
+  time, so it does not matter whether reports come back oldest- or newest-first.
+- **Paging stops on a short page**, not on a `has_more_pages` field whose name is
+  unverified. `reports_from_payload` reads a `data` list or a bare list and returns
+  nothing for anything else -- zero reports is visible in the output, an exception
+  in the middle of a nine-boss pass is not.
+- **The difficulty filter belongs in the extraction, not the query.** One
+  `report_kills` query per report serves every boss precisely because it carries no
+  encounter and no difficulty -- that is what makes the search affordable. So the
+  filter has to happen when the rows are read, and omitting it is not harmless: the
+  first run against Season 2's PTR zone found 54 kills of one boss and sampled
+  **none**, with `fight_structure` answering "fight 7 not in the report's fights"
+  once per kill. Difficulty is the only filter standing between the two calls, so
+  it is the suspect.
+
+  **Why they disagreed is not settled, and the first explanation was wrong.** It
+  read as "PTR raids are not pushed to Mythic"; the owner says they are, and that
+  most bosses simply have no kills yet. So `difficulties_seen` reports what the
+  search actually found whenever nothing matches -- "0 at Mythic, 54 at Heroic" and
+  "0 kills" are different problems and only one of them names its own fix. Do not
+  replace that with a second guess.
+
+  **Both halves of that were written and neither was connected, until 2026-08-21.**
+  Read this before trusting anything else on this page: the code looked complete
+  from every angle except running it.
+
+  - `seen_difficulties` in `_public_first_kills` was **declared and never written
+    to**, so its guard `if not rows and seen_difficulties` was permanently False and
+    the diagnostic could not fire on any run. `firstkills.difficulties_seen` -- the
+    function written for exactly this -- had no caller outside its own test.
+  - `kills_from_report` takes a `difficulty` argument whose own docstring calls it
+    load-bearing, and **the single call site omitted it**. So the search accepted
+    kills at any difficulty and `fight_structure`, which *is* filtered, then
+    answered "fight N not in the report's fights" once per kill. The symptom the
+    parameter was written to prevent was the symptom it was producing.
+
+  Three states now, not two: a row stating a **different** difficulty is dropped, a
+  row stating **none** is kept (unknown is not the same as wrong, and dropping it
+  loses a real kill invisibly), and every row is counted into
+  `SearchOutcome.difficulties_seen` either way.
+
+  The counts are published as `difficultiesSeen` on the encounter and turned into a
+  caveat by `_no_fights_caveats`, so the Fights view can say *"the log search did
+  find kills -- 54 at Heroic -- but this run asked for Mythic"*. Before this the
+  reason lived in a CI log for a run nobody kept, and an empty boss on the site was
+  indistinguishable from a boss nobody had tried to read.
+- **`kill` is re-checked** even though `killType: Kills` is passed. A filter that
+  silently stopped filtering would put a wipe into a sample of first kills, and a
+  first-night wipe is precisely the row that would win the sort.
+- **No anchor means the whole zone, which is the case this route exists for.** A
+  PTR zone has no ranked parses, so there is nothing to anchor on -- and the first
+  run against zone 54 refused on exactly that, leaving the eight Season 2 bosses
+  unmeasured while their reports sat in the API. Such a zone has existed for weeks,
+  so its entire report list is small and searching from zero is both correct and
+  cheap. `beat_anchor` is then meaningless and the summary says so instead of
+  reporting a zero.
+- **The window is anchored on the earliest *ranked* kill**, because nothing in the
+  schema says when a raid opened (`Zone.partitions` has names, no dates). The search
+  runs from `--lookback-days` before it. That makes the question concrete and
+  checkable -- *is there a public kill earlier than the earliest ranked one?* -- and
+  `SearchOutcome.beat_anchor` publishes the answer. A zone where it comes back zero
+  is a real finding about that zone, not a failure, and the run says so.
+- **A different `--order` re-opens an encounter.** `is_complete` compares the
+  recorded order, because a sample chosen one way is not more of a sample chosen the
+  other. Without it the resume defeats the switch entirely: everything collected at
+  `first` counts as done, the new route never runs, and the pass reports success
+  having changed nothing. That is exactly how the `max_pages` default went inert,
+  so it is worth stating as a rule: **any setting that changes *which* data is
+  collected has to participate in the completeness test**, or the continuation
+  quietly keeps the old answer.
+
+### The schema can be asked, and it was — two routes to "first kill" exist
+
+`wclschema.py` + `wowdps wcl-schema` + `wcl-schema.yml`. Verified against the live
+service on 2026-08-16, so the entries below are **read from the server**, not from
+the third-party mirror everything else here was written against. Introspection is
+**enabled**; that was the open risk and it is settled.
+
+The question was whether "the first public kill" can be asked directly, rather than
+approximated by sorting a window of damage-ranked parses by date. It can, two ways:
+
+| Route | What it gives | Restricted to ranked parses |
+|---|---|---|
+| `Encounter.fightRankings(metric: progress\|speed)` | fight-level ranking -- the progress race, per guild | yes |
+| `ReportData.reports(zoneID:, startTime:, endTime:, limit:, page:)` | every log uploaded in a time window | **no** |
+
+`FightRankingMetricType` = `default, execution, feats, score, speed, progress`.
+`CharacterRankingMetricType` is the long list of dps/hps variants plus
+`playerspeed` -- no date ordering anywhere in it, which is why the current probe
+has to sort client-side.
+
+**The reports route is the one that answers the owner's question.** It goes nowhere
+near rankings, so a public log Warcraft Logs never ranked is still in it, and it is
+natively bounded by time rather than by damage. The shape of a first-kill query is
+`reports(zoneID, startTime=<zone opening>, limit=100, page=N)` then
+`Report.fights(encounterID:, killType: Kills)` per report, taking the earliest
+`ReportFight.startTime`. `ReportFight` carries `kill`, `startTime`, `endTime`,
+`size`, `friendlyPlayers` and `phaseTransitions` -- everything `_probe_fight`
+already reads -- so the extraction downstream does not change at all. Only the
+*selection* does.
+
+Two other levers nobody has used: both ranking fields take `filter: String` (WCL's
+filter expression language) and `partition: Int`, and `Zone.partitions` is a real
+list with `id`, `name`, `compactName`, `default`. A partition is a tuning phase, so
+it is probably the honest way to say "the raid as it was at release" -- which is
+what "first kills" is a proxy for.
+
+Two traps, both measured:
+
+- **An unknown type name returns `Internal server error`, not a null `__type`.**
+  `EncounterRankings` was a guess -- the ranking fields return an untyped `JSON`
+  scalar, so no such object type exists -- and it aborted the whole first pass on
+  its second query. Errors are recorded per type and the walk continues now.
+- **`ReportPagination` is not introspectable either** despite being the declared
+  return type of `reports`. Read the fields off `Report` instead.
+
 **Previously not verified: a single real API call.** Credentials are Actions secrets. The GraphQL
 documents were written against a third-party mirror of the v2 schema
 (`ToppleTheNun/mchammer`, which carries `phases`/`archiveStatus`, so it is recent) because
@@ -1842,6 +4474,23 @@ enum values come from that mirror, not from the live server. So the first CI run
 `fight-probe.yml` is a schema check as much as a measurement — expect to fix a field name,
 and expect the `table` payload shape (`_table_entries` guesses between `entries`/`series`/
 `targets`) to need pinning against a real response.
+
+## The issue protocol: tracking that survives the session
+
+Standing instruction from the owner (2026-08-24): issues are created, updated
+and swept automatically, without him having to ask. What that means here:
+
+- Work that outlives a session, or waits on the owner's decision, gets a GitHub
+  issue. A PR body or a chat transcript is not durable tracking -- a caveat
+  written there is invisible three sessions later, which is how findings rot.
+- Every "could not verify" or deferred item in a merged PR either gets an issue
+  or is consciously dropped, and the PR text says which of the two happened.
+- Merging work closes the issues it resolves, with a comment linking the PR and
+  stating what was actually verified -- never a bare "done".
+- Before ending a session, and when picking one up: sweep the open issues for
+  staleness. Close what is done, with evidence; comment on what has changed.
+- Labels: `hub-plan` on everything; `agent-ready` only where no owner decision
+  is needed. Issue bodies are German, in the owner's vocabulary.
 
 ## Conventions
 
@@ -1861,3 +4510,281 @@ and expect the `table` payload shape (`_table_entries` guesses between `entries`
   `settings.medianDpsError` — the median error actually *measured* across every cell — and
   `settings.deterministic`; `samplingError()` and `describeConvergence()` in
   `web/src/lib/format.ts` are the only things that should phrase either.
+
+## Searching for a build, and what a search may claim
+
+`buildsearch.py` (the algorithm), `buildsearchrun.py` (the wiring), `talentrepair.py`
+(the forced repair), `computedbuilds.py` (the gate and the document), `wowdps
+build-search`, `.github/workflows/build-search.yml` -> `<tier>/computed-builds.json`,
+drawn by wtt-frontend's `dps-computed.ts`.
+
+### Only edits that leave the node set alone, and why that is a proof
+
+simc validates eleven things and **none of them is an unlock edge, a point gate or a
+point budget** — see the talent-tree section. Two of the three this project can check.
+The third is not in simc's data at all, so a search that adds or drops a node cannot
+know whether the result is reachable.
+
+The way out is not to check the edges but to make the question not arise:
+
+> If the seed's node set is legal, and an edit does not change which nodes are
+> selected, then every unlock edge satisfied by the seed is satisfied by the result —
+> because an unlock edge is a statement about which nodes are taken, and that set is
+> identical.
+
+That is a proof, not a heuristic, it needs no edge table, and `test_buildsearch.py`
+asserts it over generated mutations rather than arguing it. The same invariance carries
+the other two for free: `move_rank` preserves each tree's total, and a gate is a
+threshold on a tree's total.
+
+**What it costs is stated with every published number**: the search cannot discover
+that a different *set* of talents is better.
+
+### The search space is smaller than "choices and ranks" suggests
+
+Measured on simc `625a591` (2026-08-23) over MID2's 39 searchable builds:
+
+| | min | median | max |
+|---|---|---|---|
+| flippable choice nodes | **1** | 9 | 16 |
+| rank-move pairs | 0 | **0** | 4 |
+
+**Rank moves are unavailable on 33 of the 39 builds.** MID2's profiles put nodes at
+full rank or at one rank, so there is rarely a rank to move that would not empty its
+source — and emptying a source changes the node set, which voids the proof above. So
+this is in practice a **choice-node search** and the rank-move machinery earns its
+place on six builds. Do not describe the space as though both axes were live.
+
+The floor is not a rounding case either: both Frost Death Knight builds offer exactly
+**one** flippable choice node, so their entire search space is two builds. Those are
+the same two profiles `_THIN_CLASS_TREE` flags for spending 10 class points.
+
+### The blind calibration caught a structural defect, not a statistical one
+
+The first version generated the whole field once, around the seeds, and never again.
+Measured blind on both Arcane builds at 3000 iterations, that came back **3.4% and 4.1%
+behind** simc's own build — and the reason is arithmetic rather than noise: a scrambled
+seed has a median of **nine** choice nodes set at random and a one-shot single-edit
+neighbourhood corrects exactly **one**. The search could not reach simc's build from a
+blind start however many variants it measured. The calibration was measuring the
+algorithm's reach.
+
+Adding a greedy climb — measure the leader's whole one-edit neighbourhood, take the
+winner, repeat — moved the same two builds to **−0.18% and an exact tie** (Sunfury
+recovered simc's build to the DPS). Same seed, same criterion, same iteration counts.
+
+Two things worth keeping from that:
+
+- **A step is taken only when the new leader separates from the old one** under the tie
+  rule. Without it the climb walks uphill on Monte Carlo noise and reports the walk.
+- **A climb that spends every step says so.** A truncated climb presented as a
+  converged one is the same error as a truncated event fetch presented as a whole
+  fight.
+
+### Two things about the schedule that only a real run showed
+
+Both were found by running the calibration over the tier, not by a test, and both are
+invisible from any single round's output.
+
+- **The halving rounds must be planned *after* the climb, from the field it hands
+  them.** Planned from the pre-climb field, ``keep`` was half of ten while the field
+  arriving was two hundred, so the round dropped most of a tied field "for budget" and
+  the halving had stopped halving anything. And the climb must hand on its **tie-rule
+  survivors**, not everything it visited: re-measuring a deterministic run at the
+  precision it already ran at returns the same numbers for nothing.
+- **The replan has to be clamped.** ``plan_rounds`` gives a field of two a *single*
+  round at ``FINAL_ITERATIONS``, so the climb runs at 3000 -- and quadrupling that asks
+  for a schedule starting above where it ends (``iteration schedule must rise: start
+  12000, final 3000``). Measured: exactly **2 of MID2's 39** searchable builds are that
+  narrow, and they are both Frost Death Knight, which has one flippable choice node.
+  They are also both pet specs, so those two builds climb at full precision and cost
+  several times what the other 37 do. Worth knowing before reading a run's wall clock
+  as a per-build cost.
+
+### The gate, and what it does not gate
+
+`PASS_MIN_NOT_BEHIND` = 0.80 and `PASS_MAX_LOSS` = 0.02, **fixed and committed before
+the first calibration row existed**. Both must hold. simc's build is *inside* the space
+the search covers — it is one choice assignment over the same node set — so "tie or
+beat" is the natural bar rather than a generous one; 80% leaves room for the budget
+rather than for the method, and the second constant exists because the first can be
+satisfied by a search that is catastrophically wrong on one build.
+
+A row with **no candidate** counts as behind *and* as an unbounded loss. Treating it as
+zero would let "found nothing" clear a criterion about how badly the search may lose.
+
+**Repairs are not gated, and that is not an inconsistency.** A repair asserts only
+"simc refuses the hash its own profile ships, and this is that hash with the correction
+the trait table forces" — checkable by running simc, containing no optimality claim,
+and therefore not something a calibration could ever be evidence about.
+
+### Repairing a refused hash: three of the six are not one-node repairs
+
+Four of MID2's damage specs have **no number anywhere** — Havoc DH, Retribution Paladin,
+Arms and Fury Warrior — because simc's own parser refuses their stored hash. Asked
+directly on `625a591`, each exits **81**.
+
+**`spec-index.json` reports the wrong reason for four of the six, and reports one node
+where there are more.** Two separate things:
+
+- The published wording for Havoc and Retribution is *"choice index 1 out of bounds for
+  node 91020 (1 entries)"*, which is **this project's decoder speaking**. simc says
+  *"Node 91020 is not a choice node but has index selection."* — a different one of its
+  eleven refusals (#10, not #11). Right node, wrong sentence, and a caller grepping a
+  real run's stderr for the published one finds nothing.
+- Both `decode_loadout` and `spec_rule_violation` stop at the **first** failure, so
+  "exactly one node each" is an artifact of the reporting. Read past it with
+  `decode_lenient`: Havoc Aldrachi Reaver has **5** overflowing nodes, Retribution
+  **7** and **4**, and Arms and Fury have **2** spec-rule offenders each.
+
+Neither is fixed here — they are `specindex`'s fields and rewriting them churns a
+published document — but do not read that panel as a count.
+
+### Round-tripping is **not** evidence that a decode is sound
+
+47 of MID2's 51 hashes decode strictly and **all 47 re-encode byte for byte**, Arms and
+Fury included. That is tempting to read as "the decode is right" and it is not: the
+encoder walks the same node list as the decoder, so a reader whose walk disagrees with
+the *writer's* still reproduces the string it misread. Round-tripping proves reader and
+writer are inverses and says nothing about the tree the hash came from.
+
+Two signals do carry information, and both are read off the corpus rather than typed:
+**`spare_bits`** (observed range **-1 to 9** over the 84 MID1+MID2 profiles that decode;
+MID2 alone 0 to 9) and **per-tree point totals** against `derive_point_budget`. Applied
+to the five refused decodes they separate cleanly and agree with each other:
+
+| profile | spare bits | class/spec/hero | verdict |
+|---|---|---|---|
+| Havoc Fel-Scarred | 3 | 35/34/14 | sound |
+| Havoc Aldrachi Reaver | **-77** | 33/30/6 | overran the string |
+| Retribution (both) | **10** | 31/**37**/16 | stopped early, over budget |
+| Arms | 1 | 36/34/14 | sound |
+| Fury | 4 | 37/**30**/14 | sound, with a caveat |
+
+So the choice-index overflow is a *symptom* on three of those five and the whole disease
+on one. **The screen only ever rejects**: a build that passes was not caught, not
+proven, and that sentence travels with every repair as a caveat.
+
+**Verified against simc**: the three repaired hashes load and simulate — Havoc
+Fel-Scarred 115,335, Arms 106,065, Fury 96,418 DPS at 300 deterministic iterations on
+the profiles' own (289 item level) gear, all exit 0 where the originals exit 81. Those
+absolute numbers are why the anchor exists; do not compare them with the tier.
+
+**Fury spends 30 spec points where 82 of the other 83 profiles across both tiers spend
+exactly 34.** Not a decode failure — MID1's Fury profile reads 30 too, and a desync
+would not reproduce across two tiers. It is simc's profile being four points light, and
+the repair does not spend them: spending a point is a search decision.
+
+### The base actor is never *read* and is always *built*
+
+**The defect that defeated the whole repair feature, found by a real run and invisible
+to every test.** `run_profilesets` compares profilesets to profilesets and reads nothing
+from the base actor -- which is correct and is documented at length elsewhere in this
+file. simc still **builds** that actor, from the profile file, before it generates a
+single profileset. For the four specs the repair exists for, the profile's own hash is
+exactly the one simc refuses:
+
+```
+Error: Initialization error: Player 'MID2_Demon_Hunter_Havoc_Fel-Scarred':
+Hash '...': Node 91024 is not a choice node but has index selection.
+```
+
+simc exits **81** and the entire invocation dies, taking every profileset in it. So all
+three repaired builds came back `search failed` on the first tier-wide calibration.
+
+The trap is in how it was verified. `simc PROFILE.simc talents=HASH` **overrides the
+profile**, so a repaired hash checked that way loads and simulates and proves nothing
+about the pipeline, which reaches simc by a different route. Any check of a talent hash
+has to go through the route the pipeline actually uses, or it is checking a different
+question.
+
+`buildsearch.simc_runner` takes `base_talents` and `BuildContext.base_talents` supplies
+it only when a repair happened; each profileset still sets its own `talents=` and so
+overrides it. Measured after the fix: **Arms Warrior, a spec with no number anywhere on
+the site, returns 157,770 DPS** on the anchored kit -- against 106,065 on its own
+289-item-level gear, which is the anchor doing exactly what it exists for.
+
+### Anchor: one shape published, and it is the site's
+
+`GearAnchor.to_json()` is the **record**; `DpsGearAnchor` in `dps-data.models.ts` is the
+**reading**. Only `itemLevel` is common to both and `preserved`/`tierSet` share a name
+and differ in kind — reported by wtt-frontend#130 and left for whoever wired the
+producer. **Settled on the pipeline side**: `gearanchor.display_json` projects onto the
+frontend's shape and the frontend model is untouched, because the frontend's shape is
+the one with a consumer and a published field nothing reads is a field that drifts.
+
+### Cost, measured over a whole pass
+
+**153.7 CPU-minutes for MID2's 42 builds** — 39 searched, 3 refused, 1,237 variants —
+at the shipped settings (breadth 24, climb 12, 300/1200/3000), i.e. **3.9 CPU-minutes
+per searched build**. Wall clock was 48m12s on a 4-core box, so the run held ~3.2 of 4
+cores. Measured as the process tree's `cutime + cstime` off `/proc`, sampled every 10s
+and read at exit; single-build timings taken while something else was on the box are
+upper bounds and are not the figure to quote.
+
+That is under an hour of wall clock on a 4-vCPU runner, comfortably inside
+`timeout-minutes: 350`, and the reason `build-search.yml` is **one job rather than a
+matrix**. Sharding would buy nothing and would need a merge step, i.e. a second
+document shape to keep in agreement with the site.
+
+**A blind calibration costs more than a publish pass, not less**, which is the opposite
+of what "the climb stops as soon as no neighbour separates" suggests on its own: a
+seeded run frequently takes zero climb steps because simc's own build is already a
+local maximum, while a scrambled start has a median of nine wrong choice nodes and has
+to walk. Budget the calibration at the higher figure.
+
+### What the published pass found: simc's own build is beatable on 12 of 39
+
+MID2, one target, 3000 deterministic iterations, every build seeded with simc's own
+hash (repaired where simc refuses it), 2026-08-23. **12 of the 39 searchable builds
+carry a computed build that beats simc's outside the tie band**, median gain among them
+**+1.43%**; the largest are Devastation Evoker (Scalecommander) **+2.54%**, Devourer DH
+(Void-Scarred) **+2.46%** and Havoc DH (Fel-Scarred) **+2.20%**. The other 27 tie.
+
+Two things that is and is not. It **is** evidence that simc's shipped choice-node
+assignments are not always its own APL's best, on the anchored kit at one target. It is
+**not** a claim about the tier's balance: the search cannot change which nodes are
+taken, so a build it improves is still simc's node set, and every gain is measured
+against simc's build on the same gear rather than against the shipped dataset's numbers.
+
+**Three specs with no number anywhere on the site now have one**, all from a repaired
+hash: Havoc DH (Fel-Scarred) 179,858, Fury Warrior 161,765, Arms Warrior 157,231. On
+Arms and Fury the search separated from nothing, so what is published is the repair and
+only the repair -- which is the repair working as designed rather than a thin result.
+Retribution Paladin and Havoc's Aldrachi Reaver build stay refused, with the screen's
+reason on the row.
+
+### A pre-existing harvest test fails only with `WOWDPS_SIMC_SOURCE` set
+
+Found on 2026-08-23 and **not** introduced here -- it fails identically at
+`0b43705`. `test_harvest.py::test_a_real_hash_under_the_wrong_spec_name_is_still_caught`
+feeds an Arcane hash in as a Death Knight and asserts `spec_mismatch`; `harvest.validate`
+decodes *before* it compares spec ids, and that hash no longer survives a decode against
+Death Knight's node list, so the verdict is `decode_error`. The control's point stands
+(it is still a refusal) but the reason it asserts is not the reason it gets.
+
+Worth keeping for the shape rather than the bug: the test is gated on an environment
+variable, so `pytest -q` skips it and the default gate is green. A test that only runs
+in a mode nobody runs is a test that decays silently -- and this repository has three
+such gates now (`WOWDPS_SIMC_DIR`, `WOWDPS_SIMC_SOURCE`, and the pair together), each
+covering a different set.
+
+### Two document fields go beyond the frontend's declared interface
+
+`DpsComputedDataset` declares seven keys. The emitter adds two, both at document level,
+both omitted when empty, and neither read by `dps-computed.ts`: **`notes`** (per-run
+sentences -- which seed sources were available) and **`calibration`** (the gate's own
+table). They are named in `test_no_undeclared_field_reaches_a_row_the_site_reads`, which
+pins the *rows* to exactly the declared sets.
+
+That test exists because every other test of this document asks whether a declared key
+is **present**, and none of them can see a key the site has never heard of -- which is
+the direction this document drifts in. A producer grows a field, nothing reads it, and
+the next person takes it for part of the contract.
+
+`workflow_dispatch` only and no schedule, for the same reason `gear.yml` is: builds
+change when a tuning pass or a season changes. **Something has to invoke it or the
+document never exists** — the same failure `hero_trees.json` shipped. A committed
+document survives the nightly: `dataset.merge_shards` creates its output directory and
+writes into it, with no `rmtree` and no directory replacement, so a file it did not
+produce is left alone.

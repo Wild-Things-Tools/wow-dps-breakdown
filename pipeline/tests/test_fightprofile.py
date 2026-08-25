@@ -26,6 +26,12 @@ from wowdps.fightprofile import (
     load_profiles,
 )
 
+# These nine encounters are The Voidspire, Midnight Season 1's raid. They were
+# filed under MID2 until 2026-08-17, when Warcraft Logs' own zone list settled
+# it -- see the "nine bosses filed under MID2" note in CLAUDE.md. MID2 now holds
+# The Venomous Abyss, whose bosses nobody has facts for yet.
+VOIDSPIRE_TIER = "MID1"
+
 
 def profile(**facts) -> FightProfile:
     return FightProfile(
@@ -194,7 +200,7 @@ def test_an_amplification_multiplier_is_never_marked_as_measured():
 
 
 def test_the_shipped_file_carries_provenance_on_every_fact():
-    profiles = load_profiles("MID2")
+    profiles = load_profiles(VOIDSPIRE_TIER)
     assert profiles.profiles, "MID2 should list the tier's encounters"
     for entry in profiles.profiles.values():
         for key, fact in entry.facts.items():
@@ -206,7 +212,7 @@ def test_the_shipped_file_matches_what_the_owner_stated_about_lightblinded_vangu
     """The known-good case, pinned. Lightblinded Vanguard is a permanent three
     target fight, and one of the three takes about 20% extra damage for roughly
     the first twenty seconds."""
-    vanguard = load_profiles("MID2").get(3180)
+    vanguard = load_profiles(VOIDSPIRE_TIER).get(3180)
     assert vanguard is not None
     assert vanguard.baseline_targets == 3
     assert vanguard.targets.provenance.source == SOURCE_HAND
@@ -219,10 +225,28 @@ def test_the_shipped_file_matches_what_the_owner_stated_about_lightblinded_vangu
     assert amplification.target == fightprofile.TARGET_UNKNOWN
 
 
-def test_an_encounter_with_no_facts_falls_back_and_does_not_pretend_otherwise():
-    """Eight of the nine MID2 bosses are unmeasured. That has to read as a gap."""
-    profiles = load_profiles("MID2")
-    unknown = profiles.get(3176)
+def test_an_encounter_with_no_facts_falls_back_and_does_not_pretend_otherwise(tmp_path):
+    """A gap has to read as a gap, whatever the shipped file happens to contain.
+
+    Driven from a synthetic file: every MID2 boss carries promoted facts now, so
+    the shipped data no longer has a factless encounter, and a test that quietly
+    stopped exercising its own case would be worse than one that fails.
+    """
+    path = tmp_path / "profiles.json"
+    path.write_text(
+        json.dumps(
+            {
+                "tiers": {
+                    "MID2": {
+                        "difficulty": 5,
+                        "encounters": [{"encounterId": 3176, "name": "A boss", "facts": {}}],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    unknown = load_profiles("MID2", path).get(3176)
     assert unknown is not None and unknown.facts == {}
     plan = unknown.to_plan()
     assert plan.targets == 1 and plan.asserted == ()
@@ -278,7 +302,7 @@ def observation_of(peak: int, size: int, duration: float) -> fightextract.Encoun
 def test_a_disagreement_between_profile_and_probe_is_shown_rather_than_resolved():
     """If the probe says two targets on a fight the owner knows has three, the
     extraction is wrong -- and that is invisible if one overwrites the other."""
-    vanguard = load_profiles("MID2").get(3180)
+    vanguard = load_profiles(VOIDSPIRE_TIER).get(3180)
     rows = {row["fact"]: row for row in vanguard.compare_to_measurement(observation_of(2, 20, 280))}
 
     assert rows["baseline targets"]["profile"] == 3
@@ -336,11 +360,15 @@ def test_an_amplification_with_an_ability_id_is_matched_exactly():
 
 
 def test_the_probe_confirming_the_owner_leaves_both_numbers_standing():
-    vanguard = load_profiles("MID2").get(3180)
+    """The validation case: the owner's three targets, reproduced by the reader.
+
+    Raid size is now a promoted `logs` fact rather than absent, which is the
+    promotion working -- so this asserts the confirmation rather than the gap.
+    """
+    vanguard = load_profiles(VOIDSPIRE_TIER).get(3180)
     rows = {row["fact"]: row for row in vanguard.compare_to_measurement(observation_of(3, 20, 280))}
     assert rows["baseline targets"]["profile"] == rows["baseline targets"]["measured"] == 3
-    assert rows["raid size"]["profile"] is None  # never asserted; the probe answers it
-    assert rows["raid size"]["measured"] == 20
+    assert rows["raid size"]["profile"] == rows["raid size"]["measured"] == 20
 
 
 # --------------------------------------------------------------------------------

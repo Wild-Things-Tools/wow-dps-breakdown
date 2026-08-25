@@ -18,7 +18,7 @@ from pathlib import Path
 
 from wowdps import fightpromote
 from wowdps.fightextract import EncounterObservation, observe_fight
-from wowdps.fightprofile import SOURCE_HAND, SOURCE_LOGS, _data_file, load_profiles
+from wowdps.fightprofile import SOURCE_HAND, SOURCE_LOGS, load_profiles
 
 START = 1_000_000
 
@@ -83,11 +83,60 @@ def probe_payload(**overrides) -> dict:
 
 def setup(tmp_path: Path, **args) -> argparse.Namespace:
     """A profile file of our own plus a probe artifact, wired as the CLI wires them."""
-    # Copied through the loader's own resolver rather than by path arithmetic, so
-    # this keeps working if the data directory moves -- and so a test can never
-    # edit the shipped file.
+    # A file of our own rather than a copy of the shipped one. It used to be a copy,
+    # which was fine while the shipped file held only the owner's assertions and
+    # broke the moment a promotion run filled the blanks in it: the case under test
+    # is "a blank gets filled", and against an already-filled file that case cannot
+    # occur. The facts below are what MID2's Lightblinded Vanguard carried before
+    # the first promotion.
     profiles = tmp_path / "fight_profiles.json"
-    profiles.write_text(_data_file().read_text(encoding="utf-8"), encoding="utf-8")
+    profiles.write_text(
+        json.dumps(
+            {
+                "note": "n",
+                "tiers": {
+                    "MID2": {
+                        "difficulty": 5,
+                        "encounters": [
+                            {
+                                "encounterId": 3180,
+                                "name": "Lightblinded Vanguard",
+                                "facts": {
+                                    "targets": {
+                                        "value": {"baseline": 3, "constant": True},
+                                        "provenance": {
+                                            "source": "hand",
+                                            "statedBy": "owner",
+                                            "detail": "permanent three-target fight",
+                                        },
+                                    },
+                                    "amplifications": {
+                                        "value": [
+                                            {
+                                                "ability": "opening damage-taken buff",
+                                                "multiplier": 1.2,
+                                                "first": 0,
+                                                "duration": 20,
+                                                "target": "unknown",
+                                                "abilityId": None,
+                                                "magnitudeSource": "hand",
+                                            }
+                                        ],
+                                        "provenance": {
+                                            "source": "hand",
+                                            "statedBy": "owner",
+                                            "detail": "roughly 20% for roughly 20s",
+                                        },
+                                    },
+                                },
+                            }
+                        ],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
 
     probe = tmp_path / "fight-probe-MID2.json"
     probe.write_text(json.dumps(probe_payload()), encoding="utf-8")
@@ -220,3 +269,58 @@ def test_the_file_it_writes_is_still_a_file_the_loader_reads(tmp_path):
     assert vanguard.fight_length.value == 288
     assert vanguard.fight_length.provenance.source == SOURCE_LOGS
     assert vanguard.amplifications[0].ability_id == 555_001
+
+
+def test_promoting_from_a_published_fights_file_needs_no_probe_artifact(tmp_path):
+    """The probe payload is ~160 MB and lives in a CI run's attachments.
+
+    fights.json carries `Promotion.to_json()` verbatim, so the manual step -- which
+    stays manual, because a disagreement between an assertion and the log reader is
+    the most valuable thing this subsystem produces -- is reachable from a plain
+    checkout.
+    """
+    args = setup(tmp_path, write=True)
+    fights = tmp_path / "fights.json"
+    fights.write_text(
+        json.dumps(
+            {
+                "measurement": {"generatedAt": "2026-08-16T15:42:20+00:00"},
+                "encounters": [
+                    {
+                        "encounterId": 3180,
+                        "promotions": [
+                            {
+                                "key": "raidSize",
+                                "label": "Raid size",
+                                "value": 20,
+                                "summary": "20 players",
+                                "evidence": "the log's own group size",
+                                "sample": 30,
+                                "reports": ["AAA"],
+                                "eligible": True,
+                                "reason": "nothing is recorded for this fact",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    args.probe = None
+    args.from_fights = str(fights)
+
+    assert fightpromote.cmd_fight_promote(args) == 0
+
+    fact = facts_of(Path(args.profiles_file))["raidSize"]
+    assert fact["value"] == 20
+    assert fact["provenance"]["source"] == "logs"
+    # The measurement's own timestamp travels with it, not this run's clock.
+    assert fact["provenance"]["observedAt"] == "2026-08-16T15:42:20+00:00"
+
+
+def test_neither_source_named_is_an_error_rather_than_a_silent_no_op(tmp_path):
+    args = setup(tmp_path)
+    args.probe = None
+    args.from_fights = None
+    assert fightpromote.cmd_fight_promote(args) == 1

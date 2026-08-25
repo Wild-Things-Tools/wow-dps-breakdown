@@ -952,10 +952,27 @@ def _caveats(payload: dict, rankings_page: int | None, order: str | None = None)
             "fight is incomplete rather than absent."
         )
     if order == "first":
-        notes.append(
-            "Sampled from the earliest kills of the boss by kill date -- long kills "
-            "at the intended tuning, whose timings are alike."
-        )
+        span = payload.get("killedBetween")
+        if isinstance(span, dict) and span.get("first"):
+            # The dates, not just the claim. "Earliest kills" is only as true as the
+            # ranking window is wide: the selector sorts by date within the pages it
+            # gathered, and those are sorted by damage, so a slow first-night kill
+            # can sit past the window entirely. A reader who can see the dates can
+            # judge that; one who is only told "the earliest kills" cannot.
+            notes.append(
+                f"Sampled from the earliest kills by kill date, {span['first'][:10]} to "
+                f"{span['last'][:10]} ({span.get('spanDays')} days) -- long kills at the "
+                f"intended tuning, whose timings are alike. Earliest here means earliest "
+                f"among the ranking pages gathered, which Warcraft Logs sorts by damage, "
+                f"so a slow early kill can fall outside the window: widen it with "
+                f"--rankings-pages."
+            )
+        else:
+            notes.append(
+                "Sampled from the earliest kills of the boss by kill date -- long kills "
+                "at the intended tuning, whose timings are alike. No kill dates were "
+                "recorded, so how early they really were cannot be checked."
+            )
     elif rankings_page == 1:
         notes.append(
             "Sampled from page 1 of the rankings: the world's best pulls, which are "
@@ -992,6 +1009,36 @@ def _comparison(profile: FightProfile, measured: MeasuredEncounter | None) -> li
     return rows
 
 
+def _no_fights_caveats(payload: dict) -> list[str]:
+    """Why an encounter has no kills in it, when the search can say.
+
+    "The probe read no fights" is true and answers nothing: a boss nobody has killed
+    yet and a boss whose kills are all at a difficulty this run did not ask for look
+    identical on the page, and only one of them names its own fix. The counts come
+    from the report search, which is unfiltered by difficulty on purpose -- so it
+    sees the kills the probe then declines to open.
+    """
+    caveats = ["The probe read no fights for this encounter."]
+    seen = payload.get("difficultiesSeen")
+    if not isinstance(seen, dict) or not seen:
+        return caveats
+
+    wanted = payload.get("difficulty")
+    names = {"5": "Mythic", "4": "Heroic", "3": "Normal", "1": "Raid Finder"}
+    parts = [
+        f"{count} at {names.get(str(key), f'difficulty {key}')}"
+        if key != "None"
+        else f"{count} with no difficulty recorded"
+        for key, count in seen.items()
+    ]
+    asked = names.get(str(wanted), f"difficulty {wanted}")
+    caveats.append(
+        f"The log search did find kills of this encounter -- {', '.join(parts)} -- "
+        f"but this run asked for {asked}, so none of them was opened."
+    )
+    return caveats
+
+
 def _encounter_document(
     profile: FightProfile,
     payload: dict | None,
@@ -1016,6 +1063,12 @@ def _encounter_document(
             # How much of each sampled fight the events actually covered. Every
             # count in this block is averaged over that, not over the fight.
             "eventCoverage": payload.get("eventCoverage"),
+            # When the sampled kills actually happened. `--order first` promises the
+            # earliest kills and delivers the earliest *among the ranking pages
+            # gathered*, which are sorted by damage -- so a slow first-night kill can
+            # sit past the window and never be seen. Publishing the span is what
+            # turns that from an assumption into something a reader can check.
+            "killedBetween": payload.get("killedBetween"),
             "adds": payload.get("adds") or [],
             "auras": payload.get("auras") or [],
             "phases": payload.get("phases") or [],
@@ -1032,7 +1085,7 @@ def _encounter_document(
         measured_block = {
             "fightsSampled": 0,
             "reports": list(payload.get("reports") or []),
-            "caveats": ["The probe read no fights for this encounter."],
+            "caveats": _no_fights_caveats(payload),
             "timeline": None,
         }
 
@@ -1151,6 +1204,23 @@ def build_document(
 _PROVENANCE_PATHS: tuple[tuple[str, ...], ...] = (
     ("generatedAt",),
     ("measurement", "generatedAt"),
+    # The point meter, and it belongs here for the same reason the timestamps do:
+    # it describes the *run*, not the fights. Five of its nine fields are readings
+    # taken at the moment the run happened -- what the hour's counter stood at,
+    # how long until it resets -- so they differ on every pass by construction and
+    # the settle can never fire.
+    #
+    # Measured on 2026-08-24: three consecutive hourly probe commits, each "data:
+    # refresh fight shapes for MID2", each a one-line diff, and the only fields
+    # that moved were the two stamps and `cost`. No encounter, no kill count, no
+    # aura window changed. That is exactly the failure the settle exists to
+    # prevent -- "any diff means something moved" stops being true -- reached
+    # through a field nobody thought of as a stamp.
+    #
+    # The block is kept in the document rather than dropped: what a pass costs is
+    # the open question behind the event-budget decision, and it is the only
+    # measurement of it anywhere.
+    ("measurement", "cost"),
 )
 
 
@@ -1183,27 +1253,96 @@ def _carry_stamps(document: dict, published: dict) -> dict:
     return settled
 
 
-def write_fights(out_dir: Path, document: dict) -> Path:
+class MeasurementWouldBeLost(RuntimeError):
+    """Refusal: this write would replace measured fights with nothing."""
+
+
+def write_fights(out_dir: Path, document: dict, force: bool = False) -> Path:
     """Write ``<out_dir>/fights.json``, keeping the timestamp when nothing changed.
 
     Same reasoning as the manifest: a wall-clock timestamp that rewrites itself on
     every run means every run commits, and "a diff means something moved" stops
     being true. ``generatedAt`` reads as when the fight data last changed.
+
+    **A write that would drop a measurement is refused.** ``wowdps fights`` is
+    deliberately usable with no probe at all -- that is the state of a checkout
+    that has never reached Warcraft Logs, and publishing the assertions alone is
+    right there. Pointed at a directory that *already* holds a probe's results it
+    is something else entirely: it silently replaces 30 sampled kills per boss with
+    nulls, and the run reports success. Done exactly that once, by hand, one
+    command after promoting the facts those measurements produced.
+
+    ``force`` is the way through for somebody who means it.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "fights.json"
 
-    settled = document
     try:
         published = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         published = None
 
+    if published is not None and not force:
+        had = int((published.get("coverage") or {}).get("measured") or 0)
+        has = int((document.get("coverage") or {}).get("measured") or 0)
+        if had and not has:
+            raise MeasurementWouldBeLost(
+                f"{path} carries measurements for {had} encounter(s) and this "
+                f"document has none, so writing it would discard them. Pass a "
+                f"--probe payload to rebuild the measured half, or --force if "
+                f"dropping it is what you mean."
+            )
+
+    if published is not None and not force:
+        # After the refusal above and before the settle below: the carried-forward
+        # entries have to be in the document the settle compares, or a run that
+        # changed nothing else would still write a new timestamp.
+        document = _keep_measurements(published, document)
+
+    settled = document
     if published is not None and _without_stamps(published) == _without_stamps(document):
         settled = _carry_stamps(document, published)
 
     path.write_text(json.dumps(settled, separators=(",", ":")) + "\n", encoding="utf-8")
     return path
+
+
+def _keep_measurements(published: dict, document: dict) -> dict:
+    """Carry an encounter's measurements forward when this run produced none for it.
+
+    The payload level already works this way -- "a run contributes what it managed;
+    everything else comes back from the previous payload untouched" -- but
+    ``--no-resume`` clears the previous payload by design, so an encounter the run
+    did not reach vanishes from it and publishes as ``measured: null``.
+
+    That is not a smaller claim, it is a *different* one. ``fightsSampled: 0`` says
+    the probe looked and read nothing; ``measured: null`` says nothing ever looked,
+    and the view says something different for each. Observed on 2026-08-21: a
+    ``--no-resume`` pass moved four of MID2's eight encounters from the first state
+    to the second, and the whole-document guard above could not see it because the
+    other four still carried measurements.
+
+    The carried block is from an earlier run, so ``measurement.generatedAt`` bounds
+    the newest measurement in the document rather than every entry in it. That is
+    the lesser of the two inaccuracies: the alternative asserts an encounter was
+    never probed when it was.
+    """
+    by_id = {
+        entry.get("encounterId"): entry
+        for entry in published.get("encounters") or []
+        if isinstance(entry, dict)
+    }
+    kept = 0
+    encounters = []
+    for entry in document.get("encounters") or []:
+        was = by_id.get(entry.get("encounterId"))
+        if entry.get("measured") is None and was is not None and was.get("measured") is not None:
+            entry = {**entry, "measured": was["measured"]}
+            kept += 1
+        encounters.append(entry)
+    if not kept:
+        return document
+    return {**document, "encounters": encounters}
 
 
 def load_probe(path: Path) -> dict:

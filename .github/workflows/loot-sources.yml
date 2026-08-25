@@ -212,7 +212,24 @@ jobs:
             exit 0
           fi
           git commit -m "data: refresh derived loot sources ${{ inputs.tier }} $(date -u +%Y-%m-%d)"
-          git push
+          # Rebase before pushing. These workflows commit into one branch and run
+          # concurrently with each other and with a person's own pushes, so a bare
+          # push loses the race and fails a run whose actual work succeeded --
+          # observed three times on 2026-08-16/17, each time discarding a completed
+          # probe pass for a reason that had nothing to do with it. The commits are
+          # data-only and touch disjoint files, so rebasing is safe; --autostash
+          # covers anything the run left in the tree.
+          # github.ref_name rather than `git rev-parse --abbrev-ref HEAD`: a
+          # checkout is detached for some event types and would resolve to "HEAD".
+          pushed=false
+          for attempt in 1 2 3; do
+            git pull --rebase --autostash origin "${{ github.ref_name }}" || true
+            if git push origin "HEAD:${{ github.ref_name }}"; then pushed=true; break; fi
+            echo "push attempt $attempt lost the race; retrying"
+            sleep $((attempt * 5))
+          done
+          # Losing three times is a real failure, not something to exit 0 on.
+          [ "$pushed" = true ]
 
       # The response cache is the reason a second run costs nothing: download it,
       # point a local run at it with --cache, and the extraction can be iterated on

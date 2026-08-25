@@ -49,6 +49,15 @@ on:
       tiers:
         description: "Space-separated tiers to simulate: names, 'latest', 'previous'"
         default: 'latest'
+      scenarios:
+        description: "Scenario flags passed straight to `wowdps build`, e.g. '--scenario patchwerk'. Empty uses the default set plus every boss with facts"
+        default: ''
+      include_unvalidated:
+        description: "Also simulate the profiles simc wrote and left commented out. They are labelled everywhere they appear"
+        default: 'true'
+      include_extra_builds:
+        description: "Also simulate the builds this project supplies for missing (spec, hero tree) cells -- repaired, harvested or computed talents, labelled with their origin everywhere they appear"
+        default: 'true'
 
 concurrency:
   group: sims
@@ -108,6 +117,34 @@ jobs:
           cp simc/build/simc bundle/simc
           strip bundle/simc || true
           cp -r simc/profiles bundle/profiles
+
+          # simc's generated trait table, which `wowdps hero-trees` needs and no
+          # compiled binary can supply. 686 KB against a 30 MB binary, and it means a
+          # shard can name every build's hero tree from the bundle alone rather than
+          # cloning simc again.
+          mkdir -p bundle/engine/dbc/generated
+          cp simc/engine/dbc/generated/trait_data*.inc bundle/engine/dbc/generated/
+
+          # And the two tables `wowdps build` needs to say which builds wear the
+          # tier set: `item_set_bonus` for the sets, `item_data` for the `id_set` on
+          # each equipped piece. Without them `cli._tier_set_reference` warns and
+          # returns None -- correctly, since a missing table must never cost a night
+          # of simulations -- and no build is flagged anywhere in the published
+          # dataset. That is how it stood from the day the flag was added: it worked
+          # from a full checkout and could not work here.
+          #
+          # `item_data.inc` is 26 MB and there are two of it, which is the whole of
+          # the cost question. Measured on simc 625a591: 52.5 MB raw, but the tables
+          # are text and deflate 11.4:1, so the artifact -- which is what actually
+          # crosses the wire, twelve times -- grows by 4.6 MB. Both variants rather
+          # than one, for 2.3 MB more: which of the two the pipeline reads is a
+          # run-time choice (`wowdps build --ptr`), and a bundle carrying only the
+          # other one fails by warning and flagging nothing, which is precisely the
+          # silent failure being fixed here. Same glob as trait_data above, for the
+          # same reason. Copying the whole of engine/dbc/generated, as gear.yml and
+          # buffs.yml do, would be 157 MB raw and 15 MB compressed.
+          cp simc/engine/dbc/generated/item_set_bonus*.inc bundle/engine/dbc/generated/
+          cp simc/engine/dbc/generated/item_data*.inc bundle/engine/dbc/generated/
 
           # Smoke test: does the binary we just built run at all?
           #
@@ -178,7 +215,73 @@ jobs:
           chmod +x bundle/simc
           pip install -e ./pipeline
 
+      # The specs simc wrote a complete profile for and did not switch on. MID2
+      # ships 15 of 26 damage specs and the reason is not stale action lists --
+      # those live in the class modules and exist for every spec. It is that
+      # `profiles/generators/<tier>/<Class>.simc` carries a whole profile for each
+      # of the others, talent hash and every gear slot, with every line commented
+      # out. Materialising them is the difference between "the data does not exist"
+      # and "simc's authors have not signed this off yet".
+      #
+      # Every shard runs it, over the same generator files, so the discovered set
+      # is identical in all of them and the round-robin split stays consistent. The
+      # unvalidated state travels in the written file rather than through this flag
+      # (`unvalidated.MARKER`), so no shard can label its builds differently from
+      # another's.
+      - name: Materialise the unvalidated profiles
+        if: ${{ (inputs.include_unvalidated || 'true') == 'true' }}
+        run: |
+          wowdps -v unvalidated \
+            --tier "${{ matrix.tier }}" \
+            --simc-source bundle \
+            --write
+
+      # The builds this project supplies for (spec, hero tree) cells simc ships
+      # nothing usable for -- repaired, harvested or computed talents on a stated
+      # base character, from `data/extra_builds.json`. After the unvalidated
+      # materialisation, because some cells deliberately supersede a refused
+      # materialised profile of the same filename; the provenance travels in the
+      # written file (`# wowdps-origin ...`), so every shard labels its builds
+      # identically, exactly like the unvalidated marker above. A cell whose hash
+      # no longer validates against the current trait table is refused and
+      # reported rather than written -- one rotted cell must not cost the night.
+      - name: Materialise the extra builds
+        if: ${{ (inputs.include_extra_builds || 'true') == 'true' }}
+        run: |
+          wowdps -v extra-builds \
+            --tier "${{ matrix.tier }}" \
+            --simc-source bundle \
+            --write
+
+      # Which hero tree each build plays, decoded from its own talent hash against
+      # simc's trait table. Ordering is the whole point of putting it here: every
+      # shard reads `hero_trees.json` through `profiles.discover`, so it has to be
+      # written before `wowdps build` and after the disabled profiles are
+      # materialised -- a build materialised later would otherwise not be in the map.
+      # It runs in every shard over the same inputs, so all twelve write the same
+      # file, exactly like the materialisation above; only the publish job's copy is
+      # committed.
+      - name: Name every build's hero tree
+        run: |
+          wowdps -v hero-trees \
+            --tier "${{ matrix.tier }}" \
+            --simc-source bundle \
+            --profiles bundle/profiles \
+            --include-tanks \
+            --out web/public/data \
+            --write
+
       - name: Run simulations
+        env:
+          # The default scenario set plus every boss the tier's fight profiles know
+          # something about. Those were wiring waiting on data until 2026-08-16: the
+          # profiles carried only the 300s fallback, so a boss scenario reproduced
+          # the static sweep with a boss's name on it -- measured at 486,157 DPS
+          # both ways. `fight-promote` has since written a measured fight length
+          # into all nine (139s to 493s) and a target count into two, so they are
+          # now different simulations. Nine extra cells per build, about 15% on a
+          # run, which is what the fight subsystem has been for.
+          SCENARIOS: ${{ inputs.scenarios || '--scenario patchwerk --scenario addwaves --scenario hecticaddcleave --scenario dungeonslice --scenario bosses' }}
         run: |
           wowdps build \
             --simc bundle/simc \
@@ -187,6 +290,7 @@ jobs:
             --shard "${{ matrix.shard }}/$SHARDS" \
             --target-error "$TARGET_ERROR" \
             --max-iterations "$ITERATIONS" \
+            $SCENARIOS \
             --out shard
 
       # Each shard directory already holds its own <tier>/ subdirectory, so the merge
@@ -256,11 +360,77 @@ jobs:
       # against simc's own trait table -- no credentials, no external service, and no
       # compiled simc either, so a sparse clone of one directory is the whole cost.
       # It runs here rather than in a shard because it needs every spec file at once.
+      # Pinned to the revision the simulations actually ran against, not to whatever
+      # simc's HEAD is by the time this job starts. simc merges through the night, so
+      # an unpinned clone decodes the talent trees, indexes the specs and names the
+      # hero trees against a *different* trait table from the one that produced the
+      # spec files being published beside them -- and can name a build simc added
+      # after the shards were handed their bundle. Falls back to HEAD with a warning
+      # rather than failing: a one-revision drift is a smaller harm than losing the
+      # night's simulations, and the warning says which of the two happened.
       - name: Fetch simc trait table
+        env:
+          SIMC_SHA: ${{ needs.build-simc.outputs.simc-sha }}
         run: |
           git clone --depth 1 --filter=blob:none --sparse \
             https://github.com/simulationcraft/simc.git simc-src
-          git -C simc-src sparse-checkout set engine/dbc/generated
+          # `spec-index` needs the profiles too: role is the one field simc's
+          # generated data does not carry, and it comes from a profile's role= line.
+          git -C simc-src sparse-checkout set engine/dbc/generated profiles
+          if git -C simc-src fetch --depth 1 origin "$SIMC_SHA" \
+            && git -C simc-src checkout --force "$SIMC_SHA"; then
+            echo "::notice::pinned simc-src to $SIMC_SHA, the revision the shards simulated"
+          else
+            echo "::warning::could not pin simc-src to $SIMC_SHA; using simc HEAD, so the talent trees, spec index and hero trees may describe a newer simc than the spec files published beside them"
+          fi
+
+      # The same materialisation the shards did, so `spec-index` sees the same set.
+      # Without it a spec this run simulated from a disabled profile would be drawn
+      # as "simc ships no profile for this spec" while its build sits in the
+      # ranking -- the coverage panel contradicting the chart beside it.
+      - name: Materialise the unvalidated profiles
+        if: ${{ (inputs.include_unvalidated || 'true') == 'true' }}
+        run: |
+          for tier in $(python3 -c "
+          import json, pathlib
+          index = json.loads(pathlib.Path('web/public/data/tiers.json').read_text())
+          print(' '.join(t['id'] for t in index['tiers']))
+          "); do
+            wowdps -v unvalidated --tier "$tier" --simc-source simc-src --write
+          done
+
+      # The same extra-build materialisation the shards did, for the same reason
+      # the unvalidated one runs here twice: `spec-index` and `hero-trees` read
+      # the profiles back in this job, and a build the shards simulated must not
+      # be drawn as "simc ships no profile for this tree" beside its own row.
+      - name: Materialise the extra builds
+        if: ${{ (inputs.include_extra_builds || 'true') == 'true' }}
+        run: |
+          for tier in $(python3 -c "
+          import json, pathlib
+          index = json.loads(pathlib.Path('web/public/data/tiers.json').read_text())
+          print(' '.join(t['id'] for t in index['tiers']))
+          "); do
+            wowdps -v extra-builds --tier "$tier" --simc-source simc-src --write
+          done
+
+      # Same step the shards ran, and -- because the checkout above is pinned to the
+      # build job's simc revision -- over the same inputs, so the committed file
+      # matches what the run simulated with. It is here as well as in the shards
+      # because this is the job that commits, and because `spec-index` reads the
+      # resolved names back through `profiles.discover`. If the pin failed, the
+      # warning from that step is what says the two may differ; the shards' answer is
+      # the one the published spec files were built from.
+      - name: Name every build's hero tree
+        run: |
+          for tier in $(python3 -c "
+          import json, pathlib
+          index = json.loads(pathlib.Path('web/public/data/tiers.json').read_text())
+          print(' '.join(t['id'] for t in index['tiers']))
+          "); do
+            wowdps -v hero-trees --tier "$tier" --simc-source simc-src \
+              --include-tanks --out web/public/data --write
+          done
 
       - name: Decode talent trees
         run: |
@@ -270,6 +440,19 @@ jobs:
           print(' '.join(t['id'] for t in index['tiers']))
           "); do
             wowdps -v talent-trees --tier "$tier" --simc-source simc-src
+          done
+
+      # Every class and spec in the game, for the Spec detail picker. Runs after the
+      # talent decode on purpose: hero tree names exist nowhere in simc's data and
+      # are joined out of `talent-trees.json`, so the order matters.
+      - name: Index every class and spec
+        run: |
+          for tier in $(python3 -c "
+          import json, pathlib
+          index = json.loads(pathlib.Path('web/public/data/tiers.json').read_text())
+          print(' '.join(t['id'] for t in index['tiers']))
+          "); do
+            wowdps -v spec-index --tier "$tier" --simc-source simc-src
           done
 
       # simc's own history, for "when did the engine last change and what moved".
@@ -294,10 +477,29 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
-          git add web/public/data
+          # `hero_trees.json` is pipeline data rather than published output, and it
+          # is the one file outside web/public/data this run may rewrite.
+          git add web/public/data pipeline/src/wowdps/data/hero_trees.json
           if git diff --staged --quiet; then
             echo "dataset unchanged"
             exit 0
           fi
           git commit -m "data: refresh simulations $(date -u +%Y-%m-%d)"
-          git push
+          # Rebase before pushing. These workflows commit into one branch and run
+          # concurrently with each other and with a person's own pushes, so a bare
+          # push loses the race and fails a run whose actual work succeeded --
+          # observed three times on 2026-08-16/17, each time discarding a completed
+          # probe pass for a reason that had nothing to do with it. The commits are
+          # data-only and touch disjoint files, so rebasing is safe; --autostash
+          # covers anything the run left in the tree.
+          # github.ref_name rather than `git rev-parse --abbrev-ref HEAD`: a
+          # checkout is detached for some event types and would resolve to "HEAD".
+          pushed=false
+          for attempt in 1 2 3; do
+            git pull --rebase --autostash origin "${{ github.ref_name }}" || true
+            if git push origin "HEAD:${{ github.ref_name }}"; then pushed=true; break; fi
+            echo "push attempt $attempt lost the race; retrying"
+            sleep $((attempt * 5))
+          done
+          # Losing three times is a real failure, not something to exit 0 on.
+          [ "$pushed" = true ]

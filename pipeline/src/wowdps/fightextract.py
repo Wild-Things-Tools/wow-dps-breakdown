@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import statistics
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 #: Aura events that start a window, and the ones that end it. ``refresh*`` is
 #: deliberately absent: a refresh extends a window that is already open, and
@@ -363,6 +364,12 @@ class FightObservation:
     #: True when an event fetch stopped at its page limit, so anything derived
     #: from the tail of the fight is incomplete rather than absent.
     truncated: bool = False
+    #: When the kill happened, epoch milliseconds, from the ranking row that
+    #: nominated it. 0 when the row carried no timestamp. This is what makes
+    #: "are these actually the first kills?" an answerable question instead of an
+    #: assumption -- see ``select_report_fights``, where the sample is the earliest
+    #: kills *among the damage-sorted pages gathered*, which is not the same thing.
+    started_at: float = 0.0
     warnings: tuple[str, ...] = ()
     #: Actor ids on the raid's side: the players and everything they own. Auras
     #: applied by one of these are player effects on an enemy, not something the
@@ -982,6 +989,7 @@ def observe_fight(
     truncated: bool = False,
     friendly_ids: frozenset[int] = frozenset(),
     significant_share: float = DEFAULT_SIGNIFICANT_SHARE,
+    started_at: float = 0.0,
 ) -> FightObservation:
     """Assemble one fight's observations from the payloads that describe it."""
     start_ms = float(fight.get("startTime") or 0.0)
@@ -1046,6 +1054,7 @@ def observe_fight(
         damage_by_target=tuple(damage_by_target(damage_table)),
         active_time_fraction=active_time_fraction(player_table, duration),
         truncated=truncated,
+        started_at=started_at,
         warnings=tuple(warnings),
         friendly_ids=friendly_ids,
         # Nominated from the enemies that mattered rather than from everything
@@ -1106,6 +1115,16 @@ class EncounterObservation:
     encounter_name: str
     difficulty: int | None
     fights: list[FightObservation] = field(default_factory=list)
+    #: True when the selection walked the whole candidate set rather than a window
+    #: of it -- only the report search can claim that. It is what lets an encounter
+    #: with genuinely few kills count as finished instead of being re-opened every
+    #: hour forever.
+    search_exhausted: bool = False
+    #: Kills the search saw of this encounter, per difficulty, keyed by the raw
+    #: value (``None`` for a row that stated none). It is what separates "nobody
+    #: has killed this boss yet" from "the kills are at a difficulty this run did
+    #: not ask for", and those look identical on a view that only has a count.
+    difficulties_seen: dict[int | None, int] = field(default_factory=dict)
 
     def _values(self, pick) -> list[float]:
         return [value for value in (pick(fight) for fight in self.fights) if value is not None]
@@ -1121,6 +1140,20 @@ class EncounterObservation:
     @property
     def reports(self) -> list[str]:
         return sorted({fight.report_code for fight in self.fights})
+
+    @property
+    def killed_between(self) -> tuple[float, float] | None:
+        """Earliest and latest sampled kill, epoch ms, or None when no row had a date.
+
+        Published so the sample can be argued with. ``--order first`` takes the
+        earliest kills *among the ranking pages gathered*, and those pages are
+        sorted by damage -- so a narrow gather quietly returns kills from well after
+        the raid opened while still being, truthfully, "the earliest ones we saw".
+        The only way to notice is to look at the dates, which means they have to be
+        in the output.
+        """
+        stamps = [fight.started_at for fight in self.fights if fight.started_at]
+        return (min(stamps), max(stamps)) if stamps else None
 
     @property
     def duration(self) -> Spread | None:
@@ -1340,11 +1373,45 @@ class EncounterObservation:
             "peakTargetShare": _json(self.peak_share),
             "activeTimeFraction": _json(self.uptime),
             "eventCoverage": _json(self.event_coverage),
+            "searchExhausted": self.search_exhausted,
+            # Only when there is something to say. An encounter that was read fine
+            # publishes the bytes it did before this existed, so a quiet re-probe
+            # still leaves nothing to commit.
+            **(
+                {
+                    "difficultiesSeen": {
+                        str(k): v
+                        for k, v in sorted(
+                            self.difficulties_seen.items(), key=lambda kv: (kv[0] is None, kv[0])
+                        )
+                    }
+                }
+                if self.difficulties_seen
+                else {}
+            ),
+            # When the sampled kills happened. Published so `--order first` can be
+            # checked rather than believed: it takes the earliest kills *among the
+            # damage-sorted ranking pages gathered*, so a narrow gather returns
+            # kills from well after the raid opened while still being, truthfully,
+            # the earliest ones seen. Dates in the output are the only way to notice.
+            "killedBetween": _killed_between(self.killed_between),
             "adds": self.pooled_adds(),
             "auras": self.pooled_auras(),
             "phases": self.pooled_phases(),
             "fights": [fight.to_json() for fight in self.fights],
         }
+
+
+def _killed_between(span: tuple[float, float] | None) -> dict | None:
+    """Epoch-millisecond kill span as ISO dates, or None when no row carried one."""
+    if not span:
+        return None
+    first, last = span
+    return {
+        "first": datetime.fromtimestamp(first / 1000, UTC).isoformat(timespec="seconds"),
+        "last": datetime.fromtimestamp(last / 1000, UTC).isoformat(timespec="seconds"),
+        "spanDays": round((last - first) / 86_400_000, 1),
+    }
 
 
 def _one_role(roles: set[str]) -> str:

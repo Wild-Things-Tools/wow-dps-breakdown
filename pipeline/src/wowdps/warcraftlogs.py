@@ -34,7 +34,7 @@ from pathlib import Path
 
 import httpx
 
-from . import logsanalysis
+from . import fightprofile, logsanalysis
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +66,28 @@ query SpecRankings(
 }
 """
 
+# One zone by id, which the zone *list* cannot always reach. Measured on
+# 2026-08-17: `worldData.zones` returns 42 zones topping out at id 50, and zone 54
+# -- the Season 2 PTR zone, which warcraftlogs.com/zone/reports?zone=54 serves --
+# is not among them. So the list is not an enumeration of every zone, and anything
+# that treats it as one silently concludes a zone does not exist. `zones` also
+# takes an `expansion_id`, which is the likelier explanation than PTR-specific
+# hiding, but either way the direct lookup is the answer rather than a guess about
+# the filter.
+ZONE_BY_ID_QUERY = """
+query ZoneById($zoneId: Int!) {
+  rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
+  worldData {
+    zone(id: $zoneId) {
+      id
+      name
+      frozen
+      encounters { id name }
+    }
+  }
+}
+"""
+
 ZONE_QUERY = """
 query Zones {
   worldData {
@@ -78,6 +100,192 @@ query Zones {
   }
 }
 """
+
+# The route to "who killed this first" that does not go through rankings at all.
+# Verified against the live schema on 2026-08-16: `reportData.reports` takes a
+# zoneID and a startTime/endTime window and is not restricted to ranked parses, so
+# a public log Warcraft Logs never ranked is still in it.
+#
+# `ReportPagination` is the declared return type and the server refuses to
+# introspect it, so only `data` is requested -- the Laravel-style envelope these
+# APIs use -- and paging stops on a short page rather than on a `has_more_pages`
+# field whose name is unverified. `firstkills.reports_from_payload` reads the
+# envelope defensively for the same reason.
+REPORTS_QUERY = """
+query Reports($zoneId: Int!, $startTime: Float!, $endTime: Float!, $limit: Int!, $page: Int!) {
+  rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
+  reportData {
+    reports(zoneID: $zoneId, startTime: $startTime, endTime: $endTime, limit: $limit, page: $page) {
+      data { code startTime endTime }
+    }
+  }
+}
+"""
+
+# One report's kills of one encounter. `killType: Kills` is the server-side filter;
+# `kill` is requested anyway so the extraction can re-check it, because a filter
+# that silently stopped filtering would put wipes into a sample of first *kills*.
+# Deliberately *not* filtered by encounter. A zone's report list is the same for
+# every boss in it, so filtering server-side would ask the same question nine times
+# with nine different variable sets and nine cache misses -- measured at 2880 of
+# 3600 points before the ceiling stopped the first run. Unfiltered, the query and
+# its variables are identical across every encounter, the response cache serves the
+# second through ninth for nothing, and `firstkills.kills_from_report` does the
+# encounter filter locally, which it had to do anyway.
+REPORT_KILLS_QUERY = """
+query ReportKills($code: String!) {
+  rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
+  reportData {
+    report(code: $code) {
+      code
+      startTime
+      fights(killType: Kills) {
+        id
+        encounterID
+        difficulty
+        kill
+        startTime
+        endTime
+      }
+    }
+  }
+}
+"""
+
+# The zone a boss belongs to, which `reports` needs and the probe does not otherwise
+# know. `Encounter.zone` is a non-null field, so this cannot come back empty for a
+# real encounter id.
+ENCOUNTER_ZONE_QUERY = """
+query EncounterZone($encounterId: Int!) {
+  rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
+  worldData {
+    encounter(id: $encounterId) {
+      id
+      name
+      zone { id name frozen }
+    }
+  }
+}
+"""
+
+# The gear and specialisation of every player in one pull, in one request.
+#
+# `playerDetails` is documented as "a table of information for the players of a
+# report, including their specs, talents, gear, etc. This data is not considered
+# frozen, and it can change without notice" -- so it is an untyped `JSON` scalar
+# and `harvest.player_detail_rows` reads it defensively, exactly as
+# `_ranking_entries` reads `characterRankings`.
+#
+# Scoped to one fight by `fightIDs`, which is the whole reason this is affordable:
+# unscoped it returns the players of every pull in the report. It is also what makes
+# a sampled kill cost the same whether one spec is wanted out of it or twenty --
+# the response carries the entire raid.
+#
+# `killType` is passed explicitly. Its default is `All`, and this project has
+# already paid once for the general lesson that an omitted argument is a *default*
+# rather than nothing: the server answers helpfully with a wider set and nothing
+# says so.
+#
+# **`includeCombatantInfo: true` is the whole reason this query returns gear**, and
+# it is the same lesson a second time. It was omitted; its default is `false`; and
+# the server then answers with every row's `combatantInfo` present and **empty** --
+# serialised as `[]`, not as an absent key, so nothing downstream reads as broken.
+# The first live probe (CI run 32660348582, 2026-08-23) accordingly reported
+# `combatantInfo keys: list` and `gear entries: 0 readable, 0 skipped` over fourteen
+# real players, which reads like a payload shape this code failed to parse and was
+# an argument it failed to send.
+#
+# Read from the server rather than from a mirror: `wowdps wcl-schema --type Report`
+# on 2026-08-23 (CI run 32660759853) returns
+#
+#     playerDetails: JSON
+#         difficulty: Int = 0
+#         encounterID: Int = 0
+#         endTime: Float = 0
+#         fightIDs: [Int] = []
+#         killType: KillType = All
+#         startTime: Float = 0
+#         translate: Boolean = true
+#         includeCombatantInfo: Boolean = false
+#
+# Every argument this query passes is therefore stated, and no argument it does not
+# pass is load-bearing. `Encounter.characterRankings` carries an argument of the
+# same name and the same default; nothing here uses it, because the gear has to come
+# from the sampled kill rather than from whichever pull a ranking row happens to be.
+PLAYER_DETAILS_QUERY = """
+query PlayerDetails($code: String!, $fightId: Int!) {
+  rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
+  reportData {
+    report(code: $code) {
+      code
+      startTime
+      playerDetails(
+        fightIDs: [$fightId]
+        killType: Kills
+        translate: true
+        includeCombatantInfo: true
+      )
+    }
+  }
+}
+"""
+
+# One encounter's name, which is what verifies a PTR id's live twin before anything
+# is harvested from it. `Encounter.name` is `String!` -- introspected on 2026-08-23,
+# CI run 32660759853 -- so a name that comes back absent means the *encounter* is
+# absent, which is a real answer and the one `harvest.choose_encounter_id` refuses on.
+#
+# Deliberately not `ENCOUNTER_ZONE_QUERY`, which would answer as well and asks for a
+# zone nothing needs: this query is sent for an id nobody has established exists.
+ENCOUNTER_NAME_QUERY = """
+query EncounterName($encounterId: Int!) {
+  rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
+  worldData {
+    encounter(id: $encounterId) {
+      id
+      name
+    }
+  }
+}
+"""
+
+
+def talent_codes_query(actor_ids: list[int]) -> str:
+    """One query that asks for every actor's talent code in a single request.
+
+    ``ReportFight.talentImportCode`` takes one ``actorID`` and returns one string,
+    so the obvious reading is one request per player -- twenty per sampled kill, on
+    the field this project has measured to be the expensive kind. GraphQL aliases
+    collapse that to one: the same field is selected once per actor under a
+    distinct name, and the server resolves them all against a fight it has already
+    loaded.
+
+    The actor ids are written into the document rather than passed as variables
+    because the *number* of them varies per fight, and a variable list cannot
+    produce a variable number of selections. They are therefore forced through
+    ``int`` first -- an id that is not an integer is a bug in the actor extraction,
+    and letting one reach the query text would be the one place in this module
+    where a payload value becomes executable syntax.
+    """
+    if not actor_ids:
+        raise ValueError("no actor ids to ask for")
+    aliases = "\n        ".join(
+        f"a{int(actor)}: talentImportCode(actorID: {int(actor)})" for actor in actor_ids
+    )
+    return f"""
+query TalentCodes($code: String!, $fightId: Int!) {{
+  rateLimitData {{ limitPerHour pointsSpentThisHour pointsResetIn }}
+  reportData {{
+    report(code: $code) {{
+      fights(fightIDs: [$fightId]) {{
+        id
+        {aliases}
+      }}
+    }}
+  }}
+}}
+"""
+
 
 RATE_LIMIT_QUERY = """
 query RateLimit {
@@ -326,9 +534,21 @@ class WarcraftLogsClient:
         ).hexdigest()[:32]
         return self._cache_dir / f"{digest}.json"
 
-    def query(self, query: str, variables: dict | None = None, label: str = "query") -> dict:
+    def query(
+        self,
+        query: str,
+        variables: dict | None = None,
+        label: str = "query",
+        cache: bool = True,
+    ) -> dict:
+        """Send one document, or serve it from the response cache.
+
+        ``cache=False`` is for a query whose answer is *the present moment* rather
+        than a fact about a report -- see ``rate_limit``. Everything else is cached
+        on (query, variables), which is what makes iterating on an extraction free.
+        """
         variables = variables or {}
-        cached_at = self._cache_path(query, variables)
+        cached_at = self._cache_path(query, variables) if cache else None
         if cached_at and cached_at.is_file():
             payload = json.loads(cached_at.read_text(encoding="utf-8"))
             self.ledger.record(label, payload, cached=True)
@@ -359,12 +579,26 @@ class WarcraftLogsClient:
         return data
 
     def rate_limit(self) -> dict:
-        """The current point budget, as its own query.
+        """The current point budget, as its own query. **Never cached.**
 
         Taken once before and once after a pass, this brackets the whole run: the
         difference is exactly what the pass cost, with no attribution guesswork.
+
+        The cache bypass is what makes that true, and without it the whole
+        measurement is silently impossible. ``RATE_LIMIT_QUERY`` takes no variables,
+        so both bracketing readings hash to the same ``(query, {})`` -- the second
+        one is served from the first one's response, the two readings are equal by
+        construction, and the run reports ``pointsSpentThisRun = 0`` for any pass at
+        any size. Measured against a stub whose counter moved 100 -> 118: one HTTP
+        call, both readings 109.0, delta 0.0. And because the cache is a *directory*
+        that CI restores between runs, the first reading of a later run would be a
+        number the API returned hours ago.
+
+        A cached response is a record of *then*; this query asks about *now*. Those
+        are different kinds of answer and only one of them can be stored.
         """
-        return (self.query(RATE_LIMIT_QUERY, label="rateLimit").get("rateLimitData")) or {}
+        data = self.query(RATE_LIMIT_QUERY, label="rateLimit", cache=False)
+        return data.get("rateLimitData") or {}
 
     def fight_structure(self, code: str, encounter_id: int, difficulty: int) -> dict:
         """Fights, phase metadata and the report's actor/ability names, in one call."""
@@ -443,6 +677,132 @@ class WarcraftLogsClient:
         if isinstance(table, str):
             table = json.loads(table)
         return table if isinstance(table, dict) else None
+
+    def player_details(self, code: str, fight_id: int) -> object:
+        """The raw ``playerDetails`` payload for one fight.
+
+        Returned untouched rather than parsed here: the field is an untyped JSON
+        scalar whose shape Warcraft Logs explicitly declines to freeze, so reading
+        it is ``harvest.player_detail_rows``' job and an unexpected shape has to be
+        visible there rather than swallowed in the client. Same arrangement as
+        ``reports_in_window``.
+        """
+        data = self.query(
+            PLAYER_DETAILS_QUERY,
+            {"code": code, "fightId": fight_id},
+            label=f"player-details:{code}:{fight_id}",
+        )
+        return ((data.get("reportData") or {}).get("report") or {}).get("playerDetails")
+
+    def talent_import_codes(self, code: str, fight_id: int, actor_ids: list[int]) -> dict[int, str]:
+        """``actor id -> talent loadout string`` for a whole pull, in one request.
+
+        An actor the server answers ``null`` for is *absent from the result* rather
+        than present with an empty string. The field is documented to return null
+        for a non-player actor and for a pre-Dragonflight fight, and those are two
+        different findings from "this player ran no talents", which is not a state
+        that exists. ``harvest.validate`` reports the missing code as its own
+        rejection reason.
+        """
+        query = talent_codes_query(actor_ids)
+        data = self.query(
+            query,
+            {"code": code, "fightId": fight_id},
+            label=f"talent-codes:{code}:{fight_id}",
+        )
+        fights = ((data.get("reportData") or {}).get("report") or {}).get("fights") or []
+        codes: dict[int, str] = {}
+        for fight in fights:
+            if not isinstance(fight, dict):
+                continue
+            for key, value in fight.items():
+                if key.startswith("a") and key[1:].isdigit() and isinstance(value, str) and value:
+                    codes[int(key[1:])] = value
+        return codes
+
+    def encounter_name(self, encounter_id: int) -> str | None:
+        """One encounter's name, or ``None`` when the schema has no such encounter.
+
+        The two answers are different and must stay different: a name is what lets
+        ``harvest.choose_encounter_id`` accept a PTR id's live twin, and ``None``
+        is what makes it refuse. ``Encounter.name`` is `String!`, so a missing name
+        can only mean a missing encounter.
+        """
+        data = self.query(
+            ENCOUNTER_NAME_QUERY,
+            {"encounterId": encounter_id},
+            label=f"encounter-name:{encounter_id}",
+        )
+        encounter = ((data.get("worldData") or {}).get("encounter")) or {}
+        name = encounter.get("name")
+        return name if isinstance(name, str) and name.strip() else None
+
+    def encounter_zone(self, encounter_id: int) -> dict:
+        """The zone one encounter belongs to. `reports` is keyed on zone, not boss."""
+        data = self.query(
+            ENCOUNTER_ZONE_QUERY,
+            {"encounterId": encounter_id},
+            label=f"encounter-zone:{encounter_id}",
+        )
+        encounter = ((data.get("worldData") or {}).get("encounter")) or {}
+        return encounter.get("zone") or {}
+
+    def reports_in_window(
+        self, zone_id: int, start_ms: int, end_ms: int, page: int = 1, limit: int = 100
+    ) -> object:
+        """One page of logs uploaded for a zone in a time window.
+
+        Returns the raw pagination payload rather than a list: its envelope could not
+        be introspected, so reading it is `firstkills.reports_from_payload`'s job and
+        an unexpected shape has to be visible there rather than swallowed here.
+        """
+        data = self.query(
+            REPORTS_QUERY,
+            {
+                "zoneId": zone_id,
+                # Warcraft Logs takes these as seconds-with-millis floats in some
+                # places and plain epoch ms in others. Everything else in this module
+                # works in epoch ms, which is what report and fight timestamps are, so
+                # that is what goes out.
+                "startTime": float(start_ms),
+                "endTime": float(end_ms),
+                "limit": limit,
+                "page": page,
+            },
+            label=f"reports:{zone_id}:{page}",
+        )
+        return ((data.get("reportData") or {}).get("reports")) or {}
+
+    def report_kills(self, code: str) -> tuple[float, list[dict]]:
+        """``(report start in epoch ms, every kill in the report)``.
+
+        One request per report for a whole zone rather than one per report *per
+        boss*: the caller filters by encounter, and the identical variables mean the
+        cache answers every boss after the first.
+
+        **The report's own start time is not optional context, it is the time base.**
+        ``ReportFight.startTime`` is milliseconds *since the report began*, not an
+        epoch timestamp, so a fight time used on its own is a number near zero and
+        compares as older than everything. Returning the two together is what stops
+        them being used apart.
+        """
+        data = self.query(
+            REPORT_KILLS_QUERY,
+            {"code": code},
+            label=f"report-kills:{code}",
+        )
+        report = ((data.get("reportData") or {}).get("report")) or {}
+        fights = report.get("fights")
+        start = report.get("startTime")
+        return (
+            float(start) if isinstance(start, (int, float)) else 0.0,
+            fights if isinstance(fights, list) else [],
+        )
+
+    def zone(self, zone_id: int) -> dict | None:
+        """One zone by id, including zones the list does not return."""
+        data = self.query(ZONE_BY_ID_QUERY, {"zoneId": zone_id}, label=f"zone:{zone_id}")
+        return (data.get("worldData") or {}).get("zone")
 
     def zones(self) -> list[dict]:
         data = self.query(ZONE_QUERY, label="zones")
@@ -526,8 +886,10 @@ def _entry_start(entry: dict) -> float:
 
 def select_report_fights(
     encounters: list[dict], limit: int, order: str = "first"
-) -> list[tuple[str, int]]:
-    """``(report code, fight id)`` for the kills to probe, one fight per report.
+) -> list[tuple[str, int, float]]:
+    """``(report code, fight id, kill start in epoch ms)`` for the kills to probe.
+
+    One fight per report.
 
     One per report on purpose: two parses from the same pull describe the same
     fight, so a sample of five entries could be a sample of one kill.
@@ -545,6 +907,20 @@ def select_report_fights(
       rankings by damage and not by date, so this reads the ``startTime`` every row
       already carries and sorts on it; the gather just has to be wide enough to
       contain the early kills, which is why the probe hands several pages in.
+
+    **The width of that gather is the whole constraint, and it is easy to
+    misread.** "First" here means *the earliest kills among the pages handed in*,
+    and those pages are the highest-damage parses. A guild that killed the boss on
+    the first night with a slow, scrappy pull ranks low and can sit far past the
+    window, so a narrow gather returns "the earliest of the best" rather than the
+    first kills -- a plausible sample, systematically later than the one asked for,
+    and invisible in the output unless the dates are published. `killed_between`
+    on the observation is what makes it visible; widening ``--rankings-pages`` is
+    what fixes it, and ranking pages are cheap next to the per-fight event streams.
+
+    One thing no setting can reach: ``characterRankings`` contains *ranked* parses
+    only. A kill logged privately, or one Warcraft Logs declined to rank, is not in
+    this list at any depth. That is their rule, not a bound of this project.
     """
     seen: set[str] = set()
     rows: list[tuple[float, str, int]] = []
@@ -561,10 +937,10 @@ def select_report_fights(
         # A zero (no timestamp) sorts to the front and would masquerade as the
         # earliest kill, so those go last rather than first.
         rows.sort(key=lambda row: (row[0] == 0.0, row[0]))
-    return [(code, fight_id) for _, code, fight_id in rows[:limit]]
+    return [(code, fight_id, started) for started, code, fight_id in rows[:limit]]
 
 
-def top_report_fights(encounter: dict, limit: int) -> list[tuple[str, int]]:
+def top_report_fights(encounter: dict, limit: int) -> list[tuple[str, int, float]]:
     """Back-compat single-page helper: the highest parses, one fight per report."""
     return select_report_fights([encounter], limit, order="top")
 
@@ -659,17 +1035,43 @@ def cmd_verify(args: argparse.Namespace) -> int:
     # compare" are different statements, and the second is the useful one.
     thin = 0
 
-    with WarcraftLogsClient(credentials) as client:
+    # Which bosses this tier's numbers are compared against comes from the tier's
+    # own fight profiles, not from "the newest zone Warcraft Logs is ranking".
+    #
+    # Those two are the same raid for most of a season and different raids for the
+    # week either side of a turn, which is precisely when somebody runs this. The
+    # published MID2 comparison is what that costs: 192 rows of Season 2 sim output
+    # against Season 1 kills, under a Season 2 heading, with nothing in the file
+    # saying so. `fight_profiles.json` is the one registry of which bosses a season
+    # has -- the Fights view already reads it -- so this reads it too and the two
+    # views can no longer disagree about what a season is.
+    #
+    # A tier with no fight profiles is a refusal rather than a fallback. Falling
+    # back to the newest live zone is exactly the bug: a raid that has not opened
+    # yet has no kills, and comparing against another season's raid instead
+    # produces a full set of plausible numbers that answer a question nobody asked.
+    if not encounter_ids:
+        tier_profiles = fightprofile.load_profiles(tier)
+        encounter_ids = sorted(tier_profiles.profiles)
         if not encounter_ids:
-            zones = client.zones()
-            live = [z for z in zones if not z.get("frozen")]
-            if not live:
-                log.error("no unfrozen zone found; pass --encounter explicitly")
-                return 1
-            newest = live[-1]
-            encounter_ids = [e["id"] for e in newest.get("encounters", [])]
-            log.info("using zone %s (%d encounters)", newest.get("name"), len(encounter_ids))
+            log.error(
+                "no fight profiles for tier %s, so there is no boss list to compare "
+                "against. Seed one with `wowdps fight-zones --tier %s --seed <zone> "
+                "--write`, or pass --encounter to name the bosses explicitly. Not "
+                "falling back to the newest ranked zone: before a season opens that "
+                "is the *previous* season's raid.",
+                tier,
+                tier,
+            )
+            return 1
+        log.info(
+            "comparing against %s's %d fight profile(s): %s",
+            tier,
+            len(encounter_ids),
+            ", ".join(profile.name for _, profile in sorted(tier_profiles.profiles.items())),
+        )
 
+    with WarcraftLogsClient(credentials) as client:
         # One request per spec per encounter. Specs sharing a class/spec pair but
         # differing only in hero talent resolve to the same Warcraft Logs query, so
         # results are cached per (class, spec, encounter).

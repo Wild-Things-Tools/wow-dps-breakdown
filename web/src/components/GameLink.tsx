@@ -46,8 +46,15 @@ export function GameLink({
     refreshWowheadLinks()
   }, [kind, id, ilevel])
 
+  // The key is load-bearing, not decoration. Wowhead paints its icon *onto this
+  // anchor* and marks the element as done, so `refreshLinks()` skips it forever
+  // after. React reuses one `<a>` across prop changes, so switching the Loot view
+  // from trinkets to necks changed the href and the text and left the trinket's
+  // icon sitting beside a neck's name. A key that carries the entity forces a
+  // fresh element, which Wowhead has never seen and therefore iconises correctly.
   return (
     <a
+      key={`${kind}:${id}`}
       className={cx('gamelink', className)}
       href={wowheadUrl(kind, id)}
       data-wowhead={wowheadParams(kind, id, ilevel)}

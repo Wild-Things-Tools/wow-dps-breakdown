@@ -183,6 +183,16 @@ const HERO_TREE_ATLAS: Record<string, string> = {
   Slayer: 'talents-heroclass-warrior-slayer',
   'Mountain Thane': 'talents-heroclass-warrior-mountainthane',
   Colossus: 'talents-heroclass-warrior-colossus',
+  // Midnight's two new Demon Hunter trees, which arrived with the Devourer spec and
+  // are why this map is 40 of simc's 41 rather than the 39 it had.
+  Annihilator: 'talents-heroclass-demonhunter-annihilator',
+  // Void-Scarred is deliberately absent. The atlas element is `TraitSubTree`'s
+  // `UiTextureAtlasElementID`, which is not in any data this project reads, and the
+  // eleven names a pattern suggests -- `voidscarred`, `void-scarred`, `thevoidscarred`
+  // and eight more -- all 404 (checked 2026-08-22, against `annihilator` and
+  // `felscarred` returning 200 at ~17 KB on the same run). Guessing further would
+  // either 404 again or, worse, hit some other tree's emblem, so the build wears the
+  // lettered tile until somebody reads the real element name out of the game client.
 }
 
 /** simc's placeholder for a spec it ships exactly one build for. */

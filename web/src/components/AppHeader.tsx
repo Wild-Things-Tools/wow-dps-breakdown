@@ -8,6 +8,7 @@ export type ViewId =
   | 'funnel'
   | 'builds'
   | 'gear'
+  | 'buffs'
   | 'fights'
   | 'logs'
   | 'timing'
@@ -27,6 +28,11 @@ const VIEWS: Array<{ id: ViewId; label: string; blurb: string }> = [
     id: 'fights',
     label: 'Fights',
     blurb: 'What each boss actually looks like, and what the sim would run for it',
+  },
+  {
+    id: 'buffs',
+    label: 'Buffs & sets',
+    blurb: 'What a tier set and an outside Power Infusion are worth on each build',
   },
   {
     id: 'logs',

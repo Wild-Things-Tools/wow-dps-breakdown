@@ -273,6 +273,18 @@ body {
   user-select: none;
 }
 
+/* Wowhead's own stylesheet sizes the icon it attaches, with `!important`, for an
+   inline link: a fixed background-size of a few px and 1.3em of left padding to
+   make room beside text. A talent node is not an inline link -- it is a 44px tile
+   whose entire face should be the icon -- so both of those have to be overridden
+   or the icon renders as a small square adrift in the middle of the tile. The
+   attribute selector matches every size variant the script may choose. */
+.talent-node[class*='icon'] {
+  background-size: cover !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+
 /* Once Wowhead's script has attached an icon, the initials would show through it.
    The class it adds varies by icon size, so every variant is covered. */
 .talent-node[class*='icontiny'] .talent-node-fallback,

@@ -13,9 +13,18 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from wowdps import fightdataset
 from wowdps.fightextract import EncounterObservation, observe_fight
 from wowdps.fightprofile import Fact, FightProfile, Provenance, TierProfiles, load_profiles
+
+# These nine encounters are The Voidspire, Midnight Season 1's raid. They were
+# filed under MID2 until 2026-08-17, when Warcraft Logs' own zone list settled
+# it -- see the "nine bosses filed under MID2" note in CLAUDE.md. MID2 now holds
+# The Venomous Abyss, whose bosses nobody has facts for yet.
+VOIDSPIRE_TIER = "MID1"
+
 
 START = 1_000_000
 
@@ -111,21 +120,43 @@ def find(document: dict, encounter_id: int) -> dict:
 
 
 def test_a_dataset_with_no_probe_run_publishes_every_boss_with_a_null_measurement():
-    document = fightdataset.build_document("MID2", load_profiles("MID2"))
+    document = fightdataset.build_document(VOIDSPIRE_TIER, load_profiles(VOIDSPIRE_TIER))
 
     assert document["measurement"] is None
-    assert document["coverage"] == {"encounters": 9, "asserted": 1, "measured": 0}
+    # Every boss carries facts now: `fight-promote --from-fights` wrote a measured
+    # fight length and raid size into all nine on 2026-08-16. `asserted` counts
+    # bosses something is known about, not bosses a *person* asserted -- the per-fact
+    # provenance is where hand and logs are told apart.
+    assert document["coverage"] == {"encounters": 9, "asserted": 9, "measured": 0}
     assert all(entry["measured"] is None for entry in document["encounters"])
 
 
-def test_a_boss_nobody_has_written_facts_for_says_so_rather_than_defaulting_to_one_target():
-    """Eight of the nine bosses are in this state, and it is the point of the view.
+def test_a_boss_nobody_has_written_facts_for_says_so_rather_than_defaulting_to_one_target(
+    tmp_path,
+):
+    """The scenario still says one target, but no fact may read as a measurement.
 
-    The scenario still says one target because something has to be simmed, but every
-    fact key reports `default` with the reason, so nothing on the page can read as a
-    measurement of a one-target fight.
+    Driven from a synthetic profile file rather than the shipped one. Every MID2
+    boss now carries promoted facts, so the shipped data no longer contains this
+    state -- and a test that quietly stopped exercising its own case would be worse
+    than one that fails.
     """
-    document = fightdataset.build_document("MID2", load_profiles("MID2"))
+    path = tmp_path / "fight_profiles.json"
+    path.write_text(
+        json.dumps(
+            {
+                "note": "n",
+                "tiers": {
+                    "MID2": {
+                        "difficulty": 5,
+                        "encounters": [{"encounterId": 3176, "name": "A boss", "facts": {}}],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    document = fightdataset.build_document(VOIDSPIRE_TIER, load_profiles("MID2", path))
     entry = find(document, 3176)
 
     assert entry["hasFacts"] is False
@@ -136,12 +167,14 @@ def test_a_boss_nobody_has_written_facts_for_says_so_rather_than_defaulting_to_o
 
 
 def test_an_asserted_boss_carries_its_provenance_per_fact():
-    entry = find(fightdataset.build_document("MID2", load_profiles("MID2")), 3180)
+    entry = find(fightdataset.build_document(VOIDSPIRE_TIER, load_profiles(VOIDSPIRE_TIER)), 3180)
     by_key = {fact["key"]: fact for fact in entry["facts"]}
 
     assert by_key["targets"]["source"] == "hand"
     assert by_key["targets"]["statedBy"] == "owner"
-    assert by_key["fightLengthSeconds"]["source"] == "default"
+    # Promoted from the logs on 2026-08-16; it was `default` before that, and the
+    # point of the assertion is that hand and logs sit side by side per fact.
+    assert by_key["fightLengthSeconds"]["source"] == "logs"
     # The magnitude of an amplification is the one number the API cannot ever
     # supply, and the file says so where a reader will meet it.
     assert entry["profile"]["amplifications"][0]["magnitudeMeasurable"] is False
@@ -210,7 +243,9 @@ def test_the_timeline_is_one_real_pull_and_never_an_average_of_pulls():
     The published curve therefore belongs to a named report and fight, and the
     other sampled pulls are carried whole beside it.
     """
-    document = fightdataset.build_document("MID2", load_profiles("MID2"), vanguard_payload())
+    document = fightdataset.build_document(
+        VOIDSPIRE_TIER, load_profiles(VOIDSPIRE_TIER), vanguard_payload()
+    )
     timeline = find(document, 3180)["measured"]["timeline"]
 
     assert timeline["pooling"] == "representative"
@@ -229,14 +264,78 @@ def test_a_player_cooldown_on_an_enemy_is_not_drawn_as_a_boss_mechanic():
     Filtering to the pooled shortlist -- which already dropped player-applied auras
     -- is what keeps Avenging Wrath off the chart. This exact mistake shipped once.
     """
-    document = fightdataset.build_document("MID2", load_profiles("MID2"), vanguard_payload())
+    document = fightdataset.build_document(
+        VOIDSPIRE_TIER, load_profiles(VOIDSPIRE_TIER), vanguard_payload()
+    )
     drawn = find(document, 3180)["measured"]["timeline"]["representative"]["auras"]
 
     assert [entry["ability"] for entry in drawn] == ["Blinding Fervor"]
 
 
-def test_the_comparison_puts_both_claims_on_the_page_and_resolves_neither():
-    document = fightdataset.build_document("MID2", load_profiles("MID2"), vanguard_payload())
+def hand_only_profiles(tmp_path):
+    """Lightblinded Vanguard as the owner asserted it, with nothing promoted yet.
+
+    The comparison tests are about the *mechanism* -- an assertion and a measurement
+    side by side, resolved by neither -- so they must not move every time a
+    promotion writes a measured fight length into the shipped file. The hand facts
+    below are exactly what `fight_profiles.json` carried before the first
+    promotion run.
+    """
+    path = tmp_path / "fight_profiles.json"
+    path.write_text(
+        json.dumps(
+            {
+                "note": "n",
+                "tiers": {
+                    "MID2": {
+                        "difficulty": 5,
+                        "encounters": [
+                            {
+                                "encounterId": 3180,
+                                "name": "Lightblinded Vanguard",
+                                "facts": {
+                                    "targets": {
+                                        "value": {"baseline": 3, "constant": True},
+                                        "provenance": {
+                                            "source": "hand",
+                                            "statedBy": "owner",
+                                            "detail": "permanent three-target fight",
+                                        },
+                                    },
+                                    "amplifications": {
+                                        "value": [
+                                            {
+                                                "ability": "opening damage-taken buff",
+                                                "multiplier": 1.2,
+                                                "first": 0,
+                                                "duration": 20,
+                                                "target": "unknown",
+                                                "abilityId": None,
+                                                "magnitudeSource": "hand",
+                                            }
+                                        ],
+                                        "provenance": {
+                                            "source": "hand",
+                                            "statedBy": "owner",
+                                            "detail": "roughly 20% for roughly 20s",
+                                        },
+                                    },
+                                },
+                            }
+                        ],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return load_profiles("MID2", path)
+
+
+def test_the_comparison_puts_both_claims_on_the_page_and_resolves_neither(tmp_path):
+    document = fightdataset.build_document(
+        VOIDSPIRE_TIER, hand_only_profiles(tmp_path), vanguard_payload()
+    )
     rows = {row["fact"]: row for row in find(document, 3180)["comparison"]}
 
     assert rows["baseline targets"]["profile"] == 3
@@ -249,7 +348,9 @@ def test_the_comparison_puts_both_claims_on_the_page_and_resolves_neither():
 
 
 def test_the_caveats_travel_with_the_numbers():
-    document = fightdataset.build_document("MID2", load_profiles("MID2"), vanguard_payload())
+    document = fightdataset.build_document(
+        VOIDSPIRE_TIER, load_profiles(VOIDSPIRE_TIER), vanguard_payload()
+    )
     caveats = " ".join(find(document, 3180)["measured"]["caveats"])
 
     assert "page 1" in caveats
@@ -262,7 +363,7 @@ def test_looking_and_finding_nothing_is_not_the_same_as_never_looking():
     empty = EncounterObservation(3176, "Imperator Averzian", 5)
     payload = vanguard_payload()
     payload["encounters"].append(empty.to_json())
-    document = fightdataset.build_document("MID2", load_profiles("MID2"), payload)
+    document = fightdataset.build_document(VOIDSPIRE_TIER, load_profiles(VOIDSPIRE_TIER), payload)
 
     assert find(document, 3176)["measured"]["fightsSampled"] == 0
     assert find(document, 3177)["measured"] is None
@@ -288,21 +389,27 @@ def test_a_probe_of_an_encounter_the_profiles_have_never_heard_of_still_publishe
 
 
 def test_an_unchanged_dataset_keeps_its_timestamp_so_a_quiet_run_commits_nothing(tmp_path):
-    profiles = load_profiles("MID2")
-    first = fightdataset.build_document("MID2", profiles, generated_at="2026-01-01T00:00:00+00:00")
+    profiles = load_profiles(VOIDSPIRE_TIER)
+    first = fightdataset.build_document(
+        VOIDSPIRE_TIER, profiles, generated_at="2026-01-01T00:00:00+00:00"
+    )
     fightdataset.write_fights(tmp_path, first)
 
-    second = fightdataset.build_document("MID2", profiles, generated_at="2026-06-06T00:00:00+00:00")
+    second = fightdataset.build_document(
+        VOIDSPIRE_TIER, profiles, generated_at="2026-06-06T00:00:00+00:00"
+    )
     path = fightdataset.write_fights(tmp_path, second)
 
     assert json.loads(path.read_text())["generatedAt"] == "2026-01-01T00:00:00+00:00"
 
 
 def test_a_changed_dataset_takes_the_new_timestamp(tmp_path):
-    profiles = load_profiles("MID2")
+    profiles = load_profiles(VOIDSPIRE_TIER)
     fightdataset.write_fights(
         tmp_path,
-        fightdataset.build_document("MID2", profiles, generated_at="2026-01-01T00:00:00+00:00"),
+        fightdataset.build_document(
+            VOIDSPIRE_TIER, profiles, generated_at="2026-01-01T00:00:00+00:00"
+        ),
     )
     path = fightdataset.write_fights(
         tmp_path,
@@ -321,7 +428,10 @@ def test_a_changed_dataset_takes_the_new_timestamp(tmp_path):
 
 def test_promotions_are_published_so_the_decision_can_be_looked_at():
     entry = find(
-        fightdataset.build_document("MID2", load_profiles("MID2"), vanguard_payload()), 3180
+        fightdataset.build_document(
+            VOIDSPIRE_TIER, load_profiles(VOIDSPIRE_TIER), vanguard_payload()
+        ),
+        3180,
     )
     plan = {promotion["key"]: promotion for promotion in entry["promotions"]}
 
@@ -337,7 +447,7 @@ def test_promotions_are_published_so_the_decision_can_be_looked_at():
 
 
 def test_a_boss_nobody_probed_offers_no_promotions():
-    entry = find(fightdataset.build_document("MID2", load_profiles("MID2")), 3180)
+    entry = find(fightdataset.build_document(VOIDSPIRE_TIER, load_profiles(VOIDSPIRE_TIER)), 3180)
     assert entry["promotions"] == []
 
 
@@ -345,7 +455,10 @@ def test_a_drawn_aura_window_names_the_enemy_that_carried_it():
     """A band labelled only with an ability, over a three-target chart, does not
     answer the question the band exists to raise."""
     entry = find(
-        fightdataset.build_document("MID2", load_profiles("MID2"), vanguard_payload()), 3180
+        fightdataset.build_document(
+            VOIDSPIRE_TIER, load_profiles(VOIDSPIRE_TIER), vanguard_payload()
+        ),
+        3180,
     )
     drawn = entry["measured"]["timeline"]["representative"]["auras"]
 
@@ -357,9 +470,12 @@ def test_a_drawn_aura_window_names_the_enemy_that_carried_it():
     assert "nominates one as the priority target" in pooled["roleEvidence"]
 
 
-def test_the_comparison_asks_which_enemy_carries_the_amplification():
+def test_the_comparison_asks_which_enemy_carries_the_amplification(tmp_path):
     entry = find(
-        fightdataset.build_document("MID2", load_profiles("MID2"), vanguard_payload()), 3180
+        fightdataset.build_document(
+            VOIDSPIRE_TIER, hand_only_profiles(tmp_path), vanguard_payload()
+        ),
+        3180,
     )
     row = next(row for row in entry["comparison"] if "carried by" in row["fact"])
 
@@ -413,7 +529,7 @@ def payload_of(fights) -> dict:
 
 
 def timeline_of(payload) -> dict:
-    document = fightdataset.build_document("MID2", load_profiles("MID2"), payload)
+    document = fightdataset.build_document(VOIDSPIRE_TIER, load_profiles(VOIDSPIRE_TIER), payload)
     return find(document, 3180)["measured"]["timeline"]
 
 
@@ -693,3 +809,146 @@ def test_a_document_with_no_measurement_block_still_settles(tmp_path):
     before = path.read_text(encoding="utf-8")
     write_fights(tmp_path, {**first, "generatedAt": "2026-08-15T13:05:02+00:00"})
     assert path.read_text(encoding="utf-8") == before
+
+
+def test_writing_without_a_probe_refuses_to_discard_published_measurements(tmp_path):
+    """`wowdps fights` with no probe over a probed directory is silent data loss.
+
+    The command is deliberately usable with no probe at all -- that is the honest
+    state of a checkout that has never reached Warcraft Logs. Pointed at a
+    directory that already holds a probe's results it is something else: 30 sampled
+    kills per boss replaced by nulls, and the run reports success. Done exactly
+    that once, by hand, one command after promoting the facts those measurements
+    produced.
+    """
+    from wowdps.fightdataset import MeasurementWouldBeLost, write_fights
+
+    measured = {"coverage": {"encounters": 9, "asserted": 1, "measured": 9}, "encounters": []}
+    write_fights(tmp_path, measured)
+
+    bare = {"coverage": {"encounters": 9, "asserted": 9, "measured": 0}, "encounters": []}
+    with pytest.raises(MeasurementWouldBeLost, match="would discard"):
+        write_fights(tmp_path, bare)
+
+    # The published file is untouched by the refusal.
+    still = json.loads((tmp_path / "fights.json").read_text(encoding="utf-8"))
+    assert still["coverage"]["measured"] == 9
+
+    # And somebody who means it can say so.
+    write_fights(tmp_path, bare, force=True)
+    assert json.loads((tmp_path / "fights.json").read_text())["coverage"]["measured"] == 0
+
+
+def test_a_first_publish_is_not_a_loss(tmp_path):
+    """Nothing published yet means nothing to lose -- the guard must not block that."""
+    from wowdps.fightdataset import write_fights
+
+    bare = {"coverage": {"encounters": 9, "asserted": 9, "measured": 0}, "encounters": []}
+    assert write_fights(tmp_path, bare).is_file()
+
+
+def test_an_empty_encounter_says_whether_the_kills_exist_elsewhere():
+    """ "No fights" and "no fights at the difficulty asked for" are different answers.
+
+    Only the second names its own fix, and on a page that shows a count they look
+    the same. The counts come from the report search, which is deliberately
+    unfiltered by difficulty, so it sees the kills the probe then declines to open.
+    """
+    from wowdps.fightdataset import _no_fights_caveats
+
+    plain = _no_fights_caveats({"difficulty": 5})
+    assert len(plain) == 1
+
+    told = _no_fights_caveats({"difficulty": 5, "difficultiesSeen": {"4": 54, "None": 3}})
+    assert len(told) == 2
+    assert "54 at Heroic" in told[1]
+    assert "3 with no difficulty recorded" in told[1]
+    assert "asked for Mythic" in told[1]
+
+
+def test_an_encounter_this_run_did_not_reach_keeps_what_it_had(tmp_path):
+    """`--no-resume` clears the previous payload, so an unreached boss publishes null.
+
+    "The probe looked and read nothing" and "nothing ever looked" are different
+    claims and the view says something different for each. Observed on 2026-08-21:
+    a --no-resume pass moved four of MID2's eight encounters from the first to the
+    second, and the whole-document guard could not see it because the other four
+    still carried measurements.
+    """
+    from wowdps.fightdataset import write_fights
+
+    def doc(*pairs):
+        return {
+            "generatedAt": "2026-08-21T00:00:00+00:00",
+            "coverage": {"measured": sum(1 for _, m in pairs if m is not None)},
+            "encounters": [
+                {"encounterId": eid, "name": str(eid), "measured": m} for eid, m in pairs
+            ],
+        }
+
+    write_fights(tmp_path, doc((1, {"fightsSampled": 3}), (2, {"fightsSampled": 0})))
+    # A second run reaches only encounter 1.
+    write_fights(tmp_path, doc((1, {"fightsSampled": 5}), (2, None)))
+
+    written = json.loads((tmp_path / "fights.json").read_text())
+    by_id = {e["encounterId"]: e for e in written["encounters"]}
+    assert by_id[1]["measured"]["fightsSampled"] == 5, "a fresh measurement still wins"
+    assert by_id[2]["measured"]["fightsSampled"] == 0, "the unreached one keeps its own"
+
+
+def test_force_still_lets_a_measurement_go(tmp_path):
+    """The override has to override this too, or --force stops meaning what it says."""
+    from wowdps.fightdataset import write_fights
+
+    def doc(measured):
+        return {
+            "generatedAt": "2026-08-21T00:00:00+00:00",
+            "coverage": {"measured": 1 if measured else 0},
+            "encounters": [{"encounterId": 1, "name": "1", "measured": measured}],
+        }
+
+    write_fights(tmp_path, doc({"fightsSampled": 3}))
+    write_fights(tmp_path, doc(None), force=True)
+    written = json.loads((tmp_path / "fights.json").read_text())
+    assert written["encounters"][0]["measured"] is None
+
+
+def test_the_point_meter_does_not_defeat_the_settle(tmp_path):
+    """The cost block is a reading of the run, not a fact about the fights.
+
+    Five of its fields are taken at the moment the pass ran -- what the hour's
+    counter stood at, how long until it resets -- so they differ on every run by
+    construction. Left in the comparison they make every probe commit, each one
+    saying "refresh fight shapes" over a document whose fight shapes are identical.
+
+    Observed on 2026-08-24 as three consecutive hourly commits with a one-line diff
+    apiece; the only fields that moved were the two stamps and `cost`.
+    """
+    from wowdps.fightdataset import write_fights
+
+    def doc(stamp, spent):
+        return {
+            "generatedAt": stamp,
+            "coverage": {"measured": 1},
+            "measurement": {
+                "generatedAt": stamp,
+                "cost": {"pointsSpentThisHour": spent, "pointsResetIn": 3600 - spent},
+            },
+            "encounters": [{"encounterId": 1, "name": "1", "measured": {"fightsSampled": 3}}],
+        }
+
+    path = write_fights(tmp_path, doc("2026-08-24T11:50:06+00:00", 80.84))
+    first = path.read_text()
+
+    # A later pass that read the same fights and spent different points.
+    write_fights(tmp_path, doc("2026-08-24T13:27:47+00:00", 22.0))
+    assert path.read_text() == first, "an unchanged document must not rewrite itself"
+
+    # A pass that actually read something new still writes, stamps and all.
+    changed = doc("2026-08-24T14:00:00+00:00", 30.0)
+    changed["encounters"][0]["measured"]["fightsSampled"] = 4
+    write_fights(tmp_path, changed)
+    written = json.loads(path.read_text())
+    assert written["encounters"][0]["measured"]["fightsSampled"] == 4
+    assert written["generatedAt"] == "2026-08-24T14:00:00+00:00"
+    assert written["measurement"]["cost"]["pointsSpentThisHour"] == 30.0

@@ -44,6 +44,7 @@ import {
   YAxis,
 } from 'recharts'
 import { AXIS_LINE, AXIS_TICK, CURSOR_LINE, GRID, TooltipCard } from '../components/chart'
+import { GameLink } from '../components/GameLink'
 import { EntityIcon } from '../components/BuildIdentity'
 import {
   Dot,
@@ -1592,6 +1593,28 @@ function MeasurementPanel({ measured }: { measured: MeasuredFight }) {
         subtitle={`Pooled across ${measured.fightsSampled} fight(s) in ${measured.reports.length} report(s): ${measured.reports.join(', ')}. Every number carries the range it was pooled from, because a handful of kills is a handful of guilds having different pulls.`}
       />
 
+      {/* When these kills happened, stated rather than implied. The probe asks for
+          the *earliest* kills, and delivers the earliest among the ranking pages it
+          gathered — which Warcraft Logs sorts by damage, so a slow first-night kill
+          can fall outside the window entirely. Without the dates, a sample drawn
+          from three weeks after the raid opened is indistinguishable from one drawn
+          from opening night. */}
+      {measured.killedBetween ? (
+        <p className="px-5 pb-4 text-[12.5px] text-ink-tertiary">
+          Kills sampled from{' '}
+          <span className="text-ink-secondary tabular-nums">
+            {measured.killedBetween.first.slice(0, 10)}
+          </span>{' '}
+          to{' '}
+          <span className="text-ink-secondary tabular-nums">
+            {measured.killedBetween.last.slice(0, 10)}
+          </span>{' '}
+          ({measured.killedBetween.spanDays} days apart). &ldquo;Earliest kills&rdquo; means
+          earliest among the ranking pages read, and Warcraft Logs ranks by damage — so a
+          slow kill on opening night can sit outside that window.
+        </p>
+      ) : null}
+
       <div className="grid gap-3 px-5 pb-5 sm:grid-cols-2 lg:grid-cols-4">
         <StatTile
           label="Kill time"
@@ -1672,7 +1695,18 @@ function MeasurementPanel({ measured }: { measured: MeasuredFight }) {
           title="Auras on enemies"
           columns={['Ability', 'Starts', 'Lasts', 'Carried by', 'Seen in']}
           rows={measured.auras.map((aura) => [
-            `${aura.ability} (${aura.abilityId})`,
+            // A spell link: Wowhead's script paints the icon and the hover card, so
+            // "Avenging Wrath" stops being a bare string somebody has to look up to
+            // find out whether it is the boss's ability or a Paladin's. The id is
+            // printed beside it because that is what the profile facts join on.
+            aura.abilityId ? (
+              <>
+                <GameLink kind="spell" id={aura.abilityId} name={aura.ability} />{' '}
+                <Muted>({aura.abilityId})</Muted>
+              </>
+            ) : (
+              aura.ability
+            ),
             spreadText(aura.start, 1, 's'),
             <>
               {spreadText(aura.duration, 1, 's')}

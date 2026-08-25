@@ -75,9 +75,25 @@ def _normalise(name: str) -> str:
 
 #: Equipment lines in a simc profile. Only real gear slots -- a profile also carries
 #: `id=` inside other options, and reading those would place items nobody wears.
+#:
+#: **Every alias simc accepts, because it accepts several per slot and this list had
+#: picked the wrong one for two of them.** Measured on 2026-08-23 against simc's
+#: midnight branch: `player.cpp` registers `shoulders` *and* `shoulder`, `wrists`
+#: *and* `wrist`, `hands`/`hand`, `legs`/`leg`, `feet`/`foot`, `finger1`/`ring1` --
+#: and every shipped MID2 profile writes the plural (`shoulders=ornaments_of_the_
+#: eternal_coil,...`, `wrists=martyrs_bindings,...`, checked in five class profiles).
+#: So the singular-only alternation here matched neither spelling of the shoulders
+#: line nor of the wrists line, and `equipped_item_ids` -- the authority for which
+#: raid a tier belongs to -- has been silently dropping two of every profile's
+#: sixteen slots.
+#:
+#: A reader accepts every spelling; an emitter writes the one simc ships. The
+#: opposite confusion (a slot table carrying only the plural, or only the singular)
+#: is easy to reintroduce, so it is named in CLAUDE.md.
 _EQUIP_LINE = re.compile(
-    r"^(?:head|neck|shoulder|back|chest|wrist|hands|waist|legs|feet|finger[12]"
-    r"|trinket[12]|main_hand|off_hand)\s*=.*?\bid=(\d+)",
+    r"^(?:head|neck|shoulders|shoulder|back|chest|wrists|wrist|hands|hand|waist"
+    r"|legs|leg|feet|foot|finger[12]|ring[12]|trinket[12]|main_hand|off_hand"
+    r"|tabard|shirt)\s*=.*?\bid=(\d+)",
     re.MULTILINE,
 )
 

@@ -1,0 +1,235 @@
+name: Harvest builds
+
+# Collect the talent builds and gear real players killed a boss with, from Warcraft
+# Logs, and publish them as `web/public/data/<tier>/harvested-builds.json`.
+#
+# The point is the nine damage specs simc ships no profile for. What is missing there
+# is a *character* -- gear plus talents somebody has signed off -- and this project
+# deliberately does not author one, because an invented profile would be our opinion
+# published on a site whose claim is that its numbers are derived from simc. Top
+# players already run good characters and Warcraft Logs exposes them.
+#
+# `workflow_dispatch` only, and **the default mode measures rather than harvests**.
+# Both of those are deliberate:
+#
+# * Warcraft Logs meters by points per hour and does not publish a cost formula, so
+#   what a full pass costs is a measurement nobody has taken yet. `--probe` reads one
+#   kill of one encounter, prints what the payloads actually contain, reports what the
+#   counter did, and writes nothing. Run that first; it is also the schema check,
+#   because no query in `harvest.py` has ever been sent to the live service.
+# * No schedule. A tier's builds change when a tuning pass or a season changes, not
+#   nightly, and a cron over a metered API is the wrong default for something whose
+#   cost is unmeasured.
+#
+# Needs WCL_CLIENT_ID / WCL_CLIENT_SECRET as repository secrets; a client is free at
+# https://www.warcraftlogs.com/api/clients/. Without them the job says so and stops.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'probe = one kill, print the payload shapes and the cost, write nothing. harvest = the real pass'
+        type: choice
+        options: [probe, harvest]
+        default: probe
+      tier:
+        description: 'Tier whose boss list is harvested'
+        default: 'MID2'
+      difficulty:
+        description: '5 = Mythic, 4 = Heroic. One per run -- builds from two difficulties are not pooled'
+        default: '5'
+      reports:
+        description: 'Distinct kills per encounter. Two report-level queries each, and each yields the whole raid'
+        default: '10'
+      encounter:
+        description: 'Space-separated encounter ids, or empty for every boss the tier lists'
+        default: ''
+      spec:
+        description: 'Space-separated spec ids, e.g. death_knight_frost. Targets the ranking sample at those specs as well as narrowing the file'
+        default: ''
+      point_ceiling:
+        description: 'Abort once this fraction of the hourly point budget is spent'
+        default: '0.8'
+      cache:
+        description: 'Serve repeated queries from the response cache. Turn OFF to measure what a pass really costs -- a cached query spends nothing and the cost then reads UNMEASURED'
+        type: boolean
+        default: true
+      commit:
+        description: 'Commit the harvested file (harvest mode only)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: harvest-builds
+
+permissions:
+  contents: write
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check credentials
+        id: creds
+        env:
+          WCL_CLIENT_ID: ${{ secrets.WCL_CLIENT_ID }}
+        run: |
+          if [ -z "$WCL_CLIENT_ID" ]; then
+            echo "::notice::WCL_CLIENT_ID is not set — skipping. Add WCL_CLIENT_ID and WCL_CLIENT_SECRET as repository secrets; a client is free at https://www.warcraftlogs.com/api/clients/"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.creds.outputs.enabled == 'true'
+        with:
+          python-version: '3.12'
+
+      - name: Install pipeline
+        if: steps.creds.outputs.enabled == 'true'
+        run: pip install -e ./pipeline
+
+      # No compiled simc, and no simulation: the harvest needs simc's *data* only --
+      # the trait tables that decode a loadout hash and the item table that names each
+      # gear slot. A sparse clone of one directory is the whole cost, the same
+      # arrangement `wowdps talent-trees` and `wowdps hero-trees` already use.
+      - name: Fetch simc data tables
+        if: steps.creds.outputs.enabled == 'true'
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://github.com/simulationcraft/simc.git simc-src
+          git -C simc-src sparse-checkout set engine/dbc/generated
+
+      # Whether this run uses the response cache at all, decided in bash rather than
+      # in an `if:` expression: a dispatched boolean arrives as a real boolean from
+      # the form and as a string from the API, and `inputs.cache != false` is true
+      # for one of those and not the other. Anything that is not the literal "false"
+      # means "use it", so the default and an unset input both keep the cache.
+      - name: Decide whether to use the response cache
+        id: cachemode
+        if: steps.creds.outputs.enabled == 'true'
+        env:
+          USE_CACHE: ${{ inputs.cache }}
+        run: |
+          if [ "$USE_CACHE" = "false" ]; then
+            echo "use=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::running without the response cache, so the point cost of this pass is a real measurement"
+          else
+            echo "use=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The response cache is what makes iterating on the extraction free: a re-run
+      # over the same kills sends nothing and costs no points. Keyed on the tier so a
+      # probe and the harvest that follows it share one.
+      #
+      # Skipped entirely when the cache is off, which also skips the post-run save --
+      # otherwise a measured run would seed the cache it was run without. `--cache`
+      # is what CLAUDE.md's own note says a measurement needs an empty directory of,
+      # and until this input existed the workflow passed it unconditionally, so the
+      # default probe mode could never take the measurement it exists for.
+      - name: Restore response cache
+        if: steps.creds.outputs.enabled == 'true' && steps.cachemode.outputs.use == 'true'
+        uses: actions/cache@v4
+        with:
+          path: .work/harvest-cache
+          key: harvest-cache-${{ inputs.tier }}-${{ github.run_id }}
+          restore-keys: harvest-cache-${{ inputs.tier }}-
+
+      - name: Harvest
+        if: steps.creds.outputs.enabled == 'true'
+        env:
+          WCL_CLIENT_ID: ${{ secrets.WCL_CLIENT_ID }}
+          WCL_CLIENT_SECRET: ${{ secrets.WCL_CLIENT_SECRET }}
+          # Every input is bound here and read as "$VAR" below, never interpolated
+          # into the script. `${{ }}` is substituted into the file *before* bash sees
+          # it, so a dispatched value containing a quote and a semicolon becomes
+          # script -- and this job holds `contents: write` and WCL_CLIENT_SECRET.
+          # An environment variable is data to bash however it is spelled. Same
+          # arrangement as `fight-probe.yml`, deliberately not a second pattern.
+          MODE: ${{ inputs.mode || 'probe' }}
+          TIER: ${{ inputs.tier || 'MID2' }}
+          DIFFICULTY: ${{ inputs.difficulty || '5' }}
+          REPORTS: ${{ inputs.reports || '10' }}
+          ENCOUNTERS: ${{ inputs.encounter }}
+          SPECS: ${{ inputs.spec }}
+          POINT_CEILING: ${{ inputs.point_ceiling || '0.8' }}
+          USE_CACHE: ${{ steps.cachemode.outputs.use }}
+        run: |
+          args=()
+          if [ "$USE_CACHE" = "true" ]; then args+=(--cache .work/harvest-cache); fi
+          # Space-separated, like fight-probe's `encounters`: both flags are
+          # repeatable on the command line and a single-valued form would quietly
+          # cap a dispatch at one boss.
+          for id in $ENCOUNTERS; do args+=(--encounter "$id"); done
+          for key in $SPECS; do args+=(--spec "$key"); done
+          if [ "$MODE" = "probe" ]; then args+=(--probe); fi
+          # `| tee` makes tee's status the pipeline's, so without pipefail a refusal
+          # or a crash would report as a clean run and the commit below would fire.
+          set -o pipefail
+          set +e
+          wowdps harvest-builds \
+            --tier "$TIER" \
+            --difficulty "$DIFFICULTY" \
+            --reports "$REPORTS" \
+            --point-ceiling "$POINT_CEILING" \
+            --simc-source simc-src \
+            --ptr \
+            "${args[@]}" | tee harvest-report.txt
+          status=$?
+          set -e
+          # 2 is the point ceiling stopping the pass. What was harvested is written
+          # and is worth keeping, so it is a warning, exactly as in `fight-probe.yml`.
+          # Anything else non-zero -- notably the one-difficulty refusal -- fails the
+          # step, which is what stops the Commit step below from running.
+          if [ "$status" = "2" ]; then
+            echo "::warning::the pass stopped early on the point ceiling; partial output uploaded"
+          elif [ "$status" != "0" ]; then
+            exit "$status"
+          fi
+
+      # Whatever the run managed, even when the step above failed or the point ceiling
+      # stopped it. `if: success()` is the default and it skipped the upload on exactly
+      # the two failures an artifact is for -- that cost a whole run of `gear.yml` once.
+      - name: Upload report
+        if: always() && steps.creds.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: harvest-builds-${{ inputs.tier }}
+          path: |
+            harvest-report.txt
+            web/public/data/${{ inputs.tier }}/harvested-builds.json
+          if-no-files-found: ignore
+
+      - name: Summary
+        if: always() && steps.creds.outputs.enabled == 'true'
+        env:
+          MODE: ${{ inputs.mode || 'probe' }}
+          TIER: ${{ inputs.tier || 'MID2' }}
+        run: |
+          {
+            echo "## Harvest ($MODE) — $TIER"
+            echo
+            echo '```'
+            cat harvest-report.txt 2>/dev/null || echo "(no report — the run did not get that far)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit
+        if: steps.creds.outputs.enabled == 'true' && inputs.mode == 'harvest' && inputs.commit
+        env:
+          TIER: ${{ inputs.tier || 'MID2' }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "web/public/data/$TIER/harvested-builds.json"
+          # `generatedAt` and `cost` are settled when nothing else moved, so a re-run
+          # that harvested the same builds leaves nothing to commit and any diff here
+          # means the builds themselves changed.
+          if git diff --cached --quiet; then
+            echo "::notice::no change to commit"
+          else
+            git commit -m "data: harvest builds for $TIER $(date -u +%Y-%m-%d)"
+            git push
+          fi

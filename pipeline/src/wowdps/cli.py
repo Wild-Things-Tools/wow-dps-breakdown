@@ -13,6 +13,7 @@ from . import (
     equipment,
     fightdataset,
     fightprofile,
+    fightzones,
     gearsweep,
     profiles,
     scenarios,
@@ -134,12 +135,26 @@ def _resolve_scenarios(
         loaded = fightprofile.load_profiles(tier, Path(profiles_file) if profiles_file else None)
         available = fightprofile.boss_scenarios(loaded)
         if not available:
-            raise KeyError(
+            empty = (
                 f"no boss in {tier} has a fight profile with anything asserted or "
                 f"measured in it, so there is no boss scenario to run. "
                 f"`wowdps fight-probe` measures them; `wowdps fight-promote` writes "
                 f"a measurement into a profile."
             )
+            # Fatal only when the bosses are all that was asked for. As one entry in
+            # a scenario list it is an ordinary state -- a season whose raid has not
+            # opened has no boss to sim -- and failing there took down all twelve
+            # shards of a nightly run that had four other scenarios to do. That
+            # happened on 2026-08-18, one day after the re-file moved MID2's
+            # asserted bosses to MID1 and left MID2 with eight factless encounters.
+            others = [
+                name
+                for name in names
+                if name != BOSS_SCENARIO_TOKEN and not name.startswith("boss_")
+            ]
+            if not others:
+                raise KeyError(empty)
+            logging.warning("%s Running the other %d scenario(s).", empty, len(others))
 
     resolved: list[scenarios.Scenario] = []
     for name in names:
@@ -158,6 +173,96 @@ def _resolve_scenarios(
     for scenario in resolved:
         unique.setdefault(scenario.id, scenario)
     return list(unique.values())
+
+
+def _tier_set_reference(
+    profiles_dir: Path,
+    tier: str,
+    ptr: bool = False,
+) -> dataset.TierSetReference | None:
+    """Which tier-set state the tier's shipped profiles wear, or ``None`` and why.
+
+    **It discovers the tier itself rather than taking a profile list**, which is what
+    makes it shard-safe in the way ``profiles.spec_coverage`` already is: there is no
+    parameter a shard could hand its own slice through, so all twelve shards compute
+    one reference and ``merge_shards`` keeping the newest manifest keeps a correct
+    one. Passing ``cmd_build``'s ``all_profiles`` would be right today and would be
+    one refactor away from passing ``selected``, and the resulting per-shard majority
+    would be a full set of plausible flags on the wrong builds.
+
+    Tanks are discovered too, for the same reason and not because their damage
+    matters: they are shipped profiles that wear the set, and reading them makes the
+    reference independent of ``--include-tanks`` as well as of the shard. Measured on
+    simc 22b442e, MID2: with tanks the tally is 33 profiles at the four-piece against
+    2 at none, without them 26 against 2 -- the same verdict from a wider base.
+
+    Two of simc's generated tables answer the question and both live beside the
+    profiles directory, so the simc checkout is derived from it rather than asked for
+    again -- ``--profiles`` defaults to ``.work/simc/profiles`` and every workflow
+    lays it out that way. A checkout without them is not a reason to lose a night of
+    simulations, so it warns and returns ``None``; nothing is then flagged, which is
+    the state the dataset was in before this existed.
+
+    **Which of simc's two item tables is stated, never discovered, and the version
+    this replaces described a mechanism it did not implement.** It read the ``ptr``
+    flag out of ``<out_root>/<tier>/index.json`` and called that "the same question
+    ``talent-trees`` answers, answered the same way" -- but ``talent-trees`` takes an
+    explicit ``--ptr`` and falls back to a manifest under ``--out``, which for that
+    command *is* the published dataset, while ``cmd_build``'s ``--out`` is where this
+    run writes. The nightly passes ``--out shard``, a fresh empty directory, so the
+    file never existed, ``ptr`` silently defaulted to ``False``, and nothing said so.
+    ``--ptr`` is the whole of the interface now, matching ``gear-anchor``, which reads
+    these same two tables.
+
+    **And the manifest could not have answered it anyway.** ``manifest.simc.ptr`` is
+    ``report["ptr_enabled"]``, which is ``SC_USE_PTR`` -- a compile-time constant,
+    defined as 1 in ``engine/config.hpp`` on simc's midnight branch, so it says
+    the binary *carries* PTR data and not that anything used it. What the run used is
+    ``dbc.version_used``, and measured on simc 625a591 on 2026-08-23 against the exact
+    argv ``simc_runner.build_command`` produces, it is **Live**: this pipeline never
+    passes ``ptr=1``, and the option has to precede the profile to take effect at all,
+    because simc copies the sim's dbc into the player while parsing the profile. Hence
+    the default here is the live table, which is what the sims read.
+    ``test_build_command_never_enables_ptr_data`` is what stops that going stale.
+
+    Live and PTR agree today in both tables -- 12,260 items carry an ``id_set`` in
+    each and the two maps are equal, as are all 376 set rows, measured on 22b442e and
+    again on 625a591 -- which is exactly the kind of agreement that stops being true
+    without announcing itself. That is why the choice is stated rather than left to a
+    file that happens not to be there.
+    """
+    from . import buffsweep, gearanchor
+
+    simc_dir = profiles_dir.parent
+    try:
+        sets = buffsweep.parse_tier_sets(simc_dir, ptr=ptr)
+        item_sets = gearanchor.parse_item_sets(simc_dir, ptr=ptr)
+        reference = dataset.shipped_set_states(
+            profiles.discover(profiles_dir, tier, dps_only=False), tier, sets, item_sets
+        )
+    except (OSError, gearanchor.AnchorError) as exc:
+        logging.warning(
+            "cannot read simc's set tables under %s (%s); no build will be checked "
+            "against the tier's tier-set state",
+            simc_dir,
+            exc,
+        )
+        return None
+
+    written = ", ".join(
+        f"{count} at {'no set' if state == 0 else str(state) + 'pc'}"
+        for state, count in reference.tally
+    )
+    if reference.state is None:
+        logging.warning(
+            "tier %s has no majority tier-set state among its shipped profiles (%s); "
+            "no build will be flagged, because there is nothing to differ from",
+            tier,
+            written or "no profile votes",
+        )
+        return reference
+    logging.info("tier %s ships tier-set states: %s", tier, written)
+    return reference
 
 
 def cmd_build(args: argparse.Namespace) -> int:
@@ -229,12 +334,34 @@ def cmd_build(args: argparse.Namespace) -> int:
         simc,
     )
 
+    # From every profile the tier ships, not from this shard's slice, so all twelve
+    # shards anchor on the same number. A build whose gear sits away from it gets a
+    # caveat rather than a silent place in the ranking -- absolute DPS does not
+    # survive an item-level difference, and simc's disabled profiles are routinely a
+    # whole tier behind its shipped ones.
+    reference_item_level = dataset.shipped_item_levels(all_profiles)
+    if reference_item_level:
+        logging.info("tier %s ships item levels %s", tier, reference_item_level)
+
+    # The other systematic gear difference a tier can hold, derived the same way and
+    # from the same list. Read once here rather than per profile: the item table is
+    # 26 MB and parsing it is the whole cost of the answer.
+    reference_set = _tier_set_reference(profiles_dir, tier, ptr=args.ptr)
+
     results: list[dataset.SpecResult] = []
     simc_meta: dict = {}
 
     for index, profile in enumerate(selected, start=1):
         logging.info("[%d/%d] %s", index, len(selected), profile.display_name)
-        result = dataset.run_spec(simc, profile, selected_scenarios, settings, timeout=args.timeout)
+        result = dataset.run_spec(
+            simc,
+            profile,
+            selected_scenarios,
+            settings,
+            timeout=args.timeout,
+            reference_item_level=reference_item_level,
+            reference_set=reference_set,
+        )
         if not result.cells:
             logging.error("  no successful sims for %s, skipping", profile.id)
             continue
@@ -269,6 +396,13 @@ def cmd_build(args: argparse.Namespace) -> int:
     manifest = dataset.write_manifest(
         out_dir, results, selected_scenarios, tier, simc_meta, settings, coverage
     )
+    # An unsharded run is the whole run, so the third coverage state -- shipped by
+    # simc and produced nothing -- can be settled here. A sharded run gets it in
+    # `merge_shards` instead, where the union of the slices is known.
+    if not getattr(args, "shard", None):
+        document = json.loads(manifest.read_text(encoding="utf-8"))
+        dataset.apply_simulated_coverage(document)
+        manifest.write_text(json.dumps(document, separators=(",", ":")) + "\n", encoding="utf-8")
     dataset.write_tier_index(out_root)
     failed = sum(len(r.errors) for r in results)
     logging.info("wrote %s (%d specs, %d failed cells)", manifest, len(results), failed)
@@ -315,6 +449,27 @@ def cmd_gear(args: argparse.Namespace) -> int:
 
     results: list[gearsweep.SpecSlotResult] = []
     simc_meta: dict = {}
+
+    def publish() -> Path:
+        """Write everything swept so far, and carry its own coverage count.
+
+        Called after every spec rather than once at the end, which CLAUDE.md has
+        claimed for a while and the code did not do. A sweep that is interrupted at
+        spec 9 of 26 then leaves a dataset that is smaller *and* honest about being
+        smaller, instead of leaving nothing at all -- and this matters more now than
+        it did, because enumerating the whole pool roughly doubles what a ring spec
+        costs and so doubles what a timeout throws away.
+        """
+        return dataset.write_gear(
+            out_dir,
+            results,
+            {slot: pools.slots[slot] for slot in wanted_slots},
+            tier,
+            simc_meta,
+            settings,
+            specs_available=len(all_profiles),
+        )
+
     for index, profile in enumerate(selected, start=1):
         logging.info("[%d/%d] %s", index, len(selected), profile.display_name)
         for slot_id in wanted_slots:
@@ -328,20 +483,16 @@ def cmd_gear(args: argparse.Namespace) -> int:
 
         if not simc_meta and results:
             simc_meta = _probe_simc_metadata(simc, profile)
+        if results:
+            publish()
 
     if not results:
         logging.error("every spec failed; not writing a gear dataset")
         return 1
 
-    path = dataset.write_gear(
-        out_dir,
-        results,
-        {slot: pools.slots[slot] for slot in wanted_slots},
-        tier,
-        simc_meta,
-        settings,
-        specs_available=len(all_profiles),
-    )
+    # The loop's last iteration already published exactly this, so serialising a
+    # several-hundred-kilobyte document again would only restamp `generatedAt`.
+    path = out_dir / "gear.json"
     failed = sum(len(result.errors) for result in results)
     logging.info(
         "wrote %s (%d spec-slot results of %d profiles, %d failures)",
@@ -452,6 +603,926 @@ def cmd_fight_profiles(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_fight_zones(args: argparse.Namespace) -> int:
+    """Read Warcraft Logs' zone list and say which season each boss list belongs to.
+
+    The cheapest query in the project -- one document, no per-fight events -- and
+    the one that keeps a whole season's fight data from being filed under the wrong
+    label. It answers two questions a checkout cannot answer offline: which raids
+    Warcraft Logs is currently ranking, and which raid the encounter ids already in
+    ``fight_profiles.json`` actually came from.
+
+    Read-only unless ``--seed`` or ``--move`` is passed, and both of those name what
+    they are doing rather than inferring it. The suggestion this prints is an
+    inference over zone order and the ``frozen`` flag; the writes are a person's
+    decision.
+    """
+    from .warcraftlogs import Credentials, WarcraftLogsClient, WarcraftLogsError
+
+    path = Path(args.profiles_file) if args.profiles_file else fightzones._data_file()
+    raw = json.loads(path.read_text(encoding="utf-8"))
+
+    try:
+        credentials = Credentials.from_env()
+    except WarcraftLogsError as exc:
+        logging.error("%s", exc)
+        return 1
+
+    with WarcraftLogsClient(credentials) as client:
+        zones = fightzones.parse_zones(client.zones())
+        ledger = client.ledger
+
+    if not zones:
+        logging.error("Warcraft Logs returned no zones")
+        return 1
+
+    live = [zone for zone in zones if not zone.frozen]
+    print(f"{len(zones)} zone(s), {len(live)} still being ranked\n")
+    # Highest id first: the list arrives newest-first, but sorting by id says so
+    # explicitly rather than relying on it -- and `--show N` should mean "the N
+    # newest", which taking a slice of the tail did not.
+    for zone in sorted(zones, key=lambda entry: entry.zone_id, reverse=True)[: args.show]:
+        state = "frozen" if zone.frozen else "live"
+        print(f"  [{zone.zone_id}] {zone.name} -- {state}, {len(zone.encounters)} encounter(s)")
+        if args.verbose_zones:
+            for encounter in zone.encounters:
+                print(f"        {encounter.encounter_id:>6}  {encounter.name}")
+
+    suggestion = fightzones.suggest_current_zone(zones)
+    print(f"\ncurrent season looks like: {suggestion.reason}")
+
+    print("\nwhere each tier's filed encounters actually live:")
+    for tier, entry in sorted((raw.get("tiers") or {}).items()):
+        ids = [
+            int(item["encounterId"])
+            for item in entry.get("encounters") or []
+            if item.get("encounterId") is not None
+        ]
+        placement = fightzones.locate(tier, ids, zones)
+        print(f"  {tier}: {len(ids)} encounter(s) -> {placement.zone_names}")
+        for zone, hits in placement.zones:
+            if zone.frozen:
+                print(
+                    f"    ! {zone.name} is frozen -- {hits} of {tier}'s bosses belong to a "
+                    "season that has ended"
+                )
+        if placement.unplaced:
+            print(f"    ? not in any zone: {sorted(placement.unplaced)}")
+
+    if args.move:
+        source, destination = args.move
+        moved = fightzones.move_tier(raw, source, destination)
+        print(f"\nmoved {moved} encounter(s) from {source} to {destination}")
+
+    if args.scan:
+        # There is no endpoint that enumerates *every* zone: `worldData.zones`
+        # answers "what is currently ranked" and leaves out at least the PTR zones
+        # (54 is real and absent from it). `worldData.zone(id:)` reaches any of them
+        # one at a time, so walking a range of ids is the enumeration -- derived,
+        # not guessed, and cheap: one query per id, and the ids are small integers.
+        low, high = args.scan
+        print(f"\nscanning zone ids {low}-{high} directly, past what the list returns:")
+        with WarcraftLogsClient(credentials) as scan_client:
+            for zone_id in range(low, high + 1):
+                if any(entry.zone_id == zone_id for entry in zones):
+                    continue
+                fetched = scan_client.zone(zone_id)
+                found = next(iter(fightzones.parse_zones([fetched] if fetched else [])), None)
+                if not found:
+                    continue
+                state = "frozen" if found.frozen else "live"
+                print(
+                    f"  [{found.zone_id}] {found.name} -- {state}, "
+                    f"UNLISTED, {len(found.encounters)} encounter(s)"
+                )
+                for encounter in found.encounters:
+                    print(f"        {encounter.encounter_id:>6}  {encounter.name}")
+
+    if args.seed:
+        zone = next((entry for entry in zones if entry.zone_id == args.seed), None)
+        if zone is None:
+            # The list is not an enumeration. Zone 54 -- Season 2's PTR zone -- is
+            # real and is not in it, so "not in the list" must mean "ask directly"
+            # rather than "does not exist"; concluding the latter is exactly the
+            # mistake this branch was making.
+            logging.info("zone %d is not in the list; asking for it directly", args.seed)
+            with WarcraftLogsClient(credentials) as client:
+                fetched = client.zone(args.seed)
+            zone = next(iter(fightzones.parse_zones([fetched] if fetched else [])), None)
+        if zone is None:
+            logging.error("Warcraft Logs has no zone %d", args.seed)
+            return 1
+        print(
+            f"\nzone {zone.zone_id}: {zone.name} -- "
+            f"{'frozen' if zone.frozen else 'live'}, {len(zone.encounters)} encounter(s)"
+        )
+        for encounter in zone.encounters:
+            print(f"    {encounter.encounter_id:>6}  {encounter.name}")
+        result = fightzones.seed_tier(raw, args.tier, zone, difficulty=args.difficulty)
+        print(f"\nseeded {args.tier} from {zone.name}:")
+        for encounter in result.added:
+            print(f"  + {encounter.encounter_id:>6}  {encounter.name}")
+        if result.kept:
+            print(f"  = {len(result.kept)} already filed, left untouched")
+        if result.absent:
+            print(
+                f"  ? {len(result.absent)} filed under {args.tier} but not in "
+                f"the zone: {result.absent}"
+            )
+
+    if args.write and (args.seed or args.move):
+        written = fightzones.write_profiles(raw, path)
+        print(f"\nwrote {written}")
+    elif args.seed or args.move:
+        print("\nnothing written -- pass --write to apply")
+
+    cost = ledger.spent
+    # A zero delta is reported as unmeasured rather than as a number: the counter
+    # not moving is the absence of a measurement, and printing "0 points" invites
+    # the conclusion that the API is free. Same rule as the probe's ledger.
+    reading = "UNMEASURED (the hourly counter did not move)" if not cost else f"{cost:.1f} points"
+    print(f"\ncost: {reading}, {len(ledger.entries)} query/queries")
+    return 0
+
+
+def cmd_wcl_schema(args: argparse.Namespace) -> int:
+    """Introspect the Warcraft Logs schema and print what it offers.
+
+    Written for one open question -- is there a route to the *first* kill that does
+    not go through a damage-sorted ranking -- but it is general. Everything in this
+    project that talks to Warcraft Logs was written against a third-party schema
+    mirror, so "does this field exist" has always been answered by trying it. This
+    asks instead, which is the same discipline the loot pools and the boss lists
+    already follow.
+
+    Fields, arguments and enum values whose names bear on ordering by time or
+    progress are marked with ``*``, because that is the half of the output somebody
+    running this is looking for.
+    """
+    from . import wclschema
+    from .warcraftlogs import Credentials, WarcraftLogsClient, WarcraftLogsError
+
+    try:
+        credentials = Credentials.from_env()
+    except WarcraftLogsError as exc:
+        logging.error("%s", exc)
+        return 1
+
+    names = args.type or list(wclschema.DEFAULT_TYPES)
+    missing: list[str] = []
+    errored: list[str] = []
+
+    with WarcraftLogsClient(credentials) as client:
+        for name in names:
+            try:
+                data = client.query(
+                    wclschema.TYPE_QUERY, {"name": name}, label=f"introspect:{name}"
+                )
+            except WarcraftLogsError as exc:
+                # A name the schema does not have comes back as an *error*, not as
+                # a null `__type` -- measured on the first live run, where
+                # `EncounterRankings` (a guess: the ranking fields are untyped JSON,
+                # so no such object type exists) returned "Internal server error"
+                # and aborted the whole pass on its second query. One bad guess must
+                # not cost the answers for every other type, so this is recorded and
+                # the walk continues.
+                logging.warning("introspection errored on %s: %s", name, exc)
+                errored.append(name)
+                print(f"\n=== {name} (ERRORED)")
+                print(f"  the server refused this name: {exc}")
+                print("  most likely no such type -- check the spelling against a field's own type")
+                continue
+
+            payload = (data or {}).get("__type")
+            if not payload:
+                missing.append(name)
+            print(f"\n=== {name} ({(payload or {}).get('kind', 'ABSENT')})")
+            for line in wclschema.describe_type(payload):
+                print(line)
+
+        ledger = client.ledger
+
+    if missing:
+        print(f"\nabsent from this schema: {', '.join(missing)}")
+    if errored:
+        print(f"\nthe server errored on: {', '.join(errored)}")
+    cost = ledger.spent
+    reading = "UNMEASURED (the hourly counter did not move)" if not cost else f"{cost:.1f} points"
+    print(f"\ncost: {reading}, {len(ledger.entries)} query/queries")
+    return 0
+
+
+def cmd_spec_index(args: argparse.Namespace) -> int:
+    """Publish ``<tier>/spec-index.json``: every class and spec in the game.
+
+    The Spec detail picker draws the whole game rather than the tier's build list,
+    so a spec's absence reads as absence. Everything in it is derived -- see
+    ``specindex`` for which file answers which question, and for the one thing simc
+    does not carry at all, which is what a hero tree is called.
+    """
+    from . import specindex
+
+    simc_dir = Path(args.simc_source)
+    out_root = Path(args.out)
+    tier = _resolve_tier(simc_dir / "profiles", args.tier)
+
+    manifest_path = out_root / tier / "index.json"
+    manifest = (
+        json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else None
+    )
+    if manifest is None:
+        logging.warning("no manifest at %s; the picker will show no builds", manifest_path)
+
+    talents_path = out_root / tier / "talent-trees.json"
+    tree_names: dict[int, str] = {}
+    build_sub_trees: dict[str, int] = {}
+    if talents_path.is_file():
+        talents = json.loads(talents_path.read_text(encoding="utf-8"))
+        tree_names = specindex.tree_names_from_talents(talents)
+        build_sub_trees = specindex.builds_by_sub_tree(talents)
+    else:
+        logging.warning(
+            "no %s, so no build can be placed in a hero tree and coverage stays at "
+            "the spec level -- run `wowdps talent-trees` first. That fallback is in "
+            "`hero_tree_coverage`, which publishes nothing rather than reporting "
+            "every shipped spec as uncovered",
+            talents_path,
+        )
+
+    ptr = bool((manifest or {}).get("simc", {}).get("ptr"))
+    # Which of this tier's profiles simc will refuse, decided offline: the reason and
+    # the node id come out of the trait table without a binary. See
+    # `specindex.refused_profiles`; `wowdps check-profiles` is the version that asks
+    # simc itself.
+    refused = specindex.refused_profiles(simc_dir, tier, ptr=ptr)
+    document = specindex.build_index(
+        simc_dir,
+        tier,
+        manifest,
+        tree_names,
+        ptr=ptr,
+        build_sub_trees=build_sub_trees,
+        refused=refused,
+    )
+    path = specindex.write_spec_index(out_root / tier, document)
+
+    specs = [spec for entry in document["classes"] for spec in entry["specs"]]
+    roles: dict[str, int] = {}
+    for spec in specs:
+        roles[spec["role"]] = roles.get(spec["role"], 0) + 1
+    named = sum(1 for tree in document["heroTrees"] if tree["name"])
+    print(
+        f"wrote {path}: {len(document['classes'])} classes, {len(specs)} specs "
+        f"({', '.join(f'{count} {role}' for role, count in sorted(roles.items()))}), "
+        f"{len(document['heroTrees'])} hero trees of which {named} are named"
+    )
+    coverage = document.get("heroTreeCoverage")
+    if not coverage:
+        # Never silent: "no hero tree coverage" and "complete hero tree coverage" are
+        # the same empty block on the site if nobody says which happened.
+        print(
+            "  hero tree coverage: not published -- no build could be placed in a "
+            "tree, so the panel falls back to spec-level coverage"
+        )
+    if coverage:
+        print(
+            f"  hero tree coverage: {coverage['covered']} of {coverage['cells']} "
+            f"damage spec x hero tree pairs have a build"
+        )
+        for entry in refused:
+            print(f"  ! {entry['profile']:<44} will not load: {entry['reason']}")
+        for entry in coverage["unplaced"]:
+            logging.warning(
+                "%s plays %s (sub-tree %d), which simc's trait table places on no "
+                "spec -- the pair is not counted",
+                entry["build"],
+                entry["tree"],
+                entry["subTree"],
+            )
+    return 0
+
+
+def cmd_buffs(args: argparse.Namespace) -> int:
+    """Sweep tier set bonuses and Power Infusion, per spec.
+
+    The two questions a spreadsheet usually answers and nobody can check: what a
+    class's tier set is worth, split into its two- and four-piece halves, and what
+    an outside Power Infusion is worth on each spec. Both are profileset sweeps
+    against the spec's own profile, so both come out as differences with the run's
+    own precision attached.
+    """
+    from . import buffsweep
+
+    profiles_dir = Path(args.profiles)
+    tier = _resolve_tier(profiles_dir, args.tier)
+    simc = simc_runner.find_simc(args.simc)
+    settings = SimSettings(
+        target_error=args.target_error, max_iterations=args.max_iterations, threads=args.threads
+    )
+
+    all_sets = buffsweep.parse_tier_sets(Path(args.simc_source))
+    sets = buffsweep.sets_for_tier(all_sets, tier)
+    if not sets:
+        logging.warning("simc ships no set bonuses labelled %s; only Power Infusion will run", tier)
+
+    # The season boundary needs the tier before this one. Resolved against the tiers
+    # simc ships rather than by decrementing the name, so it keeps meaning "last
+    # season" after the next one lands.
+    previous_sets: list[buffsweep.TierSet] = []
+    try:
+        previous_tier = profiles.previous_tier(profiles_dir)
+    except Exception as exc:  # noqa: BLE001 - a first tier has no predecessor
+        logging.info("no previous tier to compare sets against: %s", exc)
+    else:
+        previous_sets = buffsweep.sets_for_tier(all_sets, previous_tier)
+        if previous_sets:
+            logging.info("comparing against %s's sets for the season boundary", previous_tier)
+        else:
+            logging.warning("simc ships no set bonuses labelled %s", previous_tier)
+
+    found = profiles.discover(profiles_dir, tier, dps_only=True)
+    selected = _select(found, args.wow_class, args.spec, args.limit, _parse_shard(args.shard))
+    results: list[buffsweep.BuffResult] = []
+    for index, profile in enumerate(selected, start=1):
+        tier_set = buffsweep.class_id_of(profile, sets)
+        logging.info(
+            "[%d/%d] %s (%s)",
+            index,
+            len(selected),
+            profile.display_name,
+            tier_set.name if tier_set else "no tier set",
+        )
+        result = buffsweep.sweep_spec(
+            simc,
+            profile,
+            tier_set,
+            settings,
+            targets=args.targets,
+            timeout=args.timeout,
+            previous_set=buffsweep.class_id_of(profile, previous_sets),
+        )
+        for message in result.errors or ():
+            logging.warning("  %s", message)
+        results.append(result)
+        # Written per spec, like the gear sweep: an interrupted run leaves a smaller
+        # dataset rather than none.
+        buffsweep.write_buffs(Path(args.out) / tier, tier, results, settings)
+
+    path = Path(args.out) / tier / "buffs.json"
+    print(f"wrote {path}: {len(results)} spec(s)")
+    return 0
+
+
+def cmd_unvalidated(args: argparse.Namespace) -> int:
+    """Write out the profiles simc has written and left commented out.
+
+    Not the same claim as a shipped profile, and the command says so on every run.
+    A shipped profile is simc's authors saying "this is the spec this season"; one
+    of these is the character they had written down when they stopped. The results
+    have to carry that difference wherever they are shown.
+    """
+    from . import unvalidated
+
+    simc_dir = Path(args.simc_source)
+    tier = _resolve_tier(simc_dir / "profiles", args.tier)
+    found = unvalidated.extract_tier(simc_dir, tier)
+    shipped = {path.name for path in (simc_dir / "profiles" / tier).glob("*.simc")}
+
+    print(f"{len(found)} disabled profile(s) in {tier}'s generators:")
+    for profile in found:
+        mark = "shipped" if profile.filename in shipped else "DISABLED"
+        print(f"  [{mark}] {profile.name} ({profile.spec_line})")
+
+    if not args.write:
+        print("\nnothing written -- pass --write to materialise them")
+        return 0
+
+    # Default destination is the tier's own profile directory, which is what makes
+    # `wowdps build` pick them up with no flag of its own: the state travels in the
+    # file (`unvalidated.MARKER`), so a sharded run materialises them identically in
+    # every job and no shard can disagree with another about what it simulated.
+    out_dir = Path(args.out) if args.out else simc_dir / "profiles" / tier
+    written = unvalidated.write_profiles(found, out_dir, shipped)
+    print(f"\nwrote {len(written)} profile(s) into {out_dir}")
+    print(
+        "These are UNVALIDATED: simc's authors disabled them for this tier, so any "
+        "number from them is weaker evidence than one from a shipped profile and "
+        "must be labelled that way."
+    )
+    return 0
+
+
+def cmd_extra_builds(args: argparse.Namespace) -> int:
+    """Materialise the builds this project supplies for missing (spec, tree) cells.
+
+    Runs after ``wowdps unvalidated`` and before ``wowdps build``, in every shard
+    and in the publish job, so the cells exist wherever profiles are discovered.
+    A cell whose hash fails offline validation is refused and reported; the other
+    cells are still written, and the exit code stays 0 unless ``--strict`` asks
+    otherwise -- one rotted cell must not cost the night, the same rule as
+    ``hero-trees``.
+    """
+    from . import extrabuilds
+
+    simc_dir = Path(args.simc_source)
+    tier = _resolve_tier(simc_dir / "profiles", args.tier)
+    cells = extrabuilds.load_cells(tier)
+    if not cells:
+        print(f"no extra builds are recorded for {tier}; nothing to do")
+        return 0
+
+    print(f"{len(cells)} extra build(s) recorded for {tier}:")
+    for cell in cells:
+        print(f"  [{cell.origin}] {cell.profile} (talents on {cell.base}'s character)")
+
+    if not args.write:
+        print("\nnothing written -- pass --write to materialise them")
+        return 0
+
+    out_dir = Path(args.out) if args.out else simc_dir / "profiles" / tier
+    report = extrabuilds.write_cells(simc_dir, tier, out_dir, cells)
+    print(f"\nwrote {len(report.written)} profile(s) into {out_dir}")
+    if report.unchecked:
+        print(
+            "WARNING: no trait table under the checkout, so the hashes were not "
+            "validated offline; simc itself is the only gate left."
+        )
+    for profile, reason in report.skipped:
+        print(f"  REFUSED {profile}: {reason}")
+    if report.skipped and args.strict:
+        return 1
+    return 0
+
+
+def cmd_gear_anchor(args: argparse.Namespace) -> int:
+    """Show the normalized kit a computed build of this tier would wear.
+
+    Offline and read-only. It exists because the anchor moves numbers -- measured on
+    MID2 at 1000 deterministic iterations, one target, it costs a shipped profile
+    3.65% to 6.17% and lifts a disabled one 45.91% to 65.65% -- and a reader who
+    cannot see the anchor has to take it on trust.
+    """
+    from . import buffsweep, gearanchor
+
+    simc_dir = Path(args.simc_source)
+    profiles_dir = Path(args.profiles)
+    tier = _resolve_tier(profiles_dir, args.tier)
+    found = profiles.discover(profiles_dir, tier, dps_only=True)
+    if not found:
+        # Distinct from the filter miss below, which used to swallow this case and
+        # report the filter as None -- naming something the user never supplied.
+        logging.error(
+            "no damage profile at all under %s/%s, so there is nothing to anchor",
+            profiles_dir,
+            tier,
+        )
+        return 1
+
+    selected = [p for p in found if not args.profile or args.profile in p.path.stem]
+    if not selected:
+        logging.error(
+            "none of %s's %d damage profiles matches %r",
+            tier,
+            len(found),
+            args.profile,
+        )
+        return 1
+
+    try:
+        sets: list[buffsweep.TierSet] | None = buffsweep.parse_tier_sets(simc_dir, ptr=args.ptr)
+        item_sets: dict[int, int] | None = None
+        if sets is not None and not buffsweep.sets_for_tier(sets, tier):
+            logging.warning("simc ships no set bonus labelled %s; anchoring gear alone", tier)
+            sets = None
+        if sets is not None:
+            # After the check, not before it: the item table is 115,470 rows and a
+            # tier with no set has no use for a single one of them.
+            item_sets = gearanchor.parse_item_sets(simc_dir, ptr=args.ptr)
+
+        # Only the *set name* and the zeroed tokens vary by class; the item level, the
+        # tally and the state do not. Deriving per profile re-ran the whole tier tally
+        # once per profile -- 40 tallies and ~1,120 profile reads on MID2 -- so it is
+        # derived once per distinct class and reused.
+        targets: dict[str, gearanchor.AnchorTarget] = {}
+        for profile in selected:
+            if profile.wow_class not in targets:
+                targets[profile.wow_class] = gearanchor.derive_target(
+                    found, tier, sets, item_sets, wow_class=profile.wow_class
+                )
+        anchors = [
+            (
+                profile,
+                gearanchor.apply(targets[profile.wow_class], gearanchor.read_kit(profile.path)),
+            )
+            for profile in selected
+        ]
+    except gearanchor.AnchorError as exc:
+        # Both of this module's refusals are worded for a human and name their own
+        # fix. A traceback buries that sentence under six frames.
+        logging.error("%s", exc)
+        return 1
+
+    target = targets[selected[0].wow_class]
+    print(f"{tier}: item level {target.ilevel} ({target.ilevel_evidence})")
+    print(f"      tier set {target.set_pieces}-piece ({target.set_evidence})")
+    if target.zeroed_options:
+        print(f"      {len(target.zeroed_options)} other set(s) written to zero")
+    print()
+
+    for profile, anchor in anchors:
+        mark = " [unvalidated]" if profile.unvalidated else ""
+        print(f"{profile.path.stem}{mark}")
+        print(f"  {gearanchor.describe(anchor)}")
+        if args.options:
+            for option in anchor.options():
+                print(f"    {option}")
+    return 0
+
+
+def buildsearch_final() -> int:
+    from . import buildsearch
+
+    return buildsearch.FINAL_ITERATIONS
+
+
+def buildsearch_climb() -> int:
+    from . import buildsearch
+
+    return buildsearch.CLIMB_STEPS
+
+
+def cmd_build_search(args: argparse.Namespace) -> int:
+    """Search for talent builds, calibrate the search, and publish what passes.
+
+    Two commands' worth of work in one, because they are one decision: a search result
+    is only publishable if the search has been shown to find the answer where the
+    answer is known, and showing that is what ``--calibrate`` does. Running them apart
+    would let a Step 5 pass be published against a Step 4 that was never run.
+    """
+    from . import buildsearch, buildsearchrun, computedbuilds, gearanchor, talentrepair
+
+    simc_dir = Path(args.simc_source)
+    profiles_dir = Path(args.profiles)
+    tier = _resolve_tier(profiles_dir, args.tier)
+    found = profiles.discover(profiles_dir, tier, dps_only=True)
+    if not found:
+        logging.error("no damage profile under %s/%s", profiles_dir, tier)
+        return 1
+
+    traits = talenttree_traits(simc_dir, args.ptr)
+    corpus, _ = talentrepair.corpus_from(simc_dir, (tier,), ptr=args.ptr)
+    if not corpus:
+        logging.error(
+            "no shipped profile of %s decodes, so neither the point budget nor the "
+            "framing range the soundness screen needs can be derived",
+            tier,
+        )
+        return 1
+    framing = talentrepair.observed_framing(corpus)
+    budget = talentedit_budget(corpus, tier)
+    logging.info(
+        "%s: budget %s, framing %s, from %d shipped build(s)",
+        tier,
+        dict(budget.per_tree),
+        framing,
+        len(corpus),
+    )
+
+    try:
+        target = _anchor_target_for(simc_dir, tier, found, args.ptr)
+    except gearanchor.AnchorError as exc:
+        logging.error("%s", exc)
+        return 1
+
+    harvested = None
+    if args.harvest:
+        harvest_path = Path(args.harvest)
+        if not harvest_path.is_file():
+            logging.error("no harvested-builds document at %s", harvest_path)
+            return 1
+        harvested = buildsearchrun.read_harvested(harvest_path)
+        logging.info("harvested seeds available for %d spec(s)", len(harvested))
+    else:
+        logging.info(
+            "no --harvest document supplied: no seed in this run came from a real player's build"
+        )
+
+    selected = [p for p in found if not args.build or args.build in p.id]
+    if not selected:
+        logging.error("no build of %s matches %r", tier, args.build)
+        return 1
+
+    contexts = [
+        buildsearchrun.prepare(
+            profile,
+            traits=traits,
+            target=_target_for(target, simc_dir, tier, found, profile, args.ptr),
+            budget=budget,
+            framing=framing,
+            blind=args.calibrate,
+            seed_value=args.seed,
+            harvested=harvested,
+        )
+        for profile in selected
+    ]
+
+    if args.plan:
+        for context in contexts:
+            state = context.blocked or f"{len(context.seeds)} seed(s)"
+            mark = " [repaired]" if context.repair and context.repair.ok else ""
+            print(f"{context.profile.id:46s} {state}{mark}")
+        return 0
+
+    simc = simc_runner.find_simc(args.simc)
+    settings = SimSettings(target_error=0.0, max_iterations=args.iterations, threads=args.threads)
+    rounds = (
+        buildsearch.plan_rounds(1, start=args.iterations, final=args.iterations)
+        if args.rounds == 1
+        else None
+    )
+
+    entries: list[computedbuilds.SpecEntry] = []
+    rows: list[computedbuilds.CalibrationRow] = []
+    notes: list[str] = []
+    out_dir = Path(args.out) / tier
+    publishing = not args.calibrate or args.write_calibration
+    if harvested is None:
+        notes.append(
+            "No harvested-builds document was available to this run, so no candidate "
+            "came from a real player's build. Seeds were simc's own builds (repaired "
+            "where simc refuses its own hash) and generated variants."
+        )
+
+    for context in contexts:
+        if context.blocked:
+            logging.warning("%s: %s", context.profile.id, context.blocked)
+            entries.append(_unsearched_entry(context, args.targets, gearanchor))
+            if publishing:
+                _publish(args, tier, entries, rows, notes, len(found), out_dir)
+            continue
+        try:
+            outcome = buildsearchrun.run_build(
+                simc,
+                context,
+                settings,
+                targets=args.targets,
+                breadth=args.breadth,
+                seed_value=args.seed,
+                blind=args.calibrate,
+                timeout=args.timeout,
+                rounds=rounds,
+                climb_steps=args.climb_steps,
+            )
+        except (simc_runner.SimcError, buildsearch.SearchError) as exc:
+            logging.error("%s: search failed: %s", context.profile.id, exc)
+            entries.append(_unsearched_entry(context, args.targets, gearanchor, reason=str(exc)))
+            if publishing:
+                _publish(args, tier, entries, rows, notes, len(found), out_dir)
+            continue
+
+        head_to_head, row = _head_to_head(
+            simc, context, settings, outcome, args, buildsearchrun, buildsearch
+        )
+        if row is not None:
+            rows.append(row)
+            logging.info(
+                "%s: %s (simc %.0f, search %s)",
+                context.profile.id,
+                row.verdict,
+                row.simc.dps,
+                "none" if row.found is None else f"{row.found.dps:.0f}",
+            )
+        entries.append(_entry_for(context, outcome, head_to_head, args, computedbuilds, gearanchor))
+        if publishing:
+            _publish(args, tier, entries, rows, notes, len(found), out_dir)
+
+    # A head-to-head runs on every build, blind or not -- it is what fills the
+    # document's `simc` side. It is only *calibration* when the search was blind,
+    # because the gate's whole meaning is that the search did not see the answer.
+    # Publishing a non-blind head-to-head under that name would be a gate that
+    # graded the search on a paper it had already read.
+    calibration = computedbuilds.Calibration(rows=tuple(rows)) if rows and args.calibrate else None
+    if calibration is not None:
+        print()
+        print("CALIBRATION -- " + calibration.criterion())
+        for row in calibration.rows:
+            margin = "n/a" if row.margin is None else f"{row.margin:+.3%}"
+            band = "n/a" if row.band is None else f"{row.band:.3%}"
+            print(f"  {row.build_id:46s} {row.verdict:14s} {margin:>10s} band {band:>8s}")
+        print("  " + calibration.summary())
+        print()
+
+    if publishing:
+        path = _publish(args, tier, entries, rows, notes, len(found), out_dir)
+        logging.info("wrote %s (%d entr(ies))", path, len(entries))
+    else:
+        logging.info("calibration run: nothing published (pass --write-calibration to record it)")
+
+    if args.calibrate:
+        # The gate decides the exit code, and a failure is a *result*: the workflow
+        # reports it and refuses to commit rather than treating it as a broken run.
+        return 0 if calibration is not None and calibration.passed else 2
+    return 0
+
+
+def _publish(args, tier, entries, rows, notes, builds_available, out_dir):
+    """Rewrite the whole document. Called after **every** build, not once at the end.
+
+    CLAUDE.md records this exact defect in the gear sweep: the entry claimed a per-spec
+    write while ``write_gear`` was called once after the loop, so an interrupted sweep
+    left *nothing* rather than a smaller dataset. A search costs CPU-hours, so being
+    interrupted is the expected case, and ``coverage`` is already honest about covering
+    fewer builds than the tier has.
+
+    Worth naming how that defect nearly shipped again here: the edit that introduced
+    this function was applied by a scripted string replacement whose anchor no longer
+    matched after a reformat, so it silently did nothing -- while the CLAUDE.md entry
+    describing per-build writes was written anyway. ``test_buildsearch_cli`` asserts the
+    document really is rewritten per build, which is the only thing that can tell a
+    described behaviour from an implemented one.
+    """
+    from . import computedbuilds
+
+    calibration = computedbuilds.Calibration(rows=tuple(rows)) if rows and args.calibrate else None
+    return computedbuilds.write_computed_builds(
+        out_dir,
+        computedbuilds.build_document(
+            tier,
+            entries,
+            iterations=args.iterations,
+            deterministic=True,
+            builds_available=builds_available,
+            calibration=calibration,
+            notes=notes,
+        ),
+    )
+
+
+def talenttree_traits(simc_dir: Path, ptr: bool) -> list:
+    from . import talenttree
+
+    return talenttree.parse_trait_data(simc_dir, ptr=ptr)
+
+
+def talentedit_budget(corpus: list, tier: str):
+    from . import talentedit
+
+    return talentedit.derive_point_budget(corpus, source=f"{tier}'s shipped profiles")
+
+
+def _anchor_target_for(simc_dir: Path, tier: str, found: list, ptr: bool):
+    from . import buffsweep, gearanchor
+
+    sets = buffsweep.parse_tier_sets(simc_dir, ptr=ptr)
+    item_sets = None
+    if sets is not None and not buffsweep.sets_for_tier(sets, tier):
+        logging.warning("simc ships no set bonus labelled %s; anchoring gear alone", tier)
+        sets = None
+    if sets is not None:
+        item_sets = gearanchor.parse_item_sets(simc_dir, ptr=ptr)
+    return (sets, item_sets)
+
+
+def _target_for(prepared, simc_dir: Path, tier: str, found: list, profile, ptr: bool):
+    """The anchor target for one profile's class, derived once per class and cached.
+
+    Only the set *name* and the zeroed tokens vary by class; the item level and the
+    tally do not. Deriving per profile re-ran the whole tier tally once per profile.
+    """
+    from . import gearanchor
+
+    sets, item_sets = prepared
+    cache = _target_for.__dict__.setdefault("cache", {})
+    key = (tier, profile.wow_class)
+    if key not in cache:
+        cache[key] = gearanchor.derive_target(
+            found, tier, sets, item_sets, wow_class=profile.wow_class
+        )
+    return cache[key]
+
+
+def _unsearched_entry(context, targets: int, gearanchor, reason: str | None = None):
+    """A build no search covered, published as exactly that.
+
+    ``searched: false`` and ``best: null`` are different sentences from ``searched:
+    true`` and ``best: null``, and the site says something different for each -- "nobody
+    has looked" against "somebody looked and found nothing". Collapsing them is the
+    failure the display contract is shaped to prevent.
+    """
+    from . import computedbuilds
+
+    caveats = list(context.caveats)
+    if context.blocked:
+        caveats.append(f"No search ran for this build: {context.blocked}")
+    if reason:
+        caveats.append(f"The search did not complete: {reason}")
+    return computedbuilds.SpecEntry(
+        build_id=context.profile.id,
+        scenario="patchwerk",
+        targets=targets,
+        searched=False,
+        simc=None,
+        best=None,
+        runner_up=None,
+        anchor=gearanchor.display_json(context.anchor, profile=context.profile.id),
+        caveats=caveats,
+    )
+
+
+def _head_to_head(simc, context, settings, outcome, args, buildsearchrun, buildsearch):
+    """Measure simc's own build and the search's winner in one field, at full precision.
+
+    One invocation for both sides. Two profilesets in one run return an exact
+    difference; two numbers from two runs at two iteration counts do not, and the tie
+    band computed over them would be describing precisions that were never compared.
+    """
+    from . import talenttree
+
+    field = []
+    simc_key = "simcbuild"
+    if context.profile.talent_hash and context.repair is None:
+        original = context.profile.talent_hash
+    elif context.repair is not None and context.repair.repaired_hash:
+        original = context.repair.repaired_hash
+    else:
+        original = None
+
+    if original:
+        try:
+            loadout = talenttree.decode_loadout(original, context.nodes)
+        except talenttree.TalentDecodeError:
+            original = None
+        else:
+            field.append(
+                buildsearch.Candidate(
+                    key=simc_key,
+                    label=context.profile.display_name,
+                    origin=buildsearch.ORIGIN_SIMC,
+                    loadout=loadout,
+                    talent_hash=original,
+                )
+            )
+    for candidate, _ in outcome.ranked:
+        field.append(candidate)
+    if not field:
+        return ({}, None), None
+
+    measured = buildsearchrun.measure(
+        simc, context, settings, field, args.iterations, args.targets, args.timeout
+    )
+    row = buildsearchrun.calibration_row(context, outcome, measured, simc_key) if original else None
+    # ``(what was measured, which of them is simc's)``, then the calibration row. The
+    # simc candidate travels with the measurements rather than being rebuilt by the
+    # caller: in a blind run ``context.seeds[0]`` is the *scrambled* build, and a
+    # caller reaching for it there would publish it under simc's name.
+    return (measured, field[0] if original else None), row
+
+
+def _entry_for(context, outcome, head_to_head, args, computedbuilds, gearanchor):
+    """One published row: simc's side, ours, the runner-up, the anchor and the caveats.
+
+    The simc side is the candidate ``_head_to_head`` actually measured, not one rebuilt
+    here. Rebuilding it read ``context.seeds[0]``, which in a **blind** run is the
+    scrambled build rather than simc's -- harmless today because only the hash is
+    published, and exactly the kind of thing that stops being harmless the moment
+    another field is added.
+    """
+    measured, simc_candidate = head_to_head
+    hero = context.profile.hero_label
+    simc_side = None
+    if simc_candidate is not None and simc_candidate.key in measured:
+        simc_side = computedbuilds.contender_json(
+            simc_candidate, measured[simc_candidate.key], hero_talent=hero
+        )
+
+    sides = [
+        computedbuilds.contender_json(
+            candidate, measured[candidate.key], hero_talent=hero, outcome=outcome
+        )
+        for candidate, _ in outcome.ranked
+        if candidate.key in measured
+    ]
+    sides.sort(key=lambda side: -side["dps"])
+
+    caveats = list(context.caveats) + outcome.caveats()
+    if args.calibrate:
+        caveats.append(
+            "Blind run: the search began from a scrambled build and never saw simc's "
+            "own choices. The node set is inherited and is not part of the claim."
+        )
+    return computedbuilds.SpecEntry(
+        build_id=context.profile.id,
+        scenario="patchwerk",
+        targets=args.targets,
+        searched=True,
+        simc=simc_side,
+        best=sides[0] if sides else None,
+        runner_up=sides[1] if len(sides) > 1 else None,
+        anchor=gearanchor.display_json(context.anchor, profile=context.profile.id),
+        caveats=caveats,
+    )
+
+
 def cmd_fights(args: argparse.Namespace) -> int:
     """Publish ``<tier>/fights.json``: what each boss is asserted and measured to be.
 
@@ -474,7 +1545,13 @@ def cmd_fights(args: argparse.Namespace) -> int:
         )
 
     document = fightdataset.build_document(args.tier, tier_profiles, probe)
-    path = fightdataset.write_fights(Path(args.out) / args.tier, document)
+    try:
+        path = fightdataset.write_fights(
+            Path(args.out) / args.tier, document, force=getattr(args, "force", False)
+        )
+    except fightdataset.MeasurementWouldBeLost as exc:
+        logging.error("%s", exc)
+        return 1
     coverage = document["coverage"]
     logging.info(
         "wrote %s (%d encounters, %d with asserted facts, %d measured from logs)",
@@ -484,6 +1561,12 @@ def cmd_fights(args: argparse.Namespace) -> int:
         coverage["measured"],
     )
     return 0
+
+
+def cmd_harvest_builds(args: argparse.Namespace) -> int:
+    from . import harvest
+
+    return harvest.cmd_harvest_builds(args)
 
 
 def cmd_fight_probe(args: argparse.Namespace) -> int:
@@ -566,58 +1649,94 @@ def cmd_talents(args: argparse.Namespace) -> int:
 
 
 def cmd_hero_trees(args: argparse.Namespace) -> int:
-    """Detect and record the hero tree of every build simc ships unnamed.
+    """Record which hero tree every build of a tier plays.
 
-    Every spec plays a hero tree; simc just omits it from the name of a spec's
-    default build. This runs each such profile for one iteration, reads which
-    hero-tree-gated abilities fired, and writes the resolved names to the
-    checked-in data file `profiles.discover` reads. Detected from simc rather than
-    hand-typed, so a new tier needs a re-run and not an edit.
+    Every spec plays a hero tree; simc's profile name states it for most builds and
+    abbreviates or omits it for the rest. This decodes each profile's talent hash
+    against simc's trait table and names the sub-tree it selects from simc's own
+    ``__trait_sub_tree_data``, then writes the result to the checked-in data file
+    `profiles.discover` reads.
+
+    Derived rather than hand-typed, and it needs no compiled simc -- a sparse
+    checkout of ``engine/dbc/generated`` and ``profiles`` is the whole input -- so a
+    new tier needs a re-run and not an edit.
     """
     from . import herotrees
 
-    profiles_dir = Path(args.profiles)
+    simc_dir = Path(args.simc_source)
+    profiles_dir = Path(args.profiles) if args.profiles else simc_dir / "profiles"
     tier = _resolve_tier(profiles_dir, args.tier)
-    simc = simc_runner.find_simc(args.simc)
 
-    found = profiles.discover(profiles_dir, tier, dps_only=not args.include_tanks)
-    # A build simc already named needs nothing; only the unnamed ones are resolved.
-    unnamed = [p for p in found if p.hero_talent is None]
-    if not unnamed:
-        logging.info("%s: every build already names its hero tree", tier)
+    # `tiers.json` outlives simc's profile directories -- the publish job loops over
+    # published tiers, and simc deletes an old tier's profiles eventually -- so a tier
+    # with nothing to read is a normal state and not an error. Same tolerance
+    # `build_index` already has.
+    if not (profiles_dir / tier).is_dir():
+        logging.warning(
+            "simc no longer ships %s under %s; leaving its recorded hero trees alone",
+            tier,
+            profiles_dir,
+        )
         return 0
 
-    resolved: dict[str, str] = dict(herotrees.load_overrides(tier))
-    unresolved: list[str] = []
-    for profile in unnamed:
-        text = profile.path.read_text(encoding="utf-8", errors="replace")
-        import re as _re
-
-        name_match = _re.search(r'="(MID\d+[^"]*)"', text) or _re.search(r'="([^"]+)"', text)
-        internal = name_match.group(1) if name_match else profile.path.stem
-        report = simc_runner.run(
-            simc,
-            simc_runner.SimRequest(profile=profile, scenario=scenarios.PATCHWERK, targets=1),
-            SimSettings(target_error=0, max_iterations=1),
-            timeout=args.timeout,
-        )
-        tree = herotrees.detect_hero_tree(report, profile.wow_class, profile.spec)
-        if tree is None:
-            unresolved.append(f"{profile.wow_class} {profile.spec} ({internal})")
-            logging.warning(
-                "could not resolve the hero tree for %s %s -- add a signature to "
-                "herotrees.HERO_TREE_SIGNATURES",
-                profile.wow_class,
-                profile.spec,
+    # Which trait table -- live or PTR -- has to match the one the dataset was built
+    # against, or the node stream desynchronises and the decode quietly describes a
+    # different tree. The published manifest is where that is recorded, so it is read
+    # from there rather than assumed; `--ptr/--no-ptr` overrides it for a tier that
+    # has never been published.
+    ptr = args.ptr
+    if ptr is None:
+        manifest_path = Path(args.out) / tier / "index.json"
+        if manifest_path.is_file():
+            ptr = bool(
+                json.loads(manifest_path.read_text(encoding="utf-8")).get("simc", {}).get("ptr")
             )
-            continue
-        resolved[internal] = tree
-        print(f"  {profile.wow_class} {profile.spec:<14} {internal:<34} -> {tree}")
+        else:
+            logging.info("no manifest at %s; reading simc's live trait table", manifest_path)
+            ptr = False
 
-    if resolved:
-        path = herotrees.write_overrides(tier, resolved)
-        logging.info("wrote %s (%d resolved)", path, len(resolved))
-    return 1 if unresolved else 0
+    result = herotrees.resolve_tier(
+        profiles_dir,
+        tier,
+        simc_dir,
+        ptr=ptr,
+        dps_only=not args.include_tanks,
+    )
+    for name, tree in sorted(result.resolved.items()):
+        print(f"  {name:<44} -> {tree}")
+    for name, carried, canonical in sorted(result.renamed):
+        # Expected for an abbreviation; a finding if the two name different trees.
+        print(f"  ! {name:<44} profile says {carried!r}, simc's table says {canonical!r}")
+    for name, reason in sorted(result.unresolved):
+        logging.warning("could not name the hero tree of %s: %s", name, reason)
+
+    if not result.resolved:
+        # Loud, and **not** a failure unless somebody is gating on it. This runs in a
+        # `for tier in ...; done` loop in the publish job under `bash -e`, so a
+        # non-zero exit here aborts that job before the commit step and discards a
+        # whole night's simulations -- over a data file whose absence costs only the
+        # canonical name, since every build keeps whatever its own profile said.
+        # `--strict` is the gate for anyone who wants one.
+        logging.error(
+            "%s: nothing resolved -- check that %s carries engine/dbc/generated",
+            tier,
+            simc_dir,
+        )
+        return 1 if args.strict else 0
+    if args.write:
+        path = herotrees.write_overrides(tier, result.resolved)
+        print(f"wrote {path}")
+    else:
+        print("(dry run; pass --write to record this)")
+    print(
+        f"{tier}: named {len(result.resolved)} builds, "
+        f"{len(result.unresolved)} unresolved, {len(result.renamed)} renamed"
+    )
+    # A profile whose talent hash no longer decodes is a fact about that profile --
+    # simc's disabled Havoc profiles are two of them today -- and it costs only the
+    # canonical name, since the build keeps whatever its own profile name said. So
+    # reporting is the point, and this is a failure only when used as a gate.
+    return 1 if result.unresolved and args.strict else 0
 
 
 def cmd_check_profiles(args: argparse.Namespace) -> int:
@@ -820,6 +1939,19 @@ def build_parser() -> argparse.ArgumentParser:
     add_common(p_build)
     p_build.add_argument("--simc", help="path to the simc binary (default: $PATH)")
     p_build.add_argument("--out", default=str(DEFAULT_OUT), help="output directory")
+    # Stated, not discovered. The predecessor read it out of a manifest under --out,
+    # which in a sharded run is a fresh scratch directory, so it was never anything
+    # but False; and the flag it read (`simc.ptr`) is simc's SC_USE_PTR compile
+    # constant rather than the data source the sims used. Same spelling as
+    # `gear-anchor`, which reads the same two tables. See `_tier_set_reference`.
+    p_build.add_argument(
+        "--ptr",
+        action=argparse.BooleanOptionalAction,
+        default=simc_runner.USES_PTR_DATA,
+        help="read simc's PTR item and set-bonus tables when checking each build's "
+        "tier-set state. The default tracks which client data this pipeline's sims "
+        "actually read, which is the live one",
+    )
     p_build.add_argument(
         "--scenario",
         action="append",
@@ -945,6 +2077,70 @@ def build_parser() -> argparse.ArgumentParser:
     p_fight_profiles.add_argument("--profiles-file", help="alternative fight profile file")
     p_fight_profiles.set_defaults(func=cmd_fight_profiles)
 
+    p_search = sub.add_parser(
+        "build-search",
+        help="search for talent builds, calibrate the search, publish what passes",
+    )
+    p_search.add_argument("--tier", default="latest")
+    p_search.add_argument("--profiles", default=".work/simc/profiles")
+    p_search.add_argument(
+        "--simc-source",
+        default=".work/simc",
+        help="simc checkout, for the trait table and the item/set tables",
+    )
+    p_search.add_argument("--simc", default=None, help="path to the simc binary")
+    p_search.add_argument("--out", default="web/public/data")
+    p_search.add_argument("--build", default=None, help="only builds whose id contains this")
+    p_search.add_argument("--targets", type=int, default=1)
+    p_search.add_argument(
+        "--iterations", type=int, default=buildsearch_final(), help="final-round iterations"
+    )
+    p_search.add_argument("--breadth", type=int, default=24, help="neighbours generated per seed")
+    p_search.add_argument(
+        "--climb-steps",
+        type=int,
+        default=buildsearch_climb(),
+        help="how many real one-edit improvements the opening phase will chase; 0 disables",
+    )
+    p_search.add_argument(
+        "--seed", type=int, default=0, help="PRNG seed; the run is reproducible from it"
+    )
+    p_search.add_argument("--threads", type=int, default=0)
+    p_search.add_argument("--timeout", type=int, default=3600)
+    p_search.add_argument(
+        "--rounds",
+        type=int,
+        default=0,
+        help="1 collapses the schedule to a single round at --iterations (for smoke runs)",
+    )
+    p_search.add_argument(
+        "--calibrate",
+        action="store_true",
+        help=(
+            "blind run: every choice node is scrambled before the first round, so the "
+            "search never sees simc's own choices. Publishes nothing unless "
+            "--write-calibration is also given; exits 2 when the gate fails."
+        ),
+    )
+    p_search.add_argument(
+        "--write-calibration",
+        action="store_true",
+        help="publish the document from a calibration run as well (for inspection)",
+    )
+    p_search.add_argument(
+        "--harvest",
+        default=None,
+        help="a harvested-builds.json, whose builds become seeds labelled as harvested",
+    )
+    p_search.add_argument("--ptr", action="store_true", default=True)
+    p_search.add_argument("--no-ptr", dest="ptr", action="store_false")
+    p_search.add_argument(
+        "--plan",
+        action="store_true",
+        help="report which builds are searchable and where each seed comes from, and stop",
+    )
+    p_search.set_defaults(func=cmd_build_search)
+
     p_fights = sub.add_parser(
         "fights",
         help="publish <tier>/fights.json from the fight profiles and an optional probe run",
@@ -957,7 +2153,140 @@ def build_parser() -> argparse.ArgumentParser:
         "the assertions alone",
     )
     p_fights.add_argument("--profiles-file", help="alternative fight profile file")
+    p_fights.add_argument(
+        "--force",
+        action="store_true",
+        help="write even when it would discard measurements the published file "
+        "already carries. Without --probe that is what this command does, and it "
+        "reports success while doing it",
+    )
     p_fights.set_defaults(func=cmd_fights)
+
+    p_anchor = sub.add_parser(
+        "gear-anchor",
+        help="the normalized kit a computed build of a tier would wear",
+    )
+    p_anchor.add_argument("--tier", default="latest")
+    p_anchor.add_argument("--profiles", default="simc/profiles")
+    p_anchor.add_argument(
+        "--simc-source", default="simc", help="a simc checkout, for engine/dbc/generated"
+    )
+    p_anchor.add_argument("--profile", help="only profiles whose filename contains this")
+    p_anchor.add_argument(
+        "--options", action="store_true", help="print the simc option lines themselves"
+    )
+    p_anchor.add_argument("--ptr", action="store_true")
+    p_anchor.set_defaults(func=cmd_gear_anchor)
+
+    p_buffs = sub.add_parser(
+        "buffs",
+        help="what the tier set and an outside Power Infusion are worth, per spec",
+    )
+    p_buffs.add_argument("--tier", default="latest")
+    p_buffs.add_argument("--simc", help="path to the simc binary")
+    p_buffs.add_argument("--profiles", default="simc/profiles")
+    p_buffs.add_argument(
+        "--simc-source", default="simc", help="a simc checkout, for engine/dbc/generated"
+    )
+    p_buffs.add_argument("--out", default=str(DEFAULT_OUT))
+    p_buffs.add_argument("--targets", type=int, default=1)
+    p_buffs.add_argument("--target-error", type=float, default=0.0)
+    p_buffs.add_argument("--max-iterations", type=int, default=3000)
+    p_buffs.add_argument("--threads", type=int, default=0)
+    p_buffs.add_argument("--timeout", type=int, default=1800)
+    p_buffs.add_argument("--class", dest="wow_class", action="append")
+    p_buffs.add_argument("--spec", action="append")
+    p_buffs.add_argument("--limit", type=int)
+    p_buffs.add_argument("--shard")
+    p_buffs.set_defaults(func=cmd_buffs)
+
+    p_extra = sub.add_parser(
+        "extra-builds",
+        help="materialise the builds this project supplies for missing (spec, hero tree) cells",
+    )
+    p_extra.add_argument("--tier", default="latest")
+    p_extra.add_argument("--simc-source", default="simc")
+    p_extra.add_argument(
+        "--out", default=None, help="destination directory (default: the tier's profile dir)"
+    )
+    p_extra.add_argument("--write", action="store_true")
+    p_extra.add_argument(
+        "--strict", action="store_true", help="exit non-zero when any cell is refused"
+    )
+    p_extra.set_defaults(func=cmd_extra_builds)
+
+    p_unvalidated = sub.add_parser(
+        "unvalidated",
+        help="list or write out the profiles simc wrote and left commented out",
+    )
+    p_unvalidated.add_argument("--tier", default="latest")
+    p_unvalidated.add_argument("--simc-source", default="simc")
+    p_unvalidated.add_argument(
+        "--out",
+        help="directory to write the profiles into (default: the tier's own profile directory)",
+    )
+    p_unvalidated.add_argument("--write", action="store_true")
+    p_unvalidated.set_defaults(func=cmd_unvalidated)
+
+    p_spec_index = sub.add_parser(
+        "spec-index",
+        help="publish <tier>/spec-index.json: every class and spec in the game, for "
+        "the Spec detail picker",
+    )
+    p_spec_index.add_argument("--tier", default="latest")
+    p_spec_index.add_argument(
+        "--simc-source", default="simc", help="a simc checkout (profiles + dbc/generated)"
+    )
+    p_spec_index.add_argument("--out", default="web/public/data")
+    p_spec_index.set_defaults(func=cmd_spec_index)
+
+    p_fight_zones = sub.add_parser(
+        "fight-zones",
+        help="list Warcraft Logs' raid zones and say which season each boss list "
+        "belongs to (needs credentials)",
+    )
+    p_fight_zones.add_argument("--tier", default="MID2", help="tier to seed with --seed")
+    p_fight_zones.add_argument("--profiles-file", help="alternative fight profile file")
+    p_fight_zones.add_argument(
+        "--show", type=int, default=8, help="how many of the newest zones to print"
+    )
+    p_fight_zones.add_argument(
+        "--verbose-zones", action="store_true", help="print every encounter of every zone shown"
+    )
+    p_fight_zones.add_argument(
+        "--seed", type=int, metavar="ZONE_ID", help="add that zone's encounters to --tier"
+    )
+    p_fight_zones.add_argument(
+        "--move",
+        nargs=2,
+        metavar=("FROM", "TO"),
+        help="re-file a tier's encounters, with their facts, under another tier name",
+    )
+    p_fight_zones.add_argument(
+        "--scan",
+        nargs=2,
+        type=int,
+        metavar=("FROM", "TO"),
+        help="walk this range of zone ids through the by-id lookup and print every "
+        "zone the list does not return. There is no endpoint that enumerates all "
+        "zones, and at least the PTR ones are missing from `worldData.zones`",
+    )
+    p_fight_zones.add_argument("--difficulty", type=int, default=5)
+    p_fight_zones.add_argument("--write", action="store_true", help="apply --seed/--move to disk")
+    p_fight_zones.set_defaults(func=cmd_fight_zones)
+
+    p_wcl_schema = sub.add_parser(
+        "wcl-schema",
+        help="introspect the Warcraft Logs schema: which fields and orderings exist "
+        "(needs credentials)",
+    )
+    p_wcl_schema.add_argument(
+        "--type",
+        action="append",
+        help="type to introspect; repeatable. Defaults to the ones bearing on how "
+        "kills can be ordered",
+    )
+    p_wcl_schema.set_defaults(func=cmd_wcl_schema)
 
     p_fight_probe = sub.add_parser(
         "fight-probe",
@@ -967,6 +2296,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     fightprobe.add_arguments(p_fight_probe)
     p_fight_probe.set_defaults(func=cmd_fight_probe)
+
+    p_harvest = sub.add_parser(
+        "harvest-builds",
+        help="collect the talent builds and gear real players killed a boss with, "
+        "from Warcraft Logs (needs credentials)",
+    )
+    from . import harvest
+
+    harvest.add_arguments(p_harvest)
+    p_harvest.set_defaults(func=cmd_harvest_builds)
 
     p_talents = sub.add_parser(
         "talents",
@@ -1006,12 +2345,36 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_hero = sub.add_parser(
         "hero-trees",
-        help="detect the hero tree of every build simc ships without one in its "
-        "name, and record it for the dataset",
+        help="name the hero tree every build of a tier plays, from its talent hash "
+        "and simc's own hero tree table, and record it for the dataset",
     )
     add_common(p_hero)
-    p_hero.add_argument("--simc", help="path to the simc binary (default: $PATH)")
-    p_hero.add_argument("--timeout", type=int, default=120, help="seconds per profile")
+    # A profiles path is optional here: the one input is a simc checkout, and its
+    # profiles directory is inside it.
+    p_hero.set_defaults(profiles=None)
+    p_hero.add_argument(
+        "--simc-source",
+        default="simc",
+        help="a simc checkout (profiles + engine/dbc/generated). No binary needed",
+    )
+    p_hero.add_argument(
+        "--ptr",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="read simc's PTR trait table (default: whatever the published manifest "
+        "for this tier says the dataset was built against)",
+    )
+    p_hero.add_argument(
+        "--out",
+        default=str(DEFAULT_OUT),
+        help="where the published dataset lives, for reading the live/PTR flag",
+    )
+    p_hero.add_argument(
+        "--write", action="store_true", help="record the result in the checked-in data file"
+    )
+    p_hero.add_argument(
+        "--strict", action="store_true", help="exit non-zero when any profile is unresolved"
+    )
     p_hero.set_defaults(func=cmd_hero_trees)
 
     p_check = sub.add_parser(

@@ -1,0 +1,166 @@
+name: Buffs and tier sets
+
+# What a class's tier set and an outside Power Infusion are worth, per build.
+#
+# Cheap next to the gear sweep and for a structural reason: five profilesets per
+# build (three set states, two Power Infusion states) against ~36 for one gear slot,
+# and no combinatorics at all. So this is a run of minutes where `gear.yml` is one
+# of hours, and it can sensibly be re-run whenever simc's set bonuses change --
+# which is every tuning pass, not every tier.
+#
+# `workflow_dispatch` only for now: it commits, and the first runs of a new sweep
+# want somebody reading the numbers before they land on the site.
+on:
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: 'Tier to sweep'
+        default: 'latest'
+      targets:
+        description: 'Target count. 1 is where a tier set and an outside cooldown are usually judged'
+        default: '1'
+      iterations:
+        description: 'Fixed iteration count (deterministic)'
+        default: '3000'
+      shards:
+        description: 'Parallel jobs to split the builds across'
+        default: '6'
+
+concurrency:
+  group: buffs
+
+permissions:
+  contents: write
+
+jobs:
+  build-simc:
+    name: Build SimulationCraft
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout SimulationCraft
+        id: simc
+        run: |
+          git clone --depth 1 https://github.com/simulationcraft/simc.git simc
+          echo "sha=$(git -C simc rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache build tree
+        id: cache
+        uses: actions/cache@v4
+        with:
+          # The same key sims.yml and gear.yml use: whichever workflow runs first
+          # pays for the build and the others get it for nothing.
+          path: simc/build
+          key: simc-build-${{ runner.os }}-${{ steps.simc.outputs.sha }}
+          restore-keys: simc-build-${{ runner.os }}-
+
+      - name: Build
+        run: |
+          cmake -B simc/build -S simc \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSC_NO_NETWORKING=ON \
+            -DBUILD_GUI=OFF
+          cmake --build simc/build -j"$(nproc)"
+
+      - name: Package binary, profiles and the set-bonus table
+        run: |
+          mkdir -p bundle/engine/dbc
+          cp simc/build/simc bundle/simc
+          strip bundle/simc || true
+          cp -r simc/profiles bundle/profiles
+          # `parse_tier_sets` reads item_set_bonus.inc out of the source tree --
+          # there is no simc command that lists set bonuses, the same absence as
+          # items and traits.
+          cp -r simc/engine/dbc/generated bundle/engine/dbc/generated
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: simc-bundle-buffs
+          path: bundle
+          retention-days: 1
+          compression-level: 6
+
+  sweep:
+    needs: build-simc
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: simc-bundle-buffs
+          path: bundle
+      - run: chmod +x bundle/simc && pip install -e ./pipeline
+
+      - name: Sweep
+        run: |
+          wowdps -v buffs \
+            --simc bundle/simc \
+            --profiles bundle/profiles \
+            --simc-source bundle \
+            --tier "${{ inputs.tier || 'latest' }}" \
+            --targets "${{ inputs.targets || '1' }}" \
+            --max-iterations "${{ inputs.iterations || '3000' }}" \
+            --shard "${{ matrix.shard }}/${{ inputs.shards || '6' }}" \
+            --out shard
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: buffs-${{ matrix.shard }}
+          path: shard
+
+  publish:
+    name: Merge and commit
+    needs: [build-simc, sweep]
+    # Publish whatever finished: a partial sweep is a smaller honest answer, and
+    # the dataset says how many builds it covers.
+    if: always() && needs.sweep.result != 'cancelled'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: buffs-*
+          path: shards
+
+      - name: Install pipeline
+        run: pip install -e ./pipeline
+
+      - name: Merge shards
+        run: |
+          shopt -s nullglob
+          dirs=(shards/buffs-*)
+          if [ ${#dirs[@]} -eq 0 ]; then
+            echo "::error::no shard produced any buff data"
+            exit 1
+          fi
+          wowdps merge "${dirs[@]}" --out web/public/data
+
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add web/public/data
+          if git diff --staged --quiet; then
+            echo "buff dataset unchanged"
+            exit 0
+          fi
+          git commit -m "data: refresh buff and tier set comparison $(date -u +%Y-%m-%d)"
+          pushed=false
+          for attempt in 1 2 3; do
+            git pull --rebase --autostash origin "${{ github.ref_name }}" || true
+            if git push origin "HEAD:${{ github.ref_name }}"; then pushed=true; break; fi
+            echo "push attempt $attempt lost the race; retrying"
+            sleep $((attempt * 5))
+          done
+          [ "$pushed" = true ]

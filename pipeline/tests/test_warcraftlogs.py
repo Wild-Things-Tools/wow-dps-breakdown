@@ -89,6 +89,11 @@ def ranking_entry(code: str, fight_id: int, amount: float = 100.0) -> dict:
     return {"amount": amount, "report": {"code": code, "fightID": fight_id, "startTime": 1}}
 
 
+def routes(selected) -> list[tuple[str, int]]:
+    """Drop the kill timestamp, which these cases are not about."""
+    return [(code, fight_id) for code, fight_id, _ in selected]
+
+
 def test_ranking_entries_carry_the_route_to_the_actual_log():
     """This is what makes a fight probe cheap: no report search is needed, because
     every ranking already names the report and fight it came from."""
@@ -96,7 +101,7 @@ def test_ranking_entries_carry_the_route_to_the_actual_log():
         "id": 3180,
         "characterRankings": {"rankings": [ranking_entry("aaa", 4), ranking_entry("bbb", 7)]},
     }
-    assert top_report_fights(encounter, 5) == [("aaa", 4), ("bbb", 7)]
+    assert routes(top_report_fights(encounter, 5)) == [("aaa", 4), ("bbb", 7)]
 
 
 def test_two_parses_from_one_pull_are_one_fight_not_two():
@@ -107,7 +112,7 @@ def test_two_parses_from_one_pull_are_one_fight_not_two():
             "rankings": [ranking_entry("aaa", 4), ranking_entry("aaa", 4), ranking_entry("bbb", 2)]
         }
     }
-    assert top_report_fights(encounter, 5) == [("aaa", 4), ("bbb", 2)]
+    assert routes(top_report_fights(encounter, 5)) == [("aaa", 4), ("bbb", 2)]
 
 
 def test_the_report_limit_is_the_cost_dial_and_is_respected():
@@ -119,7 +124,7 @@ def test_rankings_returned_as_a_json_string_are_still_read():
     """``characterRankings`` is an untyped JSON scalar in the schema, and the site
     has been seen to return it both ways."""
     encounter = {"characterRankings": json.dumps({"rankings": [ranking_entry("aaa", 1)]})}
-    assert top_report_fights(encounter, 5) == [("aaa", 1)]
+    assert routes(top_report_fights(encounter, 5)) == [("aaa", 1)]
 
 
 def test_entries_without_a_report_are_skipped_rather_than_crashing():
@@ -128,7 +133,7 @@ def test_entries_without_a_report_are_skipped_rather_than_crashing():
             "rankings": [{"amount": 1}, {"report": {"code": "aaa"}}, ranking_entry("bbb", 3)]
         }
     }
-    assert top_report_fights(encounter, 5) == [("bbb", 3)]
+    assert routes(top_report_fights(encounter, 5)) == [("bbb", 3)]
 
 
 # --------------------------------------------------------------------------------
@@ -168,3 +173,124 @@ def test_cache_hits_are_counted_apart_from_paid_queries():
     ledger.record("b", reading(10.0), cached=True)
     payload = ledger.to_json()
     assert payload["queries"] == 1 and payload["cacheHits"] == 1
+
+
+def test_the_boss_list_comes_from_the_tier_and_a_tier_with_none_is_a_refusal(
+    tmp_path, monkeypatch, caplog
+):
+    """A season whose raid has not opened yet must not borrow the last one's bosses.
+
+    The published MID2 comparison is what the old fallback ("the newest zone
+    Warcraft Logs is ranking") cost: 192 rows of Season 2 sim output against Season
+    1 kills, under a Season 2 heading. It is the failure shape this project keeps
+    running into -- a full set of plausible numbers answering a question nobody
+    asked -- so the fallback is gone and the empty case is an error rather than a
+    quiet substitution.
+    """
+    import argparse
+    import json as _json
+
+    from wowdps import warcraftlogs
+
+    root = tmp_path / "data"
+    (root / "MID9").mkdir(parents=True)
+    (root / "tiers.json").write_text(_json.dumps({"current": "MID9", "tiers": []}))
+    (root / "MID9" / "index.json").write_text(_json.dumps({"specs": []}))
+
+    monkeypatch.setenv("WCL_CLIENT_ID", "id")
+    monkeypatch.setenv("WCL_CLIENT_SECRET", "secret")
+
+    args = argparse.Namespace(
+        data=str(root), tier="MID9", encounter=None, difficulty=5, metric="dps"
+    )
+
+    with caplog.at_level("ERROR"):
+        assert warcraftlogs.cmd_verify(args) == 1
+
+    message = caplog.text
+    assert "no fight profiles for tier MID9" in message
+    # The way out is named, and so is the reason there is no fallback.
+    assert "fight-zones" in message
+    assert "previous" in message
+
+
+# --------------------------------------------------------------------------------
+# The bracketing readings must not go through the response cache
+# --------------------------------------------------------------------------------
+
+
+class _CountingTransport:
+    """A stub post() whose hourly counter moves with every real request.
+
+    The counter moving is the whole point: a client that serves the second reading
+    out of the first one's cache entry cannot see it move, and that is exactly the
+    failure this pins.
+    """
+
+    def __init__(self, start: float = 100.0, per_call: float = 9.0) -> None:
+        self.spent = start
+        self.per_call = per_call
+        self.posts = 0
+
+    def __call__(self, *args, **kwargs):
+        self.posts += 1
+        self.spent += self.per_call
+        payload = {
+            "data": {
+                "rateLimitData": {
+                    "limitPerHour": 3600,
+                    "pointsSpentThisHour": self.spent,
+                    "pointsResetIn": 900,
+                },
+                "reportData": {"report": {"code": "aBcD1234"}},
+            }
+        }
+        return type("Response", (), {"status_code": 200, "json": lambda self: payload})()
+
+
+def _client(tmp_path):
+    from wowdps.warcraftlogs import Credentials, WarcraftLogsClient
+
+    client = WarcraftLogsClient(Credentials("id", "secret"), cache_dir=tmp_path / "cache")
+    client._token = "token"
+    return client
+
+
+def test_the_bracketing_readings_bypass_the_response_cache(tmp_path):
+    """Without this the cost of a pass can never be measured, at any size.
+
+    `RATE_LIMIT_QUERY` takes no variables, so both readings hash to the same
+    (query, {}). Cached, the second is served from the first one's response, the
+    two readings are equal by construction, and `pointsSpentThisRun` is 0.0 for
+    every run -- which `describe_cost` correctly reports as UNMEASURED. The probe
+    exists to take exactly this measurement, and the workflow always passes
+    --cache, so the default mode could never produce the number it exists for.
+    """
+    client = _client(tmp_path)
+    transport = _CountingTransport()
+    client._client.post = transport
+
+    first = client.rate_limit()
+    last = client.rate_limit()
+
+    assert transport.posts == 2, "the second reading was served from the cache"
+    assert first["pointsSpentThisHour"] == 109.0
+    assert last["pointsSpentThisHour"] == 118.0
+    assert client.ledger.spent == 9.0
+    # And nothing was written to disk for them, so a later run cannot restore a
+    # reading the API returned hours ago and call it "before".
+    assert not list((tmp_path / "cache").glob("*.json"))
+
+
+def test_every_other_query_is_still_cached(tmp_path):
+    """The control. A bypass that leaked to the rest would make the cache useless
+    and every re-run of an extraction cost points again."""
+    client = _client(tmp_path)
+    transport = _CountingTransport()
+    client._client.post = transport
+
+    client.query("query Q { reportData { report { code } } }", {"code": "aBcD1234"})
+    client.query("query Q { reportData { report { code } } }", {"code": "aBcD1234"})
+
+    assert transport.posts == 1
+    assert len(list((tmp_path / "cache").glob("*.json"))) == 1
