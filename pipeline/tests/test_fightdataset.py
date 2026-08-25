@@ -740,9 +740,34 @@ def test_a_complete_fetch_is_kept_even_when_its_coverage_is_low():
     assert fightdataset._target_band(enc)["fights"] == 3
 
 
-def test_the_band_needs_at_least_two_kills():
-    one = payload_of([waved_fight("F0", 300.0, 60.0)])["encounters"][0]
-    assert fightdataset._target_band(one) is None
+def test_one_kill_is_a_band_of_one_rather_than_no_band():
+    """The floor was two kills, which discards the only observation on a boss whose
+    field is still filling in -- MID2's Sszorak on Mythic (#48).
+
+    One kill degenerates rather than failing: every statistic is that curve, so the
+    spread is zero and it draws as a line. `fights` says it is one, which is what
+    stops a flat band reading as agreement between many pulls.
+    """
+    enc = payload_of([waved_fight("F0", 300.0, 60.0)])["encounters"][0]
+    band = fightdataset._target_band(enc)
+
+    assert band is not None
+    assert band["fights"] == 1
+    for point in band["band"]:
+        assert point["low"] == point["median"] == point["high"]
+        assert point["min"] == point["median"] == point["max"]
+    # And it is a real curve, not a flat line by accident: the wave has to show.
+    assert max(p["median"] for p in band["band"]) > min(p["median"] for p in band["band"])
+
+
+def test_a_band_still_needs_a_kill_that_was_read_to_the_end():
+    """The floor that remains, and it is about correctness rather than sample size:
+    a truncated fetch freezes the target count at the cut point, so that curve is
+    wrong and not merely thin. One truncated kill is no band, where one complete
+    kill is a band of one."""
+    enc = payload_of([waved_fight("F0", 300.0, 60.0)])["encounters"][0]
+    enc["fights"][0]["truncated"] = True
+    assert fightdataset._target_band(enc) is None
 
 
 def test_a_rerun_that_changed_nothing_leaves_the_file_untouched(tmp_path):
