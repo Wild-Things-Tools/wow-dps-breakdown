@@ -381,6 +381,23 @@ function RankingChart({
           layout="vertical"
           margin={{ top: 4, right: 56, bottom: 4, left: 8 }}
         >
+          {/* One diagonal hatch per class present, since an SVG pattern cannot
+              inherit the shape's fill. Built from the rows rather than from the
+              whole class list, so a chart of six builds carries six defs. */}
+          <defs>
+            {Array.from(new Set(rows.map((row) => row.build.class))).map((wowClass) => (
+              <pattern
+                key={wowClass}
+                id={hatchId(wowClass)}
+                patternUnits="userSpaceOnUse"
+                width={6}
+                height={6}
+                patternTransform="rotate(135)"
+              >
+                <rect width={3} height={6} fill={classColor(wowClass)} />
+              </pattern>
+            ))}
+          </defs>
           <CartesianGrid {...GRID} vertical horizontal={false} />
           <XAxis
             type="number"
@@ -450,12 +467,29 @@ function RankingChart({
 
               Two stacked segments rather than one, because the two halves are not
               the same kind of number. The solid part is simc's own measurement;
-              the paler part is the projected talent gain, which nobody has
+              the hatched part is the projected talent gain, which nobody has
               simulated on this gear. A single solid bar would present the sum as
               one measured figure -- the whole failure `lib/bestBuild.ts` exists to
               prevent, restated in pixels. It is never the only channel: the row's
               tooltip prints both numbers, the table twin repeats them, and the
-              note under the chart says it in words. */}
+              note under the chart says it in words.
+
+              HATCHING, NOT A SECOND OPACITY, and the reason is measured. The
+              projected segment used to be drawn at `buildOpacity(row) * 0.42`,
+              which MULTIPLIES two independent claims: `buildOpacity` says whether
+              a row can be ranked against its neighbours, and the 0.42 says
+              measured-versus-projected. On a row that is both incomparable and
+              improved the product is 0.45 x 0.42 = 0.189, which is invisible on
+              this surface -- and that is not a rare corner: the builds this
+              project computes talents for are overwhelmingly the ones simc ships
+              no validated profile for, so five of the six largest gains in MID2
+              were drawn at 0.189 and only the small ones were legible (#61).
+
+              Texture is the right channel because it is orthogonal to opacity, so
+              the two claims stop multiplying: the hatch says projected, the
+              opacity says comparable, and each survives the other. Same reasoning
+              and the same 135-degree hatch as the Angular twin, which never had
+              this bug because it never multiplied. */}
           <Bar
             dataKey="simcDps"
             stackId="dps"
@@ -494,8 +528,8 @@ function RankingChart({
               <Cell
                 key={row.id}
                 cursor="pointer"
-                fill={classColor(row.build.class)}
-                fillOpacity={buildOpacity(row.build) * 0.42}
+                fill={`url(#${hatchId(row.build.class)})`}
+                fillOpacity={buildOpacity(row.build)}
               />
             ))}
           </Bar>
@@ -503,6 +537,18 @@ function RankingChart({
       </ResponsiveContainer>
     </div>
   );
+}
+
+/**
+ * The svg id of one class's hatch pattern.
+ *
+ * Slugged because a class name carries a space ("Death Knight") and an id with a
+ * space in it is not addressable by `url(#...)` -- the fill silently resolves to
+ * nothing and the segment disappears, which is the same invisible failure this
+ * whole change is repairing.
+ */
+function hatchId(wowClass: string): string {
+  return `dps-hatch-${wowClass.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
 }
 
 function RankingTable({
