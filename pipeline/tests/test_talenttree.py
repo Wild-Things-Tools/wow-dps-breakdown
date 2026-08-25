@@ -26,6 +26,7 @@ from wowdps.talenttree import (
     TalentEncodeError,
     Trait,
     _BitReader,
+    _BitWriter,
     _generated,
     decode_loadout,
     encode_loadout,
@@ -33,6 +34,7 @@ from wowdps.talenttree import (
     nodes_for_class,
     parse_sub_tree_names,
     parse_trait_data,
+    read_header,
     spec_rule_violation,
     tree_layout,
 )
@@ -115,9 +117,10 @@ def test_every_shipped_build_decodes_to_its_own_specialization():
     for build in real_builds():
         loadout = build.get("talentHash")
         assert loadout, f"{build['id']} carries no loadout string"
-        reader = _BitReader(loadout)
-        assert reader.read(8) == 2, f"{build['id']} is not serialization version 2"
-        spec_id = reader.read(16)
+        # Through `read_header`, not a second inline copy of the layout: the version
+        # check is inside it, so a build on another serialization version raises here
+        # rather than decoding to a plausible-looking wrong spec id.
+        spec_id = read_header(loadout)
         seen.setdefault((build["class"], build["spec"]), set()).add(spec_id)
 
     for key, ids in seen.items():
@@ -125,6 +128,43 @@ def test_every_shipped_build_decodes_to_its_own_specialization():
         expected = EXPECTED_SPEC_IDS.get(key)
         if expected is not None:
             assert next(iter(ids)) == expected, f"{key} decoded to {ids}, expected {expected}"
+
+
+def _header(version: int, spec_id: int) -> str:
+    """A loadout string carrying only a header, built with the project's own writer.
+
+    Through `_BitWriter` rather than packed by hand: the stream is least-significant
+    bit first, and a fixture packed the other way round reads back as a different
+    version and fails for a reason that has nothing to do with what is being tested.
+    """
+    writer = _BitWriter()
+    writer.write(version, 8)
+    writer.write(spec_id, 16)
+    writer.write(0, 128)  # the tree hash simc writes as zeros
+    return writer.text()
+
+
+def test_the_header_is_readable_without_a_trait_table_and_refuses_two_things():
+    """`read_header` exists so a spec disagreement can be reported for a hash that
+    would never decode -- against the wrong class's nodes a decode failure is all you
+    can get, and that is the less useful of the two findings. So it must answer with
+    no table at all, and it must refuse rather than return a number it cannot stand
+    behind."""
+    assert read_header(_header(2, 62)) == 62
+
+    # Another serialization version is a refusal, not a spec id. Without this the
+    # caller gets a plausible number off a layout that may have moved.
+    with pytest.raises(TalentDecodeError):
+        read_header(_header(1, 62))
+
+    # Reading past the end yields zeros by design, so an empty string presents as
+    # version 0 -- which is exactly the version check doing its job.
+    with pytest.raises(TalentDecodeError):
+        read_header("")
+
+    # An alphabet violation is caught before any of that.
+    with pytest.raises(TalentDecodeError):
+        read_header("not a loadout!")
 
 
 @pytest.mark.skipif(not real_builds(), reason="no committed MID2 dataset")

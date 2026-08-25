@@ -895,7 +895,9 @@ def spec_ids(simc_dir: Path, ptr: bool = False) -> dict[tuple[str, str], int]:
 def validate(observation: Observation, tables: TalentTables) -> Verdict:
     """Decode one observation's hash and hold it to simc's own rules.
 
-    Four ways this says no, and each one is a different finding:
+    Four ways this says no, and each one is a different finding. They are tested in
+    simc's own order -- class, spec, then the node stream -- rather than in the order
+    that happens to be cheapest:
 
     * **no talent code.** The field is documented to be null for a non-player actor
       and for a pre-Dragonflight fight. Getting one here would mean the actor
@@ -904,7 +906,10 @@ def validate(observation: Observation, tables: TalentTables) -> Verdict:
       desynchronised. The single most valuable thing this command can report.
     * **the spec id disagrees** with the spec the player details row states. Two
       sources describing one character; a disagreement means one of the two reads is
-      wrong, and pooling the build under either name would bury it.
+      wrong, and pooling the build under either name would bury it. Read out of the
+      hash's HEADER, before the node stream, because a hash exported for one class
+      does not decode against another class's nodes at all -- checked after a decode,
+      this finding is unreachable and every mismatch reports as a decode failure.
     * **simc would refuse it** -- a non-hero node whose ``id_spec`` excludes the
       player's spec, in simc's own wording. Harvesting a build simc will not load
       wastes the whole downstream sweep, and this decides it offline.
@@ -931,17 +936,33 @@ def validate(observation: Observation, tables: TalentTables) -> Verdict:
     if not observation.talent_hash:
         return Verdict(REASON_NO_CODE, "talentImportCode returned null for this actor")
 
+    # The spec is settled from the HEADER, before the node stream is touched, and the
+    # order is load-bearing rather than tidy. A hash exported for one class does not
+    # survive a decode against another class's node list at all, so decoding first can
+    # only ever report `decode_error` for a mismatch -- the plainer and more useful
+    # finding, that two sources name different specs for one character, is unreachable
+    # from there. It also matches simc: `parse_traits_hash` raises "Wrong
+    # specialization." before it walks a node, and its node-level spec refusal comes
+    # after. Measured: an Arcane hash submitted as Unholy Death Knight returned
+    # `decode_error` and now returns `spec_mismatch`.
+    #
+    # `read_header` needs no trait table, which is what makes this answerable at all
+    # for the wrong class.
+    try:
+        stated = talenttree.read_header(observation.talent_hash)
+    except (TalentDecodeError, ValueError, KeyError, IndexError) as exc:
+        return Verdict(REASON_DECODE, str(exc))
+
+    if stated != expected:
+        return Verdict(
+            REASON_SPEC_MISMATCH,
+            f"hash states spec {stated}, the log says {observation.spec} ({expected})",
+        )
+
     try:
         loadout = talenttree.decode_loadout(observation.talent_hash, tables.nodes[class_id])
     except (TalentDecodeError, ValueError, KeyError, IndexError) as exc:
         return Verdict(REASON_DECODE, str(exc))
-
-    if loadout.spec_id != expected:
-        return Verdict(
-            REASON_SPEC_MISMATCH,
-            f"hash states spec {loadout.spec_id}, the log says {observation.spec} ({expected})",
-            loadout,
-        )
 
     violation = talenttree.spec_rule_violation(loadout, tables.nodes[class_id])
     if violation:

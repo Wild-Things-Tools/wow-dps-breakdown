@@ -548,6 +548,33 @@ def decode_lenient(
     return _read(loadout, nodes, strict=False)
 
 
+def read_header(loadout: str) -> int:
+    """The spec id a hash states, read without decoding its node stream.
+
+    The header is the first 152 bits -- version, spec id, and the 128-bit tree hash
+    simc writes as zeros -- and it therefore needs **no trait table**. That is what
+    makes this answerable for a class whose node list would reject the rest of the
+    string: a hash exported for one spec cannot be decoded against another class's
+    nodes at all, so a caller that decodes first can only ever report *that*, and
+    never the plainer fact that the two specs disagree.
+
+    simc reads it in this order too. ``parse_traits_hash`` raises
+    ``Wrong specialization.`` before it walks a single node, and the node-level
+    ``Selected node ... is not available to player's spec.`` comes after -- so
+    checking the header first is simc's own sequence rather than a convenience.
+
+    Raises ``TalentDecodeError`` for a string that is too short or states another
+    serialization version, which are the two things that make the header unreadable.
+    """
+    reader = _BitReader(loadout)
+    version = reader.read(VERSION_BITS)
+    if version != LOADOUT_VERSION:
+        raise TalentDecodeError(
+            f"loadout serialization version {version}, expected {LOADOUT_VERSION}"
+        )
+    return reader.read(SPEC_BITS)
+
+
 def _read(
     loadout: str, nodes: dict[int, list[Trait]], *, strict: bool
 ) -> tuple[Loadout, tuple[ChoiceOverflow, ...]]:
