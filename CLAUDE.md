@@ -2800,13 +2800,31 @@ cheap query when it does, and is the right address whenever a filed id really is
 wrong one -- a state this tier has been in before and will be in again at the next
 season boundary.
 
-**The name check is measurably strict, and the case is on this tier.** Warcraft Logs
-names 53470 *"Nek'zali, the Soulcoiler"* and 3470 *"Nek'zali the Soulcoiler"*: the pair
-differs by a comma, and that substitution would be **refused**. It never comes up today
-because 53470 has parses of its own. Left strict on purpose -- a refusal costs one
-boss's kills and prints both names for a person to read, a false accept files a full
-set of real builds under the wrong fight and nothing downstream can detect it.
-Loosening it to ignore punctuation is a human's decision with the two names in view.
+**The name check ignores punctuation, and the case that decided it is on this tier.**
+Warcraft Logs names 53470 *"Nek'zali, the Soulcoiler"* and 3470 *"Nek'zali the
+Soulcoiler"*: the pair differs by a comma, and the strip-and-casefold comparison
+**refused** the substitution over it. The owner's decision (issue #40, 2026-08-25) is
+"einfach so wie der Boss wirklich heisst" -- so `names_agree` compares the *words* of a
+name: case, surrounding space and every Unicode punctuation mark are dropped first.
+
+**Only punctuation, and each mark becomes a space rather than being deleted.** The two
+normalisations differ and the choice is pinned by a test: spacing keeps word boundaries,
+so two names agree when their words agree and no pair of names can be joined into a
+string a third name also produces -- deleting would merge `Fallen-King` into
+`Fallenking`, a wider claim than one comma needed. The price is that a twin dropping an
+apostrophe outright (`Nekzali`) is still refused, which is the direction this check is
+allowed to fail in.
+
+**The asymmetry that made it strict has not changed and is what bounds any further
+loosening.** A refusal costs one boss's kills and prints both names for a person to
+read; a false accept files a full set of real builds under the wrong fight and nothing
+downstream can detect it. So fuzzy distance, prefix matching and ignoring a word are all
+still out, and the guard is not the loosening but
+`test_two_different_bosses_are_still_refused_after_the_loosening` -- six pairs including
+a one-letter near-miss and a prefix, each of which a looser rule would have accepted.
+
+It still recovers nothing on MID2 today: 53470 has parses of its own, so the
+substitution never fires there.
 
 ### What a harvest covers, measured rather than hoped
 

@@ -116,6 +116,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -673,18 +674,49 @@ def live_twin_id(encounter_id: int) -> int | None:
     return int(rest)
 
 
+#: Punctuation is dropped before two encounter names are compared, and the *only*
+#: reason is a measured one: Warcraft Logs writes this tier's Nek'zali as
+#: ``Nek'zali, the Soulcoiler`` under the PTR id 53470 and ``Nek'zali the Soulcoiler``
+#: under the live id 3470. One comma, same boss, and the strict comparison refused the
+#: substitution over it (issue #40).
+#:
+#: Each punctuation mark becomes a **space** rather than being deleted, so the word
+#: boundaries survive: two names agree when their words agree, and a name whose words
+#: differ can never be normalised into another's. Deleting instead would let
+#: ``Fallen-King`` and ``Fallenking`` join into one string, which is a wider claim than
+#: the comma needed. The cost of the choice is that a twin dropping an apostrophe
+#: outright (``Nekzali``) is still refused -- and a refusal is the direction this check
+#: is allowed to fail in.
+#: ``unicodedata`` rather than a typed list of marks, so an en dash or a typographic
+#: apostrophe counts as punctuation without anybody having to remember it.
+_PUNCTUATION_CATEGORY = "P"
+
+
+def _name_key(name: str) -> str:
+    """One encounter name reduced to the words it is made of, lowercased."""
+    spaced = "".join(
+        " " if unicodedata.category(char)[0] == _PUNCTUATION_CATEGORY else char for char in name
+    )
+    return " ".join(spaced.casefold().split())
+
+
 def names_agree(left: str | None, right: str | None) -> bool:
     """Do two encounter names name the same boss?
 
-    Compared on a strip-and-casefold rather than byte-identically, because the two
-    ids are two rows of the same table and a difference in trailing space or case is
-    not a difference in boss. Nothing more forgiving than that: the point of the
-    check is that a wrong twin has to be caught, and every loosening of it is a way
-    for one to pass. A missing name never agrees with anything.
+    Compared on words rather than bytes: case, surrounding space and punctuation are
+    dropped, because the two ids are two rows of one table and a comma is not a
+    difference in boss -- see ``_NAME_PUNCTUATION`` for the case that forced it.
+
+    **Nothing beyond that**, and the asymmetry is the reason. A refusal costs one
+    boss's kills and prints both names for a person to read; a wrong acceptance files
+    a full set of real builds under another fight, and nothing downstream can detect
+    that. So every further loosening -- fuzzy distance, prefixes, ignoring a word --
+    is a way for a wrong twin to pass and is deliberately absent. A missing name never
+    agrees with anything.
     """
     if not left or not right:
         return False
-    return left.strip().casefold() == right.strip().casefold()
+    return _name_key(left) == _name_key(right)
 
 
 @dataclass(frozen=True)
