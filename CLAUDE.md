@@ -2121,12 +2121,16 @@ entry instead. The two agree on everything shipped and would disagree on a choic
 whose entries differ in spec; left alone rather than changed in passing, and recorded
 here so nobody re-derives it as a bug.
 
-**Number 5's wording here is missing simc's final full stop.** simc's format string ends
-`player's spec.`; `spec_rule_violation` returns it without the period, and a test pins
-the shorter form. Not corrected, because the string is published in `spec-index.json`
-and rewriting it churns data for one character -- but it means the published reason is
-not byte-comparable with simc's own output. `talentedit._hash_findings` uses simc's
-exact wording, so the two differ by that period until somebody decides.
+**Number 5's wording used to be missing simc's final full stop, and now is not.** It was
+left alone for months because the string was published in `spec-index.json` and
+rewriting it churned data for one character. Issue #43 settled that from the other end:
+the published `reason` is this project's own sentence now and simc's line is a separate
+`simcMessage`, so the quote exists *only* to be matched against a run's stderr and a
+missing period defeats its whole purpose. All three of simc's literals live in
+`talenttree.SIMC_CHOICE_ON_PLAIN`, `SIMC_CHOICE_INDEX_OUT_OF_BOUNDS` and
+`SIMC_SPEC_RULE`, and `talentedit._hash_findings` reads the same constants -- one
+spelling each, which is what stops a prediction and the thing it predicts drifting
+apart.
 
 ### The encoder, and what round-trips
 
@@ -3145,12 +3149,69 @@ are not the same claim as "simc has not signed this off".
 
 `specindex.refused_profiles` decides it **offline** -- see `spec_rule_violation` in
 the talent-tree section for the check and its verification against simc's own CI
-output -- so the panel prints "simc will not load it: Selected node 110203 entry
-136735 is not available to player's spec" rather than an unexplained absence. The
+output -- so the panel prints a reason rather than an unexplained absence. The
 reason travels per (spec, hero tree) cell, and a refusal naming a tree beats one that
 names none: Retribution's two builds are refused at two different nodes and one of
 them is unnamed, so taking the first match printed the wrong node against the named
 build's tree.
+
+#### The reason is ours, the quote is simc's, and they are two fields
+
+Issue #43, decided by the owner on 2026-08-25: *"gerne eigene Aussagen kreieren, diese
+muessen natuerlich stimmen"*. Two things were wrong in the same field and both were
+published.
+
+**The reason was our decoder speaking under simc's name.** Four of MID2's six refused
+profiles carried `choice index 1 out of bounds for node 91020 (1 entries)`, which is
+`decode_loadout`'s message. simc's line for that node is a *different one of its eleven
+refusals* -- `Node 91020 is not a choice node but has index selection.` -- so somebody
+grepping a real run's stderr for the published text found nothing and could not tell our
+misprediction from a simc change.
+
+**"One node" was an artifact of stopping.** Both `decode_loadout` and
+`spec_rule_violation` return at the first failure. Measured on simc 22b442e, reading on
+with `decode_lenient` / `spec_rule_offenders`, MID2's real figures are:
+
+| profile | nodes |
+|---|---|
+| Havoc Aldrachi Reaver | **5** overflowing |
+| Havoc Fel-Scarred | 1 overflowing |
+| Retribution, both builds | **7** and **4** overflowing |
+| Arms, Fury | **2** spec-rule offenders each |
+
+So `refused_profiles` now publishes both claims separately:
+
+- **`reason`** is *ours*, and visibly so -- lower-case prose that reads on from the
+  panel's own "simc will not load it:", naming the node, what the tree says about it,
+  and how many nodes are in that state. It never impersonates simc's sentence, because
+  a quote that no run emits is worse than no quote.
+- **`simcMessage`** is *simc's*, from `talenttree.SIMC_CHOICE_ON_PLAIN`,
+  `SIMC_CHOICE_INDEX_OUT_OF_BOUNDS` and `SIMC_SPEC_RULE` -- the only place its literals
+  live, so a second spelling cannot drift. `None` where nothing can be quoted: a version
+  or alphabet failure is another of simc's refusals and this reader has not established
+  which, and guessing would be the whole defect again.
+
+Three things in that which are decisions rather than formatting:
+
+- **Which choice wording applies is decided by the node type, not by the index.** simc
+  says "not a choice node" when the choice bit is set on a plain node and "index out of
+  bounds" when a real choice node is given an index past its last entry. Every overflow
+  measured across MID1 and MID2 is the *first* kind, so a version writing only that one
+  would be right today and wrong without warning; `simc_choice_refusal` derives it.
+- **The overflow count says where it comes from.** It is read past the point simc stops
+  at, by a reader that is out of step with whoever wrote the hash by definition -- the
+  same `decode_lenient` whose limits `talentrepair`'s soundness screen exists for. So
+  the sentence carries "reading on past the point simc stops at", and the number is the
+  extent of the problem rather than a tally to be quoted elsewhere. A spec-rule count
+  comes from a *strict* decode and carries no such hedge.
+- **`SIMC_SPEC_RULE` gained simc's final full stop**, which this file had flagged as
+  open. It is the difference between a line that can be matched against real stderr and
+  one that looks like it can.
+
+**What moves in the published data.** MID1's `spec-index.json` carries 17 refusals and
+MID2's carries 1 today, and every one of them gets a new `reason` and a new
+`simcMessage` field the next time `wowdps spec-index` runs -- which the nightly publish
+job does. Nothing else in the document moves, and no DPS number is involved.
 
 ### Coverage is now per hero tree, which is the half a spec-level count hides
 
