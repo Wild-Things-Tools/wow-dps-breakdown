@@ -4788,3 +4788,177 @@ document never exists** — the same failure `hero_trees.json` shipped. A commit
 document survives the nightly: `dataset.merge_shards` creates its output directory and
 writes into it, with no `rmtree` and no directory replacement, so a file it did not
 produce is left alone.
+
+## The ranking presents the best build, and never presents it silently
+
+`web/src/lib/bestBuild.ts` + `OverviewView`, and the same module again as
+`util/dps-best-build.ts` in wtt-frontend. The owner's rule, restated on
+2026-08-25: *"wenn es etwas komplettes von simc gibt, dann sollte das verwendet
+werden, außer etwas errechnetes ist besser. dann möchte ich aber auch, dass ich
+das explizit angezeigt bekomme."*
+
+`computed-builds.json` had one consumer -- wtt-frontend's spec-detail panel --
+and the published site read it not at all, so the Overview showed simc's build
+on every row including the twelve where a computed build beats it. That is the
+complaint, and it was accurate.
+
+### The number the ranking uses is a projection, and that is the whole decision
+
+**The two documents do not measure the same character.** `index.json` measures
+each build on simc's own shipped gear; `computed-builds.json` measures both
+contenders on a **gear anchor** -- one normalised kit, so the only difference
+between them is the talents. Measured against the committed MID2 data on
+2026-08-25, Frost Death Knight reads 232,961 published and 217,042 anchored:
+the anchor sits at the floor of the tier's 334-344 band, and this file's own
+gear-anchor section puts a shipped build at -3.01 to -7.07% there.
+
+So substituting `best.dps` into the ranking would move a **winning** build
+*down* while claiming it had been improved. What travels between the two
+documents is the **ratio**, which is exactly what the computed run measures, so
+a winning row is ranked by `publishedDps × (1 + margin)`.
+
+That product is a projection and is drawn as one -- the bar is stacked, solid
+for simc's measurement and pale for the gain, and simc's own figure is printed
+in the table twin beside it. Nobody has run the computed talents on simc's
+shipped gear; the assumption is that a talent gain measured on the anchor holds
+a few item levels above it. It is a smaller assumption than mixing the two
+absolutes and it is the only one that leaves every *unmarked* row byte-for-byte
+what it was. **Do not quote a marked row's figure as a simulated result.**
+
+### The join is in the view, on purpose
+
+Both frontends do the join themselves rather than the pipeline writing a field
+into the summary row. Three reasons, and the second is this project's own rule:
+
+- `index.json` never moves, so no published byte changes and MID1 -- which has
+  no computed document at all -- is untouched by construction. The "only write
+  a field when it is set" trap cannot fire because no field is written.
+- **The verdict stays derived from the numbers printed beside it.**
+  `dps-computed.ts` already states why: a published `beatsSimc` boolean could
+  disagree with the figures on screen and nothing would reveal it.
+- The document is already optional, already fetched, and its absence is already
+  a supported state.
+
+### Three states for a view with no marks
+
+`computed-builds.json` covers **patchwerk at one target** and nothing else, so
+every other scenario and target count has no computed build. That is
+`not-searched` -- *nobody has looked* -- and it is a different claim from
+`searched` with no winner, which is *a search ran and simc's builds held*, and
+different again from the tier having no such document. Collapsing them would
+publish a finding no run ever made. The join key is `(id, scenario, targets)`
+for the same reason.
+
+### What it does on the real data
+
+MID2, patchwerk, the committed dataset on 2026-08-25 (52 summary rows, 42
+computed entries):
+
+```
+1 target    12 rows marked, 13 of 52 change position
+3/5/10      0 marked, ranking unchanged to the DPS
+```
+
+Windwalker Monk (Conduit of the Celestials) climbs 13 -> 9 on +1.43%; Havoc
+Demon Hunter (Fel-Scarred) and Devourer (Annihilator) each gain a place.
+**17 builds are numerically ahead and only 12 clear the tie band**, which is
+the argument for the tie rule over a fixed percentage stated as a count.
+
+Two things this leaves open, both filed as issues rather than papered over.
+Nobody has run the computed talents on simc's own gear, so the projection's
+assumption is untested (#52). And `web/` has **no unit-test runner at all** --
+no `*.test.*` under `web/src` and no `test` script -- so the module that decides
+the published site's ranking order is guarded in CI by `tsc` alone (#54). For
+this change it was compiled standalone and run against the committed MID2
+documents, with two canaries confirmed red; that was a session, not a gate.
+
+## The Ulria sheet: an independent check that mostly agrees
+
+Read on **2026-08-25**. The owner asked how far this project's numbers sit from
+"the Ulria sheet"; it is *Ulria's tier piece + PI sims (feat Mazz) S2 Midnight*,
+a published Google Sheet that Wowhead links each season. It is **not** a DPS
+ranking site -- its subject is tier-set and Power Infusion gains, which is
+`buffs.json`'s subject -- but it carries a `Raw SIM DPS` tab, so both halves of
+this project have something to compare against.
+
+Its numbers are Raidbots runs of **simc's own MID2 profiles** (its per-row CSV
+names `MID2_Priest_Shadow_Archon` and the rest), on "close to bis" gear, with
+per-build talent trees the author maintains by hand. It states no simc revision,
+no iteration count and no fight length, and on the day it was read its own
+banner said **"SHEET IS CURRENTLY BEING RESIMMED"**.
+
+### Tier-set gains agree to about a twentieth of a percentage point
+
+28 builds in both documents, our `buffs.json` against its `DPS Tier set (0p-4p)`
+tab:
+
+```
+2-piece gain    median difference -0.06 pts   range -2.01 .. +0.51
+0p -> 4p gain   median difference -0.04 pts   range -2.59 .. +0.85
+```
+
+That is two independent pipelines, run by different people on different
+hardware through different front ends, agreeing on 28 builds. It is the
+strongest external confirmation the buff sweep has.
+
+The outliers are both explainable and neither is a defect here: **both Frost
+Death Knight builds** (-2.0 and -2.6 pts) and **Outlaw Rogue's 4-piece**
+(-1.21 pts). Frost Death Knight is the spec whose shipped profiles spend **10
+class points** -- the `_THIN_CLASS_TREE` caveat this file already publishes --
+and the sheet uses its own hand-maintained tree instead. Its raw DPS runs the
+other way for the same reason: ours reads 1.043x theirs.
+
+### The DPS ranking agrees on every build this project says is comparable
+
+52 damage builds join one-to-one. Read naively the agreement looks terrible --
+Spearman **0.188** over all 52 -- and the whole of that is our own flagged
+builds:
+
+| population | n | Spearman | our DPS / theirs |
+|---|---|---|---|
+| every build | 52 | **0.188** | median 0.982, min 0.373 |
+| builds this project does **not** flag | 34 | **0.911** | median **0.9936**, range 0.898-1.064 |
+
+**Every one of the 16 builds where we read under 70% of Ulria's is a build our
+own dataset already flags** as `unvalidated` or `gearComparable: false` -- simc's
+switched-off profiles, 45 item levels behind and wearing no tier set. Fury
+Warrior at 0.373 and Arms at 0.432 are the extremes. The comparability flags
+are doing exactly what they were built for, checked from outside for the first
+time.
+
+The two remaining flagged builds are the sharpest result in the comparison, and
+they are the only two whose ratio sits between the two populations rather than
+in either. **Arcane Spellslinger reads 0.884 of Ulria's and Arcane Sunfury
+0.880** -- the two builds this project flags `tierSetComparable: false`, because
+simc ships them wearing no tier set. This file measures that four-piece deficit
+at **+13.13% for Spellslinger and +14.42% for Sunfury**, i.e. ratios of 0.884
+and 0.874 if the set were the entire difference. Spellslinger lands on its
+figure exactly; Sunfury reads 0.006 high, which is the size of everything else
+the two runs differ by. Take the agreement as confirmation that the tier-set
+flag is measuring a real gap of about the size claimed, not as a decomposition:
+nothing here isolates the set from the gear and the talents.
+
+### Where the two genuinely differ, and why that is allowed
+
+Among the 34 comparable builds nothing moves more than 11 places and the median
+gap is 0.6%. The widest:
+
+```
+Subtlety Rogue (Trickster)     ours 0.943x, 6 -> 17
+Survival Hunter (Pack Leader)  ours 0.898x, 22 -> 33
+Elemental Shaman (Farseer)     ours 1.064x, 12 -> 3
+Frost DK (Deathbringer)        ours 1.043x, 19 -> 12
+```
+
+The differences that are permitted without either side being wrong, all of them
+real between these two documents: **different talents** (the sheet maintains its
+own trees per build, this project runs the hash simc ships -- which is the whole
+subject of `build-search`), **different gear** ("close to bis" against simc's
+shipped profile), a **different simc revision** and a different sampling budget
+(the sheet states neither), and **no external buffs** on our side. A rank
+disagreement is only a finding when the conditions match, and here they do not.
+
+Do not treat any of this as a target to converge on. The claim of this dataset
+is that it is what simc ships, byte-reproducibly; the sheet's claim is that it
+is a maintainer's best current build. Those are different questions and the
+0.9936 median says they answer them compatibly.

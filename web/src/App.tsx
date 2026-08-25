@@ -5,6 +5,7 @@ import {
   loadFights,
   loadGear,
   loadBuffs,
+  loadComputedBuilds,
   loadSpecIndex,
   loadTalentTrees,
   loadLogsVerification,
@@ -16,6 +17,7 @@ import {
 import { describeConvergence, describeGameBuild, samplingError } from './lib/format'
 import type {
   BuffDataset,
+  ComputedBuildsDataset,
   FightsDataset,
   GearDataset,
   LogsVerification,
@@ -233,6 +235,29 @@ export default function App() {
     }
   }, [tier, reloadToken])
 
+  // Builds this project computed, beside simc's own. Its own fetch, because it
+  // is optional -- a tier that has never been through `wowdps build-search` has
+  // no such file, and `null` then means "no computed build", never an error.
+  const [computedBuilds, setComputedBuilds] =
+    useState<ComputedBuildsDataset | null>(null)
+  const [computedSettled, setComputedSettled] = useState(false)
+  useEffect(() => {
+    if (!tier) return
+    let cancelled = false
+    setComputedBuilds(null)
+    setComputedSettled(false)
+    loadComputedBuilds(tier).then((data) => {
+      if (cancelled) return
+      setComputedBuilds(data)
+      // Separate from the value: "still asking" and "asked, there is none" are
+      // different states and the footnote says a different sentence for each.
+      setComputedSettled(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [tier, reloadToken])
+
   // And again for the logs cross-check, which needs Warcraft Logs credentials and
   // so only exists for a tier somebody has run `wowdps verify` against.
   useEffect(() => {
@@ -404,6 +429,8 @@ export default function App() {
           manifest={manifest}
           scenario={scenario}
           specIndex={specIndex}
+          computedBuilds={computedBuilds}
+          computedSettled={computedSettled}
           onScenarioChange={setScenarioId}
           onOpenSpec={openSpec}
         />

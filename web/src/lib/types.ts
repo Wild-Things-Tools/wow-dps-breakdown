@@ -1224,3 +1224,46 @@ export interface BuffCrossover {
   currentFourOverSplit: number | null;
   currentFourOverPreviousFour: number | null;
 }
+
+// ---------------------------------------------------------------------------
+// Computed builds (<tier>/computed-builds.json)
+//
+// Optional, and its absence is a supported state rather than a gap: a tier that
+// has never been through `wowdps build-search` has no such file, and every
+// reader degrades to "SimulationCraft's build, unmarked". Only the fields the
+// site actually reads are typed here -- the document also carries the gear
+// anchor, the run's caveats and the harvest evidence, which the spec page will
+// want and the ranking does not.
+
+export interface ComputedContender {
+  origin: "simc" | "search" | "harvest";
+  label: string;
+  talentHash: string | null;
+  heroTalent?: string | null;
+  dps: number;
+  /** Percent standard error of the mean, as simc reports it. */
+  dpsError: number;
+  iterations: number;
+}
+
+export interface ComputedSpec {
+  id: string;
+  scenario: string;
+  targets: number;
+  /** False when no search covered this build. Not the same as "found nothing". */
+  searched: boolean;
+  simc: ComputedContender | null;
+  best: ComputedContender | null;
+  runnerUp: ComputedContender | null;
+  caveats: string[];
+}
+
+export interface ComputedBuildsDataset {
+  schemaVersion: number;
+  generatedAt: string;
+  tier: string;
+  note: string;
+  settings: { iterations: number; deterministic: boolean };
+  coverage: { specs: number; specsAvailable: number };
+  specs: ComputedSpec[];
+}
