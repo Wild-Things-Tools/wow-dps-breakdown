@@ -4864,6 +4864,14 @@ Demon Hunter (Fel-Scarred) and Devourer (Annihilator) each gain a place.
 **17 builds are numerically ahead and only 12 clear the tie band**, which is
 the argument for the tie rule over a fixed percentage stated as a count.
 
+Two things this leaves open, both filed as issues rather than papered over.
+Nobody has run the computed talents on simc's own gear, so the projection's
+assumption is untested (#52). And `web/` has **no unit-test runner at all** --
+no `*.test.*` under `web/src` and no `test` script -- so the module that decides
+the published site's ranking order is guarded in CI by `tsc` alone (#54). For
+this change it was compiled standalone and run against the committed MID2
+documents, with two canaries confirmed red; that was a session, not a gate.
+
 ## The Ulria sheet: an independent check that mostly agrees
 
 Read on **2026-08-25**. The owner asked how far this project's numbers sit from
