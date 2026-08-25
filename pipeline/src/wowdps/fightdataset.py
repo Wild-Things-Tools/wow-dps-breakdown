@@ -835,13 +835,26 @@ def _target_band(payload: dict) -> dict | None:
     Normalised time is turned back into seconds for the reader by the median kill
     length, which is meaningful precisely because the user asked for kills whose
     timings are alike -- when they are, one length fits them all.
+
+    **One kill is enough.** The floor used to be two, and on a boss whose Mythic
+    field is still filling in that discards the only observation there is -- MID2's
+    Sszorak is exactly that case, and the owner asked for it to be drawn (#48).
+    A band over a single kill is arithmetically fine and degenerate: median, both
+    quartiles and both extremes are that one curve, so it renders as a line with no
+    spread, which is the honest picture of one observation. ``kills`` is published
+    beside it, so a reader can see the band is built from one pull rather than
+    inferring it from a shape that happens to be flat.
+
+    The floor that matters is still enforced above and is a different one: a kill
+    whose event fetch was truncated is excluded whatever the count, because that
+    curve is wrong rather than thin.
     """
     fights = [
         fight
         for fight in payload.get("fights") or []
         if isinstance(fight, dict) and not fight.get("truncated")
     ]
-    if len(fights) < 2:
+    if not fights:
         return None
 
     curves = [
