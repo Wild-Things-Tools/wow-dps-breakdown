@@ -147,6 +147,15 @@ def requests_for(profiles: list[SpecProfile], scenarios: list[Scenario]) -> Iter
                 yield SimRequest(profile=profile, scenario=scenario, targets=targets)
 
 
+#: The name simc gives its live client data in a report's ``dbc`` block, and the
+#: fallback when a report does not say which one it read. It is what this pipeline
+#: reads -- see ``USES_PTR_DATA`` -- so falling back to it is falling back to the
+#: answer that has been true of every run, not to a guess. ``dataSource`` publishes
+#: ``None`` in that case, so "simc said Live" stays distinguishable from "simc said
+#: nothing".
+LIVE_DATA_SOURCE = "Live"
+
+
 def simc_metadata(report: dict) -> dict:
     """Version and build information, pulled from a json2 report.
 
@@ -155,14 +164,34 @@ def simc_metadata(report: dict) -> dict:
     an answer on the page instead of a guess. It is not at the top level: it lives
     under the first actor's ``dbc`` block, per data source (``Live``/``PTR``), and it
     is the same for every actor in a run, so the first one settles it.
+
+    **``ptr`` says which client data this run read, and it used to say something
+    else.** It was ``report["ptr_enabled"]``, i.e. ``SC_USE_PTR``, a compile-time
+    constant defined as 1 in ``engine/config.hpp`` on simc's midnight branch -- true
+    of every binary this project builds, and therefore an answer to a question nobody
+    was asking. Every consumer wanted the other question: the patch panel prints
+    "from the PTR data set" from this field, and ``spec-index``, ``hero-trees`` and
+    ``talent-trees`` pick between simc's ``*_ptr.inc`` and ``*.inc`` generated tables
+    with it. All four were reading a constant, so the published manifest named the
+    **PTR** build (69382) while the actor had read the **Live** one, and the panel
+    built to answer "which build are these numbers from" named a build they were not
+    from (issue #42).
+
+    So it is derived from ``dbc.version_used`` now, which is what the run *used*.
+    ``dataSource`` carries simc's own word for it beside the boolean, because a
+    boolean with no evidence in the document is how the previous version stayed wrong
+    for months.
     """
     game = _game_build(report)
+    source = data_source(report)
     return {
         "simcVersion": report.get("version"),
         "buildDate": report.get("build_date"),
         "gitRevision": report.get("git_revision"),
         "gitBranch": report.get("git_branch"),
-        "ptr": bool(report.get("ptr_enabled")),
+        # None when the report does not name one: "unknown" is not "Live".
+        "dataSource": source,
+        "ptr": bool(source) and source != LIVE_DATA_SOURCE,
         "beta": bool(report.get("beta_enabled")),
         "reportVersion": report.get("report_version"),
         # None rather than absent so a reader can tell "no game build in this report"
@@ -173,18 +202,73 @@ def simc_metadata(report: dict) -> dict:
     }
 
 
+def manifest_used_ptr_data(manifest: dict | None) -> bool:
+    """Did the run behind this manifest read simc's PTR client data?
+
+    The one place that question is answered, because three commands ask it --
+    ``spec-index``, ``hero-trees`` and ``talent-trees`` all have to read the same
+    generated table the sims read, and a wrong answer decodes cleanly while quietly
+    describing a different tree.
+
+    ``simc.dataSource`` is the evidence and is preferred. A manifest without it was
+    written before ``simc.ptr`` stopped meaning ``SC_USE_PTR`` (issue #42), so its
+    ``ptr`` is a compile-time constant carrying no information about the data -- and
+    reading it would reproduce the very bug for exactly the documents that have it.
+    ``USES_PTR_DATA`` is the answer for those: every manifest was written by this
+    pipeline, and nothing in ``build_command`` has ever passed ``ptr=1``.
+    """
+    simc = (manifest or {}).get("simc") or {}
+    source = simc.get("dataSource")
+    if isinstance(source, str) and source:
+        return source != LIVE_DATA_SOURCE
+    return USES_PTR_DATA
+
+
+def _player_dbc(report: dict) -> dict:
+    """The first actor's ``dbc`` block, which every actor in a run shares."""
+    players = (report.get("sim") or {}).get("players") or []
+    dbc = players[0].get("dbc") if players else None
+    return dbc if isinstance(dbc, dict) else {}
+
+
+def data_source(report: dict) -> str | None:
+    """Which client data set the run read: simc's own ``version_used``, or ``None``.
+
+    Simply what simc says. There is no cleverness available here and none wanted --
+    the alternative that shipped was ``report["ptr_enabled"]``, which is a compile
+    flag and cannot answer this at all.
+
+    ``None`` for a report that names no source, which is not the same claim as
+    ``Live`` and is published as its own value rather than folded into one.
+    """
+    used = _player_dbc(report).get("version_used")
+    return used if isinstance(used, str) and used else None
+
+
 def _game_build(report: dict) -> dict:
     """The WoW build the run modelled: version, build number, hotfix date.
 
-    Taken from the source simc actually used -- PTR when the run enabled it, Live
-    otherwise -- rather than assuming one, because the two can differ by a patch.
+    Read out of the block for the source simc says it **used**. The two blocks can
+    differ by a patch -- 69404 against 69382 on the published MID2 run -- so picking
+    the wrong one names a build the numbers were not produced against, which is the
+    one question the patch panel exists to answer.
     """
-    players = (report.get("sim") or {}).get("players") or []
-    dbc = players[0].get("dbc") if players else None
-    if not isinstance(dbc, dict):
+    dbc = _player_dbc(report)
+    if not dbc:
         return {}
-    source = "PTR" if report.get("ptr_enabled") and "PTR" in dbc else "Live"
-    block = dbc.get(source) or dbc.get("Live") or {}
+    source = data_source(report)
+    block = dbc.get(source) if source else None
+    if not isinstance(block, dict):
+        # Either the report named no source or it named one it does not carry. Live
+        # is what every run of this pipeline has read; a report shape that makes this
+        # fire is worth knowing about, so it is not silent.
+        if source:
+            log.warning(
+                "simc's report says it used %r data but carries no such block; reading %s instead",
+                source,
+                LIVE_DATA_SOURCE,
+            )
+        block = dbc.get(LIVE_DATA_SOURCE) or {}
     return block if isinstance(block, dict) else {}
 
 

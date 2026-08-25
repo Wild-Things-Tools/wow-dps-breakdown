@@ -969,15 +969,17 @@ explicit `--ptr` and falls back to a manifest under an `--out` that **is** the
 published dataset, while `cmd_build`'s `--out` is where this run writes. A docstring
 describing a mechanism the code does not implement, again.
 
-### `manifest.simc.ptr` does not mean "built against PTR data"
+### `manifest.simc.ptr` means "this run read PTR data", and it used to mean nothing
 
-The deeper reason that manifest could not have answered it, and it is worth knowing
-before anything else reaches for the field. Measured on simc 625a591, 2026-08-23:
+Read this before reaching for the field, and note that the sentence above changed on
+**2026-08-25**: until then `simc.ptr` was `report["ptr_enabled"]`, and that answers a
+different question from the one every one of its readers was asking.
 
-- `simc.ptr` is `report["ptr_enabled"]`, which `engine/report/json/report_json.cpp`
-  sets to **`SC_USE_PTR`** -- a compile-time constant, defined as 1 in
-  `engine/config.hpp` on simc's midnight branch. It is true of every binary this
-  project builds and says only that the binary *carries* PTR data.
+- `report["ptr_enabled"]` is what `engine/report/json/report_json.cpp:1390` sets to
+  **`SC_USE_PTR`** -- a compile-time constant, defined as 1 in `engine/config.hpp:161`
+  on simc's midnight branch. It is true of every binary this project builds and says
+  only that the binary *carries* PTR data. As a published field it is a constant, and a
+  constant cannot distinguish one run from another.
 - What a run *used* is `sim.players[].dbc.version_used`, and against the exact argv
   `simc_runner.build_command` produces it is **`Live`**. Nothing here passes `ptr=1`.
 - And the option only bites **before** the profile path: simc copies the sim's dbc
@@ -992,18 +994,43 @@ before anything else reaches for the field. Measured on simc 625a591, 2026-08-23
 So the tier-set check reads the **live** tables, which is what the sims read, and the
 default follows `simc_runner.USES_PTR_DATA` rather than being written down twice.
 `test_build_command_never_enables_ptr_data` fails if a scenario ever starts asking for
-PTR data. The accidental old default happened to be the right table; it just was not
-chosen, and the next person to reach for `simc.ptr` would have "fixed" it to the
-wrong one.
+PTR data.
 
-**Two things deliberately not changed.** `simc_metadata` still publishes `ptr: true`
-and reads the tier's `wowVersion`/`hotfixDate` out of the report's **PTR** dbc block
-(69382) while the actor used the Live one (69404, hotfix 2026-08-22) -- so the patch
-panel is naming a build the numbers were not produced against. And `talent-trees`
-still picks its trait table from that same field. Both are findings for a human, not
-changes made in passing: correcting either moves published data, and simc's live and
-PTR tables agree today in all three places (12,260 items with an `id_set` and 376 set
-rows, equal maps, on both 22b442e and 625a591).
+**What the compile flag cost while it was published (issue #42).** Four readers wanted
+the data source and all four got the constant:
+
+| reader | what it did |
+|---|---|
+| `simc_runner._game_build` | `"PTR" if ptr_enabled and "PTR" in dbc` -- so always PTR. The published MID2 manifest carries `wowVersion 12.1.0.69382` / `wowBuild 69382` from the **PTR** block while the actor read the **Live** one (69404, hotfix 2026-08-22) |
+| `PatchState.tsx` | prints "from the PTR data set" from `simc.ptr` -- so the panel built to answer *which build are these numbers from* named a build they are not from |
+| `cli.cmd_spec_index` | picks `trait_data*.inc` from it |
+| `cli.cmd_hero_trees`, `cli.cmd_talent_trees` | same |
+
+**The correction is the field's meaning, not a second field beside it.** `simc.ptr` is
+now derived from `version_used`, so it says what every reader already assumed, and the
+patch panel is right with no change to the view. `simc.dataSource` carries simc's own
+word (`"Live"`, `"PTR"`, or `null` when a report names none) beside the boolean, because
+a boolean with no evidence in the document is how this one stayed wrong for months --
+and `null` is published rather than folded into `"Live"`, since unknown is not an answer.
+
+`simc_runner.manifest_used_ptr_data` is the one reader of that pair, used by all three
+commands. A manifest without `dataSource` predates the fix and its `ptr` is the compile
+constant, so it falls back to `USES_PTR_DATA` rather than to that field -- reading `ptr`
+there would reproduce the bug for exactly the documents that have it.
+
+**The settle nearly buried all of it.** `simc` is provenance, so `_settle_provenance`
+keeps the *published* block on any run whose dataset did not change -- which would have
+kept `ptr: true` and build 69382 indefinitely on a quiet tier. It now settles values but
+not *shape*: a published block missing a field this run produces is replaced. Values
+still settle, which is what stops `gitRevision` churning nightly.
+
+**What moves in the published data, and when.** Nothing until a run regenerates it.
+`wowVersion`, `wowBuild` and `hotfixDate` change to the Live block's values, `ptr` goes
+`true` -> `false`, and `dataSource` appears; the DPS numbers do not move at all, because
+simc's live and PTR tables agree today in all three places (12,260 items with an
+`id_set` and 376 set rows, equal maps, on both 22b442e and 625a591). The `beta` field is
+still `report["beta_enabled"]` and is untouched -- same shape of question, nobody has
+measured it, and guessing would be the same mistake again.
 
 **What it flags today**, MID2 at 22b442e: 14 of the 40 damage builds simc ships or has
 written down -- the two Arcane ones, plus all twelve disabled profiles, which wear no
