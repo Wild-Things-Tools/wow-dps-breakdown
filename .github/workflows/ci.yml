@@ -56,5 +56,10 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # Before this, `tsc` was the whole of CI's coverage on web/ -- it checked
+      # that the code compiled, not that it was right, on a page that is live.
+      - name: Test
+        run: npm test
+
       - name: Build
         run: npm run build
