@@ -131,6 +131,19 @@ def test_no_undeclared_field_reaches_a_row_the_site_reads():
             if row[side] is not None:
                 assert set(row[side]) <= CONTENDER_KEYS | {"harvest", "search"}
 
+    # A repaired row carries one key more, and it is declared. Without this the guard
+    # passes on the fixture and would fail on the first real tier with a repair --
+    # a contract test that only holds for the shape it was written against.
+    repaired = computedbuilds.build_document(
+        "MID2",
+        [entry(repaired_seed=True)],
+        iterations=3000,
+        deterministic=True,
+        builds_available=42,
+        calibration=None,
+    )
+    assert set(repaired["specs"][0]) == SPEC_KEYS | {"repairedSeed"}
+
 
 def test_the_schema_version_is_the_one_the_site_supports():
     """``isReadableDataset`` refuses anything above ``SUPPORTED_COMPUTED_SCHEMA``, so a
@@ -313,3 +326,29 @@ def test_the_written_file_is_valid_json_the_site_could_parse(tmp_path):
     parsed = json.loads(path.read_text(encoding="utf-8"))
     assert parsed["specs"][0]["id"] == "rogue_outlaw_default"
     assert path.name == "computed-builds.json"
+
+
+def test_a_repaired_seed_is_a_field_and_not_only_a_sentence():
+    """The badge #136 asks for cannot be derived from anything else in the document.
+
+    Measured on the committed MID2 file before this field existed: the three builds
+    whose caveat says "Repaired talent hash" are Havoc Fel-Scarred, Arms and Fury,
+    while the three with ``simc: null`` are Havoc Aldrachi Reaver and both
+    Retribution builds -- a DISJOINT set. And the winning contender's ``origin`` is
+    ``search`` on a repaired build exactly as on a genuinely searched one, because
+    the search does run (27 variants on Arms) and its winner is what is published.
+
+    So the only signal was the caveat sentence, and a badge derived by matching prose
+    disappears the day the sentence is reworded.
+    """
+    repaired = entry(repaired_seed=True).to_json()
+    assert repaired["repairedSeed"] is True
+    # The two claims it must not be confused with are both still expressible.
+    assert repaired["searched"] is True
+    assert repaired["best"]["origin"] == "search"
+
+
+def test_a_tier_with_no_repaired_build_produces_the_bytes_it_did_before():
+    """Emitted only when true, the rule `unvalidated` already follows: a field that
+    appears everywhere as `false` rewrites every published document for nothing."""
+    assert "repairedSeed" not in entry().to_json()

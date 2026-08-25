@@ -1429,6 +1429,7 @@ def _unsearched_entry(context, targets: int, gearanchor, reason: str | None = No
         runner_up=None,
         anchor=gearanchor.display_json(context.anchor, profile=context.profile.id),
         caveats=caveats,
+        repaired_seed=bool(context.repair and context.repair.ok),
     )
 
 
@@ -1523,6 +1524,7 @@ def _entry_for(context, outcome, head_to_head, args, computedbuilds, gearanchor)
         runner_up=sides[1] if len(sides) > 1 else None,
         anchor=gearanchor.display_json(context.anchor, profile=context.profile.id),
         caveats=caveats,
+        repaired_seed=bool(context.repair and context.repair.ok),
     )
 
 
