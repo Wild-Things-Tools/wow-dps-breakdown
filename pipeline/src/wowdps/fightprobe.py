@@ -634,12 +634,20 @@ def load_previous(path: Path) -> dict[int, dict]:
 
 
 def is_complete(
-    entry: dict, wanted: int, event_budget: int | None = None, order: str | None = None
+    entry: dict,
+    wanted: int,
+    event_budget: int | None = None,
+    order: str | None = None,
+    difficulty: int | None = None,
 ) -> bool:
     """Has this encounter already got the sample the settings ask for?
 
-    Two ways to be short of it, and both re-open the encounter, because both are
-    somebody asking for *more* rather than asking to skip:
+    Three ways to fall short, and all three re-open the encounter. The first two
+    are somebody asking for *more* rather than asking to skip; the last two are
+    somebody asking for something *else*, which an existing entry cannot be more
+    of. The general rule, and it has now been got wrong three times: **any
+    setting that changes which data is collected has to be here**, or the
+    continuation quietly keeps the old answer and the run reports success.
 
     - **Fewer kills than `--reports`, unless the search proved there are no more.**
       An encounter that has genuinely fewer kills logged than requested can never
@@ -659,6 +667,17 @@ def is_complete(
       `--max-pages` to fix exactly that would skip every encounter for already having
       its 30 fights -- a silent no-op, and the worst kind, because the run looks
       successful and nothing changes.
+    - **A different `--order` or a different `--difficulty`.** Neither is a smaller
+      sample of the same thing. `order` was added when the switch to `public` was
+      found to be inert; `difficulty` went unchecked until 2026-08-25 and is the worse
+      of the two, because its failure is not a no-op but a *mix*: the run replaces
+      the encounters it reaches and leaves the rest at the old difficulty, then
+      stamps one `difficulty` over the whole payload. A document claiming one
+      difficulty while carrying two is not a thin answer, it is a wrong one, and
+      nothing downstream can detect it. Note *unchecked* rather than *unrecorded*:
+      ``EncounterObservation.to_json`` has always written the field, so every entry
+      could already answer the question and nothing asked it. That is the shape to
+      watch for -- what is needed to catch a mistake sitting in the payload, unread.
 
     An encounter collected before the budget was recorded reports `None`, and is left
     alone rather than re-fetched: treating unknown as zero would re-open the whole
@@ -681,6 +700,26 @@ def is_complete(
     if order is not None:
         collected_as = entry.get("order")
         if isinstance(collected_as, str) and collected_as != order:
+            return False
+    # And a different --difficulty is a different *encounter*, not a different
+    # sample of one: Heroic Sszorak and Mythic Sszorak are separate fights with
+    # separate tuning. Without this the resume treats a Mythic entry as the
+    # answer to a Heroic run, so a pass replaces the encounters it reaches and
+    # leaves the rest on the old difficulty -- while the payload stamps one
+    # `difficulty` over the lot. That is worse than the two failures this rule
+    # already covers, because the result is not a thin document but a mixed one
+    # that says it is not, and a target band is exactly the claim that cannot
+    # survive being pooled across difficulties. `harvest.py` refuses a foreign
+    # difficulty outright for the same reason; here the resume is the door it
+    # gets in through.
+    #
+    # Same "unknown is not zero" rule as the two above: an entry from before the
+    # difficulty travelled with it is left alone rather than re-fetched, so this
+    # does not re-open every zone on the next run. Such a payload needs one
+    # `--no-resume` pass to pick the field up.
+    if difficulty is not None:
+        collected_at = entry.get("difficulty")
+        if isinstance(collected_at, int) and collected_at != difficulty:
             return False
     return True
 
@@ -760,7 +799,7 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         for encounter_id in encounter_ids:
             done = previous.get(encounter_id)
             if done is not None and is_complete(
-                done, settings.reports, event_budget, settings.order
+                done, settings.reports, event_budget, settings.order, settings.difficulty
             ):
                 log.info(
                     "encounter %d already has %d fights; skipping",
@@ -803,6 +842,12 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         entry = observation.to_json()
         entry["eventBudget"] = event_budget
         entry["order"] = settings.order
+        # `difficulty` is deliberately NOT set here: EncounterObservation carries it
+        # and its to_json already writes it, so a second writer would be two sources
+        # for one key. That is worth stating, because the missing half of this rule
+        # was only ever the *check* below -- the record has been on every entry since
+        # the observation gained the field, which is why the payload could look
+        # complete while the resume ignored it.
         # Whether the selection saw everything there was to see. Only the report
         # search can say so -- a ranking page walk is always a window on a larger
         # list -- so this is absent for the other orders and `is_complete` then
@@ -816,7 +861,9 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         eid
         for eid in encounter_ids
         if eid not in by_id
-        or not is_complete(by_id[eid], settings.reports, event_budget, settings.order)
+        or not is_complete(
+            by_id[eid], settings.reports, event_budget, settings.order, settings.difficulty
+        )
     ]
 
     payload = {
@@ -848,7 +895,9 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         # read nothing are different sentences.
         "encountersRequested": len(encounter_ids),
         "encountersCollected": sum(
-            1 for e in merged if is_complete(e, settings.reports, event_budget, settings.order)
+            1
+            for e in merged
+            if is_complete(e, settings.reports, event_budget, settings.order, settings.difficulty)
         ),
         "incomplete": sorted(incomplete),
     }
