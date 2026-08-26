@@ -1,0 +1,120 @@
+/**
+ * What a sweep is allowed to claim about the tier.
+ *
+ * The bug these pin: `GearView` read both numbers out of the sweep's own
+ * document, where `specsAvailable` is the tier's size ON THE DAY THE SWEEP RAN.
+ * On 2026-08-26 that made the Loot view say "Covers 28 of 28 builds in the tier"
+ * against a tier of 52.
+ */
+
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+import { describe, expect, it } from 'vitest'
+
+import { sweepCoverage } from './sweepCoverage'
+
+describe('sweepCoverage', () => {
+  it('does not call a stale sweep complete', () => {
+    // The exact MID2 numbers on 2026-08-26: gear covered 28, the sweep saw 28
+    // builds when it ran, and the tier now holds 52.
+    const c = sweepCoverage(28, 28, 52)
+    expect(c.state).toBe('behind')
+    expect(c.sentence).not.toBe('Covers all 52 builds in the tier.')
+    expect(c.sentence).toContain('28 of 52')
+    // The reason matters: nothing is wrong with the run, it is older than the tier.
+    expect(c.sentence).toContain('when it ran')
+    expect(c.sentence).toContain('24 builds have been added since')
+  })
+
+  it('says complete only when the sweep covers the tier as it stands now', () => {
+    const c = sweepCoverage(52, 52, 52)
+    expect(c.state).toBe('complete')
+    expect(c.sentence).toBe('Covers all 52 builds in the tier.')
+  })
+
+  it('separates a sweep that stopped early from one that is merely behind', () => {
+    // Covered 20 of the 28 that existed at the time: the gap is the run's.
+    const partial = sweepCoverage(20, 28, 52)
+    expect(partial.state).toBe('partial')
+    expect(partial.sentence).toContain('32 builds are missing')
+    expect(partial.sentence).not.toContain('when it ran')
+  })
+
+  it('refuses to claim intent for a document with no coverage block', () => {
+    // buffs.json carries none, so `covered` is a ROW COUNT -- and an interrupted
+    // run and a complete one look identical from a row count.
+    const c = sweepCoverage(28, null, 52)
+    expect(c.statesIntent).toBe(false)
+    expect(c.state).toBe('partial')
+    expect(c.sentence).toContain('states no coverage')
+    expect(c.sentence).not.toContain('when it ran')
+  })
+
+  it('makes no claim about the tier when the manifest is unknown', () => {
+    const c = sweepCoverage(28, 28, null)
+    expect(c.state).toBe('unknown')
+    expect(c.sentence).not.toContain('in the tier')
+  })
+
+  it('counts one build in the singular', () => {
+    expect(sweepCoverage(1, 1, 1).sentence).toBe('Covers all 1 build in the tier.')
+    expect(sweepCoverage(1, 1, 2).sentence).toContain('1 build has been added since')
+  })
+
+  it('treats a sweep ahead of the manifest as complete rather than negative', () => {
+    // A sweep can hold a build the manifest dropped. That must not render as
+    // "-1 builds missing".
+    const c = sweepCoverage(30, 30, 28)
+    expect(c.state).toBe('complete')
+    expect(c.sentence).not.toContain('-')
+  })
+})
+
+describe('against the committed MID2 documents', () => {
+  // The corpus half, same bargain as bestBuild.test.ts: assert PROPERTIES, not
+  // frozen counts, so a nightly re-sim does not turn this red for the wrong reason.
+  const read = (name: string) =>
+    JSON.parse(
+      readFileSync(
+        join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'public', 'data', 'MID2', name),
+        'utf8',
+      ),
+    )
+
+  const manifest = read('index.json')
+  const tierBuilds: number = manifest.specs.length
+
+  it('never tells a reader a sweep is complete when builds are missing from it', () => {
+    const gear = read('gear.json')
+    const buffs = read('buffs.json')
+
+    const gearC = sweepCoverage(gear.coverage.specs, gear.coverage.specsAvailable, tierBuilds)
+    const buffsC = sweepCoverage(buffs.specs.length, buffs.coverage?.specsAvailable ?? null, tierBuilds)
+
+    for (const [name, c, covered] of [
+      ['gear', gearC, gear.coverage.specs],
+      ['buffs', buffsC, buffs.specs.length],
+    ] as const) {
+      if (covered < tierBuilds) {
+        expect(c.state, `${name} covers ${covered} of ${tierBuilds}`).not.toBe('complete')
+        // The gap has to be IN the sentence, not merely in the state.
+        expect(c.sentence).toContain(String(tierBuilds))
+      } else {
+        expect(c.state).toBe('complete')
+      }
+    }
+  })
+
+  it('reproduces the sentence the old code got wrong', () => {
+    // The shipped bug, stated as a test: reading both numbers out of gear.json
+    // yields "N of N", which is what the Loot view printed.
+    const gear = read('gear.json')
+    const selfReferential = `${gear.coverage.specs} of ${gear.coverage.specsAvailable}`
+    const honest = sweepCoverage(gear.coverage.specs, gear.coverage.specsAvailable, tierBuilds)
+    if (gear.coverage.specs < tierBuilds) {
+      expect(honest.sentence).not.toContain(selfReferential)
+    }
+  })
+})

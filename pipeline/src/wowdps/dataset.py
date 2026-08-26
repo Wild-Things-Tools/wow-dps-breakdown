@@ -844,6 +844,23 @@ def merge_buff_shards(shard_dirs: list[Path], out_dir: Path) -> Path | None:
             by_id[spec["id"]] = spec
     merged["specs"] = [by_id[key] for key in sorted(by_id)]
 
+    # Recounted, never carried over from a shard. `merged` starts as the NEWEST
+    # shard's header, whose `coverage.specs` is that shard's own slice -- publishing
+    # it as the run's is the same defect this file already records for
+    # `medianDpsError` and `targetError`: a number describing a fraction of the run,
+    # presented as describing all of it. `specsAvailable` is the tier's size and is
+    # the same in every shard, so the max of it is that size and survives a shard
+    # that wrote none.
+    stated = [(doc.get("coverage") or {}).get("specsAvailable") for doc in documents]
+    available = [value for value in stated if isinstance(value, int)]
+    if available:
+        merged["coverage"] = {"specs": len(merged["specs"]), "specsAvailable": max(available)}
+    else:
+        # No shard stated one, so neither does the merge. Absent is not zero: a
+        # reader must be able to tell "the sweep says nothing" from "the sweep
+        # covered nothing".
+        merged.pop("coverage", None)
+
     path = out_dir / "buffs.json"
     path.write_text(json.dumps(merged, separators=(",", ":")) + "\n", encoding="utf-8")
     log.info("merged %d buff shard(s) -> %d specs", len(documents), len(merged["specs"]))
