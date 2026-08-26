@@ -107,6 +107,67 @@ describe('against the committed MID2 documents', () => {
     }
   })
 
+  it('makes the SAME call the Buffs view makes, and it is complete today', () => {
+    // This file used to read `buffs.coverage?.specsAvailable` while BuffsView passed
+    // a hard `null` -- so the test asserted a call no view made, which is why the
+    // null path never showed up as wrong. Both read the field now.
+    const buffs = read('buffs.json')
+    const c = sweepCoverage(buffs.specs.length, buffs.coverage?.specsAvailable, tierBuilds)
+    expect(buffs.coverage, 'buffs.json states its coverage; the view must read it').toBeDefined()
+    expect(c.statesIntent).toBe(true)
+    if (buffs.specs.length >= tierBuilds) {
+      expect(c.state).toBe('complete')
+    }
+  })
+
+  it('would have said something false BEFORE the sweep was widened, which is the order', () => {
+    // The shape of the data as it stood at 17:30 on 2026-08-26: the sweep found 31
+    // builds because `buffs.yml` never materialised the unvalidated and extra
+    // profiles, and published `specs == specsAvailable`, which a reader takes as
+    // "covered everything there was".
+    //
+    // Wiring the view to the field WITHOUT fixing the sweep first turns a vague
+    // sentence into a confident wrong one. That is why #88 came before #89, and
+    // this pins it so the two cannot be reordered by a later refactor.
+    const behind = sweepCoverage(31, 31, 52)
+    expect(behind.state).toBe('behind')
+    expect(behind.sentence).toContain('have been added since')
+
+    // And the honest reading of the same numbers, had the field not lied.
+    const honest = sweepCoverage(31, 52, 52)
+    expect(honest.state).not.toBe('behind')
+    expect(honest.sentence).not.toContain('have been added since')
+  })
+
+  it('both views actually pass the field, which no behavioural test here can see', () => {
+    // A source-level assertion, deliberately, and it is the ONLY thing guarding the
+    // regression this pair of issues was about. Everything else in this file tests
+    // `sweepCoverage`, which was never wrong -- the defect was a CALLER passing a
+    // hard `null`, and there are no component tests in this project to catch that.
+    // Reverting either view to `null` leaves every other test in this file green.
+    //
+    // Brittle to a refactor, and that is the accepted cost: a rename makes this fail
+    // loudly, where the thing it replaces failed silently for as long as nobody
+    // opened the file.
+    const view = (name: string) =>
+      readFileSync(
+        join(dirname(fileURLToPath(import.meta.url)), '..', 'views', name),
+        'utf8',
+      )
+
+    for (const name of ['BuffsView.tsx', 'GearView.tsx']) {
+      // `=> sweepCoverage(` and not `sweepCoverage(`: the comment above the call in
+      // BuffsView quotes `sweepCoverage(31, 31, 52)` as the sentence it must not
+      // produce, and a looser pattern matches the PROSE before the code. Caught by
+      // this test failing on its first run against a file that was already correct.
+      const call = view(name).match(/=>\s*sweepCoverage\([\s\S]{0,200}?\)/)
+      expect(call, `${name} calls sweepCoverage`).not.toBeNull()
+      expect(call![0], `${name} must not hard-code the second argument`).toMatch(
+        /specsAvailable/,
+      )
+    }
+  })
+
   it('reproduces the sentence the old code got wrong', () => {
     // The shipped bug, stated as a test: reading both numbers out of gear.json
     // yields "N of N", which is what the Loot view printed.

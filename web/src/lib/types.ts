@@ -1179,6 +1179,19 @@ export interface BuffDataset {
   generatedAt: string;
   settings: { deterministic: boolean; iterations: number };
   note: string;
+  /**
+   * How many builds the sweep covered, and how many the tier held when it ran.
+   *
+   * `buffsweep.write_buffs` has emitted this for as long as `gear.json` has, and
+   * this type did not carry it -- so `BuffsView` passed `null` to `sweepCoverage`
+   * under a comment saying the file has no coverage block. The comment was true of
+   * this interface and false of the file. A missing field in a type is not a
+   * missing field in the data, and the view cannot read what the type hides.
+   *
+   * Optional because a document written before `builds_available` existed has none,
+   * and "absent" is a third answer beside a complete and an incomplete sweep.
+   */
+  coverage?: { specs: number; specsAvailable: number };
   specs: BuffSpec[];
 }
 
