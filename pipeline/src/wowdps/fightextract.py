@@ -204,14 +204,32 @@ class TargetCountTimeline:
 
     @property
     def window(self) -> float:
-        """The length the statistics are averaged over: what was read, not what ran."""
-        if self.observed is None or self.observed <= 0:
+        """The length the statistics are averaged over: what was read, not what ran.
+
+        ``None`` and ``0.0`` are opposite states and used to share a branch, which
+        is the "absent is not zero" rule this project applies everywhere else,
+        pointing the other way. ``None`` means *no bounded fetch was involved*, so
+        the whole fight is the right window. ``0.0`` means *a bounded fetch read
+        nothing*, and answering ``duration`` there makes ``coverage`` come out at
+        **1.0** -- the maximum -- for the one case the field exists to catch.
+
+        Measured in the committed MID2 data before the fix: The Lost Explorers at
+        Mythic carries a pull with a single step at zero targets and
+        ``coverage: 1.0``, beside eight real pulls at 0.9994-0.9999.
+        """
+        if self.observed is None:
             return self.duration
+        if self.observed <= 0:
+            return 0.0
         return min(self.observed, self.duration)
 
     @property
     def coverage(self) -> float:
-        """Fraction of the fight the events reached. 1.0 when nothing was cut."""
+        """Fraction of the fight the events reached.
+
+        1.0 when nothing was cut, and **0.0 when nothing was read** -- see
+        ``window``. Those two used to be the same number.
+        """
         if self.duration <= 0:
             return 0.0
         return round(min(self.window / self.duration, 1.0), 4)
