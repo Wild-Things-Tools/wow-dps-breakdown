@@ -3310,6 +3310,95 @@ Everything shown is read from the manifest -- `wowVersion`, `wowBuild`, `hotfixD
 simc's live and PTR trait tables, because reading the wrong one decodes cleanly and
 quietly describes a different tree.
 
+## Progress hours: the nine medians come from nine different guild populations
+
+`progresshours.py` + `wowdps progress-hours` + `.github/workflows/progress-hours.yml`.
+Measured on MID1 Mythic across four live runs on 2026-08-26. The metric is the sum of
+every attempt a guild made up to and including its first kill, per boss.
+
+### The cohorts barely overlap, and that is the answer to the refusal rate
+
+Each boss's sample is the top N guilds on **that boss's** progress ranking
+(`"p": 1` is page one, hard-coded). Those are not the same guilds. Measured, 20 per
+boss, shared-guild counts:
+
+```
+      1   2   3   4   5   6   7   8   9
+  1  20   7   1   2   1   0   1   1   5
+  3   1   3  20  10  14  14  15  15   4
+  6   0   2  14   6  16  20  16  15   5
+  8   1   3  15   8  16  15  16  20   6
+```
+
+**Boss 1 and boss 6 share none at all**, and 71 distinct guilds fill 180 sample slots.
+There is a tight "late boss" cluster (3, 5, 6, 7, 8 share 14-18 of 20 with each other)
+and a looser early one.
+
+Two things follow, and the second is the one to keep in mind before drawing anything:
+
+- **The per-boss refusal rate is a cohort property, not a query defect.** It looked
+  impossible: the encounter enters only the *nested* `fights(encounterID:)`, so one
+  guild's `reports(guildID:, zoneID:)` listing is the same set for all nine bosses,
+  and a guild measured on boss 1 could not have zero pulls on boss 8. It could,
+  because it is not the same guild. `medianReportsSeen` shows the mechanism in one
+  column: the early cohort has **27-37 reports** in the zone each, the late cohort
+  **3-5.5**.
+- **A season total sums nine different populations.** It is not "what one raid's
+  progression cost" -- the reading a stacked column invites -- but the sum of nine
+  per-boss bests. Anything drawing it has to say so; the published chart derives the
+  sentence from the guild rows rather than asserting it, and says nothing when those
+  rows are absent.
+
+### Three defects the first runs shipped, and what each cost
+
+All found by running it, none visible from the code alone:
+
+- **`zoneID: 0` on every query.** `fight_profiles.json` carries no `zoneId` for any
+  tier, so `block.get("zoneId") or args.zone or 0` resolved to zero and Warcraft Logs
+  answered with each guild's reports across *all* content. Medians came out at 5-18
+  minutes -- one farm pull -- and looked entirely plausible. **Third disguise of this
+  project's recurring trap**, and the nastiest: `hostilityType` and `includeResources`
+  were *omitted* arguments, this one was *passed*, as a zero, and a zero is a value the
+  service is entitled to interpret. The zone is derived per encounter now
+  (`ENCOUNTER_ZONE_QUERY`), and an encounter whose zone will not resolve is refused.
+- **The page walk stopped at the first kill it found.** Reports arrive newest-first,
+  so the first kill *found* is the guild's **last** kill. The walk reads to
+  `has_more_pages: false` now, and a window still truncated at `--max-pages` is
+  refused rather than summed.
+- **`no-fights` was two opposite findings under one name.** An empty listing is a fact
+  about the *guild*; a full listing holding no pull of this boss is a fact about the
+  *boss*. `PullTime.reports` -- the number that separates them -- was computed at all
+  four return sites and read by nothing. Split into `no-reports`/`no-fights` with
+  `medianReportsSeen` published beside them, which is what made the cohort finding
+  fall out of an ordinary run at no extra query cost.
+
+**The diagnostic that would have caught the first one immediately is the pull count.**
+A median of one or two attempts is a farm kill whatever the hours say, and the document
+carried no field that could say so. `medianAttempts` is published for that reason.
+
+### Cost, measured, and the 42% nobody was counting
+
+`rate_limit()` is deliberately uncached, so every call is a real HTTP query *and* is
+counted in the ledger. Called once per guild it dominated the pass:
+
+```
+before   432 queries   5,812 points     180 of those queries were budget polls
+after    261 queries   3,895 points     one poll per boss instead
+```
+
+The saving is 171 queries -- the 180 polls minus the 9 that remain -- and the two runs
+returned **identical medians, samples and attempt counts on all nine bosses**. The
+fixes changed the cost, not the answers, which is the control that makes both numbers
+usable.
+
+**Points are not the only budget.** `rateLimitData` arrives in the response *body*;
+anything the service says about a *request* ceiling arrives in the headers, and this
+client read no header until 2026-08-26. A pass can sit inside 18,000 points and hit a
+limit it never measured -- and the 429 branch would call that "the hourly point budget
+is spent", the wrong diagnosis with the right shape. `PointLedger.requests_sent` and
+`request_headers` record it; nothing enforces it, because that such a header exists is
+not established from this side.
+
 ## Probing across hours, rather than restarting
 
 Warcraft Logs meters by points per hour and a pass at a useful sample size does not
