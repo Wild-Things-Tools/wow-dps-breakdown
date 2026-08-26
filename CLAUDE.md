@@ -4845,6 +4845,27 @@ because no run existed to be red.
 commit a workflow pushed gets no CI ever, and without a dispatch there is no route to
 make CI look at it at all.
 
+**And there is a third way to read "no checks" wrongly, which is to ask the wrong
+API.** `pull_request_read` with `method: "get_status"` returns the *commit statuses*
+of a head sha. GitHub Actions does not write commit statuses -- it writes **check
+runs** -- so in an Actions-only repository that call returns `total_count: 0` on every
+PR forever, green or red. Measured on 2026-08-26: PR #88's CI run 32995309099
+completed `success` at 17:38:43, and `get_status` on the same sha still read
+`{"state":"pending","total_count":0}` fourteen minutes later. Two waits were spent on
+it before the run list was checked.
+
+So the answer to *did CI pass* is `actions_list list_workflow_runs` filtered by the
+PR's branch (or a check-runs read), never `get_status`. The three readings look
+identical from the outside -- queued, never triggered, wrong API -- and only the run
+list separates them. This is the same lesson as the paragraph above, one layer
+further out: **an empty result is not a measurement until you know the thing you
+asked would have answered.**
+
+Related, and it saves a wait in the sibling repo: **`wtt-backend` has no GitHub
+Actions workflows at all** (`list_workflows` returns `total_count: 0`, checked
+2026-08-26). No PR there ever gets a check. Verify by hand and say so in the PR;
+waiting is waiting for something that cannot arrive.
+
 **What the false alarm did produce that is worth keeping.** When CI is genuinely
 unavailable, the verification is done by hand on the exact sha and written into a PR
 comment with its numbers -- `pytest -q`, `ruff check`, `ruff format --check`, the
