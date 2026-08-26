@@ -97,6 +97,33 @@ jobs:
           path: bundle
       - run: chmod +x bundle/simc && pip install -e ./pipeline
 
+      # The tier is what simc ships PLUS what this project materialises, and this
+      # workflow used to sweep only the first half. Measured on the 2026-08-26 pass:
+      # `buffs.json` covered 31 builds where `index.json` ranks 52, and published
+      # `coverage {specs: 31, specsAvailable: 31}` -- which reads as COMPLETE,
+      # because `builds_available` is `len(found)` and `found` is whatever the
+      # profiles directory held. A denominator taken from the run's own view can
+      # never report a gap. `sims.yml` and `build-search.yml` already run these two
+      # steps; this file and `gear.yml` did not.
+      #
+      # Every shard runs them over the same generator files, so the discovered set
+      # is identical everywhere and the round-robin split stays consistent -- the
+      # same reason `sims.yml` gives. Inputs go through `env:` rather than into the
+      # script text: `${{ }}` is substituted before bash parses, and this job holds
+      # `contents: write`.
+      - name: Materialise the unvalidated profiles
+        run: wowdps -v unvalidated --tier "$TIER" --simc-source bundle --write
+        env:
+          TIER: ${{ inputs.tier || 'latest' }}
+
+      # After the unvalidated pass, because some cells deliberately supersede a
+      # refused materialised profile of the same filename. A cell whose hash no
+      # longer validates is refused and reported rather than written.
+      - name: Materialise the extra builds
+        run: wowdps -v extra-builds --tier "$TIER" --simc-source bundle --write
+        env:
+          TIER: ${{ inputs.tier || 'latest' }}
+
       - name: Sweep
         run: |
           wowdps -v buffs \
