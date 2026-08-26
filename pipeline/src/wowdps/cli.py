@@ -1838,6 +1838,7 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
                     logging.warning("point ceiling reached; stopping with what is measured")
                     return _write_progress_hours(args, bosses, client, start, limit)
                 reports: list[dict] = []
+                failed = False
                 for page in range(1, args.max_pages + 1):
                     try:
                         payload = client.query(
@@ -1847,7 +1848,6 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
                                 "z": int(block.get("zoneId") or args.zone or 0),
                                 "e": encounter_id,
                                 "d": args.difficulty,
-                                "limit": 100,
                                 "page": page,
                             },
                             label=f"pulls:{encounter_id}",
@@ -1855,6 +1855,7 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
                     except WarcraftLogsError as exc:
                         logging.warning("guild %s: %s", guild_id, exc)
                         boss.refused["error"] = boss.refused.get("error", 0) + 1
+                        failed = True
                         break
                     listing = (payload.get("reportData") or {}).get("reports") or {}
                     reports.extend(listing.get("data") or [])
@@ -1868,6 +1869,13 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
                     if not listing.get("has_more_pages"):
                         break
 
+                if failed:
+                    # Already counted as `error`. Falling through would count the
+                    # SAME guild again as `no-fights`, which is what made both live
+                    # runs report 12 of each on a 12-guild sample. `refused` is the
+                    # denominator for "cost per usable number", and doubling it
+                    # biases the extrapolation toward looking affordable.
+                    continue
                 answer = progresshours.pull_time(reports, encounter_id, args.difficulty)
                 if answer.ms is None:
                     if answer.reason:

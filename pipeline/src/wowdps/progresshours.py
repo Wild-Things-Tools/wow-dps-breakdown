@@ -55,15 +55,32 @@ PROGRESS_RANKINGS_QUERY = """query($e:Int!,$d:Int!,$p:Int!){
   worldData { encounter(id:$e) { fightRankings(metric: progress, difficulty:$d, page:$p) } }
 }"""
 
+#: How many reports one page asks for.
+#:
+#: **Not 100, and it is a LITERAL in the query rather than a variable.** Selecting
+#: `fights` inside the reports listing -- the thing that makes this affordable --
+#: pushes the document over Warcraft Logs' complexity ceiling at 100:
+#:
+#:     Max query complexity should be 50000 but got 50401.
+#:
+#: Measured live on 2026-08-26 (runs 32976978343 and 32977917321): 12 of 12 guilds
+#: refused on every one of MID1's nine bosses, with the pass exiting 0 both times.
+#:
+#: The literal matters because a static complexity analyser cannot see a variable's
+#: runtime value and must assume the field's maximum. Passing 50 as `$limit` would
+#: therefore be scored as 100 and refused exactly as before. Baking it into the
+#: query text is the only form the analyser can actually read.
+REPORTS_PER_PAGE = 50
+
 #: One page of a guild's reports, each carrying its attempts on one boss.
-GUILD_PULLS_QUERY = """query($g:Int!,$z:Int!,$e:Int!,$d:Int!,$limit:Int!,$page:Int!){
-  reportData { reports(guildID:$g, zoneID:$z, limit:$limit, page:$page) {
+GUILD_PULLS_QUERY = f"""query($g:Int!,$z:Int!,$e:Int!,$d:Int!,$page:Int!){{
+  reportData {{ reports(guildID:$g, zoneID:$z, limit:{REPORTS_PER_PAGE}, page:$page) {{
     has_more_pages
-    data { code startTime fights(encounterID:$e, difficulty:$d) {
+    data {{ code startTime fights(encounterID:$e, difficulty:$d) {{
       startTime endTime kill encounterID difficulty
-    } }
-  } }
-}"""
+    }} }}
+  }} }}
+}}"""
 
 
 @dataclass(frozen=True)
