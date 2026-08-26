@@ -11,6 +11,12 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
+    # `test_harvest.py` validates the harvest's GraphQL documents against an inline
+    # schema excerpt behind `pytest.importorskip("graphql")` -- no service and no
+    # credentials, so there is no reason for it not to run. Undeclared until
+    # 2026-08-26, which meant it ran only where something else had pulled it in and
+    # skipped silently everywhere else, CI included.
+    "graphql-core>=3.2",
 ]
 
 [project.scripts]

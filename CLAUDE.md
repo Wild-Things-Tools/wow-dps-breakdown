@@ -4889,20 +4889,34 @@ only the repair -- which is the repair working as designed rather than a thin re
 Retribution Paladin and Havoc's Aldrachi Reaver build stay refused, with the screen's
 reason on the row.
 
-### A pre-existing harvest test fails only with `WOWDPS_SIMC_SOURCE` set
+### The harvest test that failed under `WOWDPS_SIMC_SOURCE` was fixed, and this
+entry outlived it by three days
 
-Found on 2026-08-23 and **not** introduced here -- it fails identically at
-`0b43705`. `test_harvest.py::test_a_real_hash_under_the_wrong_spec_name_is_still_caught`
-feeds an Arcane hash in as a Death Knight and asserts `spec_mismatch`; `harvest.validate`
-decodes *before* it compares spec ids, and that hash no longer survives a decode against
-Death Knight's node list, so the verdict is `decode_error`. The control's point stands
-(it is still a refusal) but the reason it asserts is not the reason it gets.
+**Corrected 2026-08-26.** What stood here described
+`test_harvest.py::test_a_real_hash_under_the_wrong_spec_name_is_still_caught` failing
+because `harvest.validate` decoded before comparing spec ids, so an Arcane hash
+submitted as a Death Knight came back `decode_error` where `spec_mismatch` is the
+finding worth having. That was true on 2026-08-23 and stopped being true on
+**2026-08-25**, when `b2e01dc` ("Settle the spec from the hash header, before the node
+stream", #60) made `validate` read the spec id out of the hash **header** first.
+Measured: the test passes, and the whole file is `94 passed` with the gate set.
 
-Worth keeping for the shape rather than the bug: the test is gated on an environment
-variable, so `pytest -q` skips it and the default gate is green. A test that only runs
-in a mode nobody runs is a test that decays silently -- and this repository has three
-such gates now (`WOWDPS_SIMC_DIR`, `WOWDPS_SIMC_SOURCE`, and the pair together), each
-covering a different set.
+The mechanism is the part worth keeping. `talenttree.read_header` reads the first 152
+bits -- version, spec id, the zeroed tree hash -- and needs **no trait table at all**,
+so it answers for a class whose node list would reject the rest of the string. Under
+decode-first the `spec_mismatch` finding is not merely more expensive, it is
+**unreachable**. Note also that this file already documented the corrected behaviour
+elsewhere, so for three days it contradicted itself.
+
+**And the shape is worse than a stale entry.** On 2026-08-26 this section was read as
+current and copied into a GitHub issue as a live defect, by a reader who had not run
+the test -- because a gated test is the one kind whose truth cannot be checked by the
+default `pytest -q`. An undated claim about a *fixed* bug is the same failure this file
+already warns about for absences in simc's data, pointing the other way. Date every
+claim about a test that CI does not run.
+
+The gate itself is now closed: `ci.yml` runs the simc-gated tests, so a claim like the
+one above goes red rather than sitting here being believed.
 
 ### Two document fields go beyond the frontend's declared interface
 

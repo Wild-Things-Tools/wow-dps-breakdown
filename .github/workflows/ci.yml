@@ -35,6 +35,51 @@ jobs:
       - name: Test
         run: pytest -q
 
+  # The tests the `pipeline` job above can only SKIP. Measured 2026-08-26: 14 of
+  # them, and they had never run anywhere -- `ci.yml` set neither variable and no
+  # other workflow runs pytest at all. `test_buildsearch_cli.py` exists because a
+  # refactor changed what `_head_to_head` returns and killed a real run after two
+  # minutes of simulation; it caught the same class of defect again on 2026-08-26,
+  # and only because somebody fetched a checkout by hand.
+  #
+  # simc's DATA, not a compiled simc: `test_buildsearch_cli` stubs both `find_simc`
+  # and the profileset runner, and the rest is file parsing.
+  pipeline-simc-data:
+    name: Pipeline (against simc's data tables)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install
+        working-directory: pipeline
+        run: pip install -e '.[dev]'
+
+      # `profiles` is NOT optional, and leaving it out fails SILENTLY. The two
+      # variables name the same thing and are validated by three different
+      # predicates: test_harvest wants only `engine/dbc/generated`, but
+      # test_talenttree also wants `<root>/profiles` and returns None without it --
+      # a skip whose message still reads "set WOWDPS_SIMC_DIR" on a job that set
+      # it. Measured: 163 MB, ~9 s.
+      - name: Fetch simc's data tables
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://github.com/simulationcraft/simc.git simc-src
+          git -C simc-src sparse-checkout set engine/dbc/generated profiles
+
+      # Both variables, because they gate different files. A job that sets one
+      # runs half the set and reports success for the whole of it.
+      - name: Test
+        working-directory: pipeline
+        env:
+          WOWDPS_SIMC_DIR: ${{ github.workspace }}/simc-src
+          WOWDPS_SIMC_SOURCE: ${{ github.workspace }}/simc-src
+        run: pytest -q -rs
+
   web:
     name: Web (TypeScript)
     runs-on: ubuntu-latest
