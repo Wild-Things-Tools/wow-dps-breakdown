@@ -231,5 +231,24 @@ jobs:
             echo "::notice::no change to commit"
           else
             git commit -m "data: harvest builds for $TIER $(date -u +%Y-%m-%d)"
-            git push
+
+            # Same rebase-and-retry as the other committing workflows: a harvest runs long
+
+            # enough to race any merge, and losing the push throws the whole pass away.
+
+            pushed=false
+
+            for attempt in 1 2 3; do
+
+              git pull --rebase --autostash origin "${{ github.ref_name }}" || true
+
+              if git push origin "HEAD:${{ github.ref_name }}"; then pushed=true; break; fi
+
+              echo "push attempt $attempt lost the race; retrying"
+
+              sleep $((attempt * 5))
+
+            done
+
+            [ "$pushed" = true ]
           fi
