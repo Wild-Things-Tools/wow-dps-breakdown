@@ -1981,6 +1981,16 @@ def _write_progress_hours(args, bosses, client, start: float, limit: float) -> i
     # A counter that did not move is the ABSENCE of a measurement, not a cost of
     # zero. This project printed "0 points for a nine-boss pass" exactly once.
     cost["pointsSpent"] = round(spent, 1) if spent > 0 else "UNMEASURED"
+    # Points are not the only budget. Whatever Warcraft Logs says about a REQUEST
+    # ceiling arrives in the response headers, which nothing here read until now, so
+    # a pass could sit inside 18,000 points and hit a limit it never measured -- and
+    # the 429 handler would have called that "the hourly point budget is spent".
+    # Recorded, not enforced: that such a header exists is not established from here.
+    ledger = getattr(client, "ledger", None)
+    cost["requestsSent"] = getattr(ledger, "requests_sent", None)
+    headers = dict(getattr(ledger, "request_headers", {}) or {})
+    if headers:
+        cost["rateLimitHeaders"] = headers
 
     document = {
         "tier": args.tier,
