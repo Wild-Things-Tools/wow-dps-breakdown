@@ -251,6 +251,21 @@ jobs:
             exit 0
           fi
           git commit -m "data: computed builds for ${TIER}"
-          git push
+          # Rebase-and-retry, the same shape eight other workflows here already use.
+          # Without it a long pass loses its whole output to any merge that lands
+          # while it runs: run 32968050962 searched for 98 minutes, committed 52
+          # builds, and was rejected `non-fast-forward` because three PRs had gone
+          # into main meanwhile. The simulation is the expensive part and it had
+          # already succeeded -- only the push failed, and the data survived solely
+          # because the artifact upload runs before it.
+          pushed=false
+          for attempt in 1 2 3; do
+            git pull --rebase --autostash origin "${{ github.ref_name }}" || true
+            if git push origin "HEAD:${{ github.ref_name }}"; then pushed=true; break; fi
+            echo "push attempt $attempt lost the race; retrying"
+            sleep $((attempt * 5))
+          done
+          # Losing three times is a real failure, not something to exit 0 on.
+          [ "$pushed" = true ]
         env:
           TIER: ${{ inputs.tier }}
