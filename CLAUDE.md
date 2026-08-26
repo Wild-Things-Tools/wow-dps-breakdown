@@ -651,6 +651,70 @@ Two things found in `gear.yml` on the way, both the same mistake:
   baseline-combination table above -- plausible arithmetic over the wrong column,
   and this one had been load-bearing for a scheduling decision.
 
+**What the fixed sweep measured.** Dispatched the same evening, six shards, all six
+ran both materialisation steps: `buffs.json` went **31 of 31 to 52 of 52**. 52 rows,
+51 carrying a measurement; the one without is `paladin_retribution_default`, whose
+hash simc refuses with exit 81 -- published with its `errors` string rather than
+dropped, and already filtered out of the chart by the null-measurement guard. So a
+refused profile costs a row's numbers and not a shard, which is what `sweep_spec`'s
+per-invocation catch is for.
+
+Power Infusion now spans **1.54-5.05%** over 51 builds against the 1.80-5.17% this
+file records over 26. The floor moved down because the population widened, which is
+the direction it should move.
+
+**Do not read those fields as percentages.** `powerInfusionPercent` and its
+siblings hold a **ratio** -- 0.05053 is 5.05%, and `gain / baseDps` reproduces it
+exactly. Printed with a `%` beside them they read as a hundredfold collapse against
+the figures above, which is a false regression somebody will report one day.
+
+`BuffsView` reads the field now (#94). Its `null` was not the carelessness it looked
+like: `BuffDataset` in `types.ts` had **no `coverage` field at all**, so the view
+could not read what the type hid, and its comment described the *type* while naming
+the *file*. A missing field in a type is not a missing field in the data.
+
+### `gear.json` carries one provenance block over three slots, and they need not be
+from one run
+
+Found by simulating a single-slot re-run through the real `merge_gear_shards` before
+dispatching one, which is the only reason a 1,140 CPU-minute pass did not publish it.
+
+That function is built so a one-slot run does not delete the others -- the published
+document joins the merge as the *oldest*, union semantics, and its own comment
+explains why. That part works. What happens beside it does not: `merged =
+dict(documents[-1])` takes the **newest** document's top-level fields wholesale.
+
+Measured, feeding it a trinket shard at a different simc revision:
+
+```
+document simc.gitRevision   NEWREV        <- the new run
+document medianDpsError     0.0999        <- the new run
+document coverage           {specs: 80, specsAvailable: 28}
+per slot   finger 28   neck 26   trinket 78    none carries its own provenance
+```
+
+Three separate wrongnesses, and each is a shape this file already names elsewhere:
+
+- **Provenance.** The document says these numbers came from simc `NEWREV` while
+  finger and neck were measured on `69a46e1`. Right for one slot of three.
+- **Precision.** `settings.medianDpsError` is the new run's median published as the
+  document's -- literally the `merge_shards` defect recorded above for the manifest,
+  one file across.
+- **Coverage.** `specs` is the **union of build ids over all slots** and
+  `specsAvailable` comes from the newest document, so `80 of 28` is reachable. The
+  same impossible shape as `computed-builds.json`'s `104 of 52`.
+
+It is already mildly wrong with no new run at all: the union is 28 while the slots
+hold finger 28, neck 26, trinket 26, and `GearView` prints that one document-level
+number above a **per-slot** table behind a slot selector. The Trinket tab counts 28
+over a table of 26.
+
+Why it blocks rather than annoys: after a trinket run over 52 builds the union is 52,
+so `sweepCoverage(52, 52, 52)` says *"Covers all 52 builds in the tier"* above a
+Finger table holding 28 -- trading a false sentence for a more confident one. A sweep
+that replaces one error with a better-dressed error is not a repair. #95 holds the
+three-part fix and the priced pass.
+
 ## The gear anchor: what a computed build wears
 
 `gearanchor.py` + `wowdps gear-anchor`. A build this project *computes* -- from a
