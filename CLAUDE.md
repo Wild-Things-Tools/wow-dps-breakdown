@@ -4581,6 +4581,35 @@ enum values come from that mirror, not from the live server. So the first CI run
 and expect the `table` payload shape (`_table_entries` guesses between `entries`/`series`/
 `targets`) to need pinning against a real response.
 
+## Touching production: allowed as of 2026-08-26
+
+Owner's words: *"du darfst ab jetzt auch Sachen in Richtung Produktion anfassen."*
+Before this, anything that reached the published site or spent real budget waited
+for him. It does not any more. Concretely, an agent may now, without asking:
+
+- merge its own PRs once CI is green, here as in `wcl-components`;
+- dispatch the workflows that **spend** something -- `build-search.yml`,
+  `gear.yml`, `buffs.yml`, `harvest-builds.yml`, `fight-probe.yml` -- and commit
+  what they produce;
+- publish a dataset that changes what the site shows.
+
+Three things that do **not** follow from it, and each is a rule this file already
+argues for elsewhere:
+
+- **A run that replaces data is not the same as one that adds it.** A Heroic
+  `fight-probe` pass overwrites the Mythic bands in the same document; a `--no-resume`
+  pass discards measurements a previous run paid for. Those need the owner, not
+  because the button is locked but because the *loss* is the decision. `write_fights`
+  already refuses the second one without `--force`, and that refusal stays.
+- **Budget is still arithmetic, not a feeling.** The Warcraft Logs point ceiling and
+  the Actions-minute sums in this file are how a run is judged affordable before it
+  starts. "Allowed to spend" is not "no longer counted".
+- **A published number still carries its uncertainty and its caveats.** The tie rule,
+  the comparability flags, `UNMEASURED` rather than zero -- none of that is a gate the
+  owner was holding, so none of it moves.
+
+The freedom is over the button. The standard over what may be published is unchanged.
+
 ## The issue protocol: tracking that survives the session
 
 Standing instruction from the owner (2026-08-24): issues are created, updated
