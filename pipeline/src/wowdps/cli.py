@@ -1817,6 +1817,32 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
                 boss.refused["ranking-error"] = boss.refused.get("ranking-error", 0) + 1
                 continue
 
+            # The zone is DERIVED from the encounter, never taken as 0. `zoneID: 0`
+            # is not a narrower question: Warcraft Logs accepted it on 2026-08-26 and
+            # answered with each guild's reports across all content, so every number
+            # that run produced was scoped to the wrong thing while looking fine.
+            zone_id = int(block.get("zoneId") or 0) or int(args.zone or 0)
+            if not zone_id:
+                try:
+                    zone_id = (
+                        progresshours.encounter_zone(
+                            client.query(
+                                progresshours.ENCOUNTER_ZONE_QUERY,
+                                {"e": encounter_id},
+                                label=f"zone:{encounter_id}",
+                            )
+                        )
+                        or 0
+                    )
+                except WarcraftLogsError as exc:
+                    logging.warning("%s: zone lookup failed: %s", boss.name, exc)
+                    zone_id = 0
+            if not zone_id:
+                logging.warning("%s: no zone could be resolved; refusing the boss", boss.name)
+                boss.refused["no-zone"] = boss.refused.get("no-zone", 0) + 1
+                continue
+            boss.zone_id = zone_id
+
             rows = (
                 ((rankings.get("worldData") or {}).get("encounter") or {}).get("fightRankings")
                 or {}
@@ -1839,13 +1865,14 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
                     return _write_progress_hours(args, bosses, client, start, limit)
                 reports: list[dict] = []
                 failed = False
+                truncated = False
                 for page in range(1, args.max_pages + 1):
                     try:
                         payload = client.query(
                             progresshours.GUILD_PULLS_QUERY,
                             {
                                 "g": guild_id,
-                                "z": int(block.get("zoneId") or args.zone or 0),
+                                "z": zone_id,
                                 "e": encounter_id,
                                 "d": args.difficulty,
                                 "page": page,
@@ -1859,16 +1886,20 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
                         break
                     listing = (payload.get("reportData") or {}).get("reports") or {}
                     reports.extend(listing.get("data") or [])
-                    # Stop as soon as the kill is in hand: further pages buy nothing
-                    # and are the bulk of what a full pass would spend.
-                    if (
-                        progresshours.pull_time(reports, encounter_id, args.difficulty).ms
-                        is not None
-                    ):
-                        break
                     if not listing.get("has_more_pages"):
                         break
+                else:
+                    # Ran out of pages before the listing ran out of reports. The
+                    # guild's FIRST kill may be older than anything fetched, so the
+                    # window cannot support the claim and is refused.
+                    truncated = True
 
+                if truncated:
+                    # Counted, never summed. Same rule as `no-kill`: a partial window
+                    # published as the answer is a floor wearing a measurement's
+                    # clothes. Raising --max-pages is the fix, and the count says so.
+                    boss.refused["truncated"] = boss.refused.get("truncated", 0) + 1
+                    continue
                 if failed:
                     # Already counted as `error`. Falling through would count the
                     # SAME guild again as `no-fights`, which is what made both live
@@ -1882,6 +1913,7 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
                         boss.refused[answer.reason] = boss.refused.get(answer.reason, 0) + 1
                 else:
                     boss.hours.append(answer.ms / progresshours.MS_PER_HOUR)
+                    boss.attempts.append(answer.attempts)
 
             logging.info(
                 "%s: %d/%d guild(s) measured, median %s h",

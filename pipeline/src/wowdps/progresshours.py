@@ -50,6 +50,25 @@ DIFFICULTY_NAMES = {
 
 MS_PER_HOUR = 3_600_000.0
 
+#: Which raid an encounter belongs to.
+#:
+#: **The zone is derived, never typed.** `fight_profiles.json` carries encounter ids
+#: and no `zoneId` for any tier, so `block.get("zoneId") or args.zone or 0` resolved
+#: to **0** on every query of the 2026-08-26 run -- and Warcraft Logs accepted it
+#: rather than refusing, returning each guild's reports across *all* content. That is
+#: this project's own recurring trap in its third disguise: after an omitted argument
+#: (`hostilityType`, `includeResources`) comes a *zero* one, and a zero is a value the
+#: service is entitled to interpret.
+#:
+#: A zone is a property of the encounter, and the encounter ids are the one thing the
+#: tier file is authoritative about, so it is asked for rather than asserted. An
+#: encounter whose zone cannot be resolved is REFUSED, because `zoneID: 0` is not a
+#: narrower question -- it is a different one, answered plausibly.
+ENCOUNTER_ZONE_QUERY = """query($e:Int!){
+  worldData { encounter(id:$e) { id name zone { id name } } }
+}"""
+
+
 #: One guild's first kill, from `fightRankings(metric: progress)`.
 PROGRESS_RANKINGS_QUERY = """query($e:Int!,$d:Int!,$p:Int!){
   worldData { encounter(id:$e) { fightRankings(metric: progress, difficulty:$d, page:$p) } }
@@ -81,6 +100,21 @@ GUILD_PULLS_QUERY = f"""query($g:Int!,$z:Int!,$e:Int!,$d:Int!,$page:Int!){{
     }} }}
   }} }}
 }}"""
+
+
+def encounter_zone(payload: dict) -> int | None:
+    """The zone id in an ``ENCOUNTER_ZONE_QUERY`` payload, or None.
+
+    None rather than 0: the caller must be able to tell "no zone" from a zone whose
+    id happens to be falsy, because 0 is exactly the value that made the failing run
+    look like a working one.
+    """
+    encounter = ((payload.get("worldData") or {}).get("encounter")) or {}
+    zone = encounter.get("zone") or {}
+    zone_id = zone.get("id")
+    if not isinstance(zone_id, int) or zone_id <= 0:
+        return None
+    return zone_id
 
 
 @dataclass(frozen=True)
@@ -192,10 +226,20 @@ class BossProgress:
     order: int
     difficulty: int
     hours: list[float] = field(default_factory=list)
+    #: Attempts behind each measured guild's answer, index-aligned with ``hours``.
+    #:
+    #: Published because it is the cheapest thing that can tell a progress kill from a
+    #: FARM kill, and the 2026-08-26 run needed exactly that and did not have it: every
+    #: median came out at 5-18 minutes, which is one pull, and the document carried no
+    #: field that said so. A boss whose median attempts is 1 was not progressed in the
+    #: window that was read, whatever the hours say.
+    attempts: list[int] = field(default_factory=list)
     #: Guilds with no answer, by reason -- part of the cost per usable number.
     refused: dict[str, int] = field(default_factory=dict)
     guilds_seen: int = 0
     rows_without_guild: int = 0
+    #: The zone its reports were searched in. None means the boss was refused.
+    zone_id: int | None = None
 
     def to_json(self) -> dict:
         q = quartiles(self.hours)
@@ -212,6 +256,10 @@ class BossProgress:
             "q1Hours": None if q is None else round(q[0], 3),
             "q3Hours": None if q is None else round(q[1], 3),
             "sample": len(self.hours),
+            "medianAttempts": (
+                None if not self.attempts else median([float(a) for a in self.attempts])
+            ),
+            "zoneId": self.zone_id,
             "guildsSeen": self.guilds_seen,
             "refused": dict(sorted(self.refused.items())),
             "rowsWithoutGuild": self.rows_without_guild,

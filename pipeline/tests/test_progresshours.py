@@ -6,6 +6,7 @@ absolute, `ReportFight.startTime`/`endTime` are relative to their own report.
 
 from wowdps.progresshours import (
     BossProgress,
+    encounter_zone,
     fight_duration_ms,
     median,
     ordered_fights,
@@ -109,3 +110,59 @@ def test_the_season_total_refuses_when_any_boss_is_unmeasured():
     assert stacked_total([measured]) == 2.0
     assert stacked_total([measured, unmeasured]) is None
     assert stacked_total([]) is None
+
+
+# --------------------------------------------------------------------------------
+# The three defects the first successful live run exposed (2026-08-26, MID1 Mythic).
+#
+# That run measured -- no `error` refusals at all -- and every number in it was
+# wrong, which is the harder failure to see. Medians came out at 0.09-0.30 HOURS,
+# i.e. five to eighteen minutes, for first-killing a Mythic boss.
+# --------------------------------------------------------------------------------
+
+
+def test_the_zone_is_read_out_of_the_encounter_and_zero_is_not_a_zone():
+    """`zoneID: 0` is not a narrower question, it is a different one.
+
+    `fight_profiles.json` carries no `zoneId` for ANY tier, so the run's
+    `block.get("zoneId") or args.zone or 0` resolved to 0 on every query -- and
+    Warcraft Logs accepted it and answered with each guild's reports across all
+    content. The third disguise of a trap this repo has recorded twice already
+    (`hostilityType`, `includeResources`): after an omitted argument comes a *zero*
+    one, and a zero is a value the service may interpret.
+    """
+    payload = {"worldData": {"encounter": {"id": 3176, "zone": {"id": 46, "name": "VS"}}}}
+    assert encounter_zone(payload) == 46
+
+    # Each of these must be None rather than 0, because the caller's whole job is to
+    # tell "no zone" from a zone, and 0 is what made the failing run look healthy.
+    assert encounter_zone({"worldData": {"encounter": {"zone": {"id": 0}}}}) is None
+    assert encounter_zone({"worldData": {"encounter": {"zone": None}}}) is None
+    assert encounter_zone({"worldData": {"encounter": None}}) is None
+    assert encounter_zone({}) is None
+
+
+def test_the_attempt_count_is_published_beside_the_hours():
+    """The cheapest thing that separates a progress kill from a FARM kill.
+
+    The live run's document had no field that could say "these medians are one pull",
+    so a chart drawn from it would have read as progress time. A boss whose median
+    attempts is 1 was not progressed in the window that was read, whatever the hours
+    say -- and that is now legible from the document alone.
+    """
+    boss = BossProgress(ENCOUNTER, "A Boss", 1, MYTHIC, hours=[0.12, 0.15], attempts=[1, 1])
+    row = boss.to_json()
+    assert row["medianAttempts"] == 1.0
+
+    progressed = BossProgress(ENCOUNTER, "A Boss", 1, MYTHIC, hours=[9.0, 11.0], attempts=[41, 63])
+    assert progressed.to_json()["medianAttempts"] == 52.0
+
+    # Absent, not zero: no guild measured means no attempt count, and a 0 there would
+    # read as "killed without attempting it".
+    assert BossProgress(ENCOUNTER, "A Boss", 1, MYTHIC).to_json()["medianAttempts"] is None
+
+
+def test_the_zone_it_searched_is_published_so_a_wrong_scope_is_visible():
+    """The failing run scoped every query to zone 0 and said so nowhere."""
+    assert BossProgress(ENCOUNTER, "A Boss", 1, MYTHIC, zone_id=46).to_json()["zoneId"] == 46
+    assert BossProgress(ENCOUNTER, "A Boss", 1, MYTHIC).to_json()["zoneId"] is None
