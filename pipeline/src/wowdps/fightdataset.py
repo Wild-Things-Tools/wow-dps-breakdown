@@ -816,6 +816,26 @@ def _percentile_at(values: list[float], fraction: float) -> float:
     return ordered[low] + (ordered[high] - ordered[low]) * (position - low)
 
 
+def _observed_a_target(fight: dict) -> bool:
+    """Did this pull's event fetch ever see a target up?
+
+    Separate from ``truncated``: a truncated fetch stopped part-way and its tail is
+    wrong, while this one produced nothing at all and its whole curve is. Both are
+    excluded from the band, for the same reason and by different tests.
+    """
+    steps = (fight.get("significantTargetCount") or {}).get("steps") or []
+    for step in steps:
+        count = step[1] if isinstance(step, (list, tuple)) and len(step) > 1 else None
+        if count is None and isinstance(step, dict):
+            count = step.get("count")
+        try:
+            if float(count or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
 def _target_band(payload: dict) -> dict | None:
     """How many targets are up at each point of the fight, across every kill.
 
@@ -849,11 +869,33 @@ def _target_band(payload: dict) -> dict | None:
     whose event fetch was truncated is excluded whatever the count, because that
     curve is wrong rather than thin.
     """
-    fights = [
+    candidates = [
         fight
         for fight in payload.get("fights") or []
         if isinstance(fight, dict) and not fight.get("truncated")
     ]
+    # A pull the fetch read NOTHING from is not truncated -- the fetch did not stop
+    # part-way, it never produced anything -- so the `truncated` test above lets it
+    # through, and its curve resamples to zero across every bucket. Measured in the
+    # committed MID2 data: The Lost Explorers at Mythic publishes a band over nine
+    # kills whose min envelope is 0 at all sixty buckets, because one contributing
+    # pull has a single step at zero targets. Eight real pulls reach 1-3.
+    #
+    # What it drags depends on how much the real curves disagree, and on THIS band
+    # it is only the envelope: with nine curves Q1 is the third smallest and the
+    # median the fifth, the eight real pulls all sit at 3 targets there, so the
+    # published `low` and `median` are 3.0 at every bucket and only `min` is 0.0.
+    # The zero curve occupies rank 0 and nothing else. That is luck rather than
+    # safety -- it takes one rank from every statistic, so a band whose real pulls
+    # spread across two or three targets loses its lower quartile as well.
+    #
+    # The test is "did this curve ever reach a target", not the pull's `coverage`,
+    # and deliberately: a payload written before `TargetCountTimeline.window` was
+    # fixed records `coverage: 1.0` for exactly these pulls, so filtering on it
+    # would leave every existing payload contaminated. A kill in which no target was
+    # ever damaged is not a kill, so this cannot exclude a legitimate pull.
+    fights = [fight for fight in candidates if _observed_a_target(fight)]
+    unobserved = len(candidates) - len(fights)
     if not fights:
         return None
 
@@ -883,7 +925,7 @@ def _target_band(payload: dict) -> dict | None:
             }
         )
 
-    return {
+    block = {
         "fights": len(fights),
         "buckets": _BAND_BUCKETS,
         "medianLengthSeconds": round(median_length, 1),
@@ -895,6 +937,13 @@ def _target_band(payload: dict) -> dict | None:
             "at the median kill length. A wide band is a moment the kills disagreed on."
         ),
     }
+    # Published rather than silently dropped, the same rule the docstring states for
+    # the truncated ones: a thinner band has to read as thinner, and a reader
+    # comparing `fights` against the encounter's `fightsSampled` would otherwise see
+    # two numbers disagree with nothing explaining it.
+    if unobserved:
+        block["unobservedKills"] = unobserved
+    return block
 
 
 def _timeline_block(payload: dict) -> dict | None:

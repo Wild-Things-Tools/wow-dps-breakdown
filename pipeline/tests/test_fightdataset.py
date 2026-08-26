@@ -1044,3 +1044,49 @@ def test_the_headline_block_is_always_one_of_the_per_difficulty_blocks():
     headline = encounter["measured"]["fightsSampled"]
     per_difficulty = {m["difficulty"]: m["fightsSampled"] for m in encounter["measurements"]}
     assert per_difficulty[encounter["measuredDifficulty"]] == headline
+
+
+def test_the_band_excludes_a_pull_that_read_nothing():
+    """A pull the fetch read nothing from is not ``truncated``, so it got in.
+
+    The fetch did not stop part-way -- it never produced anything -- so the
+    ``truncated`` test admits it, and its curve resamples to zero across every
+    bucket. Measured in the committed MID2 data: The Lost Explorers at Mythic
+    publishes a band over nine kills whose ``min`` is 0.0 at all sixty buckets,
+    because one contributing pull has a single step at zero targets.
+
+    The exclusion tests whether the curve ever reached a target rather than the
+    pull's own ``coverage``, and that is deliberate: a payload written before
+    ``TargetCountTimeline.window`` was fixed records ``coverage: 1.0`` for exactly
+    these pulls, so filtering on it would leave every existing payload
+    contaminated.
+    """
+    from wowdps.fightdataset import _target_band
+
+    real = {
+        "truncated": False,
+        "durationSeconds": 400.0,
+        "significantTargetCount": {"steps": [[0.0, 3], [100.0, 2], [300.0, 1]]},
+    }
+    read_nothing = {
+        "truncated": False,
+        "durationSeconds": 400.0,
+        "significantTargetCount": {"steps": [[0.0, 0]]},
+    }
+
+    band = _target_band({"fights": [dict(real) for _ in range(8)] + [read_nothing]})
+    assert band is not None
+    assert band["fights"] == 8
+    # Published rather than dropped in silence: a thinner band has to read as thinner.
+    assert band["unobservedKills"] == 1
+    assert min(bucket["min"] for bucket in band["band"]) > 0
+
+    # The control: without the empty pull the band is the same, and says nothing
+    # about an exclusion that did not happen.
+    clean = _target_band({"fights": [dict(real) for _ in range(8)]})
+    assert clean["fights"] == 8
+    assert "unobservedKills" not in clean
+
+    # And a payload of nothing but unobserved pulls has no band at all, rather than
+    # a band of zeros.
+    assert _target_band({"fights": [dict(read_nothing) for _ in range(3)]}) is None
