@@ -188,3 +188,68 @@ describe('against the committed MID2 documents', () => {
     expect(bestBuildFor(published, findComputedSpec(computed, absent.id, 'patchwerk', 1)).rankDps).toBe(published)
   })
 })
+
+describe('which margin the ranking uses', () => {
+  // Devastation Evoker (Scalecommander), measured 2026-08-26: +2.53% on the gear
+  // anchor and +0.02% on simc's own kit. This is the build the projection is wrong
+  // about, and it is the case every test below is shaped around.
+  const anchored = entry(contender(100, 0.05), contender(102.53, 0.05))
+
+  function withShipped(margin: number, tieBand = 0.001): ComputedSpec {
+    return { ...anchored, shipped: { simcDps: 200, bestDps: 200 * (1 + margin), margin, tieBand } } as ComputedSpec
+  }
+
+  it('prefers the margin measured on simc own gear over the anchored one', () => {
+    const best = bestBuildFor(1000, withShipped(0.005))
+    expect(best.marginBasis).toBe('shipped-gear')
+    expect(best.gain).toBeCloseTo(0.005, 10)
+    // 1000 * 1.005, NOT 1000 * 1.0253 -- the anchored margin must not reach rankDps.
+    expect(best.rankDps).toBeCloseTo(1005, 6)
+  })
+
+  it('drops the mark when the measured margin does not clear its own band', () => {
+    // The real Devastation case: +0.02% on shipped gear is inside any band, so the
+    // row must fall back to the published number and carry no mark at all.
+    const best = bestBuildFor(1000, withShipped(0.0002, 0.001))
+    expect(best.projected).toBe(false)
+    expect(best.marginBasis).toBeNull()
+    expect(best.rankDps).toBe(1000)
+    expect(bestBuildMark(best)).toBeNull()
+  })
+
+  it('marks a build the anchored margin would have missed', () => {
+    // Devastation Flameshaper runs the other way: +0.21% anchored, +0.90% shipped.
+    // A single correction factor cannot serve both, which is why there is none.
+    const under = entry(contender(100, 0.05), contender(100.21, 0.05))
+    const best = bestBuildFor(1000, { ...under, shipped: { simcDps: 200, bestDps: 201.8, margin: 0.009, tieBand: 0.001 } } as ComputedSpec)
+    expect(best.marginBasis).toBe('shipped-gear')
+    expect(best.rankDps).toBeCloseTo(1009, 6)
+  })
+
+  it('falls back to the anchored margin when no shipped block was measured', () => {
+    // Documents written before the pipeline measured it have none. Absent is not a
+    // margin of zero, and blinding those rows would discard a real result on the
+    // eight builds in nine where the projection is fine.
+    const best = bestBuildFor(1000, anchored)
+    expect(best.marginBasis).toBe('anchor')
+    expect(best.gain).toBeCloseTo(0.0253, 6)
+  })
+
+  it('refuses a shipped block with no usable band and falls back rather than guessing', () => {
+    // A margin ranked against no bar is exactly what the tie rule exists to prevent,
+    // so a half-written block must not be preferred to a whole anchored one.
+    for (const broken of [{ margin: 0.02 }, { margin: 0.02, tieBand: -1 }, { margin: Number.NaN, tieBand: 0.001 }]) {
+      const best = bestBuildFor(1000, { ...anchored, shipped: { simcDps: 1, bestDps: 1, ...broken } } as ComputedSpec)
+      expect(best.marginBasis).toBe('anchor')
+    }
+  })
+
+  it('never mixes a shipped margin with an anchored band', () => {
+    // The band has to come from the same run as the margin it judges. Here the
+    // anchored band (0.0014) would clear a 0.2% margin and the shipped one (0.5%)
+    // would not, so a mixed pair is visible in the verdict.
+    const best = bestBuildFor(1000, withShipped(0.002, 0.005))
+    expect(best.projected).toBe(false)
+    expect(best.rankDps).toBe(1000)
+  })
+})

@@ -1590,17 +1590,66 @@ def _head_to_head(simc, context, settings, outcome, args, buildsearchrun, builds
     for candidate, _ in outcome.ranked:
         field.append(candidate)
     if not field:
-        return ({}, None), None
+        return ({}, None, None), None
 
     measured = buildsearchrun.measure(
         simc, context, settings, field, args.iterations, args.targets, args.timeout
     )
     row = buildsearchrun.calibration_row(context, outcome, measured, simc_key) if original else None
-    # ``(what was measured, which of them is simc's)``, then the calibration row. The
-    # simc candidate travels with the measurements rather than being rebuilt by the
-    # caller: in a blind run ``context.seeds[0]`` is the *scrambled* build, and a
-    # caller reaching for it there would publish it under simc's name.
-    return (measured, field[0] if original else None), row
+
+    # The same two contenders again on simc's OWN kit, which is what the ranking should
+    # use instead of projecting the anchored margin onto the published DPS (#72). Only
+    # simc's build and the winner are re-measured: the runner-up is never ranked with,
+    # so paying for it would buy nothing.
+    #
+    # Skipped in a blind run. `--calibrate` publishes nothing, and its `simc` candidate
+    # is the scrambled build rather than simc's, so a shipped-gear margin taken there
+    # would answer a question nobody asked at 33 seconds a build.
+    from . import computedbuilds
+
+    shipped: dict | None = None
+    winner = outcome.ranked[0][0] if outcome.ranked else None
+    # `getattr` rather than `args.shipped_gear`: callers that build their own Namespace
+    # (the end-to-end test does, and it is the one that caught this) would otherwise
+    # raise AttributeError deep inside a run. The default is True because that is the
+    # safe direction -- a missing flag costs 33 seconds, where defaulting to False would
+    # silently publish the projection this exists to replace.
+    if (
+        original
+        and winner is not None
+        and not args.calibrate
+        and getattr(args, "shipped_gear", True)
+    ):
+        on_shipped = buildsearchrun.measure(
+            simc,
+            context,
+            settings,
+            [field[0], winner],
+            args.iterations,
+            args.targets,
+            args.timeout,
+            gear=(),
+        )
+        shipped = computedbuilds.shipped_json(on_shipped.get(simc_key), on_shipped.get(winner.key))
+        if shipped is None:
+            logging.warning(
+                "%s: the shipped-gear head-to-head did not measure; the row falls back "
+                "to the projection",
+                context.profile.id,
+            )
+        else:
+            logging.info(
+                "%s: on simc's own gear %+.2f%%",
+                context.profile.id,
+                shipped["margin"] * 100,
+            )
+
+    # ``(what was measured, which of them is simc's, the shipped-gear block)``, then the
+    # calibration row. The simc candidate travels with the measurements rather than
+    # being rebuilt by the caller: in a blind run ``context.seeds[0]`` is the
+    # *scrambled* build, and a caller reaching for it there would publish it under
+    # simc's name.
+    return (measured, field[0] if original else None, shipped), row
 
 
 def _entry_for(context, outcome, head_to_head, args, computedbuilds, gearanchor):
@@ -1612,7 +1661,7 @@ def _entry_for(context, outcome, head_to_head, args, computedbuilds, gearanchor)
     published, and exactly the kind of thing that stops being harmless the moment
     another field is added.
     """
-    measured, simc_candidate = head_to_head
+    measured, simc_candidate, shipped = head_to_head
     hero = context.profile.hero_label
     simc_side = None
     if simc_candidate is not None and simc_candidate.key in measured:
@@ -1646,6 +1695,7 @@ def _entry_for(context, outcome, head_to_head, args, computedbuilds, gearanchor)
         anchor=gearanchor.display_json(context.anchor, profile=context.profile.id),
         caveats=caveats,
         repaired_seed=bool(context.repair and context.repair.ok),
+        shipped=shipped,
     )
 
 
@@ -2252,6 +2302,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--write-calibration",
         action="store_true",
         help="publish the document from a calibration run as well (for inspection)",
+    )
+    p_search.add_argument(
+        "--no-shipped-gear",
+        dest="shipped_gear",
+        action="store_false",
+        help=(
+            "skip the second head-to-head on simc's own kit. On by default: without it "
+            "the site has to project the anchored margin onto the published DPS, which "
+            "was measured on 2026-08-26 to be wrong by 2.52 points on one of twelve "
+            "marked builds. Costs one extra invocation per build (~33s measured)."
+        ),
     )
     p_search.add_argument(
         "--harvest",
