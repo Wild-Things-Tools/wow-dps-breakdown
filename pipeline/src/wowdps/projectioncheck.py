@@ -103,16 +103,47 @@ class Comparison:
         return out
 
 
-def marked_builds(document: dict) -> list[dict]:
-    """The rows the site actually draws a projection for.
+def published_pairs(document: dict) -> list[tuple[str, int]]:
+    """Every ``(scenario, targets)`` the document carries, in a stable order."""
+    seen = {
+        (entry.get("scenario"), entry.get("targets"))
+        for entry in document.get("specs") or []
+        if entry.get("scenario") is not None and entry.get("targets") is not None
+    }
+    return sorted(seen)
+
+
+def marked_builds(document: dict, *, scenario: str = "patchwerk", targets: int = 1) -> list[dict]:
+    """The rows the site draws a projection for, at ONE scenario and target count.
 
     Exactly the rule `bestBuild.ts` applies, restated here rather than imported,
     because it lives in the other repository: a row counts when the computed build
     beats simc's *outside the tie band*. A row that ties is drawn as simc's own and
     carries no projection, so measuring it would answer a question nobody asked.
+
+    **The pair is part of that rule and used not to be.** This walked every row, so
+    over a document carrying more than one target count it returned the same build
+    twice with two different margins, and the caller measured it once -- at whatever
+    ``--targets`` it was given -- and graded that against whichever row it happened
+    to pick. Measured on the committed MID2 document (104 rows, targets 1 and 5)
+    before the fix:
+
+        40 rows, 29 distinct ids, 11 ids appearing twice
+
+    and, sorted the way ``cmd_projection_check`` sorts them, **nine of the top ten
+    are targets=5**. So the shipped workflow defaults -- ``limit: 3``, ``targets:
+    1`` -- selected the three largest FIVE-target claims (Balance Druid +15.28%,
+    Feral Wildstalker +14.11%, Feral Druid of the Claw +8.06%), measured them at
+    ONE target, and exited 0.
+
+    That matters beyond tidiness. This command is the only tool that can check a
+    published margin against a fresh measurement, and the margin most worth checking
+    was the one it was least able to check.
     """
     rows = []
     for entry in document.get("specs") or []:
+        if entry.get("scenario") != scenario or entry.get("targets") != targets:
+            continue
         best, simc = entry.get("best"), entry.get("simc")
         if not best or not simc or not simc.get("dps"):
             continue

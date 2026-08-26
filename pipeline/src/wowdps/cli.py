@@ -1178,12 +1178,21 @@ def cmd_projection_check(args: argparse.Namespace) -> int:
         return 1
     document = json.loads(document_path.read_text(encoding="utf-8"))
 
-    marked = projectioncheck.marked_builds(document)
+    # The scenario and target count are part of the selection, not just of the run.
+    # Without them this picked rows from EVERY pair in the document and measured each
+    # at `args.targets`, so a document carrying two target counts graded a five-target
+    # claim against a one-target measurement. See `marked_builds` for the numbers.
+    marked = projectioncheck.marked_builds(document, scenario=args.scenario, targets=args.targets)
     if not marked:
+        pairs = projectioncheck.published_pairs(document)
         logging.error(
-            "%s carries no build whose computed talents beat simc's outside the tie "
-            "band, so there is no projection to check",
+            "%s carries no build at %s/%d targets whose computed talents beat simc's "
+            "outside the tie band, so there is no projection to check. The document "
+            "carries: %s",
             document_path,
+            args.scenario,
+            args.targets,
+            ", ".join(f"{name}/{count}T" for name, count in pairs) or "no rows at all",
         )
         return 1
     if args.build:
@@ -2617,6 +2626,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=0,
         help="check only the N largest published margins. 0 = every marked build",
+    )
+    p_proj.add_argument(
+        "--scenario",
+        default="patchwerk",
+        help="which scenario's rows to check. With --targets it selects the rows AND "
+        "the measurement, and the two have to agree",
     )
     p_proj.add_argument("--targets", type=int, default=1)
     p_proj.add_argument("--iterations", type=int, default=3000)
