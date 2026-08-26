@@ -402,12 +402,49 @@ def build_document(
     return document
 
 
+def merge_specs(published: list[dict], fresh: list[dict]) -> list[dict]:
+    """This run's rows, plus every published row at a ``(scenario, targets)`` it did
+    not cover.
+
+    **The scope is the pair, not the row.** A run that covered ``(patchwerk, 5)``
+    replaces *all* rows at that pair and leaves ``(patchwerk, 1)`` alone. Both halves
+    are load-bearing and they pull against each other:
+
+    - Merging per *row* would keep a build the tier no longer ships for ever -- which
+      is #73's `demon_hunter_devourer_annihilator`, a published row with a name, an
+      icon and a margin for a profile that does not exist. Re-running a target count
+      has to be able to *remove* a row.
+    - Not merging at all is what the writer did until 2026-08-26, and it is worse: a
+      ``targets=5`` publish silently deleted all 42 one-target rows, because the
+      document is rebuilt from this run's entries alone. Caught with a real
+      ``commit: true`` run 14 minutes into a 3-hour pass; #45 had predicted exactly
+      this and called it "a merge step".
+
+    Same union rule as ``merge_gear_shards``: a slot this run did not sweep keeps what
+    it had. A run that produced *nothing* covers no pair and therefore removes nothing,
+    which is the right answer for a pass that died before its first build.
+    """
+    covered = {(row.get("scenario"), row.get("targets")) for row in fresh}
+    kept = [row for row in published if (row.get("scenario"), row.get("targets")) not in covered]
+    # This run's rows first, then the untouched pairs, each in the order it had.
+    # Sorted so two runs in either order produce the same bytes.
+    return sorted(
+        [*fresh, *kept],
+        key=lambda row: (str(row.get("scenario")), row.get("targets") or 0, str(row.get("id"))),
+    )
+
+
 def write_computed_builds(out_dir: Path, document: dict) -> Path:
     """Write ``<out_dir>/computed-builds.json``, keeping the stamp when nothing moved.
 
     The sims are deterministic, so a re-run that found the same answer should leave
     nothing to commit -- which is what makes a diff in the history mean something
     actually changed. Same rule as ``_settle_provenance`` in ``dataset.py``.
+
+    Rows at a ``(scenario, targets)`` this run did not cover are carried forward -- see
+    ``merge_specs``. ``coverage.specs`` is recomputed from the merged list, because it
+    is the count a reader is told the document holds and reading it off the array is
+    the thing this project's own rule forbids.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "computed-builds.json"
@@ -417,6 +454,15 @@ def write_computed_builds(out_dir: Path, document: dict) -> Path:
         except json.JSONDecodeError:
             published = None
         if isinstance(published, dict):
+            previous = published.get("specs")
+            if isinstance(previous, list) and isinstance(document.get("specs"), list):
+                merged = merge_specs(previous, document["specs"])
+                if merged != document["specs"]:
+                    document = dict(document)
+                    document["specs"] = merged
+                    coverage = dict(document.get("coverage") or {})
+                    coverage["specs"] = len(merged)
+                    document["coverage"] = coverage
             settled = dict(document)
             for key in _PROVENANCE:
                 if key in published:

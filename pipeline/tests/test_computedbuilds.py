@@ -414,3 +414,70 @@ def test_a_side_that_did_not_measure_yields_no_block_at_all():
     assert computedbuilds.shipped_json(None, measurement()) is None
     assert computedbuilds.shipped_json(measurement(), None) is None
     assert computedbuilds.shipped_json(measurement(0.0), measurement()) is None
+
+
+# --------------------------------------------------------------------------------
+# Publishing a second target count must not delete the first (#45)
+# --------------------------------------------------------------------------------
+
+
+def _write(tmp_path, rows):
+    return computedbuilds.write_computed_builds(
+        tmp_path,
+        computedbuilds.build_document(
+            "MID2",
+            rows,
+            iterations=3000,
+            deterministic=True,
+            builds_available=42,
+            calibration=None,
+        ),
+    )
+
+
+def _pairs(path):
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    return sorted((s["scenario"], s["targets"], s["id"]) for s in doc["specs"])
+
+
+def test_publishing_a_second_target_count_keeps_the_first(tmp_path):
+    """Caught with a real `commit: true` run in flight: the document is rebuilt from
+    this run's entries alone, so a `targets=5` publish deleted all 42 one-target rows
+    and would have deployed that. #45 predicted it and called it "a merge step"."""
+    _write(tmp_path, [entry(build_id="a", targets=1), entry(build_id="b", targets=1)])
+    path = _write(tmp_path, [entry(build_id="a", targets=5)])
+    assert _pairs(path) == [
+        ("patchwerk", 1, "a"),
+        ("patchwerk", 1, "b"),
+        ("patchwerk", 5, "a"),
+    ]
+    assert json.loads(path.read_text(encoding="utf-8"))["coverage"]["specs"] == 3
+
+
+def test_rerunning_one_target_count_can_remove_a_row(tmp_path):
+    """The scope is the (scenario, targets) PAIR, not the row. Merging per row would
+    keep a build the tier no longer ships for ever -- #73's Devourer Annihilator, a
+    published row for a profile that does not exist. A re-run must be able to drop it."""
+    _write(tmp_path, [entry(build_id="stays", targets=1), entry(build_id="gone", targets=1)])
+    path = _write(tmp_path, [entry(build_id="stays", targets=1)])
+    assert _pairs(path) == [("patchwerk", 1, "stays")]
+
+
+def test_a_run_that_produced_nothing_removes_nothing(tmp_path):
+    """A pass that died before its first build covers no pair, so it must not be read
+    as "this run found no builds at five targets" and wipe anything."""
+    _write(tmp_path, [entry(build_id="a", targets=1)])
+    path = _write(tmp_path, [])
+    assert _pairs(path) == [("patchwerk", 1, "a")]
+
+
+def test_the_merged_order_does_not_depend_on_which_run_went_first(tmp_path):
+    """Two runs in either order must produce the same bytes, or a re-publish churns the
+    diff and the settle rule stops meaning anything."""
+    first = tmp_path / "one"
+    _write(first, [entry(build_id="a", targets=1)])
+    _write(first, [entry(build_id="a", targets=5)])
+    second = tmp_path / "two"
+    _write(second, [entry(build_id="a", targets=5)])
+    path = _write(second, [entry(build_id="a", targets=1)])
+    assert _pairs(first / "computed-builds.json") == _pairs(path)
