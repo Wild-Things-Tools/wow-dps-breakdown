@@ -1,0 +1,127 @@
+name: Progress hours
+
+# How long guilds fought each boss before it died -- the sum of every attempt up
+# to and including the first kill, per guild, medians per boss.
+#
+# The owner asked for this as a chart (wtt-backend#170) and chose this metric over
+# the two cheaper proxies: it is NOT `duration` on a progress ranking row (that is
+# the killing pull's length, and 0 whenever the kill came from no log) and not
+# calendar days.
+#
+# It lives here rather than in wtt-backend because the credentials do: that repo's
+# .env carries placeholders and it has no GitHub Actions at all (wtt-backend#172),
+# while this one already reads Warcraft Logs in four workflows.
+#
+# `workflow_dispatch` only. It spends real points, and how many is the open
+# question the run answers.
+on:
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: 'Tier from fight_profiles.json (MID1 has real kills; MID2 is PTR ids)'
+        default: 'MID1'
+      difficulty:
+        description: '3 Normal, 4 Heroic, 5 Mythic'
+        default: '5'
+      guilds:
+        description: 'Guilds sampled per boss. A median needs few; the cost is per guild'
+        default: '12'
+      max_pages:
+        description: 'Report pages per guild before giving up on finding its kill'
+        default: '4'
+      point_ceiling:
+        description: 'Stop before spending this share of the hourly point budget'
+        default: '0.5'
+
+concurrency:
+  group: progress-hours
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check credentials
+        id: creds
+        env:
+          WCL_CLIENT_ID: ${{ secrets.WCL_CLIENT_ID }}
+        run: |
+          if [ -z "$WCL_CLIENT_ID" ]; then
+            echo "::error::WCL_CLIENT_ID is not set."
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install
+        working-directory: pipeline
+        run: pip install -e '.[dev]'
+
+      # Inputs are bound in `env:`, never interpolated into `run:`. A dispatched
+      # value carrying a quote and a semicolon would otherwise become script, in a
+      # job holding the Warcraft Logs secret.
+      - name: Measure
+        working-directory: pipeline
+        env:
+          WCL_CLIENT_ID: ${{ secrets.WCL_CLIENT_ID }}
+          WCL_CLIENT_SECRET: ${{ secrets.WCL_CLIENT_SECRET }}
+          TIER: ${{ inputs.tier }}
+          DIFFICULTY: ${{ inputs.difficulty }}
+          GUILDS: ${{ inputs.guilds }}
+          MAX_PAGES: ${{ inputs.max_pages }}
+          CEILING: ${{ inputs.point_ceiling }}
+        run: |
+          set -euo pipefail
+          python -m wowdps.cli progress-hours \
+            --tier "$TIER" \
+            --difficulty "$DIFFICULTY" \
+            --guilds "$GUILDS" \
+            --max-pages "$MAX_PAGES" \
+            --point-ceiling "$CEILING" \
+            --out "../progress-hours-$TIER.json" 2>&1 | tee ../progress-hours.log
+
+      # Always: the run whose log somebody needs is precisely the one that stopped
+      # early. `gear.yml` shipped the default `success()` here and threw away the
+      # two failures the upload existed for.
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: progress-hours
+          path: |
+            progress-hours-*.json
+            progress-hours.log
+          if-no-files-found: ignore
+
+      - name: Summary
+        if: always()
+        env:
+          TIER: ${{ inputs.tier }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, os, pathlib
+          path = pathlib.Path(f"progress-hours-{os.environ['TIER']}.json")
+          if not path.is_file():
+              print("The run wrote no document. Read the log.")
+              raise SystemExit(0)
+          d = json.loads(path.read_text(encoding="utf-8"))
+          print(f"## {d['tier']} progress hours ({d['difficultyName']})\n")
+          print("| # | boss | median h | IQR | sample | of guilds |")
+          print("|---|---|---|---|---|---|")
+          for b in d["bosses"]:
+              med = "—" if b["medianHours"] is None else f"{b['medianHours']:.2f}"
+              iqr = "—" if b["q1Hours"] is None else f"{b['q1Hours']:.2f}–{b['q3Hours']:.2f}"
+              print(f"| {b['order']} | {b['name']} | {med} | {iqr} | {b['sample']} | {b['guildsSeen']} |")
+          total = d["seasonTotalHours"]
+          print(f"\n**Season total:** {'refused — a boss is unmeasured' if total is None else f'{total:.2f} h'}")
+          print(f"\n**Cost:** {d['cost']['pointsSpent']} points of {d['cost']['limitPerHour']}/hour")
+          PY
