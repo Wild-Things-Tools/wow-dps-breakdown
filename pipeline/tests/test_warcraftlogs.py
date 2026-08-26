@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from wowdps import warcraftlogs
 from wowdps.warcraftlogs import (
     MIN_P95,
     MIN_SAMPLE,
@@ -294,3 +295,77 @@ def test_every_other_query_is_still_cached(tmp_path):
 
     assert transport.posts == 1
     assert len(list((tmp_path / "cache").glob("*.json"))) == 1
+
+
+def test_the_ledger_counts_real_requests_and_keeps_rate_limit_headers():
+    """Points are not the only budget, and this side was blind to the other one.
+
+    `rateLimitData` arrives in the response BODY and meters points; anything the
+    service says about requests per hour arrives in the HEADERS, which nothing read.
+    A pass can therefore sit comfortably inside 18,000 points and hit a ceiling it
+    never measured — and this module's own 429 message would call that "the hourly
+    point budget is spent", which would be the wrong diagnosis.
+    """
+    ledger = warcraftlogs.PointLedger()
+    ledger.note_response(
+        {
+            "X-RateLimit-Limit": "800",
+            "x-ratelimit-remaining": "412",
+            "Content-Type": "application/json",
+        }
+    )
+
+    assert ledger.requests_sent == 1
+    # Matched on the folded name, because the service's capitalisation and hyphenation
+    # are not something this side gets to assume.
+    assert ledger.request_headers == {
+        "x-ratelimit-limit": "800",
+        "x-ratelimit-remaining": "412",
+    }
+    assert "content-type" not in ledger.request_headers
+
+
+def test_a_cache_hit_is_not_a_request(tmp_path):
+    """The ratio this exists to measure would otherwise be wrong in the flattering
+    direction: a warm cache would read as a pass that sent hundreds of requests.
+
+    Driven through `client.query()` rather than `ledger.record()`, because the count
+    happens in `query()` and a test that calls the recorder directly guards nothing
+    there. Written the direct way first, it passed unchanged while the counter was
+    deliberately incremented on the cache-hit branch -- a canary that did not sing.
+    """
+    client = _client(tmp_path)
+    transport = _CountingTransport()
+    client._client.post = transport
+    document = "query Q { reportData { report { code } } }"
+
+    client.query(document, {"code": "aBcD1234"})
+    assert transport.posts == 1
+    assert client.ledger.requests_sent == 1
+
+    # Same (query, variables): served from disk, so the service never sees it.
+    client.query(document, {"code": "aBcD1234"})
+    assert transport.posts == 1, "the second call reached the network"
+    assert client.ledger.requests_sent == 1, "a cache hit was counted as a request"
+
+
+def test_headers_without_an_items_method_are_survived_not_raised_on():
+    """A budget reading must never be the thing that kills a pass."""
+    ledger = warcraftlogs.PointLedger()
+    ledger.note_response(object())
+    assert ledger.requests_sent == 1
+    assert ledger.request_headers == {}
+
+
+def test_a_response_with_no_headers_at_all_is_survived():
+    """The guard has to sit at reaching the headers, not only at parsing them.
+
+    A response object without `.headers` is exactly what a test double is, and
+    `response.headers` raised AttributeError on two existing tests before the guard
+    moved up a level. Same rule either way: a budget reading must never be the thing
+    that kills a pass.
+    """
+    ledger = warcraftlogs.PointLedger()
+    ledger.note_response(None)
+    assert ledger.requests_sent == 1
+    assert ledger.request_headers == {}

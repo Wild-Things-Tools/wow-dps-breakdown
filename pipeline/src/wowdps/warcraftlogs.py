@@ -440,6 +440,42 @@ class PointLedger:
     last_reading: float | None = None
     resets_in: int | None = None
     entries: list[tuple[str, float, bool]] = field(default_factory=list)
+    #: Requests sent that actually reached the network (a cache hit is not one).
+    requests_sent: int = 0
+    #: Whatever the response headers say about a REQUEST ceiling, as opposed to the
+    #: point ceiling in the body.
+    #:
+    #: **Points are not the only budget, and this side has been blind to the other
+    #: one.** `rateLimitData` arrives in the response *body* and meters points;
+    #: anything Warcraft Logs says about requests per hour arrives in the *headers*,
+    #: which nothing here read. A pass can therefore be comfortably inside 18,000
+    #: points and hit a ceiling it never measured -- and a 429 would read as "the
+    #: hourly point budget is spent", which is what this module's own error message
+    #: says and would be the wrong diagnosis.
+    #:
+    #: Recorded rather than enforced: whether such a header exists, and what it is
+    #: called, is not established from this side. `None` means no header matched,
+    #: which is not the same as no ceiling.
+    request_headers: dict[str, str] = field(default_factory=dict)
+
+    def note_response(self, headers) -> None:
+        """Count the request and keep any rate-limit headers it carried.
+
+        Called only on a real network response, so ``requests_sent`` is what the
+        service actually saw -- a cache hit is not a request and must not be counted
+        as one, or the ratio this exists to measure is wrong in the flattering
+        direction.
+        """
+        self.requests_sent += 1
+        try:
+            items = headers.items()
+        except AttributeError:
+            return
+        if items is None:
+            return
+        for key, value in items:
+            if "ratelimit" in str(key).lower().replace("-", ""):
+                self.request_headers[str(key).lower()] = str(value)
 
     def record(self, label: str, payload: dict, cached: bool = False) -> None:
         data = payload.get("rateLimitData") or {}
@@ -567,6 +603,12 @@ class WarcraftLogsClient:
             )
         if response.status_code != 200:
             raise WarcraftLogsError(f"query failed ({response.status_code}): {response.text[:300]}")
+        # `getattr`, because a budget reading must never be the thing that kills a
+        # pass -- and that rule applies to reaching the headers as much as to parsing
+        # them. A response object without `.headers` at all is exactly what a test
+        # double is, and this raised AttributeError on two of them before the guard
+        # was moved up one level.
+        self.ledger.note_response(getattr(response, "headers", None))
         payload = response.json()
         if payload.get("errors"):
             raise WarcraftLogsError(f"GraphQL errors: {payload['errors']}")
