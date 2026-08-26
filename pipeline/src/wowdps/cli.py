@@ -1421,9 +1421,29 @@ def cmd_build_search(args: argparse.Namespace) -> int:
                 _publish(args, tier, entries, rows, notes, len(found), out_dir)
             continue
 
-        head_to_head, row = _head_to_head(
-            simc, context, settings, outcome, args, buildsearchrun, buildsearch
-        )
+        # Inside its own guard, and this is the third time this repository has had to
+        # learn it. `run_build` above has been caught since #38; `_head_to_head` was
+        # added later (#74) and sat OUTSIDE, so one build's simc abort killed the whole
+        # pass -- exactly as `PointBudgetExhausted` once escaped `_public_first_kills`
+        # and `harvest_encounter`, both recorded in CLAUDE.md. Measured on run
+        # 32989652220: `simc exited -6 for monk_windwalker_default__patchwerk__t10`
+        # ended a 2h26m ten-target pass after ten builds had already been searched.
+        #
+        # The build is recorded as unsearched WITH the reason rather than published
+        # with its winner, because the head-to-head is what measures simc's side: a
+        # winner with no baseline is a margin against nothing, and this document's
+        # whole claim is the comparison.
+        try:
+            head_to_head, row = _head_to_head(
+                simc, context, settings, outcome, args, buildsearchrun, buildsearch
+            )
+        except (simc_runner.SimcError, buildsearch.SearchError) as exc:
+            logging.error("%s: head-to-head failed: %s", context.profile.id, exc)
+            entries.append(_unsearched_entry(context, args.targets, gearanchor, reason=str(exc)))
+            if publishing:
+                _publish(args, tier, entries, rows, notes, len(found), out_dir)
+            continue
+
         if row is not None:
             rows.append(row)
             logging.info(
