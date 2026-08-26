@@ -977,3 +977,70 @@ def test_the_point_meter_does_not_defeat_the_settle(tmp_path):
     assert written["encounters"][0]["measured"]["fightsSampled"] == 4
     assert written["generatedAt"] == "2026-08-24T14:00:00+00:00"
     assert written["measurement"]["cost"]["pointsSpentThisHour"] == 30.0
+
+
+def _at(difficulty: int, code: str, fights: int = 3) -> dict:
+    """One encounter's probe entry at one difficulty."""
+    observation = EncounterObservation(3180, "Lightblinded Vanguard", difficulty)
+    observation.fights = [waved_fight(f"{code}{i}", 300.0, 60.0) for i in range(fights)]
+    return observation.to_json()
+
+
+def _document_with(*entries: dict) -> dict:
+    payload = vanguard_payload(encounters=list(entries))
+    return fightdataset.build_document(VOIDSPIRE_TIER, load_profiles(VOIDSPIRE_TIER), payload)
+
+
+def test_both_difficulties_of_one_boss_survive_into_the_document():
+    """The owner's decision, 2026-08-26: both in one payload.
+
+    Grouped on the encounter alone -- which is what this did until then -- the second
+    difficulty replaced the first here, one layer below the probe fix, and the loss
+    would have been invisible because the surviving block looks perfectly healthy.
+    """
+    encounter = find(_document_with(_at(5, "M", 2), _at(4, "H", 7)), 3180)
+
+    assert [m["difficulty"] for m in encounter["measurements"]] == [5, 4]
+    assert encounter["measurements"][0]["fightsSampled"] == 2
+    assert encounter["measurements"][1]["fightsSampled"] == 7
+
+
+def test_the_headline_block_is_the_hardest_difficulty_and_says_which():
+    """Mythic is the reference every other number on the site uses. The choice is a
+    policy rather than arithmetic, so it is stated rather than left to be inferred
+    from a number's size."""
+    encounter = find(_document_with(_at(5, "M", 2), _at(4, "H", 7)), 3180)
+
+    assert encounter["measuredDifficulty"] == 5
+    assert encounter["measured"]["fightsSampled"] == 2  # the Mythic one, not the bigger one
+
+
+def test_a_boss_with_only_heroic_data_surfaces_it_rather_than_nothing():
+    """Four of MID2's eight bosses have zero Mythic kills and real Heroic ones. Taking
+    "the hardest present" rather than "Mythic or nothing" is what makes them visible,
+    and it is the reason the Heroic run is worth doing at all."""
+    encounter = find(_document_with(_at(4, "H", 5)), 3180)
+
+    assert encounter["measuredDifficulty"] == 4
+    assert encounter["measured"]["fightsSampled"] == 5
+
+
+def test_an_unknown_difficulty_never_outranks_a_measured_one():
+    """ "Stated no difficulty" is the weakest row, not the hardest. Letting it win would
+    invert the "unknown is not zero" rule this file applies everywhere else."""
+    stated_none = _at(5, "U", 9)
+    stated_none["difficulty"] = None
+    encounter = find(_document_with(stated_none, _at(4, "H", 1)), 3180)
+
+    assert encounter["measuredDifficulty"] == 4
+    assert encounter["measured"]["fightsSampled"] == 1
+
+
+def test_the_headline_block_is_always_one_of_the_per_difficulty_blocks():
+    """The two must not be able to disagree. If they can, a reader sees one claim in
+    the tile and another in the table beside it and nothing reveals which is right."""
+    encounter = find(_document_with(_at(5, "M", 2), _at(4, "H", 7)), 3180)
+
+    headline = encounter["measured"]["fightsSampled"]
+    per_difficulty = {m["difficulty"]: m["fightsSampled"] for m in encounter["measurements"]}
+    assert per_difficulty[encounter["measuredDifficulty"]] == headline

@@ -11,6 +11,7 @@ to over-read it.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -532,9 +533,42 @@ def test_a_completed_encounter_is_read_back_rather_than_refetched(tmp_path):
         encoding="utf-8",
     )
     previous = load_previous(path)
-    assert set(previous) == {3176, 3177}
-    assert is_complete(previous[3176], 40) is True
-    assert is_complete(previous[3177], 40) is False
+    # Keyed on (encounter, difficulty). These rows state none, so the key's second
+    # member is None -- kept as a real key rather than dropped, on the same
+    # "unknown is not wrong" rule the rest of the difficulty handling follows.
+    assert set(previous) == {(3176, None), (3177, None)}
+    assert is_complete(previous[(3176, None)], 40) is True
+    assert is_complete(previous[(3177, None)], 40) is False
+
+
+def test_one_payload_holds_both_difficulties_rather_than_one_replacing_the_other():
+    """The owner's decision, 2026-08-26: both difficulties in one document.
+
+    Keyed on the encounter alone -- which is what this did until then -- reading a
+    boss at a second difficulty replaced the first row, and the document then stamped
+    one `difficulty` over the lot. Four MID2 bosses have zero Mythic kills and real
+    Heroic ones, so this is the case, not a hypothetical.
+    """
+    from wowdps.fightprobe import load_previous
+
+    path = tmp_path_for_both()
+    previous = load_previous(path)
+    assert set(previous) == {(3176, 5), (3176, 4), (3177, 5)}
+    # And the two rows of one boss stay distinguishable, which is the whole point.
+    assert previous[(3176, 5)]["fightsSampled"] == 9
+    assert previous[(3176, 4)]["fightsSampled"] == 30
+
+
+def test_a_run_asks_the_resume_about_its_own_difficulty():
+    """A Mythic row is not an answer to a Heroic run, and vice versa. Without the pair
+    in the lookup a Heroic pass against a Mythic payload reports every boss finished
+    and changes nothing -- the silent no-op this repository has shipped twice."""
+    from wowdps.fightprobe import is_complete, load_previous
+
+    previous = load_previous(tmp_path_for_both())
+    assert (3177, 4) not in previous  # 3177 was never read at Heroic
+    assert is_complete(previous[(3177, 5)], 5, None, None, 5) is True
+    assert is_complete(previous[(3177, 5)], 5, None, None, 4) is False
 
 
 def test_raising_the_sample_size_reopens_every_encounter():
@@ -914,3 +948,25 @@ def test_the_search_counts_the_difficulties_it_saw():
     # "0 kills" would be true and useless. This is the number that names the fix.
     assert pairs == []
     assert outcome.difficulties_seen == {4: 2}
+
+
+def tmp_path_for_both():
+    """A payload holding one boss at two difficulties and another at one."""
+    import tempfile
+
+    path = Path(tempfile.mkdtemp()) / "fight-probe-MID2.json"
+    path.write_text(
+        json.dumps(
+            {
+                "difficulty": 4,
+                "difficulties": [5, 4],
+                "encounters": [
+                    {"encounterId": 3176, "difficulty": 5, "fightsSampled": 9},
+                    {"encounterId": 3176, "difficulty": 4, "fightsSampled": 30},
+                    {"encounterId": 3177, "difficulty": 5, "fightsSampled": 6},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path

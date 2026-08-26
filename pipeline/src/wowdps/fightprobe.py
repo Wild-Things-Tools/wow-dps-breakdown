@@ -609,8 +609,24 @@ def _cell(value) -> str:
 EXIT_INCOMPLETE = 3
 
 
-def load_previous(path: Path) -> dict[int, dict]:
-    """Encounters a previous run already collected, keyed by encounter id.
+#: What a payload entry is keyed by. Not the encounter alone: one document holds
+#: every difficulty measured (the owner's decision, 2026-08-26), so Heroic Sszorak
+#: and Mythic Sszorak are two rows rather than one row overwriting the other.
+#: ``None`` is a real key -- a fight stating no difficulty is kept, not dropped.
+EntryKey = tuple[int, int | None]
+
+
+def entry_key(entry: dict) -> EntryKey | None:
+    """The (encounter, difficulty) a payload row belongs to, or None if unusable."""
+    encounter_id = entry.get("encounterId")
+    if not isinstance(encounter_id, int):
+        return None
+    difficulty = entry.get("difficulty")
+    return (encounter_id, difficulty if isinstance(difficulty, int) else None)
+
+
+def load_previous(path: Path) -> dict[EntryKey, dict]:
+    """Encounters a previous run already collected, keyed by (encounter, difficulty).
 
     The probe is bounded by Warcraft Logs points rather than by time, so a full pass
     over a zone regularly runs out partway -- the first 40-report MID2 pass stopped at
@@ -626,11 +642,16 @@ def load_previous(path: Path) -> dict[int, dict]:
     except (OSError, json.JSONDecodeError):
         log.warning("could not read %s; starting a fresh pass", path)
         return {}
-    return {
-        entry["encounterId"]: entry
-        for entry in (previous.get("encounters") or [])
-        if isinstance(entry.get("encounterId"), int)
-    }
+    # Keyed on the pair, so a payload holding two difficulties keeps both. Keyed on
+    # the encounter alone -- which is what this did until 2026-08-26 -- the second
+    # difficulty read of a boss silently replaced the first, and the document then
+    # stamped one `difficulty` over the lot.
+    entries: dict[EntryKey, dict] = {}
+    for entry in previous.get("encounters") or []:
+        key = entry_key(entry)
+        if key is not None:
+            entries[key] = entry
+    return entries
 
 
 def is_complete(
@@ -797,7 +818,9 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
 
         remaining: list[int] = []
         for encounter_id in encounter_ids:
-            done = previous.get(encounter_id)
+            # This run's difficulty, not "whatever was collected for this boss".
+            # The other difficulty's row is a different measurement and stays put.
+            done = previous.get((encounter_id, settings.difficulty))
             if done is not None and is_complete(
                 done, settings.reports, event_budget, settings.order, settings.difficulty
             ):
@@ -837,7 +860,7 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
     # A run contributes what it managed; everything else comes back from the previous
     # payload untouched. Ordered by the encounter list rather than by arrival so the
     # file does not reshuffle itself between runs and make a diff meaningless.
-    fresh = {}
+    fresh: dict[EntryKey, dict] = {}
     for observation in observations:
         entry = observation.to_json()
         entry["eventBudget"] = event_budget
@@ -854,22 +877,49 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         # falls back to the kill count.
         if observation.search_exhausted:
             entry["searchExhausted"] = True
-        fresh[observation.encounter_id] = entry
+        fresh[(observation.encounter_id, settings.difficulty)] = entry
     by_id = {**previous, **fresh}
-    merged = [by_id[eid] for eid in encounter_ids if eid in by_id]
+    # Every difficulty of every requested encounter, hardest first within a boss so a
+    # reader meets Mythic before Heroic. Sorted rather than arrival-ordered so the file
+    # does not reshuffle between runs and make a diff meaningless -- and `None` sorts
+    # last because "stated no difficulty" is the weakest row, not the hardest.
+    merged = [
+        by_id[key]
+        for key in sorted(
+            (k for k in by_id if k[0] in set(encounter_ids)),
+            key=lambda k: (encounter_ids.index(k[0]), -(k[1] if k[1] is not None else -1)),
+        )
+    ]
+    # Outstanding is asked per difficulty: this run wanted `settings.difficulty`, and
+    # a row for another one is not an answer to it. Without the pair here, a Heroic run
+    # against a Mythic payload would report every boss finished.
     incomplete = [
         eid
         for eid in encounter_ids
-        if eid not in by_id
+        if (eid, settings.difficulty) not in by_id
         or not is_complete(
-            by_id[eid], settings.reports, event_budget, settings.order, settings.difficulty
+            by_id[(eid, settings.difficulty)],
+            settings.reports,
+            event_budget,
+            settings.order,
+            settings.difficulty,
         )
     ]
 
     payload = {
         "generatedAt": datetime.now(UTC).isoformat(timespec="seconds"),
         "tier": args.tier,
+        # What THIS run asked for. It is not a property of the document any more:
+        # since 2026-08-26 one payload holds every difficulty ever measured, so the
+        # authority is each entry's own `difficulty` and this field only says which
+        # one the latest pass was after. `difficulties` below is the document's
+        # answer, and the two are published separately because collapsing them is
+        # exactly how a mixed file came to claim it was not mixed.
         "difficulty": settings.difficulty,
+        "difficulties": sorted(
+            {k[1] for k in by_id if k[1] is not None},
+            reverse=True,
+        ),
         "metric": settings.metric,
         "reportsPerEncounter": settings.reports,
         "rankingsPage": settings.rankings_page,
@@ -894,10 +944,21 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         # difference: an encounter that was never reached and one that was probed and
         # read nothing are different sentences.
         "encountersRequested": len(encounter_ids),
+        # Counted over THIS run's difficulty only. Over `merged` -- which now carries
+        # every difficulty -- a boss read at both would count twice and the total could
+        # exceed `encountersRequested`, which is the shape of a number that has quietly
+        # stopped answering its own question.
         "encountersCollected": sum(
             1
-            for e in merged
-            if is_complete(e, settings.reports, event_budget, settings.order, settings.difficulty)
+            for eid in encounter_ids
+            if (eid, settings.difficulty) in by_id
+            and is_complete(
+                by_id[(eid, settings.difficulty)],
+                settings.reports,
+                event_budget,
+                settings.order,
+                settings.difficulty,
+            )
         ),
         "incomplete": sorted(incomplete),
     }

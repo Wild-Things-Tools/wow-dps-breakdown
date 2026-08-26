@@ -1052,18 +1052,41 @@ def _no_fights_caveats(payload: dict) -> list[str]:
     return caveats
 
 
-def _encounter_document(
-    profile: FightProfile,
+#: Which difficulty a boss's headline `measured` block comes from when several were
+#: read. Highest wins: Mythic is the reference every other number on this site uses,
+#: and a boss with only Heroic data -- four of MID2's eight, which have zero Mythic
+#: kills -- then surfaces its Heroic band instead of nothing. The choice is a policy,
+#: not arithmetic, so `measuredDifficulty` states which one was taken and
+#: `measurements` carries all of them; a reader is never left inferring it from a
+#: number's size.
+def _hardest(at_difficulty: dict[int | None, dict]) -> dict | None:
+    """The entry for the hardest difficulty present, or None when there is none.
+
+    ``None`` -- a fight that stated no difficulty -- sorts last rather than first: it
+    is the weakest row, and letting an unknown outrank a measured Mythic would be the
+    "unknown is not zero" rule inverted.
+    """
+    usable = [(k, v) for k, v in at_difficulty.items() if v]
+    if not usable:
+        return None
+    return max(usable, key=lambda kv: kv[0] if kv[0] is not None else -1)[1]
+
+
+def _measured_block(
     payload: dict | None,
     rankings_page: int | None,
     order: str | None = None,
-) -> dict:
-    facts = _fact_entries(profile)
-    measured = MeasuredEncounter(payload) if payload and payload.get("fights") else None
+) -> dict | None:
+    """One difficulty's measurement, or None when the probe never looked at all.
 
-    measured_block = None
+    Three states, and they are three sentences rather than degrees of one: `None`
+    means never probed, a block with `fightsSampled: 0` means probed and read
+    nothing, and a full block means read. Collapsing the first two would publish a
+    claim no run ever made -- the view says something different for each.
+    """
+    measured = MeasuredEncounter(payload) if payload and payload.get("fights") else None
     if measured is not None and payload is not None:
-        measured_block = {
+        return {
             "fightsSampled": len(measured.fights),
             "reports": list(payload.get("reports") or []),
             "durationSeconds": payload.get("durationSeconds"),
@@ -1092,21 +1115,52 @@ def _encounter_document(
             "targetBand": _target_band(payload),
             "timeline": _timeline_block(payload),
         }
-    elif payload is not None:
+    if payload is not None:
         # The probe looked and found nothing. That is a different state from never
         # having looked, and reads differently on the page.
-        measured_block = {
+        return {
             "fightsSampled": 0,
             "reports": list(payload.get("reports") or []),
             "caveats": _no_fights_caveats(payload),
             "timeline": None,
         }
+    return None
+
+
+def _encounter_document(
+    profile: FightProfile,
+    at_difficulty: dict[int | None, dict],
+    rankings_page: int | None,
+    order: str | None = None,
+) -> dict:
+    facts = _fact_entries(profile)
+    payload = _hardest(at_difficulty)
+    measured = MeasuredEncounter(payload) if payload and payload.get("fights") else None
+    measured_block = _measured_block(payload, rankings_page, order)
 
     promotions = plan_promotions(profile, measured) if measured is not None else []
+    # Every difficulty read, hardest first, each with its own measured block. The
+    # headline `measured` above is one of these; `measuredDifficulty` says which, so
+    # the two can never disagree about what is being shown.
+    measurements = [
+        {
+            "difficulty": difficulty,
+            **(
+                _measured_block(entry, rankings_page, order)
+                or {"fightsSampled": 0, "reports": [], "caveats": [], "timeline": None}
+            ),
+        }
+        for difficulty, entry in sorted(
+            ((k, v) for k, v in at_difficulty.items() if v),
+            key=lambda kv: -(kv[0] if kv[0] is not None else -1),
+        )
+    ]
     return {
         "encounterId": profile.encounter_id,
         "name": profile.name,
         "difficulty": profile.difficulty,
+        "measuredDifficulty": (payload or {}).get("difficulty"),
+        "measurements": measurements,
         "hasFacts": any(entry["source"] != SOURCE_DEFAULT for entry in facts),
         "facts": facts,
         "profile": _profile_block(profile),
@@ -1143,7 +1197,11 @@ def build_document(
     null, which is the state a development checkout is in and a perfectly
     publishable one -- the gap is the point.
     """
-    by_encounter: dict[int, dict] = {}
+    # encounter -> difficulty -> entry. One payload holds every difficulty measured
+    # (the owner's decision, 2026-08-26), so a flat dict keyed on the encounter would
+    # drop one of them here -- the same silent loss the probe side was just fixed for,
+    # one layer down, which is where this repository's losses usually live.
+    by_encounter: dict[int, dict[int | None, dict]] = {}
     measurement: dict | None = None
     rankings_page: int | None = None
     order: str | None = None
@@ -1151,7 +1209,10 @@ def build_document(
     if probe:
         for entry in probe.get("encounters") or []:
             if isinstance(entry, dict) and isinstance(entry.get("encounterId"), int):
-                by_encounter[entry["encounterId"]] = entry
+                difficulty = entry.get("difficulty")
+                by_encounter.setdefault(entry["encounterId"], {})[
+                    difficulty if isinstance(difficulty, int) else None
+                ] = entry
         rankings_page = probe.get("rankingsPage")
         order = probe.get("order")
         measurement = {
@@ -1171,17 +1232,18 @@ def build_document(
     known = dict(profiles.profiles)
     # A probe of an encounter the profile file has never heard of still publishes:
     # a new raid tier arrives as measurements before anybody writes facts down.
-    for encounter_id, entry in by_encounter.items():
+    for encounter_id, at_difficulty in by_encounter.items():
         if encounter_id not in known:
+            entry = _hardest(at_difficulty)
             known[encounter_id] = FightProfile(
                 tier=tier,
                 encounter_id=encounter_id,
-                name=str(entry.get("encounterName") or encounter_id),
-                difficulty=int(entry.get("difficulty") or 5),
+                name=str((entry or {}).get("encounterName") or encounter_id),
+                difficulty=int((entry or {}).get("difficulty") or 5),
             )
 
     encounters = [
-        _encounter_document(profile, by_encounter.get(encounter_id), rankings_page, order)
+        _encounter_document(profile, by_encounter.get(encounter_id) or {}, rankings_page, order)
         for encounter_id, profile in sorted(known.items())
     ]
 
@@ -1350,7 +1412,18 @@ def _keep_measurements(published: dict, document: dict) -> dict:
     for entry in document.get("encounters") or []:
         was = by_id.get(entry.get("encounterId"))
         if entry.get("measured") is None and was is not None and was.get("measured") is not None:
-            entry = {**entry, "measured": was["measured"]}
+            # Both fields, as a pair. `measured` is one member of `measurements`, so
+            # carrying the headline forward and leaving the list empty would publish a
+            # boss whose two blocks disagree about whether it was measured at all --
+            # and the per-difficulty list is the one a reader checks for the OTHER
+            # difficulty, which is exactly what a --no-resume pass is most likely to
+            # have dropped.
+            entry = {
+                **entry,
+                "measured": was["measured"],
+                "measuredDifficulty": was.get("measuredDifficulty"),
+                "measurements": was.get("measurements") or [],
+            }
             kept += 1
         encounters.append(entry)
     if not kept:
