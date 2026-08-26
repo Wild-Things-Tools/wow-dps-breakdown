@@ -4,6 +4,15 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Dispatchable because of one case the two triggers above cannot cover: a commit a
+  # workflow pushed with its own GITHUB_TOKEN never triggers another workflow, by
+  # design, so `build-search.yml`'s data commits get no CI at all and no amount of
+  # waiting changes that. Without a dispatch there is no route to make CI look at one.
+  #
+  # (It was first added on 2026-08-26 for a reason that turned out to be wrong -- the
+  # PR and push triggers looked dead for an afternoon and were merely queued forty
+  # minutes deep. The case above is real and is why it stays.)
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}

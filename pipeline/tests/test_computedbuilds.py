@@ -201,7 +201,15 @@ def test_coverage_is_carried_rather_than_left_to_an_array_length():
     """The site's own field comment states the project rule. The two numbers differ the
     moment a shard stops early, which is exactly when somebody is reading them."""
     doc = document([entry(), entry(targets=5)])
-    assert doc["coverage"] == {"specs": 2, "specsAvailable": 42}
+    # One build, searched at two target counts. `specs` counts BUILDS -- it is the
+    # "how much of the tier" number -- and `rows` counts rows. Reading the array
+    # length into `specs` published "104 of 52" on the real 5-target run.
+    assert doc["coverage"] == {
+        "specs": 1,
+        "specsAvailable": 42,
+        "rows": 2,
+        "targetCounts": [1, 5],
+    }
 
 
 def test_an_unsearched_row_says_so_without_claiming_nothing_was_found():
@@ -451,7 +459,11 @@ def test_publishing_a_second_target_count_keeps_the_first(tmp_path):
         ("patchwerk", 1, "b"),
         ("patchwerk", 5, "a"),
     ]
-    assert json.loads(path.read_text(encoding="utf-8"))["coverage"]["specs"] == 3
+    coverage = json.loads(path.read_text(encoding="utf-8"))["coverage"]
+    # Three rows over two builds: `a` at both target counts and `b` at one.
+    assert coverage["rows"] == 3
+    assert coverage["specs"] == 2
+    assert coverage["targetCounts"] == [1, 5]
 
 
 def test_rerunning_one_target_count_can_remove_a_row(tmp_path):
@@ -481,3 +493,34 @@ def test_the_merged_order_does_not_depend_on_which_run_went_first(tmp_path):
     _write(second, [entry(build_id="a", targets=5)])
     path = _write(second, [entry(build_id="a", targets=1)])
     assert _pairs(first / "computed-builds.json") == _pairs(path)
+
+
+def test_coverage_counts_builds_not_rows_once_a_second_target_count_lands():
+    """`specs` is how much of the tier the document covers, and rows are not builds.
+
+    The 5-target publish on 2026-08-26 landed 52 rows at one target and 52 at five,
+    and the old `len(merged)` duly published **"104 of 52"** — plausible arithmetic
+    over the wrong column, in the one field whose job is to say how much of the tier
+    is covered.
+    """
+    rows = [
+        {"id": "mage_arcane", "scenario": "patchwerk", "targets": 1},
+        {"id": "mage_arcane", "scenario": "patchwerk", "targets": 5},
+        {"id": "priest_shadow", "scenario": "patchwerk", "targets": 1},
+        {"id": "priest_shadow", "scenario": "patchwerk", "targets": 5},
+    ]
+    coverage = computedbuilds.coverage_of(rows, 52)
+
+    assert coverage["specs"] == 2, "two builds, four rows"
+    assert coverage["rows"] == 4
+    assert coverage["specsAvailable"] == 52
+    # Which target counts were searched is a separate question from how many, and a
+    # reader comparing two tiers needs it before comparing anything else.
+    assert coverage["targetCounts"] == [1, 5]
+
+
+def test_coverage_of_an_empty_document_claims_nothing():
+    coverage = computedbuilds.coverage_of([], 52)
+    assert coverage["specs"] == 0
+    assert coverage["rows"] == 0
+    assert coverage["targetCounts"] == []
