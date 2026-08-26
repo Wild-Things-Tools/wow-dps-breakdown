@@ -19,9 +19,26 @@ class M:
         self.dps_error = dps_error
 
 
-def entry(build_id: str, simc_dps: float, best_dps: float, error: float = 0.05) -> dict:
+def entry(
+    build_id: str,
+    simc_dps: float,
+    best_dps: float,
+    error: float = 0.05,
+    *,
+    scenario: str = "patchwerk",
+    targets: int = 1,
+) -> dict:
+    """A published row. ``scenario``/``targets`` are not decoration.
+
+    ``marked_builds`` selects on the pair, because the caller measures at ONE target
+    count and grading a five-target claim against a one-target measurement is not a
+    check. This fixture used to omit them, which is why the tests below passed while
+    the function walked every row in the document.
+    """
     return {
         "id": build_id,
+        "scenario": scenario,
+        "targets": targets,
         "simc": {"dps": simc_dps, "dpsError": error, "talentHash": "AAA"},
         "best": {"dps": best_dps, "dpsError": error, "talentHash": "BBB"},
     }
@@ -43,9 +60,25 @@ def test_only_builds_the_site_draws_a_projection_for_are_measured():
 def test_a_row_missing_a_side_is_skipped_rather_than_half_measured():
     document = {
         "specs": [
-            {"id": "no_best", "simc": {"dps": 100_000, "dpsError": 0.05}},
-            {"id": "no_simc", "best": {"dps": 100_000, "dpsError": 0.05}},
-            {"id": "zero_simc", "simc": {"dps": 0}, "best": {"dps": 1}},
+            {
+                "id": "no_best",
+                "scenario": "patchwerk",
+                "targets": 1,
+                "simc": {"dps": 100_000, "dpsError": 0.05},
+            },
+            {
+                "id": "no_simc",
+                "scenario": "patchwerk",
+                "targets": 1,
+                "best": {"dps": 100_000, "dpsError": 0.05},
+            },
+            {
+                "id": "zero_simc",
+                "scenario": "patchwerk",
+                "targets": 1,
+                "simc": {"dps": 0},
+                "best": {"dps": 1},
+            },
         ]
     }
     assert pc.marked_builds(document) == []
@@ -135,3 +168,54 @@ def test_a_run_that_compared_nothing_says_so_rather_than_claiming_the_projection
     measured" produce the same empty list, and only one of them is evidence."""
     assert "says nothing" in pc.verdict([])
     assert "holds" not in pc.verdict([])
+
+
+def test_a_build_marked_at_two_target_counts_is_selected_once_per_pair():
+    """The defect this scoping fixes, as a fixture.
+
+    A document carrying more than one target count returned the SAME build twice,
+    with two different margins, and the caller measured it once -- at whatever
+    ``--targets`` it was given -- then graded that against whichever row it happened
+    to pick. On the committed MID2 document (104 rows, targets 1 and 5) that was 40
+    rows for 29 ids, 11 of them twice; sorted the way ``cmd_projection_check`` sorts
+    them, nine of the top ten were targets=5, so the workflow's own defaults
+    (``limit: 3``, ``targets: 1``) measured the three largest FIVE-target claims at
+    ONE target and exited 0.
+    """
+    document = {
+        "specs": [
+            entry("both_counts", 100_000, 102_000, targets=1),
+            entry("both_counts", 100_000, 130_000, targets=5),
+            entry("five_only", 100_000, 105_000, targets=5),
+        ]
+    }
+
+    at_one = pc.marked_builds(document, targets=1)
+    assert [e["id"] for e in at_one] == ["both_counts"]
+    assert at_one[0]["best"]["dps"] == 102_000
+
+    at_five = pc.marked_builds(document, targets=5)
+    assert [e["id"] for e in at_five] == ["both_counts", "five_only"]
+    # The five-target row, not the one-target row of the same build.
+    assert at_five[0]["best"]["dps"] == 130_000
+
+    # A pair the document does not carry selects nothing rather than falling back.
+    assert pc.marked_builds(document, targets=10) == []
+    assert pc.marked_builds(document, scenario="dungeonslice", targets=1) == []
+
+
+def test_the_pairs_a_document_carries_are_reportable():
+    """So a refusal can say what IS there instead of only what is not."""
+    document = {
+        "specs": [
+            entry("a", 100_000, 102_000, targets=5),
+            entry("b", 100_000, 102_000, targets=1),
+            entry("c", 100_000, 102_000, scenario="dungeonslice", targets=1),
+            {"id": "malformed"},
+        ]
+    }
+    assert pc.published_pairs(document) == [
+        ("dungeonslice", 1),
+        ("patchwerk", 1),
+        ("patchwerk", 5),
+    ]
