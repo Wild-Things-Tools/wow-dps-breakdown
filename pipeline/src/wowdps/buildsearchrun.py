@@ -245,14 +245,24 @@ def measure(
     iterations: int,
     targets: int,
     timeout: int,
+    gear: tuple[str, ...] | None = None,
 ) -> dict[str, Measurement]:
-    """One field, measured once. Used for the head-to-head that follows a search."""
+    """One field, measured once. Used for the head-to-head that follows a search.
+
+    ``gear`` defaults to the build's anchored kit, which is what a search must use:
+    within one spec's search the gear has to be byte-identical or a talent difference
+    worth 2-3% sits underneath a kit difference of the same size. Passing ``()``
+    measures on **simc's own shipped kit** instead, with only ``talents=`` varying --
+    a different question, and the one `projectioncheck` asks. Nothing else should
+    pass it: an anchored number and a shipped-gear number are not comparable, which
+    is the whole reason that module exists.
+    """
     request = simc_runner.SimRequest(profile=context.profile, scenario=PATCHWERK, targets=targets)
     runner = buildsearch.simc_runner(
         simc,
         request,
         settings,
-        context.anchor.options(),
+        context.anchor.options() if gear is None else gear,
         timeout=timeout,
         base_talents=context.base_talents,
     )
