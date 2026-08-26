@@ -4348,6 +4348,52 @@ were up at the end -- holding flat exactly the fall the curve should show. The c
 kept is published so a thin band reads as thin. `medianLengthSeconds` is meaningful precisely
 because the first-kills sample has alike timings -- one length fits them all.
 
+#### A pull that read nothing scored 1.0, and the tell was already in the paragraph above
+
+`observed is None` and `observed <= 0` shared a branch and both fell back to
+`window = duration`, so a kill whose event fetch returned **nothing** divided its
+duration by itself and scored `coverage: 1.0` -- the top of the scale -- for the one
+case the field exists to catch. This is the "absent is not zero" rule pointing the
+other way: `None` means *no bounded fetch was involved*, `0.0` means *a bounded fetch
+read nothing*, and only the first makes the whole fight the right window.
+
+The band's own admission test is `truncated`, which such a pull is not, so it went
+straight in, and `_resample` carried its single step forward across every bucket.
+
+Measured against the committed `fights.json` (`b4a94cb`, 2026-08-26), The Lost
+Explorers at Mythic:
+
+```
+nine pulls, coverage    0.9994 0.9995 0.9995 0.9996 0.9996 0.9996 0.9997 0.9999 1.0
+the 1.0                 report 7TYdmcv2ZK6W fight 19, steps [[0.0, 0]], a 421s kill
+consequence             min == 0 in 60 of 60 buckets
+                        low, median and max untouched
+```
+
+**Only the min envelope moves, and that is what makes it dangerous.** One zero curve
+of nine cannot reach the quartiles, so the chart does not break -- it reads as a real
+observation, *"at some point in every one of these kills the room was empty"*, which
+is a statement about the encounter and is false.
+
+**`coverage == 1.0` exactly is unreachable by a genuine read**, and the paragraph
+above already said so -- *"scores about 0.995 and never 1.0"* -- three lines from the
+field it describes. Nobody had turned that sentence around into a check. It is a
+one-liner over any published `fights.json` and it is the cheapest audit here:
+
+```python
+[p for p in pulls if p.get("coverage") == 1.0]      # a real read never lands on 1.0
+```
+
+Fixed in #97: `window` splits the two states, `_observed_a_target` excludes a pull
+whose curve never leaves zero, and `unobservedKills` is published beside `fights` so
+a band that dropped one says so. The band tests the **curve**, not `coverage` --
+payloads already on disk record 1.0 for exactly these pulls, so a coverage test would
+read the corrupted value as healthy.
+
+Note what this does *not* explain: why that fetch read nothing. The pull is a real
+kill of a real length, and the run reported no error. Unexplained, and named rather
+than smoothed over.
+
 **"First kills" is bounded by the ranking window, and that bound was invisible.**
 `select_report_fights` sorts by kill date, but only over the rows it was handed,
 and Warcraft Logs sorts rankings **by damage**. A guild that killed the boss on the
