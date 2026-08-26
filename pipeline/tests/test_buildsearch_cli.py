@@ -78,6 +78,9 @@ def _args(tmp_path, **kw):
         rounds=1,
         calibrate=False,
         write_calibration=False,
+        # Mirrors the real parser. The stubbed runner answers the shipped-gear
+        # head-to-head like any other, so leaving it on is what exercises the path.
+        shipped_gear=True,
         harvest=None,
         ptr=True,
         plan=False,
@@ -102,6 +105,31 @@ def test_the_command_runs_end_to_end_and_writes_a_readable_document(tmp_path, st
     assert row["best"]["dpsError"] >= 0
     assert row["anchor"]["itemLevel"]
     assert row["caveats"]
+    # The shipped-gear head-to-head really ran and reached the document (#72). This is
+    # the only place that is provable end to end: the block is built three call frames
+    # from `_publish`, and every unit test above it works on a hand-made entry. The
+    # arity change that produced it was exactly the defect this file exists for, and it
+    # went unnoticed by 925 unit tests.
+    assert set(row["shipped"]) == {"simcDps", "bestDps", "margin", "tieBand", "separates"}
+    assert row["shipped"]["simcDps"] > 0
+
+
+def test_a_blind_run_measures_no_shipped_gear_margin(tmp_path, stubbed):
+    """`--calibrate` publishes nothing and its "simc" candidate is the SCRAMBLED build,
+    so a shipped-gear margin taken there would answer a question nobody asked -- and
+    would be published under simc's name if `--write-calibration` were given."""
+    cli.cmd_build_search(_args(tmp_path, calibrate=True, write_calibration=True))
+    document = json.loads((tmp_path / "MID2" / "computed-builds.json").read_text())
+    assert all("shipped" not in row for row in document["specs"])
+
+
+def test_the_flag_turns_the_shipped_gear_measurement_off(tmp_path, stubbed):
+    """A run that skipped it must publish no block rather than an empty one: absent is
+    the state the site falls back to the projection for, and a null would be read as a
+    margin somebody measured as zero."""
+    cli.cmd_build_search(_args(tmp_path, shipped_gear=False))
+    document = json.loads((tmp_path / "MID2" / "computed-builds.json").read_text())
+    assert all("shipped" not in row for row in document["specs"])
 
 
 def test_a_normal_run_publishes_no_calibration_block(tmp_path, stubbed):

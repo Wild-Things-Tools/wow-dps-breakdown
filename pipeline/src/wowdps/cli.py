@@ -1609,7 +1609,17 @@ def _head_to_head(simc, context, settings, outcome, args, buildsearchrun, builds
 
     shipped: dict | None = None
     winner = outcome.ranked[0][0] if outcome.ranked else None
-    if original and winner is not None and not args.calibrate and args.shipped_gear:
+    # `getattr` rather than `args.shipped_gear`: callers that build their own Namespace
+    # (the end-to-end test does, and it is the one that caught this) would otherwise
+    # raise AttributeError deep inside a run. The default is True because that is the
+    # safe direction -- a missing flag costs 33 seconds, where defaulting to False would
+    # silently publish the projection this exists to replace.
+    if (
+        original
+        and winner is not None
+        and not args.calibrate
+        and getattr(args, "shipped_gear", True)
+    ):
         on_shipped = buildsearchrun.measure(
             simc,
             context,
