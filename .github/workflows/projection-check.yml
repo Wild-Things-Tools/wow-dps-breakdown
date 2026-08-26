@@ -1,0 +1,193 @@
+name: Projection check
+
+# Does a talent gain measured on the gear anchor hold on simc's own kit?
+#
+# The Overview ranks a winning build at `publishedDps * (1 + margin)`. The margin is
+# measured; the product is not -- nobody has run the computed talents on the gear
+# simc's profile actually wears. This workflow is what measures it (issue #52).
+#
+# **It exists because a command nothing invokes is a command that never runs.** This
+# repository has shipped that failure once already: `hero_trees.json` was written on
+# 2026-08-16 and `sims.yml` never called the command, so three profiles sat mislabelled
+# until somebody looked. `wowdps projection-check` landed in PR #68 with no caller;
+# this is the caller.
+#
+# `workflow_dispatch` only, for the same reason `build-search.yml` is: the answer moves
+# when a tuning pass or a season moves, not nightly. It publishes NOTHING -- the run's
+# findings ride in the artifact and the step summary. That is deliberate: what the
+# result should lead to is a decision about the projection itself (keep it, or drop it
+# and measure on shipped gear), and writing a number into the dataset would skip it.
+on:
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: 'Tier whose computed-builds.json is checked'
+        default: 'MID2'
+      limit:
+        description: 'Check only the N largest published margins. 0 = every marked build. 12 are marked on MID2 today; 3 is a first signal'
+        default: '3'
+      build:
+        description: 'Only builds whose id contains this. Empty = as selected by --limit'
+        default: ''
+      targets:
+        description: 'Target count. computed-builds.json covers patchwerk at one target today, so anything else has no published margin to check against'
+        default: '1'
+      iterations:
+        description: 'Iterations per profileset. 3000 measures at ~0.05%, which the tie band here needs: it is the quadrature sum of FOUR errors'
+        default: '3000'
+
+concurrency:
+  group: projection-check-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Same shape and the same cache key as `build-search.yml`, so a run that follows a
+  # search costs no rebuild. Deliberately not a reusable workflow: the two share one
+  # cache and nothing else, and a shared file would couple their inputs.
+  simc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      sha: ${{ steps.rev.outputs.sha }}
+    steps:
+      - name: Resolve the simc revision
+        id: rev
+        run: |
+          set -euo pipefail
+          sha=$(git ls-remote https://github.com/simulationcraft/simc.git HEAD | cut -f1)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "simc at $sha"
+
+      - name: Restore the cached build
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: simc
+          key: simc-${{ steps.rev.outputs.sha }}
+
+      - name: Build simc
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/simulationcraft/simc.git simc
+          cmake -B simc/build -S simc -DCMAKE_BUILD_TYPE=Release -DSC_NO_NETWORKING=ON -DBUILD_GUI=OFF
+          cmake --build simc/build -j"$(nproc)"
+
+  # Two head-to-heads per build against one, so budget roughly double a search's
+  # per-build cost: 3.9 CPU-minutes per searched build measured over a whole MID2 pass.
+  # At the default --limit 3 that is minutes, not hours; over all 12 marked builds
+  # expect well under an hour on a 4-vCPU runner.
+  check:
+    needs: simc
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore the cached simc
+        uses: actions/cache@v4
+        with:
+          path: simc
+          key: simc-${{ needs.simc.outputs.sha }}
+          fail-on-cache-miss: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install the pipeline
+        run: pip install -e pipeline
+
+      - name: Materialise the profiles simc wrote and switched off
+        # The marked builds include Havoc Fel-Scarred, whose profile lives in simc's
+        # generator commented out. Without this it has no profile to measure against
+        # and the run reports it skipped -- which reads like a finding and is not.
+        run: wowdps unvalidated --tier "$TIER" --simc-source simc --write
+        env:
+          TIER: ${{ inputs.tier }}
+
+      - name: Materialise the extra builds
+        run: wowdps extra-builds --tier "$TIER" --simc-source simc --write
+        env:
+          TIER: ${{ inputs.tier }}
+
+      - name: Check
+        # `inputs.*` are bound in `env:` and never interpolated into `run:`. Same
+        # pattern as `build-search.yml` and `fight-probe.yml`; there is one here.
+        run: |
+          set -euo pipefail
+          args=(projection-check
+            --tier "$TIER"
+            --profiles simc/profiles
+            --simc-source simc
+            --simc simc/build/simc
+            --targets "$TARGETS"
+            --iterations "$ITERATIONS"
+            --out "web/public/data"
+            --report projection-check.json)
+          if [ -n "$BUILD" ]; then args+=(--build "$BUILD"); fi
+          if [ "$LIMIT" != "0" ]; then args+=(--limit "$LIMIT"); fi
+          wowdps -v "${args[@]}" 2>&1 | tee projection-check.log
+        env:
+          TIER: ${{ inputs.tier }}
+          BUILD: ${{ inputs.build }}
+          LIMIT: ${{ inputs.limit }}
+          TARGETS: ${{ inputs.targets }}
+          ITERATIONS: ${{ inputs.iterations }}
+
+      - name: Upload the run
+        # `always()`, not the default `success()`. The command exits non-zero when it
+        # compared nothing, and that is exactly the run whose log somebody needs.
+        # `gear.yml` shipped the opposite and threw away the two failures the upload
+        # existed for.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: projection-check
+          path: |
+            projection-check.json
+            projection-check.log
+          if-no-files-found: ignore
+
+      - name: Summary
+        if: always()
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, pathlib
+
+          path = pathlib.Path("projection-check.json")
+          if not path.is_file():
+              print("The run wrote no report, so it compared nothing. Read the log.")
+              raise SystemExit(0)
+
+          report = json.loads(path.read_text(encoding="utf-8"))
+          print(f"## {report['tier']}: {report['verdict']}\n")
+          print(f"*{report['question']}*\n")
+          print("| build | anchored | shipped | difference | tie band | separates |")
+          print("|---|---|---|---|---|---|")
+          for row in report["builds"]:
+              mark = "**yes**" if row["separates"] else "no"
+              print(
+                  f"| {row['id']} | {row['anchoredMargin']:+.2f}% | {row['shippedMargin']:+.2f}% "
+                  f"| {row['differencePoints']:+.2f} pts | {row['tieBandPoints']:.2f} pts | {mark} |"
+              )
+          # The control, reported apart from the verdict on purpose: a run that cannot
+          # reproduce the published margin is measuring something else, and its second
+          # number then says nothing about the projection.
+          missed = [r for r in report["builds"] if r.get("reproducedPublished") is False]
+          if missed:
+              print(
+                  f"\n**{len(missed)} build(s) did not reproduce the published margin.** "
+                  "This run is measuring something other than what was published; its "
+                  "shipped-gear numbers say nothing about the projection until that is "
+                  "explained."
+              )
+          for note in report.get("notes") or []:
+              print(f"\n- {note}")
+          PY
+        env:
+          TIER: ${{ inputs.tier }}
