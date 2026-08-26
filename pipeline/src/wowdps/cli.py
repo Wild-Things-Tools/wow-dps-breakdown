@@ -969,7 +969,11 @@ def cmd_buffs(args: argparse.Namespace) -> int:
         results.append(result)
         # Written per spec, like the gear sweep: an interrupted run leaves a smaller
         # dataset rather than none.
-        buffsweep.write_buffs(Path(args.out) / tier, tier, results, settings)
+        # `found`, not `selected`: the denominator is the tier's size, and every
+        # shard must state the same one or the merge cannot recount against it.
+        buffsweep.write_buffs(
+            Path(args.out) / tier, tier, results, settings, builds_available=len(found)
+        )
 
     path = Path(args.out) / tier / "buffs.json"
     print(f"wrote {path}: {len(results)} spec(s)")

@@ -68,6 +68,7 @@ import type {
   GearSlot,
   GearSpecResult,
 } from '../lib/types'
+import { sweepCoverage } from '../lib/sweepCoverage'
 
 /** Two lines of tick text plus the icon, and the axis band beneath the plot. */
 const ROW_HEIGHT = 32
@@ -86,7 +87,21 @@ function signedPercent(value: number, digits = 1): string {
 const AXIS_BAND = 44
 const TICK_WIDTH = 205
 
-export function GearView({ gear }: { gear: GearDataset | null }) {
+export function GearView({
+  gear,
+  tierBuilds,
+}: {
+  gear: GearDataset | null
+  /**
+   * How many builds the tier holds RIGHT NOW, from the manifest.
+   *
+   * Not readable from `gear.json`: its `coverage.specsAvailable` is the tier's
+   * size on the day the sweep ran, so comparing the two says only that the sweep
+   * was internally consistent. On 2026-08-26 that printed "Covers 28 of 28 builds
+   * in the tier" against a tier of 52.
+   */
+  tierBuilds: number | null
+}) {
   // A slot with no swept spec is a pool nobody has run yet -- offering it would open
   // on an empty comparison. The dataset carries every pool as a slot precisely so
   // that gap is visible in the data; the view just does not make it the landing page.
@@ -98,6 +113,12 @@ export function GearView({ gear }: { gear: GearDataset | null }) {
   // rings. The landing slot is the richest comparison instead -- most items in the
   // pool -- which is a property of the data rather than a name hard-coded here, and
   // picks the trinket sweep for as long as it is the largest.
+  // The sweep's own two numbers describe the sweep. The tier's size comes from the
+  // manifest, which is the only thing that can say whether the sweep is behind.
+  const coverage = useMemo(
+    () => sweepCoverage(gear?.coverage.specs ?? 0, gear?.coverage.specsAvailable, tierBuilds),
+    [gear, tierBuilds],
+  )
   const richest = useMemo(
     () => [...swept].sort((a, b) => b.items.length - a.items.length)[0] ?? null,
     [swept],
@@ -216,8 +237,7 @@ export function GearView({ gear }: { gear: GearDataset | null }) {
               {slot.baselineSourceLabel} {slot.label.toLowerCase()}s it can farm, at item
               level {rows[0]?.baselineIlevel ?? '—'}. A candidate takes the place of the{' '}
               <em>weakest</em> item in that set, because that is the decision a loot
-              council actually makes. Covers {gear.coverage.specs} of{' '}
-              {gear.coverage.specsAvailable} builds in the tier.
+              council actually makes. {coverage.sentence}
             </>
           }
           actions={controls}

@@ -118,3 +118,76 @@ def test_a_run_with_no_buff_shards_merges_nothing_rather_than_writing_an_empty_f
     out.mkdir()
     assert merge_buff_shards([], out) is None
     assert not (out / "buffs.json").exists()
+
+
+def test_the_merged_buff_coverage_is_recounted_not_taken_from_one_shard(tmp_path):
+    """``merged`` starts as the NEWEST shard's header, whose ``coverage.specs`` is
+    that shard's own slice. Publishing it as the run's is the defect CLAUDE.md
+    already records twice -- ``medianDpsError`` and ``targetError`` -- a number
+    describing a fraction of the run presented as describing all of it."""
+    import json
+
+    from wowdps.dataset import merge_buff_shards
+
+    shards = []
+    for index, spec_id in enumerate(("mage_fire", "mage_frost")):
+        shard = tmp_path / f"s{index}"
+        shard.mkdir()
+        (shard / "buffs.json").write_text(
+            json.dumps(
+                {
+                    "tier": "MID2",
+                    "generatedAt": f"2026-08-17T0{index}:00:00+00:00",
+                    # Each shard covered ONE build of a tier holding 52.
+                    "coverage": {"specs": 1, "specsAvailable": 52},
+                    "specs": [{"id": spec_id, "baseDps": 100.0 + index}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        shards.append(shard)
+
+    merged = json.loads(merge_buff_shards(shards, tmp_path).read_text(encoding="utf-8"))
+    # Two arrived, so the merge covers two -- not the last shard's 1.
+    assert merged["coverage"] == {"specs": 2, "specsAvailable": 52}
+
+
+def test_buff_shards_that_state_no_coverage_produce_no_coverage_block(tmp_path):
+    """Absent is not zero. A document written before the block existed must not be
+    merged into one claiming the sweep covered nothing."""
+    import json
+
+    from wowdps.dataset import merge_buff_shards
+
+    shard = tmp_path / "s0"
+    shard.mkdir()
+    (shard / "buffs.json").write_text(
+        json.dumps(
+            {
+                "tier": "MID2",
+                "generatedAt": "2026-08-17T00:00:00+00:00",
+                "specs": [{"id": "mage_fire", "baseDps": 100.0}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    merged = json.loads(merge_buff_shards([shard], tmp_path).read_text(encoding="utf-8"))
+    assert "coverage" not in merged
+
+
+def test_write_buffs_omits_coverage_when_the_tier_size_is_unknown(tmp_path):
+    """A caller that does not know the tier size must not be made to assert one."""
+    import json
+
+    from wowdps.buffsweep import write_buffs
+    from wowdps.scenarios import SimSettings
+
+    settings = SimSettings(target_error=0.0, max_iterations=300, threads=1)
+    path = write_buffs(tmp_path, "MID2", [], settings)
+    assert "coverage" not in json.loads(path.read_text(encoding="utf-8"))
+
+    path = write_buffs(tmp_path, "MID2", [], settings, builds_available=52)
+    assert json.loads(path.read_text(encoding="utf-8"))["coverage"] == {
+        "specs": 0,
+        "specsAvailable": 52,
+    }

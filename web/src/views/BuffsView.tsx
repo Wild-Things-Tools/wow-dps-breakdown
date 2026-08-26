@@ -16,6 +16,7 @@
  */
 import { useMemo, useState } from 'react'
 import type { BuffDataset, BuffSpec } from '../lib/types'
+import { sweepCoverage } from '../lib/sweepCoverage'
 import { BuildIdentity } from '../components/BuildIdentity'
 import { EmptyState, Note, Panel, PanelHeader, Select } from '../components/ui'
 import { classColor } from '../lib/palette'
@@ -158,9 +159,29 @@ function Delta({ value, last }: { value: number | null; last?: boolean }) {
   )
 }
 
-export function BuffsView({ data }: { data: BuffDataset | null }) {
+export function BuffsView({
+  data,
+  tierBuilds,
+}: {
+  data: BuffDataset | null
+  /**
+   * Builds the tier holds right now, from the manifest.
+   *
+   * `buffs.json` carries no coverage block at all, so without this the view had
+   * nothing to compare against and said nothing -- while 24 of MID2's 52 builds
+   * were simply absent from it on 2026-08-26.
+   */
+  tierBuilds: number | null
+}) {
   const [measure, setMeasure] = useState<Measure>('powerInfusion')
 
+  // `buffs.json` has no coverage block, so this is a ROW COUNT and `sweepCoverage`
+  // is told so -- it then declines to claim the sweep meant to cover more, which a
+  // row count genuinely cannot distinguish.
+  const coverage = useMemo(
+    () => sweepCoverage(data?.specs.length ?? 0, null, tierBuilds),
+    [data, tierBuilds],
+  )
   const rows = useMemo(() => {
     if (!data) return []
     return data.specs
@@ -191,7 +212,11 @@ export function BuffsView({ data }: { data: BuffDataset | null }) {
       <Panel>
         <PanelHeader
           title="Buffs and tier sets"
-          subtitle={chosen.blurb}
+          subtitle={
+            <>
+              {chosen.blurb} {coverage.sentence}
+            </>
+          }
           actions={
             <Select
               label="Compare"

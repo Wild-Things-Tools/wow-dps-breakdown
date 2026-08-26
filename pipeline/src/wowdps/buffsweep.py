@@ -417,8 +417,25 @@ def class_id_of(profile: SpecProfile, sets: list[TierSet]) -> TierSet | None:
     return next((entry for entry in sets if entry.class_id == class_id), None)
 
 
-def write_buffs(out_dir: Path, tier: str, results: list[BuffResult], settings: SimSettings) -> Path:
-    """Write ``<tier>/buffs.json``."""
+def write_buffs(
+    out_dir: Path,
+    tier: str,
+    results: list[BuffResult],
+    settings: SimSettings,
+    builds_available: int | None = None,
+) -> Path:
+    """Write ``<tier>/buffs.json``.
+
+    ``builds_available`` is how many builds the tier held when the sweep ran. It is
+    published as a ``coverage`` block for the reason ``gear.json`` has one: without
+    it the only number a reader has is the length of the ``specs`` array, and a row
+    count cannot tell a complete sweep from one that stopped. Measured on
+    2026-08-26, this file held 28 builds against a tier of 52 and the Buffs view
+    said nothing at all, because there was nothing in the document to say it with.
+
+    ``None`` omits the block rather than writing a guess, which keeps a caller that
+    does not know the tier size honest instead of making it assert one.
+    """
     import json
     from datetime import UTC, datetime
 
@@ -442,5 +459,8 @@ def write_buffs(out_dir: Path, tier: str, results: list[BuffResult], settings: S
         ),
         "specs": [result.to_json() for result in results],
     }
+    if builds_available is not None:
+        # Same shape as gear.json's, so one reader serves both.
+        document["coverage"] = {"specs": len(results), "specsAvailable": builds_available}
     path.write_text(json.dumps(document, separators=(",", ":")) + "\n", encoding="utf-8")
     return path

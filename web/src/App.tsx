@@ -108,6 +108,15 @@ export default function App() {
   const [tier, setTier] = useState<string | null>(initial.tier)
   const [manifest, setManifest] = useState<Manifest | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // How many BUILDS the tier holds now. The sweeps' own `specsAvailable` is the
+  // tier's size on the day each ran, so only the manifest can say whether a sweep
+  // has fallen behind -- see `lib/sweepCoverage.ts`.
+  //
+  // Deliberately `specs.length` and NOT `manifest.coverage`: that block counts
+  // damage SPECS (18 of 26 on MID2), while gear and buffs are swept per BUILD and
+  // MID2 publishes 52 of those. Joining the two would be the same wrong-column
+  // mistake this whole change exists to fix, one level up.
+  const tierBuilds = manifest?.specs.length ?? null
   const [reloadToken, setReloadToken] = useState(0)
 
   const [view, setView] = useState<ViewId>(initial.view)
@@ -454,9 +463,9 @@ export default function App() {
         <BuildsView details={details} scenario={scenario} talents={talents} />
       ) : null}
 
-      {view === 'gear' ? <GearView gear={gear} /> : null}
+      {view === 'gear' ? <GearView gear={gear} tierBuilds={tierBuilds} /> : null}
 
-      {view === 'buffs' ? <BuffsView data={buffs} /> : null}
+      {view === 'buffs' ? <BuffsView data={buffs} tierBuilds={tierBuilds} /> : null}
 
       {view === 'fights' ? (
         <FightsView
