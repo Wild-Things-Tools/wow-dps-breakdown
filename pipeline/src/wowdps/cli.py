@@ -1749,6 +1749,181 @@ def cmd_harvest_builds(args: argparse.Namespace) -> int:
     return harvest.cmd_harvest_builds(args)
 
 
+def cmd_progress_hours(args: argparse.Namespace) -> int:
+    """Measure progress hours per boss: attempts-until-first-kill, per guild.
+
+    Answers the owner's chart question -- medians per boss, stacked per season --
+    with the metric he chose over the two cheaper proxies. See ``progresshours``
+    for why ``duration`` on a ranking row is not it.
+
+    Budgeted rather than hoped: the pass reads the point counter before and after,
+    honours ``--point-ceiling`` BEFORE sending, and stops cleanly with everything
+    it has. A zero delta reports as UNMEASURED, never as free.
+    """
+    import json as _json
+
+    from . import progresshours
+    from .warcraftlogs import Credentials, WarcraftLogsClient, WarcraftLogsError
+
+    tiers = _json.loads(
+        (Path(__file__).parent / "data" / "fight_profiles.json").read_text(encoding="utf-8")
+    )["tiers"]
+    block = tiers.get(args.tier)
+    if block is None:
+        logging.error("no tier %r in fight_profiles.json (have %s)", args.tier, ", ".join(tiers))
+        return 1
+    encounters = block.get("encounters") or []
+    if args.encounter:
+        encounters = [e for e in encounters if int(e.get("encounterId") or 0) == args.encounter]
+    if not encounters:
+        logging.error("no encounter to measure for %s", args.tier)
+        return 1
+
+    try:
+        credentials = Credentials.from_env()
+    except WarcraftLogsError as exc:
+        logging.error("%s", exc)
+        return 1
+
+    bosses: list[progresshours.BossProgress] = []
+    with WarcraftLogsClient(credentials) as client:
+        before = client.rate_limit()
+        limit = float(before.get("limitPerHour") or 0)
+        start = float(before.get("pointsSpentThisHour") or 0)
+
+        def over_ceiling() -> bool:
+            if not limit:
+                return False
+            now = float(client.rate_limit().get("pointsSpentThisHour") or 0)
+            return now >= limit * args.point_ceiling
+
+        for order, entry in enumerate(encounters, start=1):
+            encounter_id = int(entry["encounterId"])
+            boss = progresshours.BossProgress(
+                encounter_id=encounter_id,
+                name=entry.get("name") or str(encounter_id),
+                order=order,
+                difficulty=args.difficulty,
+            )
+            bosses.append(boss)
+            try:
+                rankings = client.query(
+                    progresshours.PROGRESS_RANKINGS_QUERY,
+                    {"e": encounter_id, "d": args.difficulty, "p": 1},
+                    label=f"progress:{encounter_id}",
+                )
+            except WarcraftLogsError as exc:
+                logging.warning("%s: %s", boss.name, exc)
+                boss.refused["ranking-error"] = boss.refused.get("ranking-error", 0) + 1
+                continue
+
+            rows = (
+                ((rankings.get("worldData") or {}).get("encounter") or {}).get("fightRankings")
+                or {}
+            ).get("rankings") or []
+            # The WHOLE page is counted before the sample is cut: the page is already
+            # paid for, and a prefix scan would report its null-id share as the page's.
+            usable = []
+            for row in rows:
+                guild = row.get("guild") or {}
+                if guild.get("id"):
+                    usable.append(int(guild["id"]))
+                else:
+                    boss.rows_without_guild += 1
+            guild_ids = usable[: args.guilds]
+            boss.guilds_seen = len(guild_ids)
+
+            for guild_id in guild_ids:
+                if over_ceiling():
+                    logging.warning("point ceiling reached; stopping with what is measured")
+                    return _write_progress_hours(args, bosses, client, start, limit)
+                reports: list[dict] = []
+                for page in range(1, args.max_pages + 1):
+                    try:
+                        payload = client.query(
+                            progresshours.GUILD_PULLS_QUERY,
+                            {
+                                "g": guild_id,
+                                "z": int(block.get("zoneId") or args.zone or 0),
+                                "e": encounter_id,
+                                "d": args.difficulty,
+                                "limit": 100,
+                                "page": page,
+                            },
+                            label=f"pulls:{encounter_id}",
+                        )
+                    except WarcraftLogsError as exc:
+                        logging.warning("guild %s: %s", guild_id, exc)
+                        boss.refused["error"] = boss.refused.get("error", 0) + 1
+                        break
+                    listing = (payload.get("reportData") or {}).get("reports") or {}
+                    reports.extend(listing.get("data") or [])
+                    # Stop as soon as the kill is in hand: further pages buy nothing
+                    # and are the bulk of what a full pass would spend.
+                    if (
+                        progresshours.pull_time(reports, encounter_id, args.difficulty).ms
+                        is not None
+                    ):
+                        break
+                    if not listing.get("has_more_pages"):
+                        break
+
+                answer = progresshours.pull_time(reports, encounter_id, args.difficulty)
+                if answer.ms is None:
+                    if answer.reason:
+                        boss.refused[answer.reason] = boss.refused.get(answer.reason, 0) + 1
+                else:
+                    boss.hours.append(answer.ms / progresshours.MS_PER_HOUR)
+
+            logging.info(
+                "%s: %d/%d guild(s) measured, median %s h",
+                boss.name,
+                len(boss.hours),
+                boss.guilds_seen,
+                "n/a" if not boss.hours else f"{progresshours.median(boss.hours):.2f}",
+            )
+
+        return _write_progress_hours(args, bosses, client, start, limit)
+
+
+def _write_progress_hours(args, bosses, client, start: float, limit: float) -> int:
+    """Write the document, with the cost stated as measured or UNMEASURED."""
+    import json as _json
+
+    from . import progresshours
+
+    after = client.rate_limit()
+    spent = float(after.get("pointsSpentThisHour") or 0) - start
+    cost: dict = {
+        "limitPerHour": limit or None,
+        "queries": len(client.ledger.entries) if hasattr(client.ledger, "entries") else None,
+    }
+    # A counter that did not move is the ABSENCE of a measurement, not a cost of
+    # zero. This project printed "0 points for a nine-boss pass" exactly once.
+    cost["pointsSpent"] = round(spent, 1) if spent > 0 else "UNMEASURED"
+
+    document = {
+        "tier": args.tier,
+        "difficulty": args.difficulty,
+        "difficultyName": progresshours.DIFFICULTY_NAMES.get(args.difficulty, str(args.difficulty)),
+        "note": (
+            "Progress time is the sum of every attempt up to and including a guild's "
+            "first kill, per boss. A boss nobody could be measured for carries null, "
+            "never zero, and a season total is refused unless every boss has one."
+        ),
+        "guildsRequested": args.guilds,
+        "bosses": [boss.to_json() for boss in bosses],
+        "seasonTotalHours": progresshours.stacked_total(bosses),
+        "cost": cost,
+    }
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(_json.dumps(document, indent=1) + "\n", encoding="utf-8")
+    print(f"wrote {out}")
+    print(f"points: {cost['pointsSpent']}")
+    return 0
+
+
 def cmd_fight_probe(args: argparse.Namespace) -> int:
     from . import fightprobe
 
@@ -2361,6 +2536,35 @@ def build_parser() -> argparse.ArgumentParser:
     p_proj.add_argument("--ptr", action="store_true", default=True)
     p_proj.add_argument("--no-ptr", dest="ptr", action="store_false")
     p_proj.set_defaults(func=cmd_projection_check)
+
+    p_hours = sub.add_parser(
+        "progress-hours",
+        help="measure progress hours per boss (attempts until first kill), per guild",
+    )
+    p_hours.add_argument("--tier", default="MID1", help="tier in fight_profiles.json")
+    p_hours.add_argument(
+        "--encounter", type=int, default=0, help="one encounter id, or 0 for the whole tier"
+    )
+    p_hours.add_argument(
+        "--zone", type=int, default=0, help="Warcraft Logs zone id, when the tier states none"
+    )
+    p_hours.add_argument(
+        "--difficulty", type=int, default=5, help="3 Normal, 4 Heroic, 5 Mythic. Default 5"
+    )
+    p_hours.add_argument(
+        "--guilds", type=int, default=12, help="guilds sampled per boss. A median needs few"
+    )
+    p_hours.add_argument(
+        "--max-pages", type=int, default=4, help="report pages per guild before giving up"
+    )
+    p_hours.add_argument(
+        "--point-ceiling",
+        type=float,
+        default=0.5,
+        help="stop before spending this share of the hourly budget",
+    )
+    p_hours.add_argument("--out", default="progress-hours.json", help="where to write the document")
+    p_hours.set_defaults(func=cmd_progress_hours)
 
     p_fights = sub.add_parser(
         "fights",
