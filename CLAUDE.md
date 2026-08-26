@@ -4954,11 +4954,17 @@ a winning row is ranked by `publishedDps × (1 + margin)`.
 
 That product is a projection and is drawn as one -- the bar is stacked, solid
 for simc's measurement and pale for the gain, and simc's own figure is printed
-in the table twin beside it. Nobody has run the computed talents on simc's
-shipped gear; the assumption is that a talent gain measured on the anchor holds
-a few item levels above it. It is a smaller assumption than mixing the two
-absolutes and it is the only one that leaves every *unmarked* row byte-for-byte
-what it was. **Do not quote a marked row's figure as a simulated result.**
+in the table twin beside it. The assumption is that a talent gain measured on
+the anchor holds a few item levels above it -- a smaller assumption than mixing
+the two absolutes, and the only one that leaves every *unmarked* row
+byte-for-byte what it was. **Do not quote a marked row's figure as a simulated
+result.**
+
+**That assumption has since been measured and it does not hold on every build**
+-- see "The projection was measured, and it is right until it is very wrong"
+below. The sentence that stood here until 2026-08-26 said nobody had run the
+computed talents on simc's shipped gear; somebody has, and on one of the twelve
+marked builds the gain is entirely absent there.
 
 ### The join is in the view, on purpose
 
@@ -4999,13 +5005,84 @@ Demon Hunter (Fel-Scarred) and Devourer (Annihilator) each gain a place.
 **17 builds are numerically ahead and only 12 clear the tie band**, which is
 the argument for the tie rule over a fixed percentage stated as a count.
 
-Two things this leaves open, both filed as issues rather than papered over.
-Nobody has run the computed talents on simc's own gear, so the projection's
-assumption is untested (#52). And `web/` has **no unit-test runner at all** --
+One thing this leaves open, filed as an issue rather than papered over.
+(The projection's assumption is no longer untested -- see the section below;
+#52 measured it and it does not hold on every build.) `web/` has **no unit-test
+runner at all** --
 no `*.test.*` under `web/src` and no `test` script -- so the module that decides
 the published site's ranking order is guarded in CI by `tsc` alone (#54). For
 this change it was compiled standalone and run against the committed MID2
 documents, with two canaries confirmed red; that was a session, not a gate.
+
+### The projection was measured, and it is right until it is very wrong
+
+`wowdps projection-check` (#52), MID2, patchwerk one target, 3000 deterministic
+iterations, simc at `0711f60`, run 2026-08-26 over **all twelve marked builds**.
+Each build is measured twice head-to-head -- simc's talents against the computed
+ones, once on the gear anchor and once on **simc's own shipped kit** -- so both
+margins are exact differences and the question is whether they agree.
+
+The tie band here is the quadrature sum of **four** errors, not two: each margin
+is already a difference of two measured means, and comparing two margins adds
+two more. It lands at 0.07-0.14 points at these iteration counts.
+
+Eleven builds compared; `demon_hunter_devourer_annihilator` is skipped because
+the tier no longer ships that profile (see below). **Two of the eleven failed the
+control** and are excluded from every figure that follows -- their numbers say
+nothing about the projection, which is exactly why the control is reported apart
+from the verdict.
+
+```
+                                          anchored  shipped   difference  band
+demon_hunter_devourer_void_scarred          +2.53    +2.51       -0.02    0.14
+demon_hunter_havoc_fel_scarred              +2.20    +2.08       -0.12    0.10
+druid_feral_wildstalker                     +1.70    +1.85       +0.15    0.12
+evoker_devastation_flameshaper              +0.21    +0.90       +0.69    0.11
+evoker_devastation_sc                       +2.53    +0.02       -2.52    0.10
+hunter_survival_default                     +0.17    +0.03       -0.14    0.11
+priest_shadow_voidweaver                    +0.06    -0.02       -0.08    0.07
+rogue_subtlety_default                      +0.43    +0.41       -0.02    0.08
+warlock_affliction_soul_harvester           +0.10    +0.15       +0.05    0.10
+```
+
+**It is not a systematic bias, and that is the finding.** The median difference
+is **-0.02 points**, the sign goes both ways (-2.52 to +0.69), and seven of the
+nine sit inside 0.15 points -- immaterial to a ranking whatever the band says
+about them. There is no factor to correct by: a scale that fixed Devastation
+Spellslinger would break Devastation Flameshaper, and both are the same spec.
+
+**What breaks it is a minority, and the site's largest marked gain is in it.**
+Devastation Evoker (Scalecommander) reads **+2.53% on the anchor and +0.02% on
+simc's own gear** -- twenty-five times the band, and the whole gain gone. Its
+sibling build moves the other way by 0.69. Two builds of one spec, opposite
+directions, which is what rules out both "the projection holds" and "the
+projection overstates".
+
+So the reading #52 asked for has a third answer neither branch anticipated: the
+projection is usually accurate to a tenth of a point and occasionally wrong by
+two and a half, **and nothing visible from outside says which build is which**.
+A ranking claim that is right eight times in nine is not a ranking claim; the one
+it is wrong about is the row it moved furthest.
+
+**And there is no budget argument for projecting rather than measuring.** The
+whole eleven-build pass cost **361 seconds** -- 33 seconds per build for two
+head-to-heads -- against the 153.7 CPU-minutes a single-target search costs. The
+measurement that would replace the projection is a rounding error on the run that
+produces the thing being projected. That is the practical half of the finding and
+the reason this is worth doing rather than caveating.
+
+Two side findings the run produced, neither of which is about the projection:
+
+- **`computed-builds.json` carries a build simc no longer ships.** The published
+  document has `demon_hunter_devourer_annihilator`; the tier's profile directory
+  does not, so the check could not measure it. A published row for a profile that
+  no longer exists is stale in a way nothing else flags.
+- **Two Windwalker builds do not reproduce their own published margin** --
+  Conduit of the Celestials measured +1.14 against a published +1.43, and the
+  default build +0.67 against +0.17. Both were run the same way the publish run
+  was; the likeliest cause is a different simc revision between then and now, and
+  that is a guess, not a measurement. It is the reason the control exists and it
+  fired on exactly two rows.
 
 ## The Ulria sheet: an independent check that mostly agrees
 
