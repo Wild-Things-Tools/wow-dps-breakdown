@@ -166,3 +166,61 @@ def test_the_zone_it_searched_is_published_so_a_wrong_scope_is_visible():
     """The failing run scoped every query to zone 0 and said so nowhere."""
     assert BossProgress(ENCOUNTER, "A Boss", 1, MYTHIC, zone_id=46).to_json()["zoneId"] == 46
     assert BossProgress(ENCOUNTER, "A Boss", 1, MYTHIC).to_json()["zoneId"] is None
+
+
+# --------------------------------------------------------------------------------
+# Attributing the refusal rate. The 2026-08-26 20-guild run refused 4 to 12 of 20
+# guilds per boss on the same zone -- and the document could not say which of two
+# opposite things had happened.
+# --------------------------------------------------------------------------------
+
+
+def test_an_empty_listing_and_a_listing_without_this_boss_are_different_refusals():
+    """`no-reports` is about the guild; `no-fights` is about the boss.
+
+    Under one name the two are indistinguishable, and the whole per-boss spread (1 in
+    8 refused on one boss, 7 in 8 on another, same zone, same guilds) cannot be
+    attributed. An empty listing would refuse identically on all nine bosses; a
+    listing that holds reports but no pull of *this* boss would not.
+    """
+    empty = pull_time([], ENCOUNTER, MYTHIC)
+    assert empty.reason == "no-reports"
+    assert empty.reports == 0
+
+    elsewhere = report(0, [fight(0, 1000, kill=True, encounter=999)])
+    other_boss = pull_time([elsewhere], ENCOUNTER, MYTHIC)
+    assert other_boss.reason == "no-fights"
+    # The count is the point: reports WERE read, they just held nothing for this boss.
+    assert other_boss.reports == 1
+
+
+def test_the_report_count_is_published_so_the_split_survives_in_the_artifact():
+    """A run's log is not durable tracking; the document has to carry the answer."""
+    boss = BossProgress(ENCOUNTER, "A Boss", 1, MYTHIC, reports_seen=[0, 40, 12, 30])
+    assert boss.to_json()["medianReportsSeen"] == 21.0
+    # Absent rather than 0: no guild sampled means no denominator, and a 0 there would
+    # read as "every guild's listing was empty".
+    assert BossProgress(ENCOUNTER, "A", 1, MYTHIC).to_json()["medianReportsSeen"] is None
+
+
+def test_every_sampled_guild_is_named_with_its_outcome():
+    """The cross-boss join the refusal rate needs, and it needs guild ids to exist.
+
+    Guild ids are public Warcraft Logs data. The rule this project keeps about never
+    collecting names is about *characters* -- a build is not a person -- and a guild
+    id is the join key, not an identity.
+    """
+    boss = BossProgress(
+        ENCOUNTER,
+        "A Boss",
+        1,
+        MYTHIC,
+        guilds=[
+            {"id": 1, "outcome": "measured", "reportsSeen": 40, "hours": 2.5, "attempts": 30},
+            {"id": 2, "outcome": "no-reports", "reportsSeen": 0},
+            {"id": 3, "outcome": "no-fights", "reportsSeen": 55},
+        ],
+    )
+    rows = boss.to_json()["guilds"]
+    assert [r["id"] for r in rows] == [1, 2, 3]
+    assert {r["outcome"] for r in rows} == {"measured", "no-reports", "no-fights"}

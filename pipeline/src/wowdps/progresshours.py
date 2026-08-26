@@ -164,8 +164,25 @@ def pull_time(reports: list[dict], encounter_id: int, difficulty: int) -> PullTi
     """Progress time up to and including the first kill, in milliseconds.
 
     ``ms`` is None when the answer is not knowable from this window; ``reason`` says
-    which of ``no-fights`` / ``no-kill`` / ``unusable`` applies.
+    which of ``no-reports`` / ``no-fights`` / ``no-kill`` / ``unusable`` applies.
+
+    **``no-reports`` and ``no-fights`` used to be one bucket, and separating them is
+    the whole diagnostic.** They are opposite findings:
+
+    - ``no-reports`` -- the guild's listing for this zone came back EMPTY. Nothing was
+      read, so the boss is irrelevant: it is a fact about the guild or about
+      ``reports(guildID:)``, and it would be identical on all nine bosses.
+    - ``no-fights`` -- the listing came back with reports in it and none of them holds
+      a pull of *this* boss at *this* difficulty. That is a fact about the boss.
+
+    Under one name they are indistinguishable, and the 2026-08-26 run's central
+    puzzle -- 41 of 72 guild-boss pairs refused, at rates from 1-in-8 to 7-in-8 on
+    the same zone -- cannot be attributed without the split. The count is published
+    beside it (``reportsSeen``) so the answer survives in the artifact rather than
+    living in one run's log.
     """
+    if not reports:
+        return PullTime(None, 0, 0, "no-reports")
     fights = ordered_fights(reports, encounter_id, difficulty)
     if not fights:
         return PullTime(None, 0, len(reports), "no-fights")
@@ -217,6 +234,33 @@ def quartiles(values: list[float]) -> tuple[float, float] | None:
     return (q1, q3) if q1 is not None and q3 is not None else None
 
 
+def guild_row(
+    guild_id: int,
+    outcome: str,
+    reports_seen: int,
+    duplicates: int = 0,
+    hours: float | None = None,
+    attempts: int | None = None,
+) -> dict:
+    """One sampled guild's row: who, what happened, and over how many reports.
+
+    A pure function rather than a closure over the sweep's loop variables -- ruff's
+    B023 flags exactly that, and it is not pedantry here: a closure reading
+    ``guild_id`` from the enclosing scope is correct only while it is called in the
+    same iteration, which is a property of the call site rather than of the function.
+
+    ``duplicateReports`` and the measurement fields are omitted when they have nothing
+    to say, so a clean row stays the shape it was before any of this existed.
+    """
+    row: dict = {"id": guild_id, "outcome": outcome, "reportsSeen": reports_seen}
+    if duplicates:
+        row["duplicateReports"] = duplicates
+    if hours is not None:
+        row["hours"] = round(hours, 4)
+        row["attempts"] = attempts
+    return row
+
+
 @dataclass
 class BossProgress:
     """What one boss cost, and how much of that is actually measured."""
@@ -234,12 +278,39 @@ class BossProgress:
     #: field that said so. A boss whose median attempts is 1 was not progressed in the
     #: window that was read, whatever the hours say.
     attempts: list[int] = field(default_factory=list)
+    #: Reports read per guild, whatever the outcome. The denominator behind
+    #: ``no-reports`` vs ``no-fights``: a guild with 40 reports and no pull of this
+    #: boss is a different finding from a guild with none.
+    reports_seen: list[int] = field(default_factory=list)
+    #: Every sampled guild and what became of it, so a cross-boss join is possible
+    #: from the published document. Guild ids are public Warcraft Logs data; the rule
+    #: this project keeps about never collecting names is about *characters*.
+    guilds: list[dict] = field(default_factory=list)
     #: Guilds with no answer, by reason -- part of the cost per usable number.
     refused: dict[str, int] = field(default_factory=dict)
     guilds_seen: int = 0
     rows_without_guild: int = 0
     #: The zone its reports were searched in. None means the boss was refused.
     zone_id: int | None = None
+
+    def record(
+        self,
+        guild_id: int,
+        outcome: str,
+        reports_seen: int,
+        duplicates: int = 0,
+        hours: float | None = None,
+        attempts: int | None = None,
+    ) -> None:
+        """Append one sampled guild's row. **Every** guild gets one, whatever happened.
+
+        Without this the document publishes per-boss totals only, and the question the
+        refusal rate actually poses -- is the guild that fails on boss 8 the same guild
+        that succeeded on boss 1 -- cannot be answered from the artifact at all, only
+        from a run's log that nobody kept.
+        """
+        self.guilds.append(guild_row(guild_id, outcome, reports_seen, duplicates, hours, attempts))
+        self.reports_seen.append(reports_seen)
 
     def to_json(self) -> dict:
         q = quartiles(self.hours)
@@ -260,6 +331,10 @@ class BossProgress:
                 None if not self.attempts else median([float(a) for a in self.attempts])
             ),
             "zoneId": self.zone_id,
+            "medianReportsSeen": (
+                None if not self.reports_seen else median([float(r) for r in self.reports_seen])
+            ),
+            "guilds": list(self.guilds),
             "guildsSeen": self.guilds_seen,
             "refused": dict(sorted(self.refused.items())),
             "rowsWithoutGuild": self.rows_without_guild,

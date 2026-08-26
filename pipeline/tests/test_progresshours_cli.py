@@ -37,6 +37,7 @@ class StubClient:
         self.zone = zone
         self.guilds = guilds
         self.sent = []
+        self.rate_limit_calls = 0
         self.ledger = argparse.Namespace(entries=[])
 
     def __enter__(self):
@@ -46,6 +47,7 @@ class StubClient:
         return False
 
     def rate_limit(self):
+        self.rate_limit_calls += 1
         return {"limitPerHour": 18000.0, "pointsSpentThisHour": 0.0}
 
     def query(self, document, variables, label=None):
@@ -161,3 +163,68 @@ def test_a_farm_kill_is_legible_from_the_document_alone(monkeypatch, tmp_path):
 
     assert boss["medianAttempts"] == 1.0
     assert boss["medianHours"] == pytest.approx(0.167, abs=0.001)
+
+
+def test_budget_polling_does_not_scale_with_the_guild_count(monkeypatch, tmp_path):
+    pages = [listing([{"startTime": 0, "fights": [fight(0, HOUR, kill=True)]}], False)]
+    client = StubClient(pages, guilds=tuple(range(1, 13)))
+    run(monkeypatch, tmp_path, client, guilds=12)
+
+    # 2 bracketing readings + one per boss (one boss here, --encounter is set).
+    assert client.rate_limit_calls <= 3, (
+        f"{client.rate_limit_calls} budget polls for 12 guilds -- "
+        "the poll is back inside the guild loop"
+    )
+
+
+def test_one_report_is_never_counted_twice(monkeypatch, tmp_path):
+    """Paging is not a snapshot. A listing that shifts between page 1 and page 2 hands
+    back the same report twice, and its fights would be summed twice -- inflating both
+    `attempts` and `hours` with nothing in the document saying so.
+    """
+    same = {
+        "code": "AbC123",
+        "startTime": 0,
+        "fights": [fight(0, HOUR), fight(HOUR, 2 * HOUR, kill=True)],
+    }
+    client = StubClient([listing([same], True), listing([same], False)])
+    boss = run(monkeypatch, tmp_path, client)
+
+    assert boss["medianAttempts"] == 2.0, "the duplicated report was counted twice"
+    assert boss["medianHours"] == 2.0
+    assert boss["guilds"][0]["duplicateReports"] == 1
+
+
+def test_a_report_with_no_code_is_kept_rather_than_deduplicated(monkeypatch, tmp_path):
+    """Dropping it would lose real pulls; only a code can prove two rows are one report."""
+    a = {"startTime": 0, "fights": [fight(0, HOUR)]}
+    b = {"startTime": 1, "fights": [fight(0, HOUR, kill=True)]}
+    client = StubClient([listing([a, b], False)])
+    boss = run(monkeypatch, tmp_path, client)
+
+    assert boss["medianAttempts"] == 2.0
+    assert boss["guilds"][0].get("duplicateReports") is None
+
+
+def test_an_empty_listing_is_reported_as_no_reports_not_no_fights(monkeypatch, tmp_path):
+    """The two are opposite findings and were one bucket."""
+    client = StubClient([listing([], False)])
+    boss = run(monkeypatch, tmp_path, client)
+
+    assert boss["refused"] == {"no-reports": 1}
+    assert boss["guilds"][0]["outcome"] == "no-reports"
+    assert boss["guilds"][0]["reportsSeen"] == 0
+    assert boss["medianReportsSeen"] == 0.0
+
+
+def test_a_listing_holding_another_boss_is_no_fights_with_the_count_beside_it(
+    monkeypatch, tmp_path
+):
+    client = StubClient([listing([{"code": "X", "startTime": 0, "fights": []}] * 3, False)])
+    boss = run(monkeypatch, tmp_path, client)
+
+    assert boss["refused"] == {"no-fights": 1}
+    # One report survives the dedup (all three share the code "X"), and the count is
+    # what says the listing was NOT empty.
+    assert boss["guilds"][0]["outcome"] == "no-fights"
+    assert boss["guilds"][0]["reportsSeen"] >= 1
