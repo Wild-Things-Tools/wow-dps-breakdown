@@ -267,6 +267,36 @@ def contender_json(
     return entry
 
 
+def shipped_json(simc: Measurement | None, best: Measurement | None) -> dict | None:
+    """The same head-to-head, measured on **simc's own shipped kit**.
+
+    The ranking used to project: it took the margin measured on the gear anchor and
+    applied it to the published DPS, because nobody had run the computed talents on
+    the kit simc's profile actually wears. Measured over all twelve marked MID2
+    builds on 2026-08-26, that projection is accurate to about a tenth of a point on
+    seven of nine and wrong by **2.52 points** on one -- Devastation Evoker
+    (Scalecommander), whose entire published gain is absent on simc's own gear. The
+    sign goes both ways, so there is no factor to correct by.
+
+    This block is the measurement that replaces it. It costs one extra invocation per
+    build -- 33 seconds measured, against the 3.9 CPU-minutes a build's search costs --
+    so there was never a budget argument for projecting instead.
+
+    ``None`` when either side did not measure, and the whole block is omitted from the
+    row then: a reader must be able to tell "measured on shipped gear" from "not
+    measured", because the fallback for the second is the projection this replaces.
+    """
+    if simc is None or best is None or simc.dps <= 0:
+        return None
+    return {
+        "simcDps": round(simc.dps, 1),
+        "bestDps": round(best.dps, 1),
+        "margin": round(best.dps / simc.dps - 1, 6),
+        "tieBand": round(tie_band(best.dps_error, simc.dps_error), 6),
+        "separates": separated(best, simc),
+    }
+
+
 @dataclass
 class SpecEntry:
     """One row of the document: one build, one scenario, one target count.
@@ -304,6 +334,10 @@ class SpecEntry:
     #: against "simc will not load its own hash and this is the forced correction" --
     #: so the document says which.
     repaired_seed: bool = False
+    #: The head-to-head repeated on simc's own shipped kit -- see ``shipped_json``.
+    #: ``None`` means it was not measured, which is a different claim from a margin of
+    #: zero and is what the site falls back to the projection for.
+    shipped: dict | None = None
 
     def to_json(self) -> dict:
         entry = {
@@ -321,6 +355,11 @@ class SpecEntry:
         # before this field existed -- the same rule `unvalidated` follows.
         if self.repaired_seed:
             entry["repairedSeed"] = True
+        # Same rule: absent rather than null, so a run that did not measure it produces
+        # the bytes it did before this field existed and the view's three states stay
+        # distinguishable.
+        if self.shipped is not None:
+            entry["shipped"] = self.shipped
         return entry
 
 

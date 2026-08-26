@@ -1256,6 +1256,34 @@ export interface ComputedSpec {
   best: ComputedContender | null;
   runnerUp: ComputedContender | null;
   caveats: string[];
+  /**
+   * The same head-to-head measured on **simc's own shipped kit** rather than on
+   * the gear anchor. Optional because a document written before the pipeline
+   * measured it has none, and absent is not the same as a margin of zero: it is
+   * the state the ranking falls back to the projection for.
+   */
+  shipped?: ComputedShipped;
+}
+
+/**
+ * simc's build against the computed one, on the kit simc's own profile wears.
+ *
+ * This exists because the projection it replaces was measured and does not hold.
+ * Over all twelve marked MID2 builds on 2026-08-26 the anchored margin and this
+ * one agree to about a tenth of a point on seven of nine -- and disagree by
+ * **2.52 points** on Devastation Evoker (Scalecommander), whose entire published
+ * gain is absent on simc's own gear. The sign goes both ways, so no correction
+ * factor exists.
+ */
+export interface ComputedShipped {
+  simcDps: number;
+  bestDps: number;
+  /** Signed relative lead of the computed build, measured on shipped gear. */
+  margin: number;
+  /** The tie band that lead has to clear, from the two runs' errors. */
+  tieBand: number;
+  /** Whether it clears it. Recomputed in the view; carried for the tooltip. */
+  separates: boolean;
 }
 
 export interface ComputedBuildsDataset {

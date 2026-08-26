@@ -20,12 +20,29 @@
  * computed run measures: profileset against profileset, one kit, talents the
  * only variable. So a winning row is ranked by `publishedDps × (1 + margin)`.
  *
- * That product is a **projection**, not a measurement, and `projected` says so
- * on every row carrying one. Nobody has run the computed talents on simc's
- * shipped gear; the assumption is that a talent gain measured on the anchor
- * holds on a kit a few item levels above it. It is a smaller assumption than
- * mixing the two absolutes, and it leaves every unmarked row byte-for-byte what
- * it was. `simcDps` stays on the row so the projection can always be undone.
+ * ## Which margin, and why it stopped being the anchored one
+ *
+ * That assumption -- that a gain measured on the anchor holds on a kit a few
+ * item levels above it -- **was measured on 2026-08-26 and does not hold on
+ * every build**. Over all twelve marked MID2 builds the two margins agree to
+ * about a tenth of a point on seven of nine, and disagree by **2.52 points** on
+ * Devastation Evoker (Scalecommander): +2.53% on the anchor, **+0.02%** on
+ * simc's own gear, the whole gain gone. Its sibling build moves the other way by
+ * 0.69, so there is no correction factor -- a scale that fixed one would break
+ * the other, and they are the same spec.
+ *
+ * So when the entry carries a `shipped` block the ranking uses **that** margin:
+ * measured on the same kit the published DPS was measured on, with only the
+ * talents varying. `marginBasis` says which of the two a row used.
+ *
+ * The anchored margin remains the fallback, for documents written before the
+ * pipeline measured the other one. It is not a good fallback -- it is wrong by
+ * two and a half points on one build in twelve and nothing visible says which --
+ * and the answer is to re-run the search, not to blind the view. A row on the
+ * fallback still reads `projected: true`.
+ *
+ * `rankDps` is a product either way, never a raw measurement, and `simcDps`
+ * stays on the row so it can always be undone.
  *
  * ## Two things not done here
  *
@@ -38,7 +55,12 @@
  *   builds are numerically ahead and only 12 clear the band.
  */
 
-import type { ComputedBuildsDataset, ComputedContender, ComputedSpec } from './types'
+import type {
+  ComputedBuildsDataset,
+  ComputedContender,
+  ComputedShipped,
+  ComputedSpec,
+} from './types'
 
 /** The newest document shape this code knows how to read. */
 const SUPPORTED_SCHEMA = 1
@@ -48,9 +70,15 @@ export interface BestBuild {
   rankDps: number
   /** The manifest's own measurement, always. Never projected. */
   simcDps: number
-  /** True when `rankDps` is a projection rather than a measurement. */
+  /** True when `rankDps` is a product rather than a raw measurement. */
   projected: boolean
-  /** Measured relative lead of the computed build, on the anchored kit. */
+  /**
+   * Which kit the ranking margin was measured on. `shipped-gear` is the one the
+   * published DPS was also measured on; `anchor` is the fallback, and is known
+   * to be wrong by 2.52 points on one of MID2's twelve marked builds.
+   */
+  marginBasis: 'shipped-gear' | 'anchor' | null
+  /** Relative lead of the computed build, on whichever kit `marginBasis` names. */
   gain: number | null
   /** The tie band that lead had to clear. */
   noise: number | null
@@ -70,6 +98,24 @@ function usable(side: ComputedContender | null | undefined): side is ComputedCon
 }
 
 /**
+ * True when a `shipped` block carries a whole comparison.
+ *
+ * Both numbers are checked, not just presence: a block with a margin and no band
+ * would rank a lead against no bar at all, which is the one thing the tie rule
+ * exists to prevent. A negative band is not a band.
+ */
+function usableShipped(
+  block: ComputedShipped | null | undefined,
+): block is ComputedShipped {
+  return (
+    !!block &&
+    Number.isFinite(block.margin) &&
+    Number.isFinite(block.tieBand) &&
+    block.tieBand >= 0
+  )
+}
+
+/**
  * The tie band of two measurements, from their percent standard errors.
  * A margin equal to the band is still a tie.
  */
@@ -82,6 +128,7 @@ export function bestBuildFor(simcDps: number, entry: ComputedSpec | null): BestB
     rankDps: simcDps,
     simcDps,
     projected: false,
+    marginBasis: null,
     gain: null,
     noise: null,
     computed: null,
@@ -95,14 +142,20 @@ export function bestBuildFor(simcDps: number, entry: ComputedSpec | null): BestB
   // build exists. With no computed contender there is nothing to compare.
   if (!simc || !best) return plain
 
-  const margin = best.dps / simc.dps - 1
-  const noise = combinedNoise(best.dpsError, simc.dpsError)
+  // The measured margin when the run produced one, the anchored one otherwise.
+  // Both `margin` and `tieBand` come from the same block: mixing a shipped-gear
+  // margin with an anchored band would compare a number against the precision of
+  // a different run.
+  const measured = usableShipped(entry.shipped) ? entry.shipped : null
+  const margin = measured ? measured.margin : best.dps / simc.dps - 1
+  const noise = measured ? measured.tieBand : combinedNoise(best.dpsError, simc.dpsError)
   if (margin <= noise) return plain
 
   return {
     rankDps: simcDps * (1 + margin),
     simcDps,
     projected: true,
+    marginBasis: measured ? 'shipped-gear' : 'anchor',
     gain: margin,
     noise,
     computed: best,

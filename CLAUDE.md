@@ -5005,14 +5005,18 @@ Demon Hunter (Fel-Scarred) and Devourer (Annihilator) each gain a place.
 **17 builds are numerically ahead and only 12 clear the tie band**, which is
 the argument for the tie rule over a fixed percentage stated as a count.
 
-One thing this leaves open, filed as an issue rather than papered over.
-(The projection's assumption is no longer untested -- see the section below;
-#52 measured it and it does not hold on every build.) `web/` has **no unit-test
-runner at all** --
-no `*.test.*` under `web/src` and no `test` script -- so the module that decides
-the published site's ranking order is guarded in CI by `tsc` alone (#54). For
-this change it was compiled standalone and run against the committed MID2
-documents, with two canaries confirmed red; that was a session, not a gate.
+**Both things this once left open are closed, and both sentences here were still
+the open ones on 2026-08-26.** The projection's assumption is measured -- see the
+section below; #52 ran it and it does not hold on every build. And `web/` no
+longer has "no unit-test runner at all": PR #62 gave it **vitest**, a `test`
+script and `src/lib/bestBuild.test.ts`, so the module that decides the published
+ranking order is executed in CI rather than merely compiled (#54, closed).
+
+Worth keeping as a shape rather than as news: this paragraph was *edited* on
+2026-08-26 to correct its other half, and the reader -- me -- carried the
+test-runner sentence across unchanged because it was not what the edit was
+about. A false claim survives an edit to the paragraph it sits in. Re-read the
+whole paragraph, not the clause being changed.
 
 ### The projection was measured, and it is right until it is very wrong
 
@@ -5083,6 +5087,51 @@ Two side findings the run produced, neither of which is about the projection:
   was; the likeliest cause is a different simc revision between then and now, and
   that is a guess, not a measurement. It is the reason the control exists and it
   fired on exactly two rows.
+
+### What replaced it: the margin is measured on simc's own gear
+
+`shipped_json` in `computedbuilds.py`, filled by `_head_to_head` in `cli.py`,
+read by `bestBuildFor` in both frontends. `computed-builds.json` rows now carry a
+**`shipped`** block -- simc's build against the winner, on the kit simc's own
+profile wears, only `talents=` varying -- and the ranking uses that margin when
+it is there.
+
+Four decisions in it, none of them arithmetic:
+
+- **`rankDps` is still a product**, `publishedDps x (1 + margin)`, and `projected`
+  still says so. What changed is not that it became a measurement; it is that the
+  ratio no longer has to cross a gear difference to get there. `marginBasis` names
+  which kit the margin came from, so a row on the fallback is identifiable from
+  outside rather than by its date.
+- **The band travels with the margin it judges.** A shipped-gear margin against an
+  anchored band compares a number to the precision of a different run, and the two
+  differ enough to change a verdict -- `test_never_mixes_a_shipped_margin_with_an_anchored_band`
+  is the pin, and reverting the one-line pairing turns it red.
+- **Absent, never null.** A document written before this has no block, and that is
+  a third state beside "measured a lead" and "measured a tie". The fallback is the
+  projection, which is *not* a good fallback -- 2.52 points wrong on one build in
+  twelve, with nothing visible saying which -- and the answer is to re-run the
+  search rather than to blind the view.
+- **Only two contenders are re-measured**, simc's and the winner. The runner-up is
+  never ranked with, so measuring it would buy nothing. `--no-shipped-gear` turns
+  the whole thing off; a blind `--calibrate` run skips it unconditionally, because
+  its "simc" candidate is the scrambled build and the number would answer a
+  question nobody asked.
+
+**Cost, from the projection run rather than guessed:** one extra invocation per
+build, **33 seconds** measured over eleven builds, against the **3.9 CPU-minutes**
+a build's search costs -- about 14%. There was never a budget argument for
+projecting; nobody had done the arithmetic.
+
+**What it does to the published data: nothing, until a search re-runs.** No
+committed byte moves, `MID1` has no such document at all, and every row without a
+`shipped` block behaves exactly as it did. The first `build-search` publish pass
+fills it in -- and #73 wants that pass anyway, for two unrelated reasons.
+
+Expect one visible change when it does. Devastation Evoker (Scalecommander) is
++0.02% on simc's own gear, inside any band, so it **loses its mark**: the build
+the site currently shows as its largest computed gain is one the measurement says
+is not a gain at all.
 
 ## The Ulria sheet: an independent check that mostly agrees
 

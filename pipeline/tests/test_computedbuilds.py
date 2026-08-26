@@ -352,3 +352,65 @@ def test_a_tier_with_no_repaired_build_produces_the_bytes_it_did_before():
     """Emitted only when true, the rule `unvalidated` already follows: a field that
     appears everywhere as `false` rewrites every published document for nothing."""
     assert "repairedSeed" not in entry().to_json()
+
+
+# --------------------------------------------------------------------------------
+# The shipped-gear margin (#72)
+# --------------------------------------------------------------------------------
+
+SHIPPED_KEYS = {"simcDps", "bestDps", "margin", "tieBand", "separates"}
+
+
+def test_the_shipped_gear_block_is_absent_rather_than_null_when_nothing_measured():
+    """Three states, not two: measured, measured-and-tied, and *not measured*.
+
+    The third is the one the site falls back to the projection for, and the projection
+    is wrong by 2.52 points on one of MID2's twelve marked builds. A ``null`` block
+    would be indistinguishable from a margin the run genuinely measured as zero, and a
+    reader cannot ask a null which it meant.
+    """
+    row = computedbuilds.build_document(
+        "MID2",
+        [entry()],
+        iterations=3000,
+        deterministic=True,
+        builds_available=42,
+        calibration=None,
+    )["specs"][0]
+    assert "shipped" not in row
+
+    measured = computedbuilds.build_document(
+        "MID2",
+        [entry(shipped=computedbuilds.shipped_json(measurement(100.0), measurement(103.0)))],
+        iterations=3000,
+        deterministic=True,
+        builds_available=42,
+        calibration=None,
+    )["specs"][0]
+    assert set(measured) == SPEC_KEYS | {"shipped"}
+    assert set(measured["shipped"]) == SHIPPED_KEYS
+
+
+def test_the_shipped_margin_is_the_ratio_of_the_two_measurements():
+    block = computedbuilds.shipped_json(measurement(200.0), measurement(206.0))
+    assert block["margin"] == 0.03
+    assert block["simcDps"] == 200.0
+    assert block["bestDps"] == 206.0
+
+
+def test_a_shipped_margin_inside_the_band_does_not_separate():
+    """The tie rule applies here exactly as it does on the anchor. Devastation Evoker
+    (Scalecommander) is why: +2.53% anchored and +0.02% on simc's own gear, and the
+    second of those must not read as a lead."""
+    tied = computedbuilds.shipped_json(measurement(100.0, 0.5), measurement(100.02, 0.5))
+    assert tied["separates"] is False
+    clear = computedbuilds.shipped_json(measurement(100.0, 0.05), measurement(103.0, 0.05))
+    assert clear["separates"] is True
+
+
+def test_a_side_that_did_not_measure_yields_no_block_at_all():
+    """A half-measured head-to-head is not a margin. Publishing one side against a
+    missing other would put a number where there is no comparison."""
+    assert computedbuilds.shipped_json(None, measurement()) is None
+    assert computedbuilds.shipped_json(measurement(), None) is None
+    assert computedbuilds.shipped_json(measurement(0.0), measurement()) is None
