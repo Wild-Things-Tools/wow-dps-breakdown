@@ -32,6 +32,25 @@ concurrency:
 permissions:
   contents: write
 
+# Dispatch inputs are bound ONCE here and read as `$VAR` in every script, the way
+# `gear.yml` does it. `${{ }}` is substituted into a `run:` block **before bash
+# parses it**, so a dispatched value carrying a quote and a semicolon becomes
+# script -- in a workflow whose `publish` job holds `contents: write` and pushes to
+# `main`. CLAUDE.md states this for `harvest-builds.yml` and says "there is one
+# pattern here, not two"; this file was the second one. An environment variable is
+# data to bash however it is spelled.
+#
+# `matrix.shard` and `runner.os` stay interpolated: neither is a dispatched value.
+env:
+  TIER: ${{ inputs.tier || 'latest' }}
+  TARGETS: ${{ inputs.targets || '1' }}
+  ITERATIONS: ${{ inputs.iterations || '3000' }}
+  SHARDS: ${{ inputs.shards || '6' }}
+  # Not an input, but the same substitution and the same job. Git allows a double
+  # quote in a ref name, so a branch could close the string the push command wraps
+  # it in. Cheaper to bind than to reason about.
+  REF_NAME: ${{ github.ref_name }}
+
 jobs:
   build-simc:
     name: Build SimulationCraft
@@ -108,21 +127,16 @@ jobs:
       #
       # Every shard runs them over the same generator files, so the discovered set
       # is identical everywhere and the round-robin split stays consistent -- the
-      # same reason `sims.yml` gives. Inputs go through `env:` rather than into the
-      # script text: `${{ }}` is substituted before bash parses, and this job holds
-      # `contents: write`.
+      # same reason `sims.yml` gives. `$TIER` comes from the workflow-level `env:`
+      # block, like every other script in this file.
       - name: Materialise the unvalidated profiles
         run: wowdps -v unvalidated --tier "$TIER" --simc-source bundle --write
-        env:
-          TIER: ${{ inputs.tier || 'latest' }}
 
       # After the unvalidated pass, because some cells deliberately supersede a
       # refused materialised profile of the same filename. A cell whose hash no
       # longer validates is refused and reported rather than written.
       - name: Materialise the extra builds
         run: wowdps -v extra-builds --tier "$TIER" --simc-source bundle --write
-        env:
-          TIER: ${{ inputs.tier || 'latest' }}
 
       - name: Sweep
         run: |
@@ -130,10 +144,10 @@ jobs:
             --simc bundle/simc \
             --profiles bundle/profiles \
             --simc-source bundle \
-            --tier "${{ inputs.tier || 'latest' }}" \
-            --targets "${{ inputs.targets || '1' }}" \
-            --max-iterations "${{ inputs.iterations || '3000' }}" \
-            --shard "${{ matrix.shard }}/${{ inputs.shards || '6' }}" \
+            --tier "$TIER" \
+            --targets "$TARGETS" \
+            --max-iterations "$ITERATIONS" \
+            --shard "${{ matrix.shard }}/$SHARDS" \
             --out shard
 
       - uses: actions/upload-artifact@v4
@@ -185,8 +199,8 @@ jobs:
           git commit -m "data: refresh buff and tier set comparison $(date -u +%Y-%m-%d)"
           pushed=false
           for attempt in 1 2 3; do
-            git pull --rebase --autostash origin "${{ github.ref_name }}" || true
-            if git push origin "HEAD:${{ github.ref_name }}"; then pushed=true; break; fi
+            git pull --rebase --autostash origin "$REF_NAME" || true
+            if git push origin "HEAD:$REF_NAME"; then pushed=true; break; fi
             echo "push attempt $attempt lost the race; retrying"
             sleep $((attempt * 5))
           done
