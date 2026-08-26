@@ -4610,6 +4610,56 @@ argues for elsewhere:
 
 The freedom is over the button. The standard over what may be published is unchanged.
 
+### Actions can queue for forty minutes, and "no checks" reads exactly like "never fired"
+
+Measured **2026-08-26**, and recorded because the wrong conclusion was drawn twice
+before the right one, in a way that nearly put a false rule in this file.
+
+**What happened.** PR #83's head carried **zero check runs** when polled repeatedly
+between opening it and half an hour later; a close-and-reopen added nothing;
+`wtt-frontend#149` looked identical for four hours; and the merge to `main` produced
+no push run two minutes in. Read together that looks exactly like trigger
+suppression, and the merge went ahead on local verification with a PR comment saying
+CI had not fired.
+
+**All of it had fired.** By 16:45 the same commits carried:
+
+```
+ef4c30b   6 checks, all success   pull_request runs at 16:41:49 and 16:43:41
+6f8f6c64  CI + Deploy, success    push runs at 16:44:13 and 16:44:14
+```
+
+So the delay was roughly **forty minutes on the pull-request events and ten on the
+pushes**, against the seconds they had taken all morning on the same repository.
+Nothing was suppressed. The rule to keep is the boring one: **an empty check list and
+a queue that has not started are the same picture**, so read
+`.../commits/<sha>/check-runs` for `total_count` and give it a long time before
+concluding anything. A close-and-reopen proves nothing either -- it adds a second
+queued run to the same queue, which is what the two `ef4c30b` runs above are.
+
+**The one genuine non-trigger is a different thing and is documented.** `12eaa15`,
+the commit `build-search.yml` pushed itself, has **0 checks and always will**: a push
+made with a workflow's own `GITHUB_TOKEN` does not trigger further workflows, by
+design, to stop recursion. That is why `deploy.yml` never runs for a data-committing
+workflow's output, and it is not a delay -- waiting does not fix it.
+
+**So after any workflow commits data, dispatch `Deploy` by hand.** It has a
+`workflow_dispatch` for exactly this. On 2026-08-26 the 5-target computed-builds
+commit sat on `main` undeployed for that reason, and nothing anywhere went red,
+because no run existed to be red.
+
+`ci.yml` gained a `workflow_dispatch` the same day, justified by the same case: a
+commit a workflow pushed gets no CI ever, and without a dispatch there is no route to
+make CI look at it at all.
+
+**What the false alarm did produce that is worth keeping.** When CI is genuinely
+unavailable, the verification is done by hand on the exact sha and written into a PR
+comment with its numbers -- `pytest -q`, `ruff check`, `ruff format --check`, the
+canaries. And **re-run the canaries after any refactor**, not only before it: both
+PRs that afternoon were refactored after their canaries first passed (a `B023` fix
+moved a closure into a pure function), and a canary confirmed before a refactor says
+nothing about the code that shipped.
+
 ## The issue protocol: tracking that survives the session
 
 Standing instruction from the owner (2026-08-24): issues are created, updated

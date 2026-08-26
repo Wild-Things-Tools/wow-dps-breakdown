@@ -392,7 +392,7 @@ def build_document(
             "the difference is the talents."
         ),
         "settings": {"iterations": iterations, "deterministic": deterministic},
-        "coverage": {"specs": len(entries), "specsAvailable": builds_available},
+        "coverage": coverage_of([entry.to_json() for entry in entries], builds_available),
         "specs": [entry.to_json() for entry in entries],
     }
     if calibration is not None:
@@ -400,6 +400,31 @@ def build_document(
     if notes:
         document["notes"] = list(notes)
     return document
+
+
+def coverage_of(rows: list[dict], builds_available: int | None) -> dict:
+    """``specs`` counts BUILDS, never rows, and ``rows`` is published beside it.
+
+    Both are needed the moment the document holds more than one target count, and
+    getting it wrong is this project's own named failure -- plausible arithmetic over
+    the wrong column. The 5-target publish on 2026-08-26 landed 52 rows at one target
+    and 52 at five, and ``coverage.specs = len(merged)`` duly wrote **104 of 52**: a
+    sentence no reader can act on, in the field whose whole job is to say how much of
+    the tier a document covers. (`gear.json`'s own rule -- "print it from that field,
+    never from the array length" -- says the same thing one document over.)
+
+    ``targetCounts`` is published too, because "104 rows" and "52 builds" still do not
+    say *which* target counts were searched, and a reader comparing two tiers needs
+    that before comparing anything else.
+    """
+    return {
+        "specs": len({row.get("id") for row in rows if row.get("id")}),
+        "specsAvailable": builds_available,
+        "rows": len(rows),
+        "targetCounts": sorted(
+            {row.get("targets") for row in rows if row.get("targets") is not None}
+        ),
+    }
 
 
 def merge_specs(published: list[dict], fresh: list[dict]) -> list[dict]:
@@ -460,9 +485,9 @@ def write_computed_builds(out_dir: Path, document: dict) -> Path:
                 if merged != document["specs"]:
                     document = dict(document)
                     document["specs"] = merged
-                    coverage = dict(document.get("coverage") or {})
-                    coverage["specs"] = len(merged)
-                    document["coverage"] = coverage
+                    document["coverage"] = coverage_of(
+                        merged, (document.get("coverage") or {}).get("specsAvailable")
+                    )
             settled = dict(document)
             for key in _PROVENANCE:
                 if key in published:
