@@ -505,6 +505,50 @@ def write_spec(out_dir: Path, result: SpecResult) -> Path:
     return path
 
 
+def publish_manifest(
+    out_dir: Path,
+    results: list[SpecResult],
+    scenarios: list[Scenario],
+    tier: str,
+    simc_meta: dict,
+    settings: SimSettings,
+    coverage: dict | None = None,
+    *,
+    whole_run: bool,
+) -> Path:
+    """Write the tier manifest and settle its provenance -- in that order, once.
+
+    The order is the whole content of this function, and it is why it exists rather
+    than living in the CLI. Three things have to happen in exactly this sequence and
+    every one of them was got wrong before:
+
+    1. **Read what is published BEFORE writing anything.** The write below clobbers
+       the file a settle would otherwise compare against.
+    2. **Complete the coverage block.** `spec_coverage` emits six keys and
+       `apply_simulated_coverage` adds three; a settle against a published nine-key
+       block from a six-key document can never compare equal.
+    3. **Settle last**, on the finished document. Settling earlier is overwritten.
+
+    Held together in the CLI these were three statements a refactor could reorder
+    silently -- and a unit test over a hand-made manifest cannot see the order at all,
+    which is exactly how the previous arrangement passed 969 tests while never once
+    settling anything on the path that publishes.
+
+    ``whole_run`` is False for a shard, which knows only its slice: it gets neither the
+    third coverage state nor a settle, and its output is a temporary artifact the merge
+    reads rather than something anybody publishes.
+    """
+    path = out_dir / "index.json"
+    published = published_manifest(path)
+    write_manifest(out_dir, results, scenarios, tier, simc_meta, settings, coverage)
+    if whole_run:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        apply_simulated_coverage(document)
+        document = settle_provenance(document, published)
+        path.write_text(json.dumps(document, separators=(",", ":")) + "\n", encoding="utf-8")
+    return path
+
+
 def write_manifest(
     out_dir: Path,
     results: list[SpecResult],
@@ -551,11 +595,14 @@ def write_manifest(
         # shard, which knows only its own slice; the merge carries the whole-run value.
         **({"coverage": coverage} if coverage else {}),
     }
+    # Deliberately NOT settled here. This is an intermediate on the only path that
+    # calls it: `cmd_build` re-reads the file, adds `apply_simulated_coverage`'s three
+    # keys and writes again, so a settle at this point compares a six-key coverage
+    # block against a published nine-key one, can never fire, and is overwritten a
+    # moment later regardless. Settling the FINISHED document is the caller's job --
+    # `settle_provenance` plus `published_manifest`, captured before this write.
     path = out_dir / "index.json"
-    path.write_text(
-        json.dumps(_settle_provenance(manifest, path), separators=(",", ":")) + "\n",
-        encoding="utf-8",
-    )
+    path.write_text(json.dumps(manifest, separators=(",", ":")) + "\n", encoding="utf-8")
     return path
 
 
@@ -563,7 +610,23 @@ def write_manifest(
 _PROVENANCE = ("generatedAt", "simc")
 
 
-def _settle_provenance(manifest: dict, path: Path) -> dict:
+def published_manifest(path: Path) -> dict | None:
+    """The manifest already on disk at ``path``, or None when there is none to read.
+
+    Separate from the settle because **the caller has to read it before it writes**.
+    `cmd_build` writes the manifest twice -- once from `write_manifest`, then again
+    after `apply_simulated_coverage` -- and a settle that re-read the path on the
+    second write would compare the intermediate against itself, always find it equal,
+    and settle onto the fresh timestamp it had just written. That is a settle that
+    reports success and keeps nothing.
+    """
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def settle_provenance(manifest: dict, published: dict | None) -> dict:
     """Keep the published provenance when nothing about the dataset changed.
 
     Deterministic sims exist so that a run with no upstream change reproduces byte
@@ -580,9 +643,7 @@ def _settle_provenance(manifest: dict, path: Path) -> dict:
     `generatedAt` therefore reads as "when this data last changed", which is also the
     more honest thing to show next to figures that have not moved.
     """
-    try:
-        published = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    if published is None:
         return manifest
 
     if {k: v for k, v in published.items() if k not in _PROVENANCE} != {
@@ -813,8 +874,20 @@ def merge_shards(shard_dirs: list[Path], out_dir: Path) -> None:
     # for and got nothing out of is only answerable here.
     apply_simulated_coverage(merged)
 
-    (out_dir / "index.json").write_text(
-        json.dumps(merged, separators=(",", ":")) + "\n", encoding="utf-8"
+    # The settle belongs HERE, on the finished document, and it was missing entirely.
+    # `settle_provenance` had exactly one call site -- inside `write_manifest`, which
+    # a sharded run never reaches for the published tier -- so on the path that
+    # actually publishes, `generatedAt` was rewritten on every run. Measured over the
+    # last twenty `data: refresh simulations` commits: all twenty touched index.json
+    # and three of them touched no spec file at all, i.e. were pure timestamp commits
+    # (dbf5075 moved 04:10:45 -> 05:08:21 at an unchanged simc revision with nothing
+    # else in the diff). That is the exact churn the determinism was bought to avoid,
+    # and the patch panel says in words that it does not happen.
+    path = out_dir / "index.json"
+    path.write_text(
+        json.dumps(settle_provenance(merged, published_manifest(path)), separators=(",", ":"))
+        + "\n",
+        encoding="utf-8",
     )
     log.info("merged %d shards -> %d specs", len(manifests), len(merged["specs"]))
 

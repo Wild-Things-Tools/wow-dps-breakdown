@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -192,7 +193,7 @@ def test_merge_recomputes_the_error_over_the_whole_run(tmp_path):
 
 def test_manifest_keeps_its_timestamp_when_nothing_changed(tmp_path):
     """Determinism is worth nothing if the manifest rewrites itself every run."""
-    from wowdps.dataset import _settle_provenance
+    from wowdps.dataset import published_manifest, settle_provenance
 
     path = tmp_path / "index.json"
     published = {
@@ -208,19 +209,232 @@ def test_manifest_keeps_its_timestamp_when_nothing_changed(tmp_path):
         "simc": {"gitRevision": "f50a212"},
         "specs": [{"id": "mage_fire_sunfury", "dps": 100.0}],
     }
-    assert _settle_provenance(rerun, path) == published
+    assert settle_provenance(rerun, published_manifest(path)) == published
 
     # A real change carries the fresh provenance with it.
     changed = dict(rerun, specs=[{"id": "mage_fire_sunfury", "dps": 101.0}])
-    assert _settle_provenance(changed, path) == changed
+    assert settle_provenance(changed, published_manifest(path)) == changed
 
 
 def test_settle_provenance_survives_a_missing_or_broken_manifest(tmp_path):
-    from wowdps.dataset import _settle_provenance
+    from wowdps.dataset import published_manifest, settle_provenance
 
     fresh = {"generatedAt": "2026-08-14T08:05:14+00:00", "specs": []}
-    assert _settle_provenance(fresh, tmp_path / "absent.json") == fresh
+    assert settle_provenance(fresh, published_manifest(tmp_path / "absent.json")) == fresh
 
     broken = tmp_path / "broken.json"
     broken.write_text("{not json", encoding="utf-8")
-    assert _settle_provenance(fresh, broken) == fresh
+    assert settle_provenance(fresh, published_manifest(broken)) == fresh
+
+
+def _shard(root: Path, spec_id: str, dps: float, when: str) -> Path:
+    """One shard directory, in the shape `merge_shards` reads."""
+    tier = root / "MID2"
+    (tier / "specs").mkdir(parents=True, exist_ok=True)
+    (tier / "index.json").write_text(
+        json.dumps(
+            {
+                "generatedAt": when,
+                "tier": "MID2",
+                "settings": {"medianDpsError": 0.05},
+                "simc": {"gitRevision": "aaaaaaa"},
+                # The real manifest carries each build's numbers, not just its id
+                # (`SpecResult.summary()` -> scenarios.<name>.dps per target count),
+                # which is what makes a moved DPS visible to the settle at all. A
+                # fixture holding only the id cannot test that and quietly asserts
+                # the opposite.
+                "specs": [{"id": spec_id, "scenarios": {"patchwerk": {"dps": {"1": dps}}}}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tier / "specs" / f"{spec_id}.json").write_text(
+        json.dumps(
+            {
+                "id": spec_id,
+                "scenarios": {
+                    "patchwerk": {"targets": [{"targets": 1, "dps": dps, "dpsError": 0.05}]}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return tier
+
+
+def test_the_sharded_merge_settles_the_timestamp_it_publishes(tmp_path):
+    """The path that actually publishes had no settle at all.
+
+    `settle_provenance` had one call site, inside `write_manifest`, and the nightly
+    goes through `wowdps merge` -> `merge_shards`, which wrote `index.json` itself.
+    So `generatedAt` was rewritten on every run and every run committed -- measured
+    over the last twenty `data: refresh simulations` commits, three of which touched
+    no spec file whatsoever and were pure timestamp diffs.
+    """
+    out = tmp_path / "data" / "MID2"
+
+    first = _shard(tmp_path / "run-1", "mage_fire_sunfury", 100.0, "2026-08-13T19:22:08+00:00")
+    merge_shards([first], out)
+    published = json.loads((out / "index.json").read_text())
+
+    # Same numbers, later run, newer simc: nothing about the DATA moved.
+    again = _shard(tmp_path / "run-2", "mage_fire_sunfury", 100.0, "2026-08-14T08:05:14+00:00")
+    (again / "index.json").write_text(
+        json.dumps(
+            {
+                **json.loads((again / "index.json").read_text()),
+                "simc": {"gitRevision": "bbbbbbb"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    merge_shards([again], out)
+    quiet = json.loads((out / "index.json").read_text())
+
+    assert quiet["generatedAt"] == published["generatedAt"]
+    assert quiet["simc"] == published["simc"]
+
+    # And a real change still carries the fresh provenance with it, or the settle
+    # would be worse than its absence: a moved number under a stale date.
+    moved = _shard(tmp_path / "run-3", "mage_fire_sunfury", 101.0, "2026-08-15T08:05:14+00:00")
+    merge_shards([moved], out)
+    changed = json.loads((out / "index.json").read_text())
+    assert changed["generatedAt"] == "2026-08-15T08:05:14+00:00"
+
+
+def test_the_settle_compares_documents_of_the_same_coverage_shape(tmp_path):
+    """The unsharded path called the settle and it could never fire.
+
+    `spec_coverage` emits six keys; `apply_simulated_coverage` adds `broken`,
+    `simulated` and `unvalidatedSimulated` afterwards. `write_manifest` settled the
+    SIX-key manifest against a published file carrying NINE, so the non-provenance
+    comparison was unequal on every run -- and the caller then overwrote the result.
+    The settle now runs on the finished document, which is the only one comparable
+    with what is on disk.
+    """
+    from wowdps.dataset import apply_simulated_coverage, published_manifest, settle_provenance
+
+    six = {
+        "comparedWith": "MID1",
+        "damageSpecs": 1,
+        "damageSpecsKnown": 1,
+        "missing": [],
+        "shipped": [{"class": "Mage", "spec": "Fire"}],
+        "unvalidated": [],
+    }
+    base = {"tier": "MID2", "specs": [{"id": "mage_fire_sunfury", "class": "Mage", "spec": "Fire"}]}
+
+    # What the published file holds: the finished nine-key block.
+    published_doc = dict(
+        base,
+        generatedAt="2026-08-13T19:22:08+00:00",
+        simc={"gitRevision": "aaaaaaa"},
+        coverage=dict(six),
+    )
+    apply_simulated_coverage(published_doc)
+    assert set(published_doc["coverage"]) > set(six)
+
+    path = tmp_path / "index.json"
+    path.write_text(json.dumps(published_doc), encoding="utf-8")
+    on_disk = published_manifest(path)
+
+    # Settling the INTERMEDIATE (six keys) against it cannot fire -- this is the bug.
+    intermediate = dict(
+        base,
+        generatedAt="2026-08-14T08:05:14+00:00",
+        simc={"gitRevision": "bbbbbbb"},
+        coverage=dict(six),
+    )
+    assert settle_provenance(intermediate, on_disk)["generatedAt"] == "2026-08-14T08:05:14+00:00"
+
+    # Settling the FINISHED document does, which is where the call now lives.
+    finished = dict(intermediate)
+    finished["coverage"] = dict(six)
+    apply_simulated_coverage(finished)
+    assert settle_provenance(finished, on_disk)["generatedAt"] == "2026-08-13T19:22:08+00:00"
+
+
+def test_publishing_the_same_run_twice_keeps_the_timestamp_end_to_end(tmp_path, monkeypatch):
+    """The ORDER, exercised rather than assumed.
+
+    Every settle test above works on a hand-made manifest, so none of them can see
+    whether the caller reads the published file before it writes, completes the
+    coverage block before it compares, or settles before it saves. Removing the settle
+    from `cmd_build` used to break no test at all -- 971 passed with the unsharded path
+    settling nothing. This drives the real `publish_manifest`, which is the one place
+    that order is written down.
+
+    **The clock has to be moved by hand.** `write_manifest` stamps
+    `datetime.now(UTC).isoformat(timespec="seconds")`, and two calls in one test land
+    in the same second -- so a first version of this test passed with the settle
+    deleted, with the read moved after the write, and with the settle hoisted above
+    `apply_simulated_coverage`. It asserted that two identical documents were
+    identical, which they are for reasons that have nothing to do with the settle.
+    """
+    from datetime import UTC, datetime
+
+    from wowdps import dataset as dataset_module
+    from wowdps.dataset import SpecResult, publish_manifest
+    from wowdps.profiles import SpecProfile
+    from wowdps.scenarios import PATCHWERK
+    from wowdps.simc_runner import SimSettings
+
+    stamps = iter(
+        [
+            datetime(2026, 8, 13, 19, 22, 8, tzinfo=UTC),
+            datetime(2026, 8, 14, 8, 5, 14, tzinfo=UTC),
+            datetime(2026, 8, 15, 8, 5, 14, tzinfo=UTC),
+        ]
+    )
+
+    class _Clock:
+        @staticmethod
+        def now(_tz=None):
+            return next(stamps)
+
+    monkeypatch.setattr(dataset_module, "datetime", _Clock)
+
+    profile = SpecProfile(
+        path=tmp_path / "MID2_Mage_Fire.simc",
+        tier="MID2",
+        wow_class="Mage",
+        spec="Fire",
+        name_hero="Sunfury",
+        hero_talent="Sunfury",
+        role="spell",
+        talent_hash="",
+    )
+    coverage = {
+        "comparedWith": None,
+        "damageSpecs": 1,
+        "damageSpecsKnown": 1,
+        "missing": [],
+        "shipped": [{"class": "Mage", "spec": "Fire"}],
+        "unvalidated": [],
+    }
+    settings = SimSettings()
+    out = tmp_path / "data" / "MID2"
+
+    def once(revision: str) -> dict:
+        publish_manifest(
+            out,
+            [SpecResult(profile=profile)],
+            [PATCHWERK],
+            "MID2",
+            {"gitRevision": revision},
+            settings,
+            dict(coverage),
+            whole_run=True,
+        )
+        return json.loads((out / "index.json").read_text())
+
+    first = once("aaaaaaa")
+    assert first["generatedAt"].startswith("2026-08-13")
+    # The finished document, not the intermediate: the settle has to compare like
+    # with like or it can never fire.
+    assert "broken" in first["coverage"]
+
+    # A second run of the same data at a later clock and a newer simc.
+    second = once("bbbbbbb")
+    assert second["generatedAt"] == first["generatedAt"], "a quiet run restamped the manifest"
+    assert second["simc"] == first["simc"], "a quiet run took the new simc revision"
