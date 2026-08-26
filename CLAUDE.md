@@ -599,6 +599,58 @@ carry the same `always()` publish job over an upload step with no condition. Whe
 their sweeps write partial output at all is a separate question from this one, so
 that is a finding for a human rather than a change made in passing.
 
+### Two sweeps covered simc's profiles and the ranking covered the tier
+
+`buffs.yml` and `gear.yml` did not run `wowdps unvalidated` or `wowdps extra-builds`
+before sweeping, where `sims.yml` and `build-search.yml` do. So both swept only the
+profiles simc ships, while `index.json` ranks everything this project supplies as
+well. Measured on 2026-08-26, MID2:
+
+| document | builds | tier | its own `coverage` |
+|---|---:|---:|---|
+| `index.json` | **52** | 52 | -- |
+| `buffs.json` (refreshed that day) | 31 | 52 | `{specs: 31, specsAvailable: 31}` |
+| `gear.json` (trinket, 2026-08-21) | 28 | 52 | `{specs: 28, specsAvailable: 28}` |
+
+**Both publish `specs == specsAvailable`, which reads as complete**, because
+`builds_available` is `len(found)` and `found` is whatever the profiles directory
+held when the run started. A denominator taken from the run's own view can never
+report a gap -- the same failure `medianDpsError` and `spec_coverage` each shipped
+once, in a field nobody re-read.
+
+**And it reaches the site as a false sentence.** Measured by calling the shipped
+`sweepCoverage` with the real numbers rather than by reading it:
+
+```
+GearView   sweepCoverage(28, 28, 52) -> "behind"
+  "Covers 28 of 52 builds in the tier. The sweep covered every build the tier
+   had when it ran; 24 builds have been added since."
+```
+
+The 24 were not added since. The sweep never looked at them. That is exactly what
+the comment above that branch warns against -- *"blames the calendar for a gap that
+is the run's"* -- arriving through the **input** rather than through the arithmetic
+its own test pins. The lesson is narrow and worth keeping: a guard written against a
+wrong computation does not protect against a wrong argument.
+
+**The two readers disagree, and fixing the quieter one alone makes it worse.**
+`BuffsView` passes `null` where `GearView` passes the field, so it says *"This file
+states no coverage"* about a file that states coverage. Wiring it up on its own
+returns `sweepCoverage(31, 31, 52)` -- the same false *"21 builds have been added
+since"*. Input first, reader second; the order is the whole fix.
+
+Two things found in `gear.yml` on the way, both the same mistake:
+
+- Its bundle put simc's generated tables at **`bundle/dbc/generated`, which nothing
+  in the workflow reads**, under a comment about `wowdps gear-candidates` -- a
+  command it never runs, since `cmd_gear` reads the committed `gear_pools.json`.
+  `wowdps extra-builds` does read them, under `engine/dbc/generated`.
+- Its cost header read **"26 specs" against a tier of 52 builds**, so every figure
+  in it was half: a full single-target trinket pass is ~620 CPU-min, not ~310, and
+  1+5 targets does not fit the monthly budget at all. Same shape as the
+  baseline-combination table above -- plausible arithmetic over the wrong column,
+  and this one had been load-bearing for a scheduling decision.
+
 ## The gear anchor: what a computed build wears
 
 `gearanchor.py` + `wowdps gear-anchor`. A build this project *computes* -- from a
@@ -3399,6 +3451,39 @@ is spent", the wrong diagnosis with the right shape. `PointLedger.requests_sent`
 `request_headers` record it; nothing enforces it, because that such a header exists is
 not established from this side.
 
+### What the Heroic pass found, and where it stops
+
+MID2, `--difficulty 4 --order public --reports 30`, CI 32992502096 on 2026-08-26,
+committed as `4dffc6b`. **2,769 points over 2,616 queries** (3,209 served from the
+cache) against 18,000 an hour -- 15.4%, no abort. `measurements[]` per encounter:
+
+| boss | Mythic | Heroic |
+|---|---:|---:|
+| Sszorak | 0 | **17** |
+| The Twin Fangs | 0 | **10** |
+| The Coiled Altar | 0 | 0 |
+| Ula'tek | 0 | 0 |
+| Entombed Sentinels | 8 | **27** |
+| Vashnik the Malignant | 6 | **30** |
+| Nek'zali the Soulcoiler | 6 | **25** |
+| The Lost Explorers | 9 | 7 |
+
+Two of the four empty bosses are measured for the first time, and three of the four
+that had Mythic data have a three-to-fivefold bigger sample -- 30 kills against 6 is
+the difference between a band and a band worth reading. Two bosses have nothing at
+either difficulty, which is a fact about the zone rather than about the run.
+
+**Nothing on the site shows any of it.** `grep -rn "measuredDifficulty\|\.measurements"
+web/src/` returns **zero hits**: the view reads `measured` alone, which is the
+hardest difficulty read, which is Mythic, which is 0 for Sszorak. So seventeen kills
+were read, published, and are invisible -- this project's signature defect, one frame
+above the pipeline this time.
+
+It is deliberately still unfixed, and the reason is a decision rather than work.
+Drawing a Heroic band on a tab a reader takes for Mythic is a mislabelling, and it is
+the *same* mislabelling that the document's own `measuredDifficulty` exists to
+prevent. Issue #48 holds the three options; the run half of it is now done.
+
 ## Probing across hours, rather than restarting
 
 Warcraft Logs meters by points per hour and a pass at a useful sample size does not
@@ -4685,11 +4770,30 @@ for him. It does not any more. Concretely, an agent may now, without asking:
 Three things that do **not** follow from it, and each is a rule this file already
 argues for elsewhere:
 
-- **A run that replaces data is not the same as one that adds it.** A Heroic
-  `fight-probe` pass overwrites the Mythic bands in the same document; a `--no-resume`
-  pass discards measurements a previous run paid for. Those need the owner, not
+- **A run that replaces data is not the same as one that adds it.** A `--no-resume`
+  pass discards measurements a previous run paid for. That needs the owner, not
   because the button is locked but because the *loss* is the decision. `write_fights`
-  already refuses the second one without `--force`, and that refusal stays.
+  already refuses it without `--force`, and that refusal stays.
+
+  **The Heroic example this bullet used to lead with is wrong, and it was wrong when
+  it was written.** It said a Heroic `fight-probe` pass "overwrites the Mythic bands
+  in the same document". Measured on 2026-08-26 by running one (CI 32992502096, MID2,
+  `--difficulty 4 --order public --reports 30`, committed as `4dffc6b`): **every
+  Mythic block is byte-identical before and after**, and the only fields that moved
+  are `measurement.difficulty` and the stamps. The payload has been keyed on
+  `(encounterId, difficulty)` since `entry_key`/`load_previous`, the document
+  publishes `measurements[]` with one block per difficulty read, and `measuredDifficulty`
+  names which of them the headline `measured` block is (`_hardest`, the highest read).
+  Two difficulties coexist; neither replaces the other. Difficulty also participates
+  in `is_complete`, so a difficulty switch re-opens every encounter rather than
+  silently keeping the old answer.
+
+  The example was a plausible claim about a module that had since grown the machinery
+  to make it false -- the same shape as the `write_gear` entry that described intent
+  the code never grew into, pointing the other way. Note also the trap in reading it
+  back: the headline block shows Mythic while `measurement.difficulty` says Heroic,
+  which reads as a mislabelling until you notice `measuredDifficulty` sitting beside
+  it. It is not one.
 - **Budget is still arithmetic, not a feeling.** The Warcraft Logs point ceiling and
   the Actions-minute sums in this file are how a run is judged affordable before it
   starts. "Allowed to spend" is not "no longer counted".
