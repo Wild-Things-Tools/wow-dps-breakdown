@@ -1154,6 +1154,127 @@ def buildsearch_climb() -> int:
     return buildsearch.CLIMB_STEPS
 
 
+def cmd_projection_check(args: argparse.Namespace) -> int:
+    """Measure whether the published projection holds on simc's own gear (issue #52).
+
+    Two head-to-heads per build, both profileset-against-profileset: the same pair of
+    talent hashes on the gear anchor, and on simc's shipped kit. The first is the
+    control -- it must reproduce the published margin, or the run is measuring
+    something else and its second number means nothing.
+    """
+    from . import buildsearchrun, gearanchor, projectioncheck, talentrepair
+
+    simc_dir = Path(args.simc_source)
+    profiles_dir = Path(args.profiles)
+    tier = _resolve_tier(profiles_dir, args.tier)
+
+    document_path = Path(args.document or (Path(args.out) / tier / "computed-builds.json"))
+    if not document_path.is_file():
+        logging.error("no computed-builds document at %s", document_path)
+        return 1
+    document = json.loads(document_path.read_text(encoding="utf-8"))
+
+    marked = projectioncheck.marked_builds(document)
+    if not marked:
+        logging.error(
+            "%s carries no build whose computed talents beat simc's outside the tie "
+            "band, so there is no projection to check",
+            document_path,
+        )
+        return 1
+    if args.build:
+        marked = [e for e in marked if args.build in e["id"]]
+    if args.limit:
+        # Ranked by the margin the site actually draws, so a bounded run checks the
+        # loudest claims rather than an arbitrary slice.
+        marked.sort(key=lambda e: -(e["best"]["dps"] / e["simc"]["dps"]))
+        marked = marked[: args.limit]
+    if not marked:
+        logging.error("no marked build matches %r", args.build)
+        return 1
+
+    found = profiles.discover(profiles_dir, tier, dps_only=True)
+    by_id = {p.id: p for p in found}
+    traits = talenttree_traits(simc_dir, args.ptr)
+    corpus, _ = talentrepair.corpus_from(simc_dir, (tier,), ptr=args.ptr)
+    if not corpus:
+        logging.error("no shipped profile of %s decodes; cannot derive budget or framing", tier)
+        return 1
+    framing = talentrepair.observed_framing(corpus)
+    budget = talentedit_budget(corpus, tier)
+    try:
+        target = _anchor_target_for(simc_dir, tier, found, args.ptr)
+    except gearanchor.AnchorError as exc:
+        logging.error("%s", exc)
+        return 1
+
+    simc = simc_runner.find_simc(args.simc)
+    settings = SimSettings(target_error=0.0, max_iterations=args.iterations, threads=args.threads)
+
+    rows: list[projectioncheck.Comparison] = []
+    notes: list[str] = []
+    for entry in marked:
+        profile = by_id.get(entry["id"])
+        if profile is None:
+            notes.append(f"{entry['id']}: the tier no longer ships this profile, skipped")
+            continue
+        context = buildsearchrun.prepare(
+            profile,
+            traits=traits,
+            target=_target_for(target, simc_dir, tier, found, profile, args.ptr),
+            budget=budget,
+            framing=framing,
+            blind=False,
+            seed_value=0,
+        )
+        if context.blocked:
+            notes.append(f"{entry['id']}: {context.blocked}")
+            continue
+        candidates = projectioncheck.candidates_for(entry, context.nodes)
+        if candidates is None:
+            notes.append(f"{entry['id']}: a published talent hash will not decode, skipped")
+            continue
+
+        logging.info("%s: measuring anchored and shipped-gear head-to-head", entry["id"])
+        anchored = buildsearchrun.measure(
+            simc, context, settings, candidates, args.iterations, args.targets, args.timeout
+        )
+        # `gear=()` is the whole point: simc's own kit, only `talents=` overridden.
+        shipped = buildsearchrun.measure(
+            simc,
+            context,
+            settings,
+            candidates,
+            args.iterations,
+            args.targets,
+            args.timeout,
+            gear=(),
+        )
+        published = (entry["best"]["dps"] / entry["simc"]["dps"]) - 1
+        row = projectioncheck.compare(entry["id"], anchored, shipped, published)
+        if row is None:
+            notes.append(f"{entry['id']}: a side of the comparison did not measure, skipped")
+            continue
+        rows.append(row)
+        logging.info(
+            "%s: anchored %+.2f%%, shipped %+.2f%%, difference %+.2f pts (band %.2f)%s",
+            row.build_id,
+            row.anchored_margin * 100,
+            row.shipped_margin * 100,
+            row.difference * 100,
+            row.band * 100,
+            "" if row.reproduced is not False else "  [did NOT reproduce the published margin]",
+        )
+
+    for note in notes:
+        logging.warning("%s", note)
+    print(projectioncheck.verdict(rows))
+    if args.report:
+        projectioncheck.write_report(Path(args.report), tier, rows, notes)
+        logging.info("wrote %s", args.report)
+    return 0 if rows else 1
+
+
 def cmd_build_search(args: argparse.Namespace) -> int:
     """Search for talent builds, calibrate the search, and publish what passes.
 
@@ -2145,6 +2266,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="report which builds are searchable and where each seed comes from, and stop",
     )
     p_search.set_defaults(func=cmd_build_search)
+
+    p_proj = sub.add_parser(
+        "projection-check",
+        help="does a talent gain measured on the gear anchor hold on simc's own kit?",
+    )
+    p_proj.add_argument("--tier", default="latest")
+    p_proj.add_argument("--profiles", default=".work/simc/profiles")
+    p_proj.add_argument("--simc-source", default=".work/simc")
+    p_proj.add_argument("--simc", default=None, help="path to the simc binary")
+    p_proj.add_argument("--out", default="web/public/data")
+    p_proj.add_argument(
+        "--document",
+        default=None,
+        help="computed-builds.json to read; defaults to <out>/<tier>/computed-builds.json",
+    )
+    p_proj.add_argument("--build", default=None, help="only builds whose id contains this")
+    p_proj.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="check only the N largest published margins. 0 = every marked build",
+    )
+    p_proj.add_argument("--targets", type=int, default=1)
+    p_proj.add_argument("--iterations", type=int, default=3000)
+    p_proj.add_argument("--threads", type=int, default=0)
+    p_proj.add_argument("--timeout", type=int, default=3600)
+    p_proj.add_argument("--report", default=None, help="write the run's findings here as JSON")
+    p_proj.add_argument("--ptr", action="store_true", default=True)
+    p_proj.add_argument("--no-ptr", dest="ptr", action="store_false")
+    p_proj.set_defaults(func=cmd_projection_check)
 
     p_fights = sub.add_parser(
         "fights",
