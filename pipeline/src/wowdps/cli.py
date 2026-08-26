@@ -1791,11 +1791,23 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
         limit = float(before.get("limitPerHour") or 0)
         start = float(before.get("pointsSpentThisHour") or 0)
 
+        # `rate_limit()` is deliberately uncached (`warcraftlogs.rate_limit`), so every
+        # call is a real HTTP query AND is counted in the ledger. Called once per guild
+        # it dominated the run: the 20-guild MID1 pass sent 432 queries of which **180
+        # -- 42% -- were budget polls**, and 232 did the work. The ceiling still has to
+        # be checked BEFORE sending, so this polls once per boss and re-uses the reading
+        # across that boss's guilds. Worst case it overshoots by one boss's guilds
+        # rather than by one guild, which the 0.5-0.8 ceiling has ample room for.
+        budget = {"spent": start}
+
+        def refresh_budget() -> None:
+            if limit:
+                budget["spent"] = float(client.rate_limit().get("pointsSpentThisHour") or start)
+
         def over_ceiling() -> bool:
             if not limit:
                 return False
-            now = float(client.rate_limit().get("pointsSpentThisHour") or 0)
-            return now >= limit * args.point_ceiling
+            return budget["spent"] >= limit * args.point_ceiling
 
         for order, entry in enumerate(encounters, start=1):
             encounter_id = int(entry["encounterId"])
@@ -1842,6 +1854,7 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
                 boss.refused["no-zone"] = boss.refused.get("no-zone", 0) + 1
                 continue
             boss.zone_id = zone_id
+            refresh_budget()
 
             rows = (
                 ((rankings.get("worldData") or {}).get("encounter") or {}).get("fightRankings")
@@ -1864,6 +1877,8 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
                     logging.warning("point ceiling reached; stopping with what is measured")
                     return _write_progress_hours(args, bosses, client, start, limit)
                 reports: list[dict] = []
+                seen_codes: set[str] = set()
+                duplicates = 0
                 failed = False
                 truncated = False
                 for page in range(1, args.max_pages + 1):
@@ -1885,7 +1900,20 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
                         failed = True
                         break
                     listing = (payload.get("reportData") or {}).get("reports") or {}
-                    reports.extend(listing.get("data") or [])
+                    for report in listing.get("data") or []:
+                        # Keyed on the report code, because paging is not a snapshot: a
+                        # listing that shifts between page 1 and page 2 can hand back the
+                        # same report twice, and `pull_time` would then count its fights
+                        # twice -- inflating `attempts` and `hours` with nothing to show
+                        # that it happened. A report with no code cannot be deduplicated
+                        # and is kept, since dropping it would lose real pulls.
+                        code = report.get("code")
+                        if code is not None and code in seen_codes:
+                            duplicates += 1
+                            continue
+                        if code is not None:
+                            seen_codes.add(code)
+                        reports.append(report)
                     if not listing.get("has_more_pages"):
                         break
                 else:
@@ -1899,6 +1927,7 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
                     # published as the answer is a floor wearing a measurement's
                     # clothes. Raising --max-pages is the fix, and the count says so.
                     boss.refused["truncated"] = boss.refused.get("truncated", 0) + 1
+                    boss.record(guild_id, "truncated", len(reports), duplicates)
                     continue
                 if failed:
                     # Already counted as `error`. Falling through would count the
@@ -1906,14 +1935,25 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
                     # runs report 12 of each on a 12-guild sample. `refused` is the
                     # denominator for "cost per usable number", and doubling it
                     # biases the extrapolation toward looking affordable.
+                    boss.record(guild_id, "error", len(reports), duplicates)
                     continue
                 answer = progresshours.pull_time(reports, encounter_id, args.difficulty)
                 if answer.ms is None:
                     if answer.reason:
                         boss.refused[answer.reason] = boss.refused.get(answer.reason, 0) + 1
+                    boss.record(guild_id, answer.reason or "unknown", answer.reports, duplicates)
                 else:
-                    boss.hours.append(answer.ms / progresshours.MS_PER_HOUR)
+                    hours = answer.ms / progresshours.MS_PER_HOUR
+                    boss.hours.append(hours)
                     boss.attempts.append(answer.attempts)
+                    boss.record(
+                        guild_id,
+                        "measured",
+                        answer.reports,
+                        duplicates,
+                        hours,
+                        answer.attempts,
+                    )
 
             logging.info(
                 "%s: %d/%d guild(s) measured, median %s h",
