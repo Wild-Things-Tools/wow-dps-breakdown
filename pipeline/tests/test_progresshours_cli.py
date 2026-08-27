@@ -19,12 +19,16 @@ MYTHIC = 5
 HOUR = progresshours.MS_PER_HOUR
 
 
-def fight(start, end, kill=False):
+def fight(start, end, kill=False, encounter=None):
+    # `encounter` is explicit for the twin tests: after a PTR id is read as its live
+    # twin the walk asks for the TWIN's fights, and `ordered_attempts` re-checks
+    # `encounterID` -- so a fight still carrying the filed id is correctly dropped and
+    # the boss comes back `no-fights`. That is the code working, not the test.
     return {
         "startTime": start,
         "endTime": end,
         "kill": kill,
-        "encounterID": ENCOUNTER,
+        "encounterID": ENCOUNTER if encounter is None else encounter,
         "difficulty": MYTHIC,
     }
 
@@ -393,3 +397,84 @@ def test_guilds_seen_counts_what_was_actually_reached(monkeypatch, tmp_path):
 
     assert boss["guildsSeen"] == 3
     assert boss["sampleShortOfRequest"] is True, "asked for 10, the ranking held 3"
+
+
+# ── PTR ids: a tier seeded from a PTR zone addresses the wrong encounter ──────
+
+
+class TwinClient(StubClient):
+    """A stub where the FILED id has no ranking rows and a live twin does.
+
+    Modelled on the measurement of 2026-08-27: all eight MID2 bosses returned 0 of 0
+    guilds at Mythic AND at Heroic, because the tier carries `5xxxx` PTR ids.
+    """
+
+    def __init__(self, pages, filed, twin, twin_name, filed_name=None, **kw):
+        super().__init__(pages, **kw)
+        self.filed = filed
+        self.twin = twin
+        self.twin_name = twin_name
+        self.filed_name = filed_name if filed_name is not None else twin_name
+
+    def query(self, document, variables, label=None):
+        self.sent.append((label, dict(variables)))
+        if document is progresshours.ENCOUNTER_ZONE_QUERY:
+            which = variables["e"]
+            name = self.filed_name if which == self.filed else self.twin_name
+            if name is None:
+                return {"worldData": {"encounter": None}}
+            zone = {"id": self.zone} if self.zone else None
+            return {"worldData": {"encounter": {"id": which, "name": name, "zone": zone}}}
+        if document is progresshours.PROGRESS_RANKINGS_QUERY:
+            if variables["e"] != self.twin or variables.get("p", 1) > 1:
+                return {"worldData": {"encounter": {"fightRankings": {"rankings": []}}}}
+            rows = [
+                {"guild": {"id": g}, "fromlog": self.from_log, "killTime": self.kill_time}
+                for g in self.guilds
+            ]
+            return {"worldData": {"encounter": {"fightRankings": {"rankings": rows}}}}
+        return {"reportData": {"reports": self.pages[variables["page"] - 1]}}
+
+
+def test_a_ptr_id_with_no_ranking_rows_is_read_as_its_live_twin(monkeypatch, tmp_path):
+    pages = [
+        listing([{"startTime": 0, "fights": [fight(0, HOUR, kill=True, encounter=3445)]}], False)
+    ]
+    client = TwinClient(pages, filed=53445, twin=3445, twin_name="Entombed Sentinels")
+    boss = run(monkeypatch, tmp_path, client, tier="MID2", encounter=53445)
+
+    assert boss["medianHours"] == 1.0, "the twin's ranking was never used"
+    assert "read as 3445" in (boss["readAs"] or "")
+    assert any(label == "progress:3445:p1" for label, _ in client.sent)
+
+
+def test_a_twin_that_is_a_different_boss_is_refused_not_substituted(monkeypatch, tmp_path):
+    """Filing a season's progression under the wrong fight is undetectable downstream."""
+    pages = [listing([{"startTime": 0, "fights": [fight(0, HOUR, kill=True)]}], False)]
+    client = TwinClient(
+        pages, filed=53445, twin=3445, twin_name="Some Other Boss", filed_name="Entombed Sentinels"
+    )
+    boss = run(monkeypatch, tmp_path, client, tier="MID2", encounter=53445)
+
+    assert boss["medianHours"] is None
+    assert "different boss" in (boss["readAs"] or "")
+    assert not any(label == "progress:3445:p1" for label, _ in client.sent)
+
+
+def test_an_id_that_is_not_a_ptr_id_has_no_twin_and_says_so(monkeypatch, tmp_path):
+    """An ordinary live id with an empty ranking is a fact about the season."""
+    pages = [listing([{"startTime": 0, "fights": [fight(0, HOUR, kill=True)]}], False)]
+    client = TwinClient(pages, filed=3176, twin=176, twin_name="Never Asked")
+    boss = run(monkeypatch, tmp_path, client, encounter=3176)
+
+    assert boss["medianHours"] is None
+    assert "not a PTR id" in (boss["readAs"] or "")
+
+
+def test_a_filed_id_that_answers_costs_no_twin_lookup(monkeypatch, tmp_path):
+    """The ordinary case must not pay for the PTR branch."""
+    pages = [listing([{"startTime": 0, "fights": [fight(0, HOUR, kill=True)]}], False)]
+    boss = run(monkeypatch, tmp_path, StubClient(pages))
+
+    assert boss["medianHours"] == 1.0
+    assert boss["readAs"] is None

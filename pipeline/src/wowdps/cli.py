@@ -1762,7 +1762,11 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
     """
     import json as _json
 
-    from . import progresshours
+    # `harvest` owns the PTR/live twin rule and its refusals. Imported rather than
+    # re-derived: a second copy of "strip the leading 5 and check the name" is exactly
+    # the duplication this repo warns about, and the wrong copy files a season's
+    # progression under the wrong boss with nothing downstream able to tell.
+    from . import harvest, progresshours
     from .warcraftlogs import Credentials, WarcraftLogsClient, WarcraftLogsError
 
     tiers = _json.loads(
@@ -1857,21 +1861,77 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
             # answered with each guild's reports across all content, so every number
             # that run produced was scoped to the wrong thing while looking fine.
             zone_id = int(block.get("zoneId") or 0) or int(args.zone or 0)
+            wcl_name = None
             if not zone_id:
                 try:
-                    zone_id = (
-                        progresshours.encounter_zone(
-                            client.query(
-                                progresshours.ENCOUNTER_ZONE_QUERY,
-                                {"e": encounter_id},
-                                label=f"zone:{encounter_id}",
-                            )
-                        )
-                        or 0
+                    payload = client.query(
+                        progresshours.ENCOUNTER_ZONE_QUERY,
+                        {"e": encounter_id},
+                        label=f"zone:{encounter_id}",
                     )
+                    zone_id = progresshours.encounter_zone(payload) or 0
+                    # Fetched all along and discarded. It is what verifies the twin
+                    # substitution below, so it costs no extra query.
+                    wcl_name = progresshours.encounter_name(payload)
                 except WarcraftLogsError as exc:
                     logging.warning("%s: zone lookup failed: %s", boss.name, exc)
                     zone_id = 0
+
+            # A tier seeded from a PTR zone carries `5xxxx` encounter ids, and those
+            # return NO progress-ranking rows at all -- measured on 2026-08-27, all
+            # eight MID2 bosses, at Mythic AND at Heroic, 0 of 0 guilds each. So an
+            # empty ranking on such an id is not a fact about the season; it is the
+            # wrong address. `harvest.resolve_encounter` already owns this rule and
+            # its refusals, and is reused rather than re-derived: a twin is taken
+            # only when Warcraft Logs gives both ids the SAME NAME, because filing a
+            # season's progression under the wrong boss is undetectable downstream.
+            if not ranked:
+
+                def _lookup(twin_id: int) -> str | None:
+                    try:
+                        return progresshours.encounter_name(
+                            client.query(
+                                progresshours.ENCOUNTER_ZONE_QUERY,
+                                {"e": twin_id},
+                                label=f"twin:{twin_id}",
+                            )
+                        )
+                    except WarcraftLogsError:
+                        return None
+
+                choice = harvest.choose_encounter_id(encounter_id, wcl_name, False, _lookup)
+                boss.read_as = choice.reason
+                logging.info("%s: %s", boss.name, choice.reason)
+                if choice.substituted and choice.used:
+                    encounter_id = int(choice.used)
+                    zone_id = 0
+                    try:
+                        payload = client.query(
+                            progresshours.ENCOUNTER_ZONE_QUERY,
+                            {"e": encounter_id},
+                            label=f"zone:{encounter_id}",
+                        )
+                        zone_id = progresshours.encounter_zone(payload) or 0
+                    except WarcraftLogsError as exc:
+                        logging.warning("%s: twin zone lookup failed: %s", boss.name, exc)
+                    for page in range(1, pages + 1):
+                        try:
+                            payload = client.query(
+                                progresshours.PROGRESS_RANKINGS_QUERY,
+                                {"e": encounter_id, "d": args.difficulty, "p": page},
+                                label=f"progress:{encounter_id}:p{page}",
+                            )
+                        except WarcraftLogsError as exc:
+                            logging.warning("%s: %s", boss.name, exc)
+                            break
+                        page_rows, missing = progresshours.ranking_rows(payload)
+                        boss.rows_without_guild += missing
+                        ranked.extend(page_rows)
+                        if len(page_rows) + missing < progresshours.RANKING_PAGE_SIZE:
+                            break
+                        if len(ranked) >= args.guilds:
+                            break
+
             if not zone_id:
                 logging.warning("%s: no zone could be resolved; refusing the boss", boss.name)
                 boss.refused["no-zone"] = boss.refused.get("no-zone", 0) + 1

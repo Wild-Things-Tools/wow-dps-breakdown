@@ -143,6 +143,18 @@ def encounter_zone(payload: dict) -> int | None:
     return zone_id
 
 
+def encounter_name(payload: dict) -> str | None:
+    """The encounter's name in an ``ENCOUNTER_ZONE_QUERY`` payload, or None.
+
+    Already fetched by the zone lookup and discarded until 2026-08-27. It is what
+    verifies a PTR/live twin substitution: two ids differing by a leading 5 are the
+    same boss only if Warcraft Logs calls them the same thing.
+    """
+    encounter = ((payload.get("worldData") or {}).get("encounter")) or {}
+    name = encounter.get("name")
+    return name if isinstance(name, str) and name else None
+
+
 @dataclass(frozen=True)
 class RankedKill:
     """One row of `fightRankings(metric: progress)`: whose kill, when, and whether logged.
@@ -526,6 +538,10 @@ class BossProgress:
     sample_short_of_request: bool = False
     #: The zone its reports were searched in. None means the boss was refused.
     zone_id: int | None = None
+    #: Warcraft Logs' own sentence about which id was read, when the filed one had no
+    #: ranking rows. Published so a substitution -- or a REFUSED one -- is visible in
+    #: the artifact rather than only in a run's log.
+    read_as: str | None = None
 
     def record(
         self,
@@ -572,6 +588,7 @@ class BossProgress:
                 None if not self.attempts else median([float(a) for a in self.attempts])
             ),
             "zoneId": self.zone_id,
+            "readAs": self.read_as,
             "medianReportsSeen": (
                 None if not self.reports_seen else median([float(r) for r in self.reports_seen])
             ),
