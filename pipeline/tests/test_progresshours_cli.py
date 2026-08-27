@@ -29,16 +29,46 @@ def fight(start, end, kill=False):
     }
 
 
+#: Sentinel: "work the kill time out from the pages" rather than "state none".
+_DERIVE = object()
+
+
+def _earliest_kill(pages):
+    """The absolute time of the first kill in the canned pages, or None.
+
+    Absolute -- `report["startTime"] + fight["startTime"]` -- because that is the
+    clock a ranking row's `killTime` is on. A stub that returned the report-relative
+    number would model a world where the two disagree by hours on every fixture.
+    """
+    times = []
+    for page in pages:
+        for report in page.get("data") or []:
+            base = report.get("startTime")
+            if not isinstance(base, (int, float)):
+                continue
+            for f in report.get("fights") or []:
+                if f.get("kill") is True:
+                    times.append(base + f["startTime"])
+    return min(times) if times else None
+
+
 class StubClient:
     """Records every query it is asked for, and answers from canned pages."""
 
-    def __init__(self, pages, zone=ZONE, guilds=(1,)):
+    def __init__(self, pages, zone=ZONE, guilds=(1,), kill_time=_DERIVE, from_log=1):
         self.pages = pages
         self.zone = zone
         self.guilds = guilds
         self.sent = []
         self.rate_limit_calls = 0
         self.ledger = argparse.Namespace(entries=[])
+        # A ranking row states the guild's first kill and whether a log backs it, and
+        # `cmd_progress_hours` screens on both. The DEFAULT models the ordinary world
+        # -- the ranking and the log agree -- by deriving the kill time from the canned
+        # pages, so a fixture about paging or deduplication does not also have to be a
+        # fixture about the screen. Override either to model a disagreement.
+        self.from_log = from_log
+        self.kill_time = _earliest_kill(pages) if kill_time is _DERIVE else kill_time
 
     def __enter__(self):
         return self
@@ -56,7 +86,18 @@ class StubClient:
             zone = {"id": self.zone} if self.zone else None
             return {"worldData": {"encounter": {"id": ENCOUNTER, "zone": zone}}}
         if document is progresshours.PROGRESS_RANKINGS_QUERY:
-            rankings = [{"guild": {"id": g}} for g in self.guilds]
+            if variables.get("p", 1) > 1:
+                # One page holds every stubbed guild, so page 2 is empty. Modelled
+                # rather than ignored: the paging loop must stop on a short page.
+                return {"worldData": {"encounter": {"fightRankings": {"rankings": []}}}}
+            rankings = []
+            for g in self.guilds:
+                row = {"guild": {"id": g}}
+                if self.from_log is not None:
+                    row["fromlog"] = self.from_log
+                if self.kill_time is not None:
+                    row["killTime"] = self.kill_time
+                rankings.append(row)
             return {"worldData": {"encounter": {"fightRankings": {"rankings": rankings}}}}
         page = variables["page"]
         return {"reportData": {"reports": self.pages[page - 1]}}
@@ -79,6 +120,7 @@ def run(monkeypatch, tmp_path, client, **overrides):
         difficulty=MYTHIC,
         guilds=4,
         max_pages=3,
+        rankings_pages=3,
         point_ceiling=0.5,
         out=str(out),
     )
@@ -121,11 +163,20 @@ def test_the_walk_does_not_stop_at_the_first_kill_it_finds(monkeypatch, tmp_path
     that preceded it. The old loop broke on page 1 and published 1 hour; the answer
     is 4 (three wipes and the kill on the older night).
     """
+    # The kill sits at the END of its night's offsets, which is the second thing this
+    # fixture has to get right and used not to. It read `fight(0, HOUR, kill=True)`
+    # after a wipe at offset HOUR -- so on the absolute clock that wipe starts an hour
+    # AFTER the kill, and counting it as progression toward that kill is exactly the
+    # error the ordering exists to prevent. Offsets are a real clock, not an array.
     farm = [{"startTime": 9_000_000, "fights": [fight(0, HOUR, kill=True)]}]
     progression = [
         {
             "startTime": 1_000_000,
-            "fights": [fight(0, HOUR), fight(HOUR, 2 * HOUR), fight(0, HOUR, kill=True)],
+            "fights": [
+                fight(0, HOUR),
+                fight(HOUR, 2 * HOUR),
+                fight(2 * HOUR, 3 * HOUR, kill=True),
+            ],
         },
         {"startTime": 500_000, "fights": [fight(0, HOUR)]},
     ]
@@ -228,3 +279,117 @@ def test_a_listing_holding_another_boss_is_no_fights_with_the_count_beside_it(
     # what says the listing was NOT empty.
     assert boss["guilds"][0]["outcome"] == "no-fights"
     assert boss["guilds"][0]["reportsSeen"] >= 1
+
+
+# ── The completeness screens, end to end ─────────────────────────────────────
+
+
+def test_a_guild_whose_first_kill_has_no_log_is_refused_before_a_report_is_fetched(
+    monkeypatch, tmp_path
+):
+    """`fromlog == 0` means Warcraft Logs holds no log behind that kill.
+
+    A report walk therefore CANNOT find it, and whatever kill the walk does find is a
+    later one -- so the guild would publish a farm night as its progression. Refusing
+    costs nothing and saves the whole walk, which is why the query count is asserted
+    rather than just the outcome.
+    """
+    pages = [listing([{"startTime": 0, "fights": [fight(0, HOUR, kill=True)]}], False)]
+    client = StubClient(pages, from_log=0)
+    boss = run(monkeypatch, tmp_path, client)
+
+    assert boss["refused"] == {"unlogged-kill": 1}
+    assert boss["guilds"][0]["outcome"] == "unlogged-kill"
+    assert boss["killsNotFromLog"] == 1 and boss["killsFromLog"] == 0
+    assert boss["medianHours"] is None
+    assert not [1 for label, _ in client.sent if label and label.startswith("pulls:")], (
+        "the report walk ran for a guild whose kill cannot be in it"
+    )
+
+
+def test_a_ranking_row_stating_neither_screen_field_is_refused_not_waved_through(
+    monkeypatch, tmp_path
+):
+    """Fail closed. A renamed field must not switch both screens off silently."""
+    pages = [listing([{"startTime": 0, "fights": [fight(0, HOUR, kill=True)]}], False)]
+    client = StubClient(pages, from_log=None, kill_time=None)
+    boss = run(monkeypatch, tmp_path, client)
+
+    assert boss["refused"] == {"ranking-row-unscreened": 1}
+    assert boss["medianHours"] is None
+
+
+def test_a_log_that_only_saw_a_later_kill_is_refused_rather_than_measured(monkeypatch, tmp_path):
+    """The ranking says the guild killed it weeks before anything in the log.
+
+    Before the screen this published one wipe and one kill as a whole progression.
+    """
+    week = 7 * 86_400_000
+    pages = [
+        listing(
+            [{"startTime": week, "fights": [fight(0, HOUR), fight(HOUR, 2 * HOUR, kill=True)]}],
+            False,
+        )
+    ]
+    client = StubClient(pages, kill_time=0)
+    boss = run(monkeypatch, tmp_path, client)
+
+    assert boss["refused"] == {"kill-too-late": 1}
+    assert boss["medianHours"] is None
+
+
+def test_the_document_states_the_screens_and_that_the_metric_is_a_floor(monkeypatch, tmp_path):
+    """A reader who never reads `note` still has to be able to tell this is a bound."""
+    pages = [listing([{"startTime": 0, "fights": [fight(0, HOUR, kill=True)]}], False)]
+    client = StubClient(pages, guilds=(1, 2), from_log=0)
+    out = tmp_path / "progress-hours.json"
+    run(monkeypatch, tmp_path, client, guilds=2, out=str(out))
+    document = json.loads(out.read_text(encoding="utf-8"))
+
+    assert document["metricIsFloor"] is True
+    assert document["screens"]["unloggedKill"] == 2
+    assert document["screens"]["killsNotFromLog"] == 2
+    assert "LOWER BOUND" in document["note"]
+
+
+def test_a_measured_guild_publishes_what_the_observation_could_possibly_cover(
+    monkeypatch, tmp_path
+):
+    """The residual limitation, disclosed rather than repaired.
+
+    Nothing can see a night nobody uploaded, so the honest move is to publish how many
+    nights WERE seen and over how long. Few nights across a wide span is what a partial
+    view looks like from outside.
+    """
+    day = 86_400_000
+    pages = [
+        listing(
+            [
+                {"code": "a", "startTime": 0, "fights": [fight(0, HOUR)]},
+                {"code": "b", "startTime": 2 * day, "fights": [fight(0, HOUR, kill=True)]},
+            ],
+            False,
+        )
+    ]
+    boss = run(monkeypatch, tmp_path, StubClient(pages))
+
+    row = boss["guilds"][0]
+    assert row["outcome"] == "measured"
+    assert row["nightsObserved"] == 2
+    assert row["spanDays"] == 2.0
+    assert boss["medianNightsObserved"] == 2.0
+    assert boss["medianSpanDays"] == 2.0
+
+
+def test_guilds_seen_counts_what_was_actually_reached(monkeypatch, tmp_path):
+    """Set incrementally, never to the sample size up front.
+
+    A ceiling stop mid-boss would otherwise publish "50 guilds seen" above three rows
+    -- a fraction of a run presented as the whole.
+    """
+    pages = [listing([{"startTime": 0, "fights": [fight(0, HOUR, kill=True)]}], False)]
+    client = StubClient(pages, guilds=(1, 2, 3))
+    boss = run(monkeypatch, tmp_path, client, guilds=10)
+
+    assert boss["guildsSeen"] == 3
+    assert boss["sampleShortOfRequest"] is True, "asked for 10, the ranking held 3"

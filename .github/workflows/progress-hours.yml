@@ -24,14 +24,23 @@ on:
         description: '3 Normal, 4 Heroic, 5 Mythic'
         default: '5'
       guilds:
-        description: 'Guilds sampled per boss. A median needs few; the cost is per guild'
-        default: '12'
+        # 50, and the defaults here MUST match the CLI's. `fight-probe` shipped a
+        # dispatch form whose max_pages said 3 while every real run passed 20, which
+        # made every scheduled continuation a silent no-op. Treat these as
+        # configuration, not as form hints.
+        description: 'Guilds sampled per boss (50 = one ranking page)'
+        default: '50'
       max_pages:
         description: 'Report pages per guild before giving up on finding its kill'
         default: '4'
+      rankings_pages:
+        description: 'Progress-ranking pages per boss, 50 guilds each. Needed above 50'
+        default: '3'
       point_ceiling:
+        # 0.7. There is no resume, so a ceiling stop discards the whole pass -- which
+        # makes a too-low ceiling the expensive mistake here rather than the safe one.
         description: 'Stop before spending this share of the hourly point budget'
-        default: '0.5'
+        default: '0.7'
 
 concurrency:
   group: progress-hours
@@ -77,6 +86,7 @@ jobs:
           DIFFICULTY: ${{ inputs.difficulty }}
           GUILDS: ${{ inputs.guilds }}
           MAX_PAGES: ${{ inputs.max_pages }}
+          RANKINGS_PAGES: ${{ inputs.rankings_pages }}
           CEILING: ${{ inputs.point_ceiling }}
         run: |
           set -euo pipefail
@@ -85,6 +95,7 @@ jobs:
             --difficulty "$DIFFICULTY" \
             --guilds "$GUILDS" \
             --max-pages "$MAX_PAGES" \
+            --rankings-pages "$RANKINGS_PAGES" \
             --point-ceiling "$CEILING" \
             --out "../progress-hours-$TIER.json" 2>&1 | tee ../progress-hours.log
 
@@ -115,13 +126,40 @@ jobs:
               raise SystemExit(0)
           d = json.loads(path.read_text(encoding="utf-8"))
           print(f"## {d['tier']} progress hours ({d['difficultyName']})\n")
-          print("| # | boss | median h | IQR | sample | of guilds |")
-          print("|---|---|---|---|---|---|")
+          print("| # | boss | median h | IQR | sample | of guilds | nights | span d | from log |")
+          print("|---|---|---|---|---|---|---|---|---|")
           for b in d["bosses"]:
               med = "—" if b["medianHours"] is None else f"{b['medianHours']:.2f}"
               iqr = "—" if b["q1Hours"] is None else f"{b['q1Hours']:.2f}–{b['q3Hours']:.2f}"
-              print(f"| {b['order']} | {b['name']} | {med} | {iqr} | {b['sample']} | {b['guildsSeen']} |")
+              # Nights and span are the disclosure the metric cannot repair: after the
+              # screens the residual error is a raid night nobody uploaded, and few
+              # nights across a wide span is what that looks like from outside.
+              nights = "—" if b.get("medianNightsObserved") is None else f"{b['medianNightsObserved']:.0f}"
+              span = "—" if b.get("medianSpanDays") is None else f"{b['medianSpanDays']:.1f}"
+              seen = b.get("killsFromLog", 0) + b.get("killsNotFromLog", 0)
+              log = "—" if not seen else f"{b.get('killsFromLog', 0)}/{seen}"
+              short = " ⚠" if b.get("sampleShortOfRequest") else ""
+              print(f"| {b['order']} | {b['name']} | {med} | {iqr} | {b['sample']} | {b['guildsSeen']}{short} | {nights} | {span} | {log} |")
           total = d["seasonTotalHours"]
           print(f"\n**Season total:** {'refused — a boss is unmeasured' if total is None else f'{total:.2f} h'}")
           print(f"\n**Cost:** {d['cost']['pointsSpent']} points of {d['cost']['limitPerHour']}/hour")
+          sc = d.get("screens") or {}
+          if sc:
+              print(
+                  f"\n**Screened out:** {sc.get('unloggedKill', 0)} no log behind the ranked kill, "
+                  f"{sc.get('killTooLate', 0)} logged kill later than the ranked one, "
+                  f"{sc.get('killTooEarly', 0)} earlier, "
+                  f"{sc.get('unscreenedRows', 0)} rows carrying neither field."
+              )
+              if sc.get("unscreenedRows"):
+                  print("\n> ⚠ Rows carrying neither `fromlog` nor `killTime` is a SCHEMA alarm, "
+                        "not a property of the guilds. The screens cannot run on them.")
+          print(
+              "\n> Every figure is a **lower bound**. A raid night that was never "
+              "uploaded is invisible to this and to every other reader of the Warcraft "
+              "Logs API — read *nights* beside *span d*: few nights across a wide span "
+              "is a partial observation. Each boss's median also comes from a different "
+              "guild cohort, so the season total is a sum of per-boss bests rather than "
+              "what one raid's progression cost."
+          )
           PY

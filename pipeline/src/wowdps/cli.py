@@ -1818,14 +1818,37 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
                 difficulty=args.difficulty,
             )
             bosses.append(boss)
-            try:
-                rankings = client.query(
-                    progresshours.PROGRESS_RANKINGS_QUERY,
-                    {"e": encounter_id, "d": args.difficulty, "p": 1},
-                    label=f"progress:{encounter_id}",
-                )
-            except WarcraftLogsError as exc:
-                logging.warning("%s: %s", boss.name, exc)
+            # The ranking is PAGED, because one page holds 50 rows and the sample is
+            # no longer smaller than that. Paging is not an optional extra at
+            # `--guilds 50`: `usable[: args.guilds]` cannot return more than a page
+            # holds, so without this a request for 200 would silently deliver 50 and
+            # `guildsSeen` would record it as if that were the request.
+            ranked: list[progresshours.RankedKill] = []
+            ranking_failed = False
+            pages = max(1, min(args.rankings_pages, progresshours.RANKING_MAX_PAGE))
+            for page in range(1, pages + 1):
+                try:
+                    payload = client.query(
+                        progresshours.PROGRESS_RANKINGS_QUERY,
+                        {"e": encounter_id, "d": args.difficulty, "p": page},
+                        label=f"progress:{encounter_id}:p{page}",
+                    )
+                except WarcraftLogsError as exc:
+                    logging.warning("%s: %s", boss.name, exc)
+                    if page == 1:
+                        ranking_failed = True
+                    break
+                page_rows, missing = progresshours.ranking_rows(payload)
+                # The WHOLE page is counted before the sample is cut: the page is
+                # already paid for, and a prefix scan would report its null-id share
+                # as the page's.
+                boss.rows_without_guild += missing
+                ranked.extend(page_rows)
+                if len(page_rows) + missing < progresshours.RANKING_PAGE_SIZE:
+                    break
+                if len(ranked) >= args.guilds:
+                    break
+            if ranking_failed:
                 boss.refused["ranking-error"] = boss.refused.get("ranking-error", 0) + 1
                 continue
 
@@ -1856,23 +1879,39 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
             boss.zone_id = zone_id
             refresh_budget()
 
-            rows = (
-                ((rankings.get("worldData") or {}).get("encounter") or {}).get("fightRankings")
-                or {}
-            ).get("rankings") or []
-            # The WHOLE page is counted before the sample is cut: the page is already
-            # paid for, and a prefix scan would report its null-id share as the page's.
-            usable = []
-            for row in rows:
-                guild = row.get("guild") or {}
-                if guild.get("id"):
-                    usable.append(int(guild["id"]))
-                else:
-                    boss.rows_without_guild += 1
-            guild_ids = usable[: args.guilds]
-            boss.guilds_seen = len(guild_ids)
+            sample = ranked[: args.guilds]
+            boss.sample_short_of_request = len(sample) < args.guilds
 
-            for guild_id in guild_ids:
+            for entry_kill in sample:
+                guild_id = entry_kill.guild_id
+                # `guildsSeen` is incremented HERE rather than set to the sample size
+                # up front. A ceiling stop mid-boss would otherwise publish "50 guilds
+                # seen" above three rows -- a fraction of a run presented as the whole,
+                # which is this repository's signature defect.
+                boss.guilds_seen += 1
+
+                # ── Screen 1: is the guild's first kill backed by a log at all? ──
+                # `fromlog == 0` means Warcraft Logs holds no log behind it, so a
+                # `reports(guildID:)` walk CANNOT find that kill and any kill it does
+                # find is a later one. Refusing costs nothing and SAVES the whole
+                # report walk; not refusing publishes a farm night as a progression.
+                if entry_kill.from_log is None:
+                    # Fail closed. A row stating neither field is a schema change, and
+                    # reading absence as "passed" would switch both screens off while
+                    # every published number still looked healthy.
+                    boss.refused["ranking-row-unscreened"] = (
+                        boss.refused.get("ranking-row-unscreened", 0) + 1
+                    )
+                    boss.record(guild_id, "ranking-row-unscreened", 0)
+                    continue
+                if entry_kill.from_log:
+                    boss.kills_from_log += 1
+                else:
+                    boss.kills_not_from_log += 1
+                    boss.refused["unlogged-kill"] = boss.refused.get("unlogged-kill", 0) + 1
+                    boss.record(guild_id, "unlogged-kill", 0)
+                    continue
+
                 if over_ceiling():
                     logging.warning("point ceiling reached; stopping with what is measured")
                     return _write_progress_hours(args, bosses, client, start, limit)
@@ -1937,7 +1976,15 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
                     # biases the extrapolation toward looking affordable.
                     boss.record(guild_id, "error", len(reports), duplicates)
                     continue
-                answer = progresshours.pull_time(reports, encounter_id, args.difficulty)
+                # ── Screen 2: the kill we found must BE the ranked first kill. ──
+                # Without the ranked time the walk finds *a* kill and calls it the
+                # first one, which is wrong in two ways it cannot see: the real first
+                # kill on an unlogged night (so this is a farm kill weeks later, with
+                # every pull before it counted as progression toward a kill that had
+                # already happened), or a log holding farm nights only.
+                answer = progresshours.pull_time(
+                    reports, encounter_id, args.difficulty, entry_kill.kill_time_ms
+                )
                 if answer.ms is None:
                     if answer.reason:
                         boss.refused[answer.reason] = boss.refused.get(answer.reason, 0) + 1
@@ -1953,6 +2000,7 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
                         duplicates,
                         hours,
                         answer.attempts,
+                        answer,
                     )
 
             logging.info(
@@ -1964,6 +2012,30 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
             )
 
         return _write_progress_hours(args, bosses, client, start, limit)
+
+
+def _progress_screen_totals(bosses) -> dict:
+    """What the two completeness screens removed, across the whole pass.
+
+    Published because the screens change what the number MEANS, not merely how many
+    rows survive: every guild counted here is one the metric is unanswerable for, and
+    a reader has to be able to size that population without re-deriving it from the
+    per-guild rows. `unscreenedRows` being non-zero is a schema alarm rather than a
+    property of the guilds -- it means a ranking row carried neither field.
+    """
+    keys = {
+        "unloggedKill": "unlogged-kill",
+        "killTooLate": "kill-too-late",
+        "killTooEarly": "kill-too-early",
+        "unscreenedRows": "ranking-row-unscreened",
+    }
+    totals = {name: 0 for name in keys}
+    for boss in bosses:
+        for name, reason in keys.items():
+            totals[name] += boss.refused.get(reason, 0)
+    totals["killsFromLog"] = sum(b.kills_from_log for b in bosses)
+    totals["killsNotFromLog"] = sum(b.kills_not_from_log for b in bosses)
+    return totals
 
 
 def _write_progress_hours(args, bosses, client, start: float, limit: float) -> int:
@@ -1999,8 +2071,21 @@ def _write_progress_hours(args, bosses, client, start: float, limit: float) -> i
         "note": (
             "Progress time is the sum of every attempt up to and including a guild's "
             "first kill, per boss. A boss nobody could be measured for carries null, "
-            "never zero, and a season total is refused unless every boss has one."
+            "never zero, and a season total is refused unless every boss has one. "
+            "Guilds whose first kill is not backed by a log are refused before any "
+            "report is read, and a logged kill that does not match the ranked kill "
+            "time is refused, so a published figure is a LOWER BOUND: a raid night "
+            "that was never uploaded is invisible to this and to every other reader "
+            "of the Warcraft Logs API. Read medianNightsObserved beside "
+            "medianSpanDays -- few nights across a wide span is what a partial "
+            "observation looks like from outside."
         ),
+        # Not a caveat in prose: a reader that never reads `note` still has to be
+        # able to tell that this is a floor.
+        "metricIsFloor": True,
+        # How large the population is that the metric cannot address, as a number
+        # rather than as a line in a log nobody kept.
+        "screens": _progress_screen_totals(bosses),
         "guildsRequested": args.guilds,
         "bosses": [boss.to_json() for boss in bosses],
         "seasonTotalHours": progresshours.stacked_total(bosses),
@@ -2642,15 +2727,40 @@ def build_parser() -> argparse.ArgumentParser:
         "--difficulty", type=int, default=5, help="3 Normal, 4 Heroic, 5 Mythic. Default 5"
     )
     p_hours.add_argument(
-        "--guilds", type=int, default=12, help="guilds sampled per boss. A median needs few"
+        "--guilds",
+        type=int,
+        default=50,
+        # 50 rather than 12, and the argument is the STABILITY of the median rather
+        # than the budget. At 20 the measured samples were 8-16 guilds per boss, and
+        # screen 1 removes another 10-20% of those before a report is fetched. 50
+        # lands at roughly 20-35 measured guilds, above the `quartiles` floor with
+        # room to spare. It is also exactly one ranking page, so the common case
+        # still costs one ranking query per boss.
+        help="guilds sampled per boss",
     )
     p_hours.add_argument(
         "--max-pages", type=int, default=4, help="report pages per guild before giving up"
     )
     p_hours.add_argument(
+        "--rankings-pages",
+        type=int,
+        default=3,
+        # One page is 50 rows, so --guilds above 50 is unreachable without this. Three
+        # pages is 150 guilds' worth of headroom at no cost when the sample fits in
+        # one: the loop stops as soon as it has enough, or as soon as a page comes
+        # back short.
+        help="progress-ranking pages to read per boss (50 guilds each)",
+    )
+    p_hours.add_argument(
         "--point-ceiling",
         type=float,
-        default=0.5,
+        # 0.7 rather than 0.5. At 50 guilds over nine bosses the arithmetic on the one
+        # real measurement (261 queries / 3,895.1 points for 9 x 20, run 32990582509)
+        # puts a pass near 55% of an hourly budget, and 0.5 stops it just short of
+        # finishing. There is no resume, so a ceiling stop discards the whole pass --
+        # which makes a too-low ceiling the more expensive mistake here, not the safer
+        # one. Screen 1 refunds a further 10-20% by refusing before the report walk.
+        default=0.7,
         help="stop before spending this share of the hourly budget",
     )
     p_hours.add_argument("--out", default="progress-hours.json", help="where to write the document")

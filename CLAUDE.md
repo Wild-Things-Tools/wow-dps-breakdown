@@ -3399,6 +3399,150 @@ is spent", the wrong diagnosis with the right shape. `PointLedger.requests_sent`
 `request_headers` record it; nothing enforces it, because that such a header exists is
 not established from this side.
 
+### The metric was neither a floor nor a ceiling, and nothing said which (2026-08-27)
+
+The owner's objection, and it was right: *"was wenn eine Gilde nicht konsistent
+ordentlich logged, sondern beispielsweise einen Abend ausgelassen hat beim logging."*
+
+`pull_time` summed whatever `reports(guildID:, zoneID:)` returned. **Three mechanisms,
+running in opposite directions**, and no published field said which side of the truth a
+row sat on:
+
+| mechanism | effect | was it detectable |
+|---|---|---|
+| a progression night was not uploaded | attempts vanish -> **understates** | no |
+| the true first kill was on an unlogged night, so the walk runs on to a later *logged* kill | farm pulls counted as progression | no |
+| only farm nights were logged at all | one wipe and one kill published as a whole progression | no |
+
+Executed against the shipped function: 8.0 h becomes **3.0 h** when one of two nights is
+unlogged; a farm-only log published 1.0 h over 2 attempts as `measured`. That is worse
+than a floor, and it is what this file's own rule -- *"a partial sum published as the
+answer is a floor wearing a measurement's clothes"* -- was already enforcing for
+`no-kill` and `truncated` and for none of these.
+
+### The screen was already being fetched and thrown away
+
+`cmd_progress_hours` read exactly `guild.id` off each `fightRankings(metric: progress)`
+row. Those rows also carry **`killTime`** and **`fromlog`**, and both are load-bearing:
+
+- **`fromlog == 0`** -- Warcraft Logs holds no log behind that guild's first kill, so a
+  report walk *cannot* find it and whatever kill it does find is a later one. Refused as
+  `unlogged-kill` **before any report query**, which also refunds the walk.
+- **`killTime`** -- the kill the ranking is about. A logged kill more than
+  `KILL_MATCH_TOLERANCE_MS` (30 min) later is `kill-too-late`; earlier is
+  `kill-too-early` and is counted **apart** rather than resolved, because the log and
+  the ranking disagreeing is a finding and picking a winner would bury it.
+
+Both fields are read from the sibling `wtt-backend`'s committed live slice -- Ulgrax,
+Normal, EU/Tarren Mill, **405 rows, 2026-08-20**, `killTime` and `fromlog` on 405 of
+405 -- not from a run of this code. **21.0% of those rows carry `fromlog: 0`**, which is
+a floor on how much of a sample the second and third mechanisms can reach. Treat the
+first live pass as a schema check, as this repo does for any field it has never asked
+for.
+
+**The screen fails closed.** A row stating neither field is `ranking-row-unscreened` and
+is refused. Reading absence as "passed" would switch both screens off on a field rename
+while every published number still looked healthy -- this repository's signature defect,
+and the reason `_progress_screen_totals` publishes `unscreenedRows` as a schema alarm
+rather than as a property of the guilds.
+
+### Three treatments rejected, and the one that looks right is the worst
+
+- **A gap-robust metric (pull count, raid nights)** -- rejected. Neither is gap-robust;
+  both are gap-*proportional in the same direction*. An unlogged night removes its pulls
+  exactly as it removes its hours, and "raid nights" is literally *nights that were
+  uploaded*. The genuinely gap-immune metrics are the kill-DATE ones (WoWProgress,
+  Raider.IO read Blizzard, which records the kill whether or not anyone uploaded), and
+  they answer a different question.
+- **Imputation** -- rejected flatly. Nothing observable separates "did not raid" from
+  "raided and did not log", so an imputed night is fabricated, and it fabricates
+  *upward*: inventing hours nobody measured to repair an understatement trades a
+  detectable error for an undetectable one.
+- **A night-count gate** -- rejected, and this is the one worth naming because it looks
+  right. `nightsObserved` cannot separate "logged 2 of 6 nights" from "killed it in 2
+  nights", so gating on it would drop the fast, well-logged guilds and push the median
+  **up** -- the opposite error, introduced deliberately. Publish it; never gate on it.
+  Same for `reportsSeen`, which this file already measured as tracking cohort rather
+  than logging quality (27-37 early vs 3-5.5 late).
+
+### What progstats does, and why it is not the answer either
+
+Their metric is *"the amount of time from the start of the first pull to the end of the
+last pull on each raid night, and then summing"*. That is a different metric from this
+one -- it charges idle time and time on *other bosses* to this boss -- and the owner
+confirmed the definition here (*"es zaehlt die Dauer aller Pulls auf der entsprechenden
+Schwierigkeit bis zum ersten kill"*), so it is not interchangeable.
+
+**And their handling of incomplete logging is established as absent**: no filter, no
+imputation, no flag, no field. The demonstration is Liquid at Illidan, published as 3
+pulls / 21.6 min with a percentile against a community IQR of 237-369 pulls, because
+exactly one log exists. So there was nothing to copy, which is the finding rather than a
+failure to find one.
+
+**A caveat about this section that is worth more than the section.** These claims come
+from a research pass, and one of its own verifiers "refuted" a progstats claim by
+grepping *this* repository for progstats' Rust function -- checking the wrong codebase
+and reporting the wrong verdict confidently. What it did establish is that **our**
+`pull_time` sums per-fight durations rather than a span, which is true and was not the
+question. Do not read the progstats internals here as measured by us.
+
+### The residue, and why the claim changed
+
+After both screens one mechanism survives: a guild whose first kill *is* logged, with
+unlogged nights before it. Nothing in the Warcraft Logs API can see a night nobody
+uploaded -- `Guild.attendance(zoneID:)` enumerates logged nights only, so it is not a
+completeness signal and is not worth the query.
+
+So **the published median is now a lower bound**, which it was not before: mechanism (a)
+only ever removes attempts, and the two overstatement routes are closed.
+`metricIsFloor: true` and the rewritten `note` say so in the document, and
+`medianNightsObserved` beside `medianSpanDays` is the disclosure a reader can act on --
+few nights across a wide span is a partial observation.
+
+### Two fixtures were physically impossible, and both hid the bug
+
+Moving attempts onto the absolute clock (`report["startTime"] + fight["startTime"]`)
+turned two committed test fixtures red, and **both were wrong rather than the code**:
+
+- one had reports starting **one second apart** with pulls running two minutes, so the
+  second report's kill correctly landed *between* the first report's two pulls;
+- one listed a kill at offset 0 and a wipe at offset 1 h *before* it in the array, so
+  that wipe starts an hour **after** the kill and was being counted as progression
+  toward it.
+
+Fight offsets are a real clock, not an array order. A fixture stating physics that
+cannot happen will pin whatever answer the code gives it.
+
+The absolute clock is also what makes a **split raid** correct: two reports logged at
+once interleave, and the guild's first kill is the earlier one rather than the earlier
+*report's*.
+
+### Sample size, and what page 1 actually selects
+
+`--guilds` 12 -> **50**, `--point-ceiling` 0.5 -> **0.7**, plus `--rankings-pages`.
+
+**Paging is not optional at 50.** One ranking page holds 50 rows and paging stops at
+page 20 -- at most 1000 rows per filter combination, both read from `wtt-backend`'s
+`PAGE_SIZE`/`MAX_PAGE`, which are the API's rather than ours. `"p": 1` was hard-coded, so
+`usable[: args.guilds]` could never return more than a page held and `guildsSeen` would
+record the short answer as though it were the request. `sampleShortOfRequest` is the
+disclosure.
+
+The cost arithmetic anchors on the one real measurement -- 261 queries / 3,895.1 points
+for 9 bosses x 20 guilds, run 32990582509 -- i.e. **~21.6 points per guild-boss slot**.
+50 guilds over nine bosses is ~9,500 points, **~55% of an 18,000/hour budget**, less
+after screen 1 refunds the walks it refuses. 100 guilds is ~105% of an hour and cannot
+complete: **there is no resume, so a ceiling stop discards the whole pass**, which is why
+the ceiling went up rather than down. Check `limitPerHour` in the run's first log line --
+this account has been observed at 3,600 as well as 18,000, and at 3,600 none of this fits.
+
+**What page 1 selects is not "a sample" and this was never written down.** The progress
+metric returns one row per guild **sorted by `killTime` ascending**, so the first 50 rows
+are the first 50 guilds in the world to kill that boss. Sampling 20 of them described the
+world-first race, not raiding. A larger sample therefore changes *which population* is
+described, not merely the precision -- which is a stronger argument for it than the error
+bars, and a caveat that has to travel with any number taken from a shallow page.
+
 ## Probing across hours, rather than restarting
 
 Warcraft Logs meters by points per hour and a pass at a useful sample size does not
