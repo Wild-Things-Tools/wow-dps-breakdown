@@ -3814,6 +3814,47 @@ Two things nearly threw it away, both fixed, both worth not reintroducing:
   This is the same bug as the `targetError` one below, in a different disguise: a number
   describing a fraction of the run, presented as describing all of it.
 
+### And the settle did not run on the path that publishes, for months
+
+**Read this before trusting the bullet above.** It describes `_settle_provenance` as
+though it were in force. It was not, on either path, and the paragraph sat here saying
+so while every nightly restamped the manifest.
+
+`settle_provenance` had **exactly one call site**, inside `write_manifest`. The nightly
+publishes through `wowdps merge` -> `merge_shards`, which wrote `index.json` itself and
+never called it. Measured over the last twenty `data: refresh simulations` commits: all
+twenty touched `index.json`, and **three touched no spec file at all**. `dbf5075` is the
+cleanest:
+
+```
+dbf5075~1   generatedAt 2026-08-24T04:10:45   gitRevision c357aef
+dbf5075     generatedAt 2026-08-24T05:08:21   gitRevision c357aef
+   three files changed, zero spec files, two runs the same day
+```
+
+Same simc, no number moved, restamped anyway -- and the patch panel prints, in words,
+*"this date only moves when a number moved -- a quiet night leaves it alone rather than
+restamping it."*
+
+The **unsharded** path called it and could never fire either: `spec_coverage` emits six
+coverage keys and `apply_simulated_coverage` adds three more *afterwards*, so the
+comparison ran between a six-key document and a nine-key file -- unequal on every run --
+and the caller then overwrote the result regardless.
+
+Three things have to happen in one order and each was wrong: **read the published file
+before writing, complete the coverage block before comparing, settle last.** They are
+`dataset.publish_manifest` now, because held apart in the CLI they were three statements
+a refactor could reorder silently. `write_manifest` no longer settles at all -- an
+inoperative guard is worse than none.
+
+**The first version of the test was worthless, and that is the part to remember.**
+`write_manifest` stamps to the *second*, and two calls in one test land in the same
+second, so the test asserted that two identical documents were identical -- true for
+reasons having nothing to do with the settle. It passed with the settle **deleted**,
+with the read moved **after** the write, and with the settle hoisted **above** the
+coverage completion: three canaries, all green. The clock is monkeypatched now and all
+three fail by name. A canary that does not fire is a finding about the test.
+
 ## The tier axis
 
 - Datasets are namespaced: `web/public/data/<tier>/index.json` and `<tier>/specs/*.json`,
@@ -5262,6 +5303,65 @@ Arms and Fury the search separated from nothing, so what is published is the rep
 only the repair -- which is the repair working as designed rather than a thin result.
 Retribution Paladin and Havoc's Aldrachi Reaver build stay refused, with the screen's
 reason on the row.
+
+### Five and ten targets, and what the second axis does to the answer
+
+Published 2026-08-26/27 (`095cc58`), one run per target count, `merge_specs` carrying
+the other pairs across untouched:
+
+```
+coverage  {specs: 52, specsAvailable: 52, rows: 156, targetCounts: [1, 5, 10]}
+```
+
+The headline is not the gains. It is that **the two rankings separate further with
+every target added**, counted over the rows the site actually marks
+(`projectioncheck.marked_builds`):
+
+| targets | marked | of those, the boss takes LESS | largest total gain |
+|---|---:|---:|---|
+| 1 | 14 | **0** -- the question cannot arise, `prioritydps == dps` | +2.59% |
+| 5 | 26 | **12** | +15.28% |
+| 10 | 30 | **18** | +31.71% |
+
+At ten targets **60% of marked rows advertise a build that does less damage to the
+boss**, and the amounts are no longer decimals: Balance Druid (Default) is marked
+**+31.71%** total while priority damage falls **17.37%**, and Keeper of the Grove trades
+**18.94%** off the boss for **+2.47%** total.
+
+This is the funnel finding from the top of this file arriving in a second document.
+That section ends *"picking a build off a damage meter is the wrong call when the boss
+is what has to die"*, measured over four specs of eleven at five targets; here it is the
+majority of marked builds at ten. Which axis "better" means is issue #99 and is the
+owner's decision -- but note that **nothing in the document says the axis at all**: over
+its 495 prose strings, zero mention priority, boss, funnel or total damage.
+
+**Windwalker crashes simc at ten targets**, both builds, exit 11 (SIGSEGV; the first
+attempt got `-6`/SIGABRT). Not a new mystery -- the gear-anchor section already records
+both Windwalker builds returning **0.000 DPS from any profileset** at one target, "a
+property of that profile at this revision", unexplained. At ten it aborts instead of
+answering. It costs its own two rows, which is only true since the fix below.
+
+**A per-build failure used to cost the whole pass.** `cmd_build_search` has caught
+`run_build` per build since #38; `_head_to_head` was added later (#74) and sat one line
+*outside* that guard, so Windwalker's abort escaped through `main`. Run 32989652220 died
+after **2h26m with ten builds already searched and written** -- `_publish` runs after
+every build precisely so an interrupted pass keeps what it did -- and the workflow's
+`Commit` step carries no status function in its `if:`, so GitHub ANDs in `success()` and
+skipped it. Everything was discarded.
+
+That is the **third** time this repository has had this exact shape, and the other two
+are in this file: `PointBudgetExhausted` escaping `harvest_encounter` ("kills 1-8 of the
+ninth encounter were lost after being paid for") and the same exception escaping
+`_public_first_kills` ("the new code path simply sat outside that guard"). Each time it
+is a new call placed *beside* a guard that already existed rather than inside it. When
+adding a call to a loop that has a `try`, the question to ask is not whether the new
+call can fail but whether it is inside.
+
+The `Commit` step is still `success()`-gated and that is deliberate rather than missed:
+committing a *partial* target count would be invisible in the document until coverage is
+published per `(scenario, targets)` (#100). The Upload step three lines above it does
+carry `if: always()`, with a comment reading "gear.yml shipped that bug; do not repeat
+it" -- repeated three lines down, which is worth seeing.
 
 ### The harvest test that failed under `WOWDPS_SIMC_SOURCE` was fixed, and this
 entry outlived it by three days
