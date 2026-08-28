@@ -5449,6 +5449,25 @@ So the choice-index overflow is a *symptom* on three of those five and the whole
 on one. **The screen only ever rejects**: a build that passes was not caught, not
 proven, and that sentence travels with every repair as a caveat.
 
+**simc has since repaired all four, and the tests that rode on that had to change.**
+Measured on `30555ef`, 2026-08-28: Arms, Fury and both Havoc builds are no longer
+disabled generator blocks at all -- simc **ships** them as ordinary profiles whose
+hashes decode with no spec-rule violation, and the two Retribution builds, still
+disabled, decode cleanly too. So `talentrepair` has no subject anywhere in MID2 today.
+
+That is good news for the site and it broke two end-to-end tests, which had been
+borrowing simc's broken profile as their fixture. A test of *our* repair must not go
+red because simc fixed *its* profile -- and must not go green for that reason either.
+`test_buildsearch_cli.refusable_profiles` now **constructs** the refusal: it moves one
+single-rank selection onto a node the class has and the spec does not own, which is
+simc's refusal #5, and re-encodes. Three constraints on the substitution, each
+measured rather than reasoned: same tree, sub-tree and `max_ranks` (the first
+candidate tried moved a point between trees and the soundness screen correctly
+rejected the whole decode); a single-entry node, so the refusal under test is
+unambiguously the spec rule; and the repair must actually succeed, since a test about
+a repaired build reaching the document needs a repairable hash rather than merely a
+refused one. Nothing is hard-coded to a node id.
+
 **Verified against simc**: the three repaired hashes load and simulate — Havoc
 Fel-Scarred 115,335, Arms 106,065, Fury 96,418 DPS at 300 deterministic iterations on
 the profiles' own (289 item level) gear, all exit 0 where the originals exit 81. Those
