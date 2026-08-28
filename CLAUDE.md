@@ -3515,6 +3515,240 @@ is spent", the wrong diagnosis with the right shape. `PointLedger.requests_sent`
 `request_headers` record it; nothing enforces it, because that such a header exists is
 not established from this side.
 
+### The metric was neither a floor nor a ceiling, and nothing said which (2026-08-27)
+
+The owner's objection, and it was right: *"was wenn eine Gilde nicht konsistent
+ordentlich logged, sondern beispielsweise einen Abend ausgelassen hat beim logging."*
+
+`pull_time` summed whatever `reports(guildID:, zoneID:)` returned. **Three mechanisms,
+running in opposite directions**, and no published field said which side of the truth a
+row sat on:
+
+| mechanism | effect | was it detectable |
+|---|---|---|
+| a progression night was not uploaded | attempts vanish -> **understates** | no |
+| the true first kill was on an unlogged night, so the walk runs on to a later *logged* kill | farm pulls counted as progression | no |
+| only farm nights were logged at all | one wipe and one kill published as a whole progression | no |
+
+Executed against the shipped function: 8.0 h becomes **3.0 h** when one of two nights is
+unlogged; a farm-only log published 1.0 h over 2 attempts as `measured`. That is worse
+than a floor, and it is what this file's own rule -- *"a partial sum published as the
+answer is a floor wearing a measurement's clothes"* -- was already enforcing for
+`no-kill` and `truncated` and for none of these.
+
+### The screen was already being fetched and thrown away
+
+`cmd_progress_hours` read exactly `guild.id` off each `fightRankings(metric: progress)`
+row. Those rows also carry **`killTime`** and **`fromlog`**, and both are load-bearing:
+
+- **`fromlog == 0`** -- Warcraft Logs holds no log behind that guild's first kill, so a
+  report walk *cannot* find it and whatever kill it does find is a later one. Refused as
+  `unlogged-kill` **before any report query**, which also refunds the walk.
+- **`killTime`** -- the kill the ranking is about. A logged kill more than
+  `KILL_MATCH_TOLERANCE_MS` (30 min) later is `kill-too-late`; earlier is
+  `kill-too-early` and is counted **apart** rather than resolved, because the log and
+  the ranking disagreeing is a finding and picking a winner would bury it.
+
+Both fields are read from the sibling `wtt-backend`'s committed live slice -- Ulgrax,
+Normal, EU/Tarren Mill, **405 rows, 2026-08-20**, `killTime` and `fromlog` on 405 of
+405 -- not from a run of this code. **21.0% of those rows carry `fromlog: 0`**, which is
+a floor on how much of a sample the second and third mechanisms can reach. Treat the
+first live pass as a schema check, as this repo does for any field it has never asked
+for.
+
+**The screen fails closed.** A row stating neither field is `ranking-row-unscreened` and
+is refused. Reading absence as "passed" would switch both screens off on a field rename
+while every published number still looked healthy -- this repository's signature defect,
+and the reason `_progress_screen_totals` publishes `unscreenedRows` as a schema alarm
+rather than as a property of the guilds.
+
+### Three treatments rejected, and the one that looks right is the worst
+
+- **A gap-robust metric (pull count, raid nights)** -- rejected. Neither is gap-robust;
+  both are gap-*proportional in the same direction*. An unlogged night removes its pulls
+  exactly as it removes its hours, and "raid nights" is literally *nights that were
+  uploaded*. The genuinely gap-immune metrics are the kill-DATE ones (WoWProgress,
+  Raider.IO read Blizzard, which records the kill whether or not anyone uploaded), and
+  they answer a different question.
+- **Imputation** -- rejected flatly. Nothing observable separates "did not raid" from
+  "raided and did not log", so an imputed night is fabricated, and it fabricates
+  *upward*: inventing hours nobody measured to repair an understatement trades a
+  detectable error for an undetectable one.
+- **A night-count gate** -- rejected, and this is the one worth naming because it looks
+  right. `nightsObserved` cannot separate "logged 2 of 6 nights" from "killed it in 2
+  nights", so gating on it would drop the fast, well-logged guilds and push the median
+  **up** -- the opposite error, introduced deliberately. Publish it; never gate on it.
+  Same for `reportsSeen`, which this file already measured as tracking cohort rather
+  than logging quality (27-37 early vs 3-5.5 late).
+
+### What progstats does, and why it is not the answer either
+
+Their metric is *"the amount of time from the start of the first pull to the end of the
+last pull on each raid night, and then summing"*. That is a different metric from this
+one -- it charges idle time and time on *other bosses* to this boss -- and the owner
+confirmed the definition here (*"es zaehlt die Dauer aller Pulls auf der entsprechenden
+Schwierigkeit bis zum ersten kill"*), so it is not interchangeable.
+
+**And their handling of incomplete logging is established as absent**: no filter, no
+imputation, no flag, no field. The demonstration is Liquid at Illidan, published as 3
+pulls / 21.6 min with a percentile against a community IQR of 237-369 pulls, because
+exactly one log exists. So there was nothing to copy, which is the finding rather than a
+failure to find one.
+
+**A caveat about this section that is worth more than the section.** These claims come
+from a research pass, and one of its own verifiers "refuted" a progstats claim by
+grepping *this* repository for progstats' Rust function -- checking the wrong codebase
+and reporting the wrong verdict confidently. What it did establish is that **our**
+`pull_time` sums per-fight durations rather than a span, which is true and was not the
+question. Do not read the progstats internals here as measured by us.
+
+### MID2 reads through its live twin, and the twin is not why it is empty
+
+Measured on **2026-08-28**, run 33135737763 (MID2, Mythic, 3 guilds, 90.1 points).
+
+`fight_profiles.json` files MID2 under PTR encounter ids, which have no progress
+rankings, so a MID2 pass returned **0 of 8 bosses** at both difficulties.
+`cmd_progress_hours` now resolves such an id through `harvest.choose_encounter_id`
+-- the same function the harvest side uses, so the rule exists once -- and the run
+confirms it live on **8 of 8**, each with the name verified:
+
+```
+53420 -> 3420  Sszorak                    53455 -> 3455  Vashnik the Malignant
+53421 -> 3421  The Twin Fangs             53470 -> 3470  Nek'zali the Soulcoiler
+53429 -> 3429  The Coiled Altar           53492 -> 3492  Ula'tek
+53445 -> 3445  Entombed Sentinels         53497 -> 3497  The Lost Explorers
+```
+
+**And unlike on the harvest side, here it recovers something.** CLAUDE.md already
+records the substitution finding nothing for `characterRankings`; for
+`fightRankings(metric: progress)` it turned Nek'zali from nothing into **2 of 3
+guilds measured**. So "the twin resolution is inert" is true of one metric and
+false of the other, and neither generalises.
+
+**What it does not fix is the emptiness, and the reason is worth not
+misdiagnosing.** Six bosses still measured nothing, and the shape rules out both
+obvious causes:
+
+- **Not the zone.** Every boss derived `zoneId` **53** and Nek'zali measured
+  fine in it. A twin whose zone did not follow would fail everywhere, not once.
+- **Not the screens.** `killsFromLog` is **18 of 18** and all four screen
+  counters are zero, so no guild was refused for an unlogged or mismatched kill.
+
+Five bosses refused `no-reports` on every sampled guild and two carried
+`guildsSeen: 0` -- no ranked guild at all yet. That is a young season read three
+guilds deep, which is the split `no-reports`/`no-fights` was built to make
+visible: a fact about the *guilds*, not about the query.
+
+**Cost, and it re-makes the point above about rates.** 90.1 points for 8 bosses x
+3 guilds is **~3.8 a slot** against the ~38 measured at 50 guilds -- a tenth,
+because a refused walk is a walk not taken. Read together, 3.8 and 38 are not two
+estimates of one number; they are the same function measured on two populations,
+which is exactly why extrapolating the 20-guild figure was wrong in kind.
+
+### At twenty guilds MID2 measures, and every row is one night
+
+Run 33135853908, same day, MID2 Mythic, 20 guilds, **298.1 points**. Five of the
+eight bosses now carry numbers where the three-guild pass carried one:
+
+```
+                        n/seen   median   IQR          attempts  nights  span d
+1 Sszorak                 1/ 5    0.72 h   --              16      1.0    0.04
+4 Entombed Sentinels      4/20    1.42 h   0.81-1.99       19      1.0    0.06
+5 Vashnik the Malignant   4/20    0.67 h   0.37-0.93     10.5      1.0    0.04
+6 Nek'zali the Soulcoiler 10/20   0.58 h   0.42-0.73        6      1.0    0.03
+8 The Lost Explorers      4/20    0.47 h   0.38-0.72      7.5      1.0    0.02
+```
+
+**`medianNightsObserved` is 1.0 on every one of them, and the spans are half an
+hour to ninety minutes.** That is not a defect and it is not a progression
+either: page 1 of a progress ranking is the first twenty guilds *in the world*,
+and on a young tier those guilds killed each boss on the night they reached it.
+The field exists to make exactly this legible from outside, and this is what it
+looks like when it fires -- so **do not put MID2 beside MID1 in a season
+comparison on these numbers.** MID1's medians come from a settled tier; these
+come from a race. Two populations, one axis, is the error the per-boss cohort
+warning already names, one level up.
+
+`killsFromLog` is 88 of 88 with all four screen counters at zero, so nothing here
+was screened out; the thinness is `no-reports` -- 8 to 14 of 20 guilds per boss
+have no listed report in the zone at all.
+
+**Cost again contradicts the rate, harder.** 298.1 points over 88 guild-boss
+slots is **3.4 a slot**, an eleventh of the 38 measured on MID1 at 50 guilds, and
+the mechanism is visible in the same document: MID1's early cohort carries 27-37
+reports each and MID2's carries none, so there is no walk to pay for. The number
+is a property of the *sample's logging*, not of the query, and any budget taken
+from one tier and spent on another is a guess.
+
+### The residue, and why the claim changed
+
+After both screens one mechanism survives: a guild whose first kill *is* logged, with
+unlogged nights before it. Nothing in the Warcraft Logs API can see a night nobody
+uploaded -- `Guild.attendance(zoneID:)` enumerates logged nights only, so it is not a
+completeness signal and is not worth the query.
+
+So **the published median is now a lower bound**, which it was not before: mechanism (a)
+only ever removes attempts, and the two overstatement routes are closed.
+`metricIsFloor: true` and the rewritten `note` say so in the document, and
+`medianNightsObserved` beside `medianSpanDays` is the disclosure a reader can act on --
+few nights across a wide span is a partial observation.
+
+### Two fixtures were physically impossible, and both hid the bug
+
+Moving attempts onto the absolute clock (`report["startTime"] + fight["startTime"]`)
+turned two committed test fixtures red, and **both were wrong rather than the code**:
+
+- one had reports starting **one second apart** with pulls running two minutes, so the
+  second report's kill correctly landed *between* the first report's two pulls;
+- one listed a kill at offset 0 and a wipe at offset 1 h *before* it in the array, so
+  that wipe starts an hour **after** the kill and was being counted as progression
+  toward it.
+
+Fight offsets are a real clock, not an array order. A fixture stating physics that
+cannot happen will pin whatever answer the code gives it.
+
+The absolute clock is also what makes a **split raid** correct: two reports logged at
+once interleave, and the guild's first kill is the earlier one rather than the earlier
+*report's*.
+
+### Sample size, and what page 1 actually selects
+
+`--guilds` 12 -> **50**, `--point-ceiling` 0.5 -> **0.7**, plus `--rankings-pages`.
+
+**Paging is not optional at 50.** One ranking page holds 50 rows and paging stops at
+page 20 -- at most 1000 rows per filter combination, both read from `wtt-backend`'s
+`PAGE_SIZE`/`MAX_PAGE`, which are the API's rather than ours. `"p": 1` was hard-coded, so
+`usable[: args.guilds]` could never return more than a page held and `guildsSeen` would
+record the short answer as though it were the request. `sampleShortOfRequest` is the
+disclosure.
+
+**The extrapolation from the 20-guild pass was 1.8x optimistic, and the correction is
+the lesson.** It read: 261 queries / 3,895.1 points for 9 bosses x 20 guilds (run
+32990582509) is ~21.6 points per guild-boss slot, so 50 guilds over nine bosses is
+~9,500 points, ~55% of an 18,000/hour budget. Measured at 50 guilds instead:
+**13,354 points for SEVEN bosses**, i.e. **~38 points per slot**, and the run stopped
+on the ceiling with two bosses unread.
+
+Nothing about the per-slot figure is fixed, which is why a linear extrapolation over it
+was wrong rather than merely imprecise: the deeper into a ranking page the sample goes,
+the more reports each guild has in the zone, and the report walk is the whole cost. So a
+figure measured at 20 guilds is a measurement of *those* guilds' logging, not a rate.
+
+At 38 a slot a full 9 x 50 pass is ~17,000 points -- effectively the entire hour, with
+no margin. **There is no resume, so a ceiling stop discards the whole pass**, which is
+why `fetch_progress_hours` takes `--encounter` and is run a boss or two at a time rather
+than as one nine-boss sweep. Screen 1 refunds the walks it refuses, so a zone with many
+`fromlog: 0` guilds costs less than this; that is a floor for planning, not a discount to
+count on. Check `limitPerHour` in the run's first log line -- this account has been
+observed at 3,600 as well as 18,000, and at 3,600 none of this fits at any sample size.
+
+**What page 1 selects is not "a sample" and this was never written down.** The progress
+metric returns one row per guild **sorted by `killTime` ascending**, so the first 50 rows
+are the first 50 guilds in the world to kill that boss. Sampling 20 of them described the
+world-first race, not raiding. A larger sample therefore changes *which population* is
+described, not merely the precision -- which is a stronger argument for it than the error
+bars, and a caveat that has to travel with any number taken from a shallow page.
+
 ### What the Heroic pass found, and where it stops
 
 MID2, `--difficulty 4 --order public --reports 30`, CI 32992502096 on 2026-08-26,
@@ -5214,6 +5448,25 @@ to the five refused decodes they separate cleanly and agree with each other:
 So the choice-index overflow is a *symptom* on three of those five and the whole disease
 on one. **The screen only ever rejects**: a build that passes was not caught, not
 proven, and that sentence travels with every repair as a caveat.
+
+**simc has since repaired all four, and the tests that rode on that had to change.**
+Measured on `30555ef`, 2026-08-28: Arms, Fury and both Havoc builds are no longer
+disabled generator blocks at all -- simc **ships** them as ordinary profiles whose
+hashes decode with no spec-rule violation, and the two Retribution builds, still
+disabled, decode cleanly too. So `talentrepair` has no subject anywhere in MID2 today.
+
+That is good news for the site and it broke two end-to-end tests, which had been
+borrowing simc's broken profile as their fixture. A test of *our* repair must not go
+red because simc fixed *its* profile -- and must not go green for that reason either.
+`test_buildsearch_cli.refusable_profiles` now **constructs** the refusal: it moves one
+single-rank selection onto a node the class has and the spec does not own, which is
+simc's refusal #5, and re-encodes. Three constraints on the substitution, each
+measured rather than reasoned: same tree, sub-tree and `max_ranks` (the first
+candidate tried moved a point between trees and the soundness screen correctly
+rejected the whole decode); a single-entry node, so the refusal under test is
+unambiguously the spec rule; and the repair must actually succeed, since a test about
+a repaired build reaching the document needs a repairable hash rather than merely a
+refused one. Nothing is hard-coded to a node id.
 
 **Verified against simc**: the three repaired hashes load and simulate — Havoc
 Fel-Scarred 115,335, Arms 106,065, Fury 96,418 DPS at 300 deterministic iterations on

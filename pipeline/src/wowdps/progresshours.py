@@ -50,6 +50,32 @@ DIFFICULTY_NAMES = {
 
 MS_PER_HOUR = 3_600_000.0
 
+#: How far a logged kill may sit from the ranked kill and still be the same kill.
+#:
+#: Generous on purpose. Warcraft Logs states `killTime` on a progress ranking row and
+#: does not say whether it is the kill fight's start or its end, and a long pull is
+#: minutes; the failures this exists to catch are *hours to weeks* late, because they
+#: are a different kill entirely. A tight tolerance would refuse real matches to buy
+#: precision the screen does not need.
+KILL_MATCH_TOLERANCE_MS = 1_800_000
+
+#: The gap that separates two raid nights.
+#:
+#: Six hours, and it partitions what was **observed** -- it never invents a night. A
+#: raid night is a few hours with short breaks; six hours is longer than any break
+#: inside one and shorter than the gap to the next day.
+NIGHT_GAP_MS = 21_600_000
+
+#: What one page of `fightRankings(metric: progress)` holds, and how deep paging goes.
+#:
+#: **Both are the API's, not ours**, and both are read from the sibling `wtt-backend`,
+#: which runs the same `fightRankings(metric: progress, ...)` query live and records
+#: them as `PAGE_SIZE = 50` / `MAX_PAGE = 20` -- at most 1000 rows per filter
+#: combination. Its query is additionally server-scoped where this one is not, so
+#: treat the first run that pages as a schema check rather than as a settled fact.
+RANKING_PAGE_SIZE = 50
+RANKING_MAX_PAGE = 20
+
 #: Which raid an encounter belongs to.
 #:
 #: **The zone is derived, never typed.** `fight_profiles.json` carries encounter ids
@@ -117,6 +143,103 @@ def encounter_zone(payload: dict) -> int | None:
     return zone_id
 
 
+def encounter_name(payload: dict) -> str | None:
+    """The encounter's name in an ``ENCOUNTER_ZONE_QUERY`` payload, or None.
+
+    Already fetched by the zone lookup and discarded until 2026-08-27. It is what
+    verifies a PTR/live twin substitution: two ids differing by a leading 5 are the
+    same boss only if Warcraft Logs calls them the same thing.
+    """
+    encounter = ((payload.get("worldData") or {}).get("encounter")) or {}
+    name = encounter.get("name")
+    return name if isinstance(name, str) and name else None
+
+
+@dataclass(frozen=True)
+class RankedKill:
+    """One row of `fightRankings(metric: progress)`: whose kill, when, and whether logged.
+
+    The progress metric returns **exactly one row per guild**, sorted by `killTime`
+    ascending, so a row *is* that guild's first kill. Two of its three fields were
+    fetched and thrown away until 2026-08-27, and they are the whole completeness
+    screen:
+
+    - `from_log` -- 1 when Warcraft Logs holds a log behind the kill, 0 when the kill
+      came from Blizzard's own records instead. A `0` guild's first kill **cannot** be
+      in any report walk, so the walk necessarily finds a later kill and calls it the
+      first one.
+    - `kill_time_ms` -- the kill the ranking is about. A logged kill far from it is a
+      different kill.
+
+    `from_log` is `None` when the row states neither, which the caller must treat as a
+    refusal rather than a pass: a renamed field would otherwise switch both screens off
+    while every published number still looked healthy.
+
+    Field names and the 21.0% `fromlog == 0` share are read from `wtt-backend`'s
+    committed live slice (Ulgrax, Normal, EU/Tarren Mill, 405 rows, 2026-08-20), not
+    from a run of this code.
+    """
+
+    guild_id: int
+    kill_time_ms: float | None
+    from_log: bool | None
+
+
+def ranking_rows(payload: dict) -> tuple[list[RankedKill], int]:
+    """Ranked first kills, plus the count of rows carrying no guild id.
+
+    `guild.id` is null on roughly 4% of rows (mostly CN), which is why the count is
+    returned rather than the rows being silently shorter.
+    """
+    rankings = ((payload.get("worldData") or {}).get("encounter") or {}).get("fightRankings") or {}
+    rows = rankings.get("rankings") if isinstance(rankings, dict) else None
+    kills: list[RankedKill] = []
+    without_guild = 0
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        guild_id = (row.get("guild") or {}).get("id")
+        if not guild_id:
+            without_guild += 1
+            continue
+        raw = row.get("fromlog")
+        from_log = None if raw is None else bool(int(raw))
+        kill_time = row.get("killTime")
+        kills.append(
+            RankedKill(
+                guild_id=int(guild_id),
+                kill_time_ms=float(kill_time) if isinstance(kill_time, (int, float)) else None,
+                from_log=from_log,
+            )
+        )
+    return kills, without_guild
+
+
+@dataclass(frozen=True)
+class Attempt:
+    """One pull, timed on the **absolute** clock rather than its report's.
+
+    `ReportFight.startTime` is milliseconds from the start of its *report*. Every
+    reader here needs absolute time -- to order attempts across reports, to partition
+    them into nights, and to compare a kill against the ranking's `killTime` -- and a
+    report-relative number used as an absolute one is a small integer that sorts
+    before every real date. That trap has already cost this repository one wrong
+    answer, in `firstkills`, and this type is how it stops being re-derivable.
+    """
+
+    start_ms: float
+    end_ms: float
+    kill: bool
+
+    @property
+    def duration_ms(self) -> float:
+        """This pull's length. **Non-positive means the payload disagrees with itself**
+        and the caller must skip it rather than add it: a zero silently shrinks the
+        total while reading as a very fast pull, and a negative one shrinks it twice.
+        """
+        return self.end_ms - self.start_ms
+
+
 @dataclass(frozen=True)
 class PullTime:
     """One guild's answer, or the reason there is none."""
@@ -125,81 +248,177 @@ class PullTime:
     attempts: int
     reports: int
     reason: str | None = None
+    #: Absolute ms of the first attempt and of the kill, when there is one.
+    first_attempt_at: float | None = None
+    kill_at: float | None = None
+    #: Attempts that contributed a duration. `attempts` counts pulls; this counts the
+    #: ones the sum is actually built from, and they differ when a timestamp is broken.
+    usable_attempts: int = 0
+    #: Distinct raid nights **observed** in the window. Never an estimate of nights
+    #: raided -- see `partition_nights`.
+    nights: int = 0
+    #: First attempt to kill, in days. Published beside the hours because a guild that
+    #: took three weeks over four logged hours is visibly a partial observation.
+    span_days: float | None = None
 
 
-def fight_duration_ms(fight: dict) -> float | None:
-    """One attempt's length, or None when the payload cannot support one.
+def ordered_attempts(
+    reports: list[dict], encounter_id: int, difficulty: int
+) -> tuple[list[Attempt], int]:
+    """Every attempt on one boss on the absolute clock, oldest first, plus the count
+    of reports refused for stating no time of their own.
 
-    A non-positive duration is refused rather than clamped to zero: it means the two
-    timestamps disagree, and a zero silently shrinks the total while reading as a
-    very fast pull.
-    """
-    start, end = fight.get("startTime"), fight.get("endTime")
-    if not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
-        return None
-    duration = end - start
-    return duration if duration > 0 else None
-
-
-def ordered_fights(reports: list[dict], encounter_id: int, difficulty: int) -> list[dict]:
-    """Every attempt on one boss, in the order they were actually fought.
-
-    ``encounterID`` and ``difficulty`` are re-checked even though the query filters
-    on both: a filter that silently stopped filtering would pool a guild's Heroic
+    `encounterID` and `difficulty` are re-checked even though the query filters on
+    both: a filter that silently stopped filtering would pool a guild's Heroic
     attempts into its Mythic progress time, and the total would merely look larger.
+
+    **A report with no `startTime` is refused, not sorted to zero.** It used to sort
+    *first* -- ahead of every real report -- so if it held a kill it terminated the
+    sum immediately and the guild published a near-zero progress time. Absolute times
+    make the same report unusable rather than merely mis-ordered, which is the honest
+    state: without its start there is no clock to put its fights on.
     """
-    rows: list[dict] = []
-    for report in sorted(reports, key=lambda r: r.get("startTime") or 0):
+    dateless = 0
+    dated: list[tuple[float, dict]] = []
+    for report in reports:
+        base = report.get("startTime")
+        if not isinstance(base, (int, float)):
+            dateless += 1
+            continue
+        dated.append((float(base), report))
+
+    rows: list[Attempt] = []
+    for base, report in sorted(dated, key=lambda pair: pair[0]):
         for fight in report.get("fights") or []:
             if int(fight.get("encounterID") or 0) != int(encounter_id):
                 continue
             stated = fight.get("difficulty")
             if stated is not None and int(stated) != int(difficulty):
                 continue
-            rows.append(fight)
-    return rows
+            start, end = fight.get("startTime"), fight.get("endTime")
+            if not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
+                continue
+            rows.append(
+                Attempt(
+                    start_ms=base + float(start),
+                    end_ms=base + float(end),
+                    kill=fight.get("kill") is True,
+                )
+            )
+    rows.sort(key=lambda a: a.start_ms)
+    return rows, dateless
 
 
-def pull_time(reports: list[dict], encounter_id: int, difficulty: int) -> PullTime:
+def partition_nights(attempts: list[Attempt]) -> int:
+    """How many distinct raid nights the observed attempts fall into.
+
+    A partition of what was **seen**, never an estimate of what happened. Two attempts
+    more than `NIGHT_GAP_MS` apart are different nights; that is all it claims. A guild
+    that logged one of its six nights has `nights == 1`, which is the true statement
+    about the observation and says nothing about the six.
+
+    This is published and must never be used as a *gate*: it cannot separate "logged
+    two of six nights" from "killed it in two nights", so refusing on it would drop the
+    fast, well-logged guilds and push the median up -- the opposite error, introduced
+    deliberately.
+    """
+    if not attempts:
+        return 0
+    nights = 1
+    previous = attempts[0].start_ms
+    for attempt in attempts[1:]:
+        if attempt.start_ms - previous >= NIGHT_GAP_MS:
+            nights += 1
+        previous = attempt.start_ms
+    return nights
+
+
+def pull_time(
+    reports: list[dict],
+    encounter_id: int,
+    difficulty: int,
+    kill_time_ms: float | None = None,
+) -> PullTime:
     """Progress time up to and including the first kill, in milliseconds.
 
-    ``ms`` is None when the answer is not knowable from this window; ``reason`` says
-    which of ``no-reports`` / ``no-fights`` / ``no-kill`` / ``unusable`` applies.
+    `ms` is None when the answer is not knowable from this window; `reason` says which
+    of `no-reports` / `no-fights` / `no-kill` / `unusable` / `no-report-time` /
+    `kill-too-late` / `kill-too-early` applies.
 
-    **``no-reports`` and ``no-fights`` used to be one bucket, and separating them is
-    the whole diagnostic.** They are opposite findings:
+    **`no-reports` and `no-fights` used to be one bucket, and separating them is the
+    whole diagnostic.** They are opposite findings:
 
-    - ``no-reports`` -- the guild's listing for this zone came back EMPTY. Nothing was
+    - `no-reports` -- the guild's listing for this zone came back EMPTY. Nothing was
       read, so the boss is irrelevant: it is a fact about the guild or about
-      ``reports(guildID:)``, and it would be identical on all nine bosses.
-    - ``no-fights`` -- the listing came back with reports in it and none of them holds
-      a pull of *this* boss at *this* difficulty. That is a fact about the boss.
+      `reports(guildID:)`, and it would be identical on all nine bosses.
+    - `no-fights` -- the listing came back with reports in it and none of them holds a
+      pull of *this* boss at *this* difficulty. That is a fact about the boss.
 
-    Under one name they are indistinguishable, and the 2026-08-26 run's central
-    puzzle -- 41 of 72 guild-boss pairs refused, at rates from 1-in-8 to 7-in-8 on
-    the same zone -- cannot be attributed without the split. The count is published
-    beside it (``reportsSeen``) so the answer survives in the artifact rather than
-    living in one run's log.
+    Under one name they are indistinguishable, and the 2026-08-26 run's central puzzle
+    -- 41 of 72 guild-boss pairs refused, at rates from 1-in-8 to 7-in-8 on the same
+    zone -- cannot be attributed without the split. The count is published beside it
+    (`reportsSeen`) so the answer survives in the artifact rather than living in one
+    run's log.
+
+    **`kill_time_ms` is the completeness screen and the reason this function can be
+    trusted at all.** Without it the walk finds *a* kill and calls it the first one.
+    Two ways that is wrong, and both published a confident number until 2026-08-27:
+
+    - the guild killed the boss on a night nobody uploaded, so the earliest logged kill
+      is a *farm* kill weeks later and every logged pull before it is counted as
+      progression toward a kill that had already happened;
+    - only farm nights were logged at all, so one wipe and one kill publish as the
+      guild's whole progression.
+
+    Both are refused as `kill-too-late`. The mirror case -- a logged kill *earlier* than
+    the ranked one -- is refused as `kill-too-early` and counted apart rather than
+    resolved in either direction: the log and the ranking disagreeing is a finding, and
+    picking a winner here would bury it.
+
+    Passing `kill_time_ms=None` restores the pre-screen behaviour and is for callers
+    that genuinely have no ranked kill; it is not a fallback the sweep should take.
     """
     if not reports:
         return PullTime(None, 0, 0, "no-reports")
-    fights = ordered_fights(reports, encounter_id, difficulty)
-    if not fights:
-        return PullTime(None, 0, len(reports), "no-fights")
+    attempts_list, dateless = ordered_attempts(reports, encounter_id, difficulty)
+    if not attempts_list:
+        # A listing made entirely of dateless reports is a different failure from one
+        # holding no pull of this boss, and only the first is a payload problem.
+        reason = "no-report-time" if dateless and dateless == len(reports) else "no-fights"
+        return PullTime(None, 0, len(reports), reason)
 
     total = 0.0
     attempts = 0
     usable = 0
-    for fight in fights:
+    seen: list[Attempt] = []
+    for attempt in attempts_list:
         attempts += 1
-        duration = fight_duration_ms(fight)
-        if duration is not None:
-            total += duration
+        seen.append(attempt)
+        if attempt.duration_ms > 0:
+            total += attempt.duration_ms
             usable += 1
-        if fight.get("kill") is True:
-            if not usable:
-                return PullTime(None, attempts, len(reports), "unusable")
-            return PullTime(total, attempts, len(reports), None)
+        if not attempt.kill:
+            continue
+        if not usable:
+            return PullTime(None, attempts, len(reports), "unusable")
+        if kill_time_ms is not None:
+            drift = attempt.start_ms - kill_time_ms
+            if drift > KILL_MATCH_TOLERANCE_MS:
+                return PullTime(None, attempts, len(reports), "kill-too-late")
+            if drift < -KILL_MATCH_TOLERANCE_MS:
+                return PullTime(None, attempts, len(reports), "kill-too-early")
+        first = seen[0].start_ms
+        return PullTime(
+            total,
+            attempts,
+            len(reports),
+            None,
+            first_attempt_at=first,
+            kill_at=attempt.start_ms,
+            usable_attempts=usable,
+            nights=partition_nights(seen),
+            span_days=round((attempt.start_ms - first) / 86_400_000.0, 3),
+        )
     return PullTime(None, attempts, len(reports), "no-kill")
 
 
@@ -241,6 +460,7 @@ def guild_row(
     duplicates: int = 0,
     hours: float | None = None,
     attempts: int | None = None,
+    coverage: PullTime | None = None,
 ) -> dict:
     """One sampled guild's row: who, what happened, and over how many reports.
 
@@ -258,6 +478,20 @@ def guild_row(
     if hours is not None:
         row["hours"] = round(hours, 4)
         row["attempts"] = attempts
+    if coverage is not None and coverage.ms is not None:
+        # How much of a progression this observation could possibly be. A guild that
+        # took three weeks over four logged hours on one night is visibly a partial
+        # view; one that took four hours over two nights inside three days is not.
+        # Published, never gated on -- see `partition_nights`.
+        row["nightsObserved"] = coverage.nights
+        row["spanDays"] = coverage.span_days
+        row["firstAttemptAt"] = coverage.first_attempt_at
+        row["killAt"] = coverage.kill_at
+        if coverage.usable_attempts != coverage.attempts:
+            # Attempts that contributed no duration. Without this the median attempt
+            # count and the median hours are built from different populations and
+            # nothing says so.
+            row["usableAttempts"] = coverage.usable_attempts
     return row
 
 
@@ -288,10 +522,26 @@ class BossProgress:
     guilds: list[dict] = field(default_factory=list)
     #: Guilds with no answer, by reason -- part of the cost per usable number.
     refused: dict[str, int] = field(default_factory=dict)
+    #: Nights and spans behind each measured guild, index-aligned with ``hours``.
+    nights: list[int] = field(default_factory=list)
+    spans: list[float] = field(default_factory=list)
+    #: The `fromlog` split over the guilds this boss SCREENED, measured rather than
+    #: assumed. It is a property of Warcraft Logs' ingestion in that era as much as of
+    #: the guilds, so it is not comparable across tiers as an absolute.
+    kills_from_log: int = 0
+    kills_not_from_log: int = 0
     guilds_seen: int = 0
     rows_without_guild: int = 0
+    #: True when the ranking could not supply as many guilds as were asked for. Without
+    #: it a short sample is indistinguishable from a small request, and `guildsSeen`
+    #: alone reads as a deliberate choice.
+    sample_short_of_request: bool = False
     #: The zone its reports were searched in. None means the boss was refused.
     zone_id: int | None = None
+    #: Warcraft Logs' own sentence about which id was read, when the filed one had no
+    #: ranking rows. Published so a substitution -- or a REFUSED one -- is visible in
+    #: the artifact rather than only in a run's log.
+    read_as: str | None = None
 
     def record(
         self,
@@ -301,6 +551,7 @@ class BossProgress:
         duplicates: int = 0,
         hours: float | None = None,
         attempts: int | None = None,
+        coverage: PullTime | None = None,
     ) -> None:
         """Append one sampled guild's row. **Every** guild gets one, whatever happened.
 
@@ -309,8 +560,14 @@ class BossProgress:
         that succeeded on boss 1 -- cannot be answered from the artifact at all, only
         from a run's log that nobody kept.
         """
-        self.guilds.append(guild_row(guild_id, outcome, reports_seen, duplicates, hours, attempts))
+        self.guilds.append(
+            guild_row(guild_id, outcome, reports_seen, duplicates, hours, attempts, coverage)
+        )
         self.reports_seen.append(reports_seen)
+        if coverage is not None and coverage.ms is not None:
+            self.nights.append(coverage.nights)
+            if coverage.span_days is not None:
+                self.spans.append(coverage.span_days)
 
     def to_json(self) -> dict:
         q = quartiles(self.hours)
@@ -331,11 +588,23 @@ class BossProgress:
                 None if not self.attempts else median([float(a) for a in self.attempts])
             ),
             "zoneId": self.zone_id,
+            "readAs": self.read_as,
             "medianReportsSeen": (
                 None if not self.reports_seen else median([float(r) for r in self.reports_seen])
             ),
+            # How much of a progression each measured observation could be. These are
+            # the honest reading of the residual limitation: after the screens the
+            # remaining error is a night nobody uploaded, and a low night count beside
+            # a wide span is what that looks like from outside.
+            "medianNightsObserved": (
+                None if not self.nights else median([float(n) for n in self.nights])
+            ),
+            "medianSpanDays": None if not self.spans else median(list(self.spans)),
+            "killsFromLog": self.kills_from_log,
+            "killsNotFromLog": self.kills_not_from_log,
             "guilds": list(self.guilds),
             "guildsSeen": self.guilds_seen,
+            "sampleShortOfRequest": self.sample_short_of_request,
             "refused": dict(sorted(self.refused.items())),
             "rowsWithoutGuild": self.rows_without_guild,
         }

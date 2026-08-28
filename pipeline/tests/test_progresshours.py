@@ -5,13 +5,15 @@ absolute, `ReportFight.startTime`/`endTime` are relative to their own report.
 """
 
 from wowdps.progresshours import (
+    Attempt,
     BossProgress,
     encounter_zone,
-    fight_duration_ms,
     median,
-    ordered_fights,
+    ordered_attempts,
+    partition_nights,
     pull_time,
     quartiles,
+    ranking_rows,
     stacked_total,
 )
 
@@ -33,14 +35,46 @@ def report(start, fights):
     return {"startTime": start, "fights": fights}
 
 
+#: Two raid nights, a day apart. **The gap is load-bearing and used not to be.**
+#:
+#: This fixture read `1_000` and `2_000` while attempts were ordered per report and
+#: only compared within one. Once attempts moved onto the absolute clock those bases
+#: describe two reports starting one second apart with pulls running for two minutes
+#: -- so the second report's kill correctly lands BETWEEN the first report's two
+#: pulls, and the sum drops to 150_000. The code was right and the fixture was
+#: impossible. Give report bases real distance, or a test states physics that cannot
+#: happen and then pins the answer to it.
+NIGHT_1 = 1_700_000_000_000
+NIGHT_2 = NIGHT_1 + 86_400_000
+
+
 def test_progress_time_is_every_attempt_up_to_and_including_the_kill():
     reports = [
-        report(1_000, [fight(0, 60_000), fight(70_000, 130_000)]),
-        report(2_000, [fight(0, 90_000, kill=True), fight(100_000, 160_000)]),
+        report(NIGHT_1, [fight(0, 60_000), fight(70_000, 130_000)]),
+        report(NIGHT_2, [fight(0, 90_000, kill=True), fight(100_000, 160_000)]),
     ]
     result = pull_time(reports, ENCOUNTER, MYTHIC)
     assert result.ms == 210_000  # the pull AFTER the kill is not progress time
     assert result.attempts == 3
+    assert result.nights == 2
+
+
+def test_two_overlapping_reports_interleave_on_the_absolute_clock():
+    """A split raid logging two reports at once has ONE first kill: the earlier one.
+
+    Ordering per report and only comparing within one would count the other team's
+    pulls after that kill as progression toward it. This is the case the absolute
+    clock exists for, and it is the reason the fixture above needed real dates.
+    """
+    reports = [
+        report(NIGHT_1, [fight(0, 60_000), fight(3_600_000, 3_660_000)]),
+        report(NIGHT_1 + 120_000, [fight(0, 90_000, kill=True)]),
+    ]
+    result = pull_time(reports, ENCOUNTER, MYTHIC)
+    # 60s of team A, then team B's kill 120s in. Team A's later pull is not progress.
+    assert result.ms == 150_000
+    assert result.attempts == 2
+    assert result.kill_at == NIGHT_1 + 120_000
 
 
 def test_reports_are_ordered_by_their_own_absolute_start():
@@ -74,14 +108,60 @@ def test_a_fight_stating_no_difficulty_is_kept():
 
 
 def test_a_non_positive_duration_is_refused_not_clamped():
-    assert fight_duration_ms(fight(100, 100)) is None
-    assert fight_duration_ms(fight(200, 100)) is None
-    assert fight_duration_ms(fight(0, 5_000)) == 5_000
+    """The rule moved from `fight_duration_ms` onto `Attempt`; it did not go away.
+
+    A zero reads as a very fast pull while shrinking the total, and a negative one
+    shrinks it twice, so `pull_time` must skip both rather than add them.
+    """
+    assert Attempt(100.0, 100.0, False).duration_ms == 0
+    assert Attempt(200.0, 100.0, False).duration_ms < 0
+    assert Attempt(0.0, 5_000.0, False).duration_ms == 5_000
+    # And the sum built from them ignores exactly those.
+    reports = [report(1_000, [fight(0, 0), fight(10, 5), fight(100, 5_100, kill=True)])]
+    answer = pull_time(reports, ENCOUNTER, MYTHIC)
+    assert answer.ms == 5_000
+    assert answer.attempts == 3 and answer.usable_attempts == 1
 
 
-def test_ordered_fights_keeps_within_report_order():
+def test_attempts_are_put_on_the_absolute_clock():
+    """`ReportFight.startTime` is report-relative; every reader here needs absolute.
+
+    Two reports whose fights both start at 0 are hours apart in reality, and a reader
+    that keeps the relative number cannot order them, partition nights, or compare a
+    kill against the ranking.
+    """
     reports = [report(1_000, [fight(0, 10), fight(50, 90)])]
-    assert [f["startTime"] for f in ordered_fights(reports, ENCOUNTER, MYTHIC)] == [0, 50]
+    attempts, dateless = ordered_attempts(reports, ENCOUNTER, MYTHIC)
+    assert dateless == 0
+    assert [a.start_ms for a in attempts] == [1_000, 1_050]
+
+
+def test_a_report_with_no_start_time_is_refused_rather_than_sorted_to_zero():
+    """It used to sort FIRST, ahead of every real report.
+
+    If such a report held a kill it terminated the sum immediately and the guild
+    published a near-zero progress time -- the same shape as the farm-kill bug.
+    """
+    dateless = {"code": "d", "fights": [fight(0, 60_000, kill=True)]}
+    real = report(1_000_000_000_000, [fight(0, 3_600_000), fight(4_000_000, 7_600_000, kill=True)])
+    attempts, skipped = ordered_attempts([dateless, real], ENCOUNTER, MYTHIC)
+    assert skipped == 1
+    assert len(attempts) == 2
+    assert pull_time([dateless, real], ENCOUNTER, MYTHIC).ms == 7_200_000
+
+
+def test_a_listing_of_nothing_but_dateless_reports_says_so():
+    """Distinct from `no-fights`: one is a payload problem, the other is about the boss."""
+    dateless = {"code": "d", "fights": [fight(0, 60_000)]}
+    assert pull_time([dateless], ENCOUNTER, MYTHIC).reason == "no-report-time"
+
+
+def test_nights_partition_what_was_observed_and_never_invent_one():
+    day = 86_400_000
+    same_night = [Attempt(0, 1, False), Attempt(3_600_000, 2, False)]
+    assert partition_nights(same_night) == 1
+    assert partition_nights([Attempt(0, 1, False), Attempt(day, 2, False)]) == 2
+    assert partition_nights([]) == 0
 
 
 def test_median_ignores_the_guilds_with_no_answer():
@@ -224,3 +304,113 @@ def test_every_sampled_guild_is_named_with_its_outcome():
     rows = boss.to_json()["guilds"]
     assert [r["id"] for r in rows] == [1, 2, 3]
     assert {r["outcome"] for r in rows} == {"measured", "no-reports", "no-fights"}
+
+
+# ── The completeness screens ─────────────────────────────────────────────────
+#
+# Everything below pins behaviour that did not exist before 2026-08-27. Each case
+# published a confident, plausible number until the screens were added, which is why
+# they are stated as tests rather than described in a docstring.
+
+RANKED_KILL = NIGHT_2 + 90_000
+
+
+def ranking(guild_id, kill_time=RANKED_KILL, from_log=1):
+    row = {"guild": {"id": guild_id}}
+    if kill_time is not None:
+        row["killTime"] = kill_time
+    if from_log is not None:
+        row["fromlog"] = from_log
+    return row
+
+
+def payload(rows):
+    return {"worldData": {"encounter": {"fightRankings": {"rankings": rows}}}}
+
+
+def test_a_ranking_row_carries_the_kill_time_and_whether_it_came_from_a_log():
+    kills, missing = ranking_rows(payload([ranking(7), ranking(8, from_log=0)]))
+    assert missing == 0
+    assert [k.guild_id for k in kills] == [7, 8]
+    assert [k.from_log for k in kills] == [True, False]
+    assert kills[0].kill_time_ms == RANKED_KILL
+
+
+def test_a_row_with_no_guild_is_counted_rather_than_silently_shortening_the_sample():
+    """`guild.id` is null on roughly 4% of live rows, mostly CN."""
+    kills, missing = ranking_rows(payload([{"killTime": 1, "fromlog": 1}, ranking(7)]))
+    assert missing == 1 and [k.guild_id for k in kills] == [7]
+
+
+def test_a_row_stating_neither_screen_field_fails_closed():
+    """Absence must not read as "passed".
+
+    A renamed field would otherwise switch both screens off while every published
+    number still looked healthy -- this repository's signature defect.
+    """
+    kills, _ = ranking_rows(payload([ranking(7, kill_time=None, from_log=None)]))
+    assert kills[0].from_log is None
+    assert kills[0].kill_time_ms is None
+
+
+def test_a_kill_the_log_never_saw_is_refused_rather_than_replaced_by_a_farm_kill():
+    """The guild killed it on an unlogged night; the earliest LOGGED kill is farm.
+
+    Before the screen this published 4 attempts and every pull before that farm kill
+    as progression toward a kill that had already happened.
+    """
+    real_kill = NIGHT_1 + 3_600_000
+    reports = [
+        report(NIGHT_1, [fight(0, 60_000), fight(70_000, 130_000)]),
+        report(NIGHT_2, [fight(0, 60_000), fight(70_000, 130_000, kill=True)]),
+    ]
+    assert pull_time(reports, ENCOUNTER, MYTHIC).ms == 240_000  # what it used to say
+    assert pull_time(reports, ENCOUNTER, MYTHIC, real_kill).reason == "kill-too-late"
+
+
+def test_a_log_holding_only_farm_nights_is_refused():
+    """One wipe and one kill published as a guild's whole progression."""
+    reports = [report(NIGHT_2, [fight(0, 60_000), fight(70_000, 130_000, kill=True)])]
+    assert pull_time(reports, ENCOUNTER, MYTHIC).ms == 120_000  # what it used to say
+    ranked_weeks_earlier = NIGHT_1 - 14 * 86_400_000
+    assert pull_time(reports, ENCOUNTER, MYTHIC, ranked_weeks_earlier).reason == "kill-too-late"
+
+
+def test_a_logged_kill_earlier_than_the_ranked_one_is_a_finding_not_a_correction():
+    """The log and the ranking disagree. Refused and counted APART.
+
+    Picking a winner here would bury exactly the disagreement worth knowing about.
+    """
+    reports = [report(NIGHT_1, [fight(0, 60_000, kill=True)])]
+    later = NIGHT_2 + 5 * 86_400_000
+    assert pull_time(reports, ENCOUNTER, MYTHIC, later).reason == "kill-too-early"
+
+
+def test_a_kill_inside_the_tolerance_still_measures():
+    """The tolerance is generous on purpose: `killTime` may be the kill's start or
+    its end, and the failures the screen catches are hours to weeks out, not minutes.
+    """
+    reports = [report(NIGHT_1, [fight(0, 60_000), fight(70_000, 130_000, kill=True)])]
+    logged_kill = NIGHT_1 + 70_000
+    for drift in (-1_500_000, 0, 1_500_000):
+        assert pull_time(reports, ENCOUNTER, MYTHIC, logged_kill + drift).ms == 120_000
+
+
+def test_the_residue_measures_and_discloses_rather_than_being_repaired():
+    """A night nobody uploaded, before a kill that IS logged and DOES match.
+
+    Nothing in the Warcraft Logs API can see that night, so this stays `measured` --
+    and the published figure is a lower bound. The disclosure is the coverage: one
+    observed night across a two-day span is what a partial view looks like from
+    outside. This test asserts the LIMITATION, which is the point of it.
+    """
+    reports = [
+        report(NIGHT_1, [fight(0, 3_600_000)]),
+        # Tuesday raided and not uploaded. Nothing here can represent it.
+        report(NIGHT_2 + 86_400_000, [fight(0, 3_600_000, kill=True)]),
+    ]
+    kill_at = NIGHT_2 + 86_400_000
+    answer = pull_time(reports, ENCOUNTER, MYTHIC, kill_at)
+    assert answer.ms == 7_200_000  # two hours, where the guild really spent more
+    assert answer.nights == 2
+    assert answer.span_days == 2.0
