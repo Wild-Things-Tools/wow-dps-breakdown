@@ -3528,13 +3528,25 @@ page 20 -- at most 1000 rows per filter combination, both read from `wtt-backend
 record the short answer as though it were the request. `sampleShortOfRequest` is the
 disclosure.
 
-The cost arithmetic anchors on the one real measurement -- 261 queries / 3,895.1 points
-for 9 bosses x 20 guilds, run 32990582509 -- i.e. **~21.6 points per guild-boss slot**.
-50 guilds over nine bosses is ~9,500 points, **~55% of an 18,000/hour budget**, less
-after screen 1 refunds the walks it refuses. 100 guilds is ~105% of an hour and cannot
-complete: **there is no resume, so a ceiling stop discards the whole pass**, which is why
-the ceiling went up rather than down. Check `limitPerHour` in the run's first log line --
-this account has been observed at 3,600 as well as 18,000, and at 3,600 none of this fits.
+**The extrapolation from the 20-guild pass was 1.8x optimistic, and the correction is
+the lesson.** It read: 261 queries / 3,895.1 points for 9 bosses x 20 guilds (run
+32990582509) is ~21.6 points per guild-boss slot, so 50 guilds over nine bosses is
+~9,500 points, ~55% of an 18,000/hour budget. Measured at 50 guilds instead:
+**13,354 points for SEVEN bosses**, i.e. **~38 points per slot**, and the run stopped
+on the ceiling with two bosses unread.
+
+Nothing about the per-slot figure is fixed, which is why a linear extrapolation over it
+was wrong rather than merely imprecise: the deeper into a ranking page the sample goes,
+the more reports each guild has in the zone, and the report walk is the whole cost. So a
+figure measured at 20 guilds is a measurement of *those* guilds' logging, not a rate.
+
+At 38 a slot a full 9 x 50 pass is ~17,000 points -- effectively the entire hour, with
+no margin. **There is no resume, so a ceiling stop discards the whole pass**, which is
+why `fetch_progress_hours` takes `--encounter` and is run a boss or two at a time rather
+than as one nine-boss sweep. Screen 1 refunds the walks it refuses, so a zone with many
+`fromlog: 0` guilds costs less than this; that is a floor for planning, not a discount to
+count on. Check `limitPerHour` in the run's first log line -- this account has been
+observed at 3,600 as well as 18,000, and at 3,600 none of this fits at any sample size.
 
 **What page 1 selects is not "a sample" and this was never written down.** The progress
 metric returns one row per guild **sorted by `killTime` ascending**, so the first 50 rows
