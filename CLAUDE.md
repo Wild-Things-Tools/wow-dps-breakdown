@@ -3486,6 +3486,84 @@ and reporting the wrong verdict confidently. What it did establish is that **our
 `pull_time` sums per-fight durations rather than a span, which is true and was not the
 question. Do not read the progstats internals here as measured by us.
 
+### MID2 reads through its live twin, and the twin is not why it is empty
+
+Measured on **2026-08-28**, run 33135737763 (MID2, Mythic, 3 guilds, 90.1 points).
+
+`fight_profiles.json` files MID2 under PTR encounter ids, which have no progress
+rankings, so a MID2 pass returned **0 of 8 bosses** at both difficulties.
+`cmd_progress_hours` now resolves such an id through `harvest.choose_encounter_id`
+-- the same function the harvest side uses, so the rule exists once -- and the run
+confirms it live on **8 of 8**, each with the name verified:
+
+```
+53420 -> 3420  Sszorak                    53455 -> 3455  Vashnik the Malignant
+53421 -> 3421  The Twin Fangs             53470 -> 3470  Nek'zali the Soulcoiler
+53429 -> 3429  The Coiled Altar           53492 -> 3492  Ula'tek
+53445 -> 3445  Entombed Sentinels         53497 -> 3497  The Lost Explorers
+```
+
+**And unlike on the harvest side, here it recovers something.** CLAUDE.md already
+records the substitution finding nothing for `characterRankings`; for
+`fightRankings(metric: progress)` it turned Nek'zali from nothing into **2 of 3
+guilds measured**. So "the twin resolution is inert" is true of one metric and
+false of the other, and neither generalises.
+
+**What it does not fix is the emptiness, and the reason is worth not
+misdiagnosing.** Six bosses still measured nothing, and the shape rules out both
+obvious causes:
+
+- **Not the zone.** Every boss derived `zoneId` **53** and Nek'zali measured
+  fine in it. A twin whose zone did not follow would fail everywhere, not once.
+- **Not the screens.** `killsFromLog` is **18 of 18** and all four screen
+  counters are zero, so no guild was refused for an unlogged or mismatched kill.
+
+Five bosses refused `no-reports` on every sampled guild and two carried
+`guildsSeen: 0` -- no ranked guild at all yet. That is a young season read three
+guilds deep, which is the split `no-reports`/`no-fights` was built to make
+visible: a fact about the *guilds*, not about the query.
+
+**Cost, and it re-makes the point above about rates.** 90.1 points for 8 bosses x
+3 guilds is **~3.8 a slot** against the ~38 measured at 50 guilds -- a tenth,
+because a refused walk is a walk not taken. Read together, 3.8 and 38 are not two
+estimates of one number; they are the same function measured on two populations,
+which is exactly why extrapolating the 20-guild figure was wrong in kind.
+
+### At twenty guilds MID2 measures, and every row is one night
+
+Run 33135853908, same day, MID2 Mythic, 20 guilds, **298.1 points**. Five of the
+eight bosses now carry numbers where the three-guild pass carried one:
+
+```
+                        n/seen   median   IQR          attempts  nights  span d
+1 Sszorak                 1/ 5    0.72 h   --              16      1.0    0.04
+4 Entombed Sentinels      4/20    1.42 h   0.81-1.99       19      1.0    0.06
+5 Vashnik the Malignant   4/20    0.67 h   0.37-0.93     10.5      1.0    0.04
+6 Nek'zali the Soulcoiler 10/20   0.58 h   0.42-0.73        6      1.0    0.03
+8 The Lost Explorers      4/20    0.47 h   0.38-0.72      7.5      1.0    0.02
+```
+
+**`medianNightsObserved` is 1.0 on every one of them, and the spans are half an
+hour to ninety minutes.** That is not a defect and it is not a progression
+either: page 1 of a progress ranking is the first twenty guilds *in the world*,
+and on a young tier those guilds killed each boss on the night they reached it.
+The field exists to make exactly this legible from outside, and this is what it
+looks like when it fires -- so **do not put MID2 beside MID1 in a season
+comparison on these numbers.** MID1's medians come from a settled tier; these
+come from a race. Two populations, one axis, is the error the per-boss cohort
+warning already names, one level up.
+
+`killsFromLog` is 88 of 88 with all four screen counters at zero, so nothing here
+was screened out; the thinness is `no-reports` -- 8 to 14 of 20 guilds per boss
+have no listed report in the zone at all.
+
+**Cost again contradicts the rate, harder.** 298.1 points over 88 guild-boss
+slots is **3.4 a slot**, an eleventh of the 38 measured on MID1 at 50 guilds, and
+the mechanism is visible in the same document: MID1's early cohort carries 27-37
+reports each and MID2's carries none, so there is no walk to pay for. The number
+is a property of the *sample's logging*, not of the query, and any budget taken
+from one tier and spent on another is a guess.
+
 ### The residue, and why the claim changed
 
 After both screens one mechanism survives: a guild whose first kill *is* logged, with
