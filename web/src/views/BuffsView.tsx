@@ -175,11 +175,23 @@ export function BuffsView({
 }) {
   const [measure, setMeasure] = useState<Measure>('powerInfusion')
 
-  // `buffs.json` has no coverage block, so this is a ROW COUNT and `sweepCoverage`
-  // is told so -- it then declines to claim the sweep meant to cover more, which a
-  // row count genuinely cannot distinguish.
+  // The sweep's own two numbers describe the sweep; the tier's size comes from the
+  // manifest, which is the only thing that can say whether the sweep is behind.
+  // Same call `GearView` makes.
+  //
+  // This passed a hard `null` until 2026-08-26, under a comment claiming
+  // `buffs.json` had no coverage block. It has one, and had for as long as
+  // `gear.json` has -- what was missing was the field on `BuffDataset`, so the view
+  // could not read what the type hid.
+  //
+  // Reading it was not safe until the sweep itself was fixed, and the order matters:
+  // with the old 31-of-31 data over a 52-build tier, `sweepCoverage(31, 31, 52)`
+  // returns "The sweep covered every build the tier had when it ran; 21 builds have
+  // been added since" -- false, because the sweep never looked at them. #88 made the
+  // sweep cover the tier first; this is the second half. `sweepCoverage.test.ts`
+  // pins both directions.
   const coverage = useMemo(
-    () => sweepCoverage(data?.specs.length ?? 0, null, tierBuilds),
+    () => sweepCoverage(data?.specs.length ?? 0, data?.coverage?.specsAvailable, tierBuilds),
     [data, tierBuilds],
   )
   const rows = useMemo(() => {

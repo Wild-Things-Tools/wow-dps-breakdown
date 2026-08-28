@@ -24,13 +24,16 @@ on:
         description: 'Tier whose computed-builds.json is checked'
         default: 'MID2'
       limit:
-        description: 'Check only the N largest published margins. 0 = every marked build. 12 are marked on MID2 today; 3 is a first signal'
+        description: 'Check only the N largest published margins at the chosen scenario and target count. 0 = all of them. MID2 today: 14 marked at 1 target, 26 at 5'
         default: '3'
       build:
         description: 'Only builds whose id contains this. Empty = as selected by --limit'
         default: ''
+      scenario:
+        description: 'Which scenario the published margins come from. With targets it selects the rows AND the measurement, and the two must agree'
+        default: 'patchwerk'
       targets:
-        description: 'Target count. computed-builds.json covers patchwerk at one target today, so anything else has no published margin to check against'
+        description: 'Target count. MID2 carries patchwerk at 1 and 5. The command refuses and lists the pairs the document holds if this names one it does not'
         default: '1'
       iterations:
         description: 'Iterations per profileset. 3000 measures at ~0.05%, which the tie band here needs: it is the quadrature sum of FOUR errors'
@@ -124,6 +127,7 @@ jobs:
             --profiles simc/profiles
             --simc-source simc
             --simc simc/build/simc
+            --scenario "$SCENARIO"
             --targets "$TARGETS"
             --iterations "$ITERATIONS"
             --out "web/public/data"
@@ -135,6 +139,7 @@ jobs:
           TIER: ${{ inputs.tier }}
           BUILD: ${{ inputs.build }}
           LIMIT: ${{ inputs.limit }}
+          SCENARIO: ${{ inputs.scenario || 'patchwerk' }}
           TARGETS: ${{ inputs.targets }}
           ITERATIONS: ${{ inputs.iterations }}
 

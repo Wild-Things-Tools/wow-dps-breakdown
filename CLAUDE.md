@@ -599,6 +599,122 @@ carry the same `always()` publish job over an upload step with no condition. Whe
 their sweeps write partial output at all is a separate question from this one, so
 that is a finding for a human rather than a change made in passing.
 
+### Two sweeps covered simc's profiles and the ranking covered the tier
+
+`buffs.yml` and `gear.yml` did not run `wowdps unvalidated` or `wowdps extra-builds`
+before sweeping, where `sims.yml` and `build-search.yml` do. So both swept only the
+profiles simc ships, while `index.json` ranks everything this project supplies as
+well. Measured on 2026-08-26, MID2:
+
+| document | builds | tier | its own `coverage` |
+|---|---:|---:|---|
+| `index.json` | **52** | 52 | -- |
+| `buffs.json` (refreshed that day) | 31 | 52 | `{specs: 31, specsAvailable: 31}` |
+| `gear.json` (trinket, 2026-08-21) | 28 | 52 | `{specs: 28, specsAvailable: 28}` |
+
+**Both publish `specs == specsAvailable`, which reads as complete**, because
+`builds_available` is `len(found)` and `found` is whatever the profiles directory
+held when the run started. A denominator taken from the run's own view can never
+report a gap -- the same failure `medianDpsError` and `spec_coverage` each shipped
+once, in a field nobody re-read.
+
+**And it reaches the site as a false sentence.** Measured by calling the shipped
+`sweepCoverage` with the real numbers rather than by reading it:
+
+```
+GearView   sweepCoverage(28, 28, 52) -> "behind"
+  "Covers 28 of 52 builds in the tier. The sweep covered every build the tier
+   had when it ran; 24 builds have been added since."
+```
+
+The 24 were not added since. The sweep never looked at them. That is exactly what
+the comment above that branch warns against -- *"blames the calendar for a gap that
+is the run's"* -- arriving through the **input** rather than through the arithmetic
+its own test pins. The lesson is narrow and worth keeping: a guard written against a
+wrong computation does not protect against a wrong argument.
+
+**The two readers disagree, and fixing the quieter one alone makes it worse.**
+`BuffsView` passes `null` where `GearView` passes the field, so it says *"This file
+states no coverage"* about a file that states coverage. Wiring it up on its own
+returns `sweepCoverage(31, 31, 52)` -- the same false *"21 builds have been added
+since"*. Input first, reader second; the order is the whole fix.
+
+Two things found in `gear.yml` on the way, both the same mistake:
+
+- Its bundle put simc's generated tables at **`bundle/dbc/generated`, which nothing
+  in the workflow reads**, under a comment about `wowdps gear-candidates` -- a
+  command it never runs, since `cmd_gear` reads the committed `gear_pools.json`.
+  `wowdps extra-builds` does read them, under `engine/dbc/generated`.
+- Its cost header read **"26 specs" against a tier of 52 builds**, so every figure
+  in it was half: a full single-target trinket pass is ~620 CPU-min, not ~310, and
+  1+5 targets does not fit the monthly budget at all. Same shape as the
+  baseline-combination table above -- plausible arithmetic over the wrong column,
+  and this one had been load-bearing for a scheduling decision.
+
+**What the fixed sweep measured.** Dispatched the same evening, six shards, all six
+ran both materialisation steps: `buffs.json` went **31 of 31 to 52 of 52**. 52 rows,
+51 carrying a measurement; the one without is `paladin_retribution_default`, whose
+hash simc refuses with exit 81 -- published with its `errors` string rather than
+dropped, and already filtered out of the chart by the null-measurement guard. So a
+refused profile costs a row's numbers and not a shard, which is what `sweep_spec`'s
+per-invocation catch is for.
+
+Power Infusion now spans **1.54-5.05%** over 51 builds against the 1.80-5.17% this
+file records over 26. The floor moved down because the population widened, which is
+the direction it should move.
+
+**Do not read those fields as percentages.** `powerInfusionPercent` and its
+siblings hold a **ratio** -- 0.05053 is 5.05%, and `gain / baseDps` reproduces it
+exactly. Printed with a `%` beside them they read as a hundredfold collapse against
+the figures above, which is a false regression somebody will report one day.
+
+`BuffsView` reads the field now (#94). Its `null` was not the carelessness it looked
+like: `BuffDataset` in `types.ts` had **no `coverage` field at all**, so the view
+could not read what the type hid, and its comment described the *type* while naming
+the *file*. A missing field in a type is not a missing field in the data.
+
+### `gear.json` carries one provenance block over three slots, and they need not be
+from one run
+
+Found by simulating a single-slot re-run through the real `merge_gear_shards` before
+dispatching one, which is the only reason a 1,140 CPU-minute pass did not publish it.
+
+That function is built so a one-slot run does not delete the others -- the published
+document joins the merge as the *oldest*, union semantics, and its own comment
+explains why. That part works. What happens beside it does not: `merged =
+dict(documents[-1])` takes the **newest** document's top-level fields wholesale.
+
+Measured, feeding it a trinket shard at a different simc revision:
+
+```
+document simc.gitRevision   NEWREV        <- the new run
+document medianDpsError     0.0999        <- the new run
+document coverage           {specs: 80, specsAvailable: 28}
+per slot   finger 28   neck 26   trinket 78    none carries its own provenance
+```
+
+Three separate wrongnesses, and each is a shape this file already names elsewhere:
+
+- **Provenance.** The document says these numbers came from simc `NEWREV` while
+  finger and neck were measured on `69a46e1`. Right for one slot of three.
+- **Precision.** `settings.medianDpsError` is the new run's median published as the
+  document's -- literally the `merge_shards` defect recorded above for the manifest,
+  one file across.
+- **Coverage.** `specs` is the **union of build ids over all slots** and
+  `specsAvailable` comes from the newest document, so `80 of 28` is reachable. The
+  same impossible shape as `computed-builds.json`'s `104 of 52`.
+
+It is already mildly wrong with no new run at all: the union is 28 while the slots
+hold finger 28, neck 26, trinket 26, and `GearView` prints that one document-level
+number above a **per-slot** table behind a slot selector. The Trinket tab counts 28
+over a table of 26.
+
+Why it blocks rather than annoys: after a trinket run over 52 builds the union is 52,
+so `sweepCoverage(52, 52, 52)` says *"Covers all 52 builds in the tier"* above a
+Finger table holding 28 -- trading a false sentence for a more confident one. A sweep
+that replaces one error with a better-dressed error is not a repair. #95 holds the
+three-part fix and the priced pass.
+
 ## The gear anchor: what a computed build wears
 
 `gearanchor.py` + `wowdps gear-anchor`. A build this project *computes* -- from a
@@ -3633,6 +3749,39 @@ world-first race, not raiding. A larger sample therefore changes *which populati
 described, not merely the precision -- which is a stronger argument for it than the error
 bars, and a caveat that has to travel with any number taken from a shallow page.
 
+### What the Heroic pass found, and where it stops
+
+MID2, `--difficulty 4 --order public --reports 30`, CI 32992502096 on 2026-08-26,
+committed as `4dffc6b`. **2,769 points over 2,616 queries** (3,209 served from the
+cache) against 18,000 an hour -- 15.4%, no abort. `measurements[]` per encounter:
+
+| boss | Mythic | Heroic |
+|---|---:|---:|
+| Sszorak | 0 | **17** |
+| The Twin Fangs | 0 | **10** |
+| The Coiled Altar | 0 | 0 |
+| Ula'tek | 0 | 0 |
+| Entombed Sentinels | 8 | **27** |
+| Vashnik the Malignant | 6 | **30** |
+| Nek'zali the Soulcoiler | 6 | **25** |
+| The Lost Explorers | 9 | 7 |
+
+Two of the four empty bosses are measured for the first time, and three of the four
+that had Mythic data have a three-to-fivefold bigger sample -- 30 kills against 6 is
+the difference between a band and a band worth reading. Two bosses have nothing at
+either difficulty, which is a fact about the zone rather than about the run.
+
+**Nothing on the site shows any of it.** `grep -rn "measuredDifficulty\|\.measurements"
+web/src/` returns **zero hits**: the view reads `measured` alone, which is the
+hardest difficulty read, which is Mythic, which is 0 for Sszorak. So seventeen kills
+were read, published, and are invisible -- this project's signature defect, one frame
+above the pipeline this time.
+
+It is deliberately still unfixed, and the reason is a decision rather than work.
+Drawing a Heroic band on a tab a reader takes for Mythic is a mislabelling, and it is
+the *same* mislabelling that the document's own `measuredDifficulty` exists to
+prevent. Issue #48 holds the three options; the run half of it is now done.
+
 ## Probing across hours, rather than restarting
 
 Warcraft Logs meters by points per hour and a pass at a useful sample size does not
@@ -3898,6 +4047,47 @@ Two things nearly threw it away, both fixed, both worth not reintroducing:
   figure over all 338 cells was 0.0597. It is recomputed from the merged spec files now.
   This is the same bug as the `targetError` one below, in a different disguise: a number
   describing a fraction of the run, presented as describing all of it.
+
+### And the settle did not run on the path that publishes, for months
+
+**Read this before trusting the bullet above.** It describes `_settle_provenance` as
+though it were in force. It was not, on either path, and the paragraph sat here saying
+so while every nightly restamped the manifest.
+
+`settle_provenance` had **exactly one call site**, inside `write_manifest`. The nightly
+publishes through `wowdps merge` -> `merge_shards`, which wrote `index.json` itself and
+never called it. Measured over the last twenty `data: refresh simulations` commits: all
+twenty touched `index.json`, and **three touched no spec file at all**. `dbf5075` is the
+cleanest:
+
+```
+dbf5075~1   generatedAt 2026-08-24T04:10:45   gitRevision c357aef
+dbf5075     generatedAt 2026-08-24T05:08:21   gitRevision c357aef
+   three files changed, zero spec files, two runs the same day
+```
+
+Same simc, no number moved, restamped anyway -- and the patch panel prints, in words,
+*"this date only moves when a number moved -- a quiet night leaves it alone rather than
+restamping it."*
+
+The **unsharded** path called it and could never fire either: `spec_coverage` emits six
+coverage keys and `apply_simulated_coverage` adds three more *afterwards*, so the
+comparison ran between a six-key document and a nine-key file -- unequal on every run --
+and the caller then overwrote the result regardless.
+
+Three things have to happen in one order and each was wrong: **read the published file
+before writing, complete the coverage block before comparing, settle last.** They are
+`dataset.publish_manifest` now, because held apart in the CLI they were three statements
+a refactor could reorder silently. `write_manifest` no longer settles at all -- an
+inoperative guard is worse than none.
+
+**The first version of the test was worthless, and that is the part to remember.**
+`write_manifest` stamps to the *second*, and two calls in one test land in the same
+second, so the test asserted that two identical documents were identical -- true for
+reasons having nothing to do with the settle. It passed with the settle **deleted**,
+with the read moved **after** the write, and with the settle hoisted **above** the
+coverage completion: three canaries, all green. The clock is monkeypatched now and all
+three fail by name. A canary that does not fire is a finding about the test.
 
 ## The tier axis
 
@@ -4433,6 +4623,52 @@ were up at the end -- holding flat exactly the fall the curve should show. The c
 kept is published so a thin band reads as thin. `medianLengthSeconds` is meaningful precisely
 because the first-kills sample has alike timings -- one length fits them all.
 
+#### A pull that read nothing scored 1.0, and the tell was already in the paragraph above
+
+`observed is None` and `observed <= 0` shared a branch and both fell back to
+`window = duration`, so a kill whose event fetch returned **nothing** divided its
+duration by itself and scored `coverage: 1.0` -- the top of the scale -- for the one
+case the field exists to catch. This is the "absent is not zero" rule pointing the
+other way: `None` means *no bounded fetch was involved*, `0.0` means *a bounded fetch
+read nothing*, and only the first makes the whole fight the right window.
+
+The band's own admission test is `truncated`, which such a pull is not, so it went
+straight in, and `_resample` carried its single step forward across every bucket.
+
+Measured against the committed `fights.json` (`b4a94cb`, 2026-08-26), The Lost
+Explorers at Mythic:
+
+```
+nine pulls, coverage    0.9994 0.9995 0.9995 0.9996 0.9996 0.9996 0.9997 0.9999 1.0
+the 1.0                 report 7TYdmcv2ZK6W fight 19, steps [[0.0, 0]], a 421s kill
+consequence             min == 0 in 60 of 60 buckets
+                        low, median and max untouched
+```
+
+**Only the min envelope moves, and that is what makes it dangerous.** One zero curve
+of nine cannot reach the quartiles, so the chart does not break -- it reads as a real
+observation, *"at some point in every one of these kills the room was empty"*, which
+is a statement about the encounter and is false.
+
+**`coverage == 1.0` exactly is unreachable by a genuine read**, and the paragraph
+above already said so -- *"scores about 0.995 and never 1.0"* -- three lines from the
+field it describes. Nobody had turned that sentence around into a check. It is a
+one-liner over any published `fights.json` and it is the cheapest audit here:
+
+```python
+[p for p in pulls if p.get("coverage") == 1.0]      # a real read never lands on 1.0
+```
+
+Fixed in #97: `window` splits the two states, `_observed_a_target` excludes a pull
+whose curve never leaves zero, and `unobservedKills` is published beside `fights` so
+a band that dropped one says so. The band tests the **curve**, not `coverage` --
+payloads already on disk record 1.0 for exactly these pulls, so a coverage test would
+read the corrupted value as healthy.
+
+Note what this does *not* explain: why that fetch read nothing. The pull is a real
+kill of a real length, and the run reported no error. Unexplained, and named rather
+than smoothed over.
+
 **"First kills" is bounded by the ranking window, and that bound was invisible.**
 `select_report_fights` sorts by kill date, but only over the rows it was handed,
 and Warcraft Logs sorts rankings **by damage**. A guild that killed the boss on the
@@ -4919,11 +5155,30 @@ for him. It does not any more. Concretely, an agent may now, without asking:
 Three things that do **not** follow from it, and each is a rule this file already
 argues for elsewhere:
 
-- **A run that replaces data is not the same as one that adds it.** A Heroic
-  `fight-probe` pass overwrites the Mythic bands in the same document; a `--no-resume`
-  pass discards measurements a previous run paid for. Those need the owner, not
+- **A run that replaces data is not the same as one that adds it.** A `--no-resume`
+  pass discards measurements a previous run paid for. That needs the owner, not
   because the button is locked but because the *loss* is the decision. `write_fights`
-  already refuses the second one without `--force`, and that refusal stays.
+  already refuses it without `--force`, and that refusal stays.
+
+  **The Heroic example this bullet used to lead with is wrong, and it was wrong when
+  it was written.** It said a Heroic `fight-probe` pass "overwrites the Mythic bands
+  in the same document". Measured on 2026-08-26 by running one (CI 32992502096, MID2,
+  `--difficulty 4 --order public --reports 30`, committed as `4dffc6b`): **every
+  Mythic block is byte-identical before and after**, and the only fields that moved
+  are `measurement.difficulty` and the stamps. The payload has been keyed on
+  `(encounterId, difficulty)` since `entry_key`/`load_previous`, the document
+  publishes `measurements[]` with one block per difficulty read, and `measuredDifficulty`
+  names which of them the headline `measured` block is (`_hardest`, the highest read).
+  Two difficulties coexist; neither replaces the other. Difficulty also participates
+  in `is_complete`, so a difficulty switch re-opens every encounter rather than
+  silently keeping the old answer.
+
+  The example was a plausible claim about a module that had since grown the machinery
+  to make it false -- the same shape as the `write_gear` entry that described intent
+  the code never grew into, pointing the other way. Note also the trap in reading it
+  back: the headline block shows Mythic while `measurement.difficulty` says Heroic,
+  which reads as a mislabelling until you notice `measuredDifficulty` sitting beside
+  it. It is not one.
 - **Budget is still arithmetic, not a feeling.** The Warcraft Logs point ceiling and
   the Actions-minute sums in this file are how a run is judged affordable before it
   starts. "Allowed to spend" is not "no longer counted".
@@ -4974,6 +5229,27 @@ because no run existed to be red.
 `ci.yml` gained a `workflow_dispatch` the same day, justified by the same case: a
 commit a workflow pushed gets no CI ever, and without a dispatch there is no route to
 make CI look at it at all.
+
+**And there is a third way to read "no checks" wrongly, which is to ask the wrong
+API.** `pull_request_read` with `method: "get_status"` returns the *commit statuses*
+of a head sha. GitHub Actions does not write commit statuses -- it writes **check
+runs** -- so in an Actions-only repository that call returns `total_count: 0` on every
+PR forever, green or red. Measured on 2026-08-26: PR #88's CI run 32995309099
+completed `success` at 17:38:43, and `get_status` on the same sha still read
+`{"state":"pending","total_count":0}` fourteen minutes later. Two waits were spent on
+it before the run list was checked.
+
+So the answer to *did CI pass* is `actions_list list_workflow_runs` filtered by the
+PR's branch (or a check-runs read), never `get_status`. The three readings look
+identical from the outside -- queued, never triggered, wrong API -- and only the run
+list separates them. This is the same lesson as the paragraph above, one layer
+further out: **an empty result is not a measurement until you know the thing you
+asked would have answered.**
+
+Related, and it saves a wait in the sibling repo: **`wtt-backend` has no GitHub
+Actions workflows at all** (`list_workflows` returns `total_count: 0`, checked
+2026-08-26). No PR there ever gets a check. Verify by hand and say so in the PR;
+waiting is waiting for something that cannot arrive.
 
 **What the false alarm did produce that is worth keeping.** When CI is genuinely
 unavailable, the verification is done by hand on the exact sha and written into a PR
@@ -5261,6 +5537,65 @@ Arms and Fury the search separated from nothing, so what is published is the rep
 only the repair -- which is the repair working as designed rather than a thin result.
 Retribution Paladin and Havoc's Aldrachi Reaver build stay refused, with the screen's
 reason on the row.
+
+### Five and ten targets, and what the second axis does to the answer
+
+Published 2026-08-26/27 (`095cc58`), one run per target count, `merge_specs` carrying
+the other pairs across untouched:
+
+```
+coverage  {specs: 52, specsAvailable: 52, rows: 156, targetCounts: [1, 5, 10]}
+```
+
+The headline is not the gains. It is that **the two rankings separate further with
+every target added**, counted over the rows the site actually marks
+(`projectioncheck.marked_builds`):
+
+| targets | marked | of those, the boss takes LESS | largest total gain |
+|---|---:|---:|---|
+| 1 | 14 | **0** -- the question cannot arise, `prioritydps == dps` | +2.59% |
+| 5 | 26 | **12** | +15.28% |
+| 10 | 30 | **18** | +31.71% |
+
+At ten targets **60% of marked rows advertise a build that does less damage to the
+boss**, and the amounts are no longer decimals: Balance Druid (Default) is marked
+**+31.71%** total while priority damage falls **17.37%**, and Keeper of the Grove trades
+**18.94%** off the boss for **+2.47%** total.
+
+This is the funnel finding from the top of this file arriving in a second document.
+That section ends *"picking a build off a damage meter is the wrong call when the boss
+is what has to die"*, measured over four specs of eleven at five targets; here it is the
+majority of marked builds at ten. Which axis "better" means is issue #99 and is the
+owner's decision -- but note that **nothing in the document says the axis at all**: over
+its 495 prose strings, zero mention priority, boss, funnel or total damage.
+
+**Windwalker crashes simc at ten targets**, both builds, exit 11 (SIGSEGV; the first
+attempt got `-6`/SIGABRT). Not a new mystery -- the gear-anchor section already records
+both Windwalker builds returning **0.000 DPS from any profileset** at one target, "a
+property of that profile at this revision", unexplained. At ten it aborts instead of
+answering. It costs its own two rows, which is only true since the fix below.
+
+**A per-build failure used to cost the whole pass.** `cmd_build_search` has caught
+`run_build` per build since #38; `_head_to_head` was added later (#74) and sat one line
+*outside* that guard, so Windwalker's abort escaped through `main`. Run 32989652220 died
+after **2h26m with ten builds already searched and written** -- `_publish` runs after
+every build precisely so an interrupted pass keeps what it did -- and the workflow's
+`Commit` step carries no status function in its `if:`, so GitHub ANDs in `success()` and
+skipped it. Everything was discarded.
+
+That is the **third** time this repository has had this exact shape, and the other two
+are in this file: `PointBudgetExhausted` escaping `harvest_encounter` ("kills 1-8 of the
+ninth encounter were lost after being paid for") and the same exception escaping
+`_public_first_kills` ("the new code path simply sat outside that guard"). Each time it
+is a new call placed *beside* a guard that already existed rather than inside it. When
+adding a call to a loop that has a `try`, the question to ask is not whether the new
+call can fail but whether it is inside.
+
+The `Commit` step is still `success()`-gated and that is deliberate rather than missed:
+committing a *partial* target count would be invisible in the document until coverage is
+published per `(scenario, targets)` (#100). The Upload step three lines above it does
+carry `if: always()`, with a comment reading "gear.yml shipped that bug; do not repeat
+it" -- repeated three lines down, which is worth seeing.
 
 ### The harvest test that failed under `WOWDPS_SIMC_SOURCE` was fixed, and this
 entry outlived it by three days

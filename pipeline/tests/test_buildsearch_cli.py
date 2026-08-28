@@ -289,3 +289,45 @@ def test_a_build_whose_decode_cannot_be_trusted_is_published_as_unsearched(
     assert row["searched"] is False
     assert row["best"] is None
     assert any("No search ran for this build" in c for c in row["caveats"])
+
+
+def test_a_head_to_head_that_aborts_simc_costs_its_build_and_not_the_pass(
+    tmp_path, profiles_dir, monkeypatch
+):
+    """One build's simc abort must not end the run, and the run must keep what it did.
+
+    Measured on run 32989652220: a ten-target pass died after 2h26m with
+    ``simc exited -6 for monk_windwalker_default__patchwerk__t10``. Ten builds had
+    already been searched and their rows written -- `_publish` runs after every build
+    for exactly this reason -- and the workflow's Commit step is `success()`-gated, so
+    all of it was discarded.
+
+    `run_build` has been inside a per-build guard since #38. `_head_to_head` was added
+    afterwards (#74) and sat outside it. That is the same shape as `PointBudgetExhausted`
+    escaping `_public_first_kills` and `harvest_encounter`, both already in CLAUDE.md:
+    a new call placed one line outside a guard that already existed.
+    """
+    from wowdps import simc_runner
+
+    stub = _StubSimc()
+    plain = stub.__call__
+
+    def abort_on_the_head_to_head(candidates, iterations):
+        # `_head_to_head` is the only caller that names a candidate `simcbuild`, so
+        # this fails precisely that invocation and lets the search itself succeed.
+        if any(c.key == "simcbuild" for c in candidates):
+            raise simc_runner.SimcError("simc exited -6 for monk_windwalker_default")
+        return plain(candidates, iterations)
+
+    monkeypatch.setattr(buildsearch, "simc_runner", lambda *a, **k: abort_on_the_head_to_head)
+    monkeypatch.setattr(cli.simc_runner, "find_simc", lambda explicit=None: pathlib.Path("/simc"))
+
+    assert cli.cmd_build_search(_args(tmp_path, profiles_dir)) == 0
+
+    document = json.loads((tmp_path / "MID2" / "computed-builds.json").read_text())
+    row = document["specs"][0]
+    # Published as unsearched WITH the reason -- not as a winner with no baseline,
+    # which is what a margin measured against nothing would be.
+    assert row["searched"] is False
+    assert row["simc"] is None
+    assert any("simc exited -6" in caveat for caveat in row["caveats"])

@@ -1033,3 +1033,30 @@ def _stub_fight(started_at: float):
         active_time_fraction=None,
         started_at=started_at,
     )
+
+
+def test_reading_nothing_is_zero_coverage_and_not_the_whole_fight():
+    """``None`` and ``0.0`` are opposite states and used to share a branch.
+
+    ``None`` means no bounded event fetch was involved, so the whole fight is the
+    right window. ``0.0`` means a bounded fetch read *nothing*, and answering
+    ``duration`` there made ``coverage`` come out at **1.0** -- the maximum -- for
+    the one case the field exists to catch.
+
+    The value is not hypothetical: the committed MID2 ``fights.json`` carries a
+    Lost Explorers pull with a single step at zero targets and ``coverage: 1.0``,
+    beside eight real pulls at 0.9994-0.9999.
+    """
+    from wowdps.fightextract import TargetCountTimeline
+
+    not_applicable = TargetCountTimeline(steps=((0.0, 0),), duration=100.0, observed=None)
+    assert not_applicable.window == 100.0
+    assert not_applicable.coverage == 1.0
+
+    read_nothing = TargetCountTimeline(steps=((0.0, 0),), duration=100.0, observed=0.0)
+    assert read_nothing.window == 0.0
+    assert read_nothing.coverage == 0.0
+
+    # The ordinary partial read is untouched.
+    read_half = TargetCountTimeline(steps=((0.0, 2),), duration=100.0, observed=50.0)
+    assert read_half.coverage == 0.5

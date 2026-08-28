@@ -26,19 +26,26 @@ name: Gear comparison
 # spec. Wall clock on the same six spread 109-247s between the runs on load alone,
 # so it is the CPU figure that travels.
 #
-#   full tier, trinket, one target : 26 specs x ~12 CPU-min  = ~310 CPU-min
-#   full tier, finger,  one target : 26 specs x ~8.1 CPU-min = ~210 CPU-min
-#   full tier, 1 + 5 targets                                 = roughly 4x either
+#   full tier, trinket, one target : 52 builds x ~12 CPU-min  = ~620 CPU-min
+#   full tier, finger,  one target : 52 builds x ~8.1 CPU-min = ~420 CPU-min
+#   full tier, 1 + 5 targets                                  = roughly 4x either
+#
+# **Those figures doubled on 2026-08-26 and the per-build costs did not move.** They
+# read "26 specs" while the tier holds 52 builds, because this workflow swept only
+# simc's shipped profiles -- the materialisation steps below are new. Same shape of
+# error CLAUDE.md already records for the baseline-combination table: plausible
+# arithmetic over the wrong column. Re-do it here rather than anywhere else.
 #
 # Against 2,000 Actions minutes a month with ~800 already committed to the weekly
-# simulation pass, CI and deploys: a single-target full pass fits comfortably as an
-# occasional run, and 1+5 targets fits about twice. Neither fits a schedule. Trinkets
+# simulation pass, CI and deploys: a single-target full pass is now most of what is
+# left rather than a comfortable fit, and 1+5 targets does not fit at all. Neither
+# fits a schedule, which was already true. Trinkets
 # change when a raid tier changes, which is not a weekly event, so a schedule would
 # buy nothing anyway -- run this when the loot table changes or when simc's item
 # modelling for the tier lands.
 #
-# Sharded because one job cannot hold a full pass: 26 specs at ~12 CPU-minutes is
-# over five hours on a 2-vCPU runner and the job limit is six. Sharding does not
+# Sharded because one job cannot hold a full pass: 52 builds at ~12 CPU-minutes is
+# over ten hours on a 2-vCPU runner and the job limit is six. Sharding does not
 # reduce the bill -- matrix jobs bill as the sum of their job-minutes -- it just
 # keeps each job inside the limit.
 on:
@@ -117,11 +124,15 @@ jobs:
           cp simc/build/simc bundle/simc
           strip bundle/simc || true
           cp -r simc/profiles bundle/profiles
-          # The gear sweep also needs simc's *source* item tables, because that is
-          # where `wowdps gear-candidates` reads the item catalogue from -- there is
-          # no simc command that lists items.
-          mkdir -p bundle/dbc
-          cp -r simc/engine/dbc/generated bundle/dbc/generated
+          # simc's *source* tables, at the path every `--simc-source` reader
+          # expects. They used to land in `bundle/dbc/generated` under a comment
+          # about `wowdps gear-candidates` -- a command this workflow never runs,
+          # and a path nothing in it ever read. `wowdps extra-builds` DOES read
+          # them, to validate a supplied hash against the current trait table
+          # before writing the profile, and it looks under `engine/dbc/generated`.
+          # One copy, at the path with a reader.
+          mkdir -p bundle/engine/dbc
+          cp -r simc/engine/dbc/generated bundle/engine/dbc/generated
 
       - uses: actions/upload-artifact@v4
         with:
@@ -160,6 +171,25 @@ jobs:
         run: |
           chmod +x bundle/simc
           pip install -e ./pipeline
+
+      # The same two steps `sims.yml` and `build-search.yml` run, and for the same
+      # reason: the tier is what simc ships PLUS what this project materialises.
+      # Without them this sweep sees only simc's shipped profiles -- the committed
+      # `gear.json` covers 28 builds of the 52 `index.json` ranks, and publishes
+      # `coverage {specs: 28, specsAvailable: 28}`, which reads as complete because
+      # the denominator comes from the run's own profile discovery.
+      #
+      # Every shard runs them over the same generator files, so the discovered set
+      # is identical everywhere and the round-robin split stays consistent.
+      # `$TIER` comes from the workflow-level `env:` above, like every other step
+      # here -- restating it per step would be two spellings of one value.
+      - name: Materialise the unvalidated profiles
+        run: wowdps -v unvalidated --tier "$TIER" --simc-source bundle --write
+
+      # After the unvalidated pass, because some cells deliberately supersede a
+      # refused materialised profile of the same filename.
+      - name: Materialise the extra builds
+        run: wowdps -v extra-builds --tier "$TIER" --simc-source bundle --write
 
       - name: Sweep
         run: |

@@ -707,7 +707,7 @@ def _provenance_block(meta: dict, rotation: Rotation, index: LootIndex) -> dict:
 def _settle(document: dict, previous: dict, tier: str, report: MergeReport) -> None:
     """Keep the published ``derivedAt`` when nothing else moved.
 
-    The same trap ``_settle_provenance`` exists for in ``dataset.py``: a wall-clock
+    The same trap ``settle_provenance`` exists for in ``dataset.py``: a wall-clock
     stamp rewrites itself every run, so every run commits, and a diff stops meaning
     anything. Here it would be worse than noise -- the whole value of a committed
     derivation is that a change in it is a change in the game.

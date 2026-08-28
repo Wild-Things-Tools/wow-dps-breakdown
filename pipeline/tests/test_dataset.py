@@ -130,7 +130,7 @@ def test_the_settle_keeps_a_stale_provenance_block_but_not_a_stale_shape(tmp_pat
     """
     import json
 
-    from wowdps.dataset import _settle_provenance
+    from wowdps.dataset import published_manifest, settle_provenance
 
     dataset = {"tier": "MID2", "specs": [1, 2, 3]}
     published = dict(
@@ -147,7 +147,7 @@ def test_the_settle_keeps_a_stale_provenance_block_but_not_a_stale_shape(tmp_pat
         generatedAt="2026-08-25T00:00:00+00:00",
         simc={"gitRevision": "bbbbbbb", "ptr": True, "wowBuild": 69382},
     )
-    settled = _settle_provenance(quiet, path)
+    settled = settle_provenance(quiet, published_manifest(path))
     assert settled["simc"] == published["simc"]
     assert settled["generatedAt"] == "2026-08-01T00:00:00+00:00"
 
@@ -163,7 +163,7 @@ def test_the_settle_keeps_a_stale_provenance_block_but_not_a_stale_shape(tmp_pat
             "wowBuild": 69404,
         },
     )
-    settled = _settle_provenance(corrected, path)
+    settled = settle_provenance(corrected, published_manifest(path))
     assert settled["simc"] == corrected["simc"]
     # `generatedAt` is a string and describes the *data*, which did not move.
     assert settled["generatedAt"] == "2026-08-01T00:00:00+00:00"

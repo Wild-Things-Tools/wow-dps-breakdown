@@ -464,7 +464,7 @@ def write_computed_builds(out_dir: Path, document: dict) -> Path:
 
     The sims are deterministic, so a re-run that found the same answer should leave
     nothing to commit -- which is what makes a diff in the history mean something
-    actually changed. Same rule as ``_settle_provenance`` in ``dataset.py``.
+    actually changed. Same rule as ``settle_provenance`` in ``dataset.py``.
 
     Rows at a ``(scenario, targets)`` this run did not cover are carried forward -- see
     ``merge_specs``. ``coverage.specs`` is recomputed from the merged list, because it
