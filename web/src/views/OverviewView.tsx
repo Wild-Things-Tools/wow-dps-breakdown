@@ -13,7 +13,7 @@
  * with its class colour, its spec icon and its hero tree written out.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -180,6 +180,16 @@ export function OverviewView({
       ? targets
       : (available[0] ?? 1);
 
+  // A chosen count the current scenario does not offer is rewritten to what is
+  // actually shown, so the URL never states a count the page is not drawing --
+  // e.g. targets=10 surviving a switch to a two-target boss. Null is left
+  // alone: "follow the first offered" keeps links clean.
+  useEffect(() => {
+    if (targets !== null && targets !== effectiveTargets) {
+      onTargetsChange(effectiveTargets);
+    }
+  }, [targets, effectiveTargets, onTargetsChange]);
+
   // Boss scenarios are ordinary scenarios with a `boss_` id -- one measured
   // composition, one target count. They get their own select so the base
   // sweeps stay a short list, but both selects write the same `scenario=`
@@ -233,7 +243,11 @@ export function OverviewView({
   );
   const computedRows = rows.filter((row) => row.best.projected).length;
 
-  const best = rows[0]?.dps ?? 0;
+  // Independent of the sort order, deliberately: under the boss sort rows[0]
+  // is the best *boss* row, whose total need not be the maximum, and a
+  // percent column divided by it reads ">100% of the top build" on an
+  // unsplit row. Both denominators are maxima over all rows.
+  const best = rows.reduce((max, row) => Math.max(max, row.dps), 0);
   const bestBoss = Math.max(
     0,
     ...rows.map((row) => row.priorityDps ?? 0),
@@ -254,6 +268,9 @@ export function OverviewView({
     const upper = errors[mid] ?? 0;
     const lower = errors[mid - 1] ?? upper;
     const median = errors.length % 2 === 1 ? upper : (lower + upper) / 2;
+    // A zero is not a measurement -- the "converged to 0% standard error"
+    // footer bug, one field over. Fall back to the pooled figure instead.
+    if (!(median > 0)) return null;
     return `${median < 0.1 ? median.toFixed(2) : median.toFixed(1)}%`;
   }, [rows]);
 
@@ -286,11 +303,15 @@ export function OverviewView({
               <Select
                 label="Scenario"
                 value={isBossScenario ? "" : scenario.id}
-                onChange={onScenarioChange}
+                onChange={(id) => {
+                  if (id) onScenarioChange(id);
+                }}
                 options={[
                   // A boss being open leaves the base select on a placeholder
                   // rather than silently highlighting a sweep nobody is
-                  // looking at. Picking any sweep leaves boss mode.
+                  // looking at. Picking any sweep leaves boss mode; picking
+                  // the placeholder itself is guarded to a no-op below, same
+                  // as the Boss select's "—".
                   ...(isBossScenario
                     ? [{ value: "", label: "— boss fight —" }]
                     : []),
@@ -379,7 +400,12 @@ export function OverviewView({
         <Note>
           Simulated damage per second against{" "}
           {isBossScenario
-            ? "this boss's measured composition and kill length, from real logged first kills"
+            ? // "Where first kills established one": two of MID2's four promoted
+              // bosses carry a measured target count, the other two run at the
+              // default composition with only the kill length measured. Claiming
+              // "measured composition" for all four would label a defaulted fact
+              // as a measurement.
+              "this boss's logged kill length, and its measured composition where first kills established one"
             : "a stationary target with no external buffs"}
           , using SimulationCraft&rsquo;s own tier profiles. Treat gaps under a
           few percent as a tie — the sampling error alone is around{" "}
@@ -419,12 +445,11 @@ export function OverviewView({
               {computedRows} {computedRows === 1 ? "build is" : "builds are"}{" "}
               ranked by talents this project computed rather than the ones
               SimulationCraft ships, because they beat simc&rsquo;s by more than
-              the two runs&rsquo; combined sampling error. Those bars carry a
-              hatched segment at the end &mdash; that segment is the gain, and it
-              is a projection rather than a measurement: the gain was measured
-              with both builds on one normalised kit, then carried forward onto
-              simc&rsquo;s own published figure, which the table beside this
-              chart prints next to it. Where the same run measured boss damage,
+              the two runs&rsquo; combined sampling error.{" "}
+              {effectiveSort === "boss"
+                ? "Under this sort their bars carry no projection segment — the gain is a total-damage claim, so it lives in the table and the tooltip here. "
+                : "Those bars carry a hatched segment at the end — that segment is the gain, and it is a projection rather than a measurement: it was carried forward onto simc's own published figure, which the table beside this chart prints next to it. "}
+              Where the same run measured boss damage,
               the mark also says what the computed build does <em>there</em>{" "}
               &mdash; a build can gain overall and lose on the boss, which is
               the trade to see before picking one. Every other row is
@@ -674,12 +699,21 @@ function RankingChart({
                           {
                             id: "simc",
                             label: "SimulationCraft's own build",
-                            value: fullNumber(row.simcDps),
-                            hint: `${row.mark}, measured with both builds on one normalised kit${
-                              row.best.priorityGain !== null
-                                ? ` — on the boss it measures ${row.best.priorityGain >= 0 ? "+" : ""}${(row.best.priorityGain * 100).toFixed(2)}% there`
+                            // The margin's kit differs per row (marginBasis),
+                            // and the boss ratio is always the anchored run's;
+                            // one "measured on..." preamble over both numbers
+                            // was naming the wrong kit for the 148 rows whose
+                            // margin is shipped-gear.
+                            hint: `${row.mark}, margin measured on ${
+                              row.best.marginBasis === "shipped-gear"
+                                ? "simc's own gear"
+                                : "one normalised kit"
+                            }${
+                              hasSplit && row.best.priorityGain !== null
+                                ? ` — boss damage, measured on the normalised kit: ${row.best.priorityGain >= 0 ? "+" : ""}${(row.best.priorityGain * 100).toFixed(2)}% there`
                                 : ""
                             }`,
+                            value: fullNumber(row.simcDps),
                           },
                         ]
                       : []),
@@ -751,12 +785,21 @@ function RankingChart({
             isAnimationActive={false}
             onClick={openRow}
           >
+            {/* The wash must not multiply with the comparability fade: 0.32
+                alpha x buildOpacity 0.45 is 0.144 effective, below the 0.189
+                this file's own #61 measurement records as invisible on this
+                surface -- the flagged rows' remainder (and with it the bar's
+                total length) would vanish. So the fade is carried by stepping
+                the wash's own mix down one legible notch instead, and the
+                cell's fillOpacity stays 1. The wash is a data mark here (its
+                edge delimits simc's measured total), which classWash's other
+                call sites are not; the solid|wash boundary and the table twin
+                carry the reading, per the caption. */}
             {rows.map((row) => (
               <Cell
                 key={row.id}
                 cursor="pointer"
-                fill={classWash(row.build.class, 32)}
-                fillOpacity={buildOpacity(row.build)}
+                fill={classWash(row.build.class, buildOpacity(row.build) < 1 ? 20 : 32)}
               />
             ))}
           </Bar>
@@ -905,14 +948,21 @@ function RankingTable({
                     </span>
                     <span className="mt-0.5 block text-[11.5px] text-ink-muted">
                       simc&rsquo;s own build:{" "}
-                      <span className="tnum">{fullNumber(row.simcDps)}</span>
+                      <span className="tnum">{fullNumber(row.simcDps)}</span>{" "}
+                      &middot; margin on{" "}
+                      {row.best.marginBasis === "shipped-gear"
+                        ? "simc's own gear"
+                        : "one normalised kit"}
                     </span>
                     {/* The other axis of the trade (#99): what the marked build
-                        does on the boss, measured in the same anchored run the
-                        mark's margin came from. Disclosure without a verdict --
-                        the run publishes no error for the priority figures, so
-                        no tie band is claimed. */}
-                    {row.best.priorityGain !== null ? (
+                        does on the boss, measured in the anchored run. Only
+                        drawn where this (scenario, targets) has a real split --
+                        on a single-enemy view the document's priorityDps equals
+                        dps and the "ratio" would be the anchor artefact wearing
+                        a boss label. Disclosure without a verdict: the run
+                        publishes no error for the priority figures, so no tie
+                        band is claimed. */}
+                    {hasSplit && row.best.priorityGain !== null ? (
                       <span className="mt-0.5 block text-[11.5px] text-ink-muted">
                         on the boss:{" "}
                         <span className="tnum">
@@ -929,9 +979,14 @@ function RankingTable({
                   </span>
                 )}
               </td>
+              {/* One metric per column: under the boss sort a row without a
+                  measured split gets a dash rather than a total-based percent
+                  that would sit unlabelled among boss-based ones. */}
               <td className="tnum px-4 py-2 text-right text-ink-secondary">
-                {sortBy === "boss" && row.priorityDps !== undefined
-                  ? percent(bestBoss > 0 ? row.priorityDps / bestBoss : 0, 0)
+                {sortBy === "boss"
+                  ? row.priorityDps !== undefined
+                    ? percent(bestBoss > 0 ? row.priorityDps / bestBoss : 0, 0)
+                    : "—"
                   : percent(best > 0 ? row.dps / best : 0, 0)}
               </td>
               <td className="px-4 py-2 text-right text-ink-secondary">

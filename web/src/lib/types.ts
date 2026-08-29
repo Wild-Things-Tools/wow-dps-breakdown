@@ -86,9 +86,12 @@ export interface SpecSummaryScenario {
    */
   dps: Record<string, number>;
   /**
-   * Damage on the priority target, per count. Absent at one target
-   * (prioritydps == dps there) and for single-enemy scenarios (simc emits
-   * none), so an entry's absence is "not a defined question", never zero.
+   * Damage on the priority target, per count. Absent wherever the cell had a
+   * single enemy — simc emits the field only when enemy_targets > 1, and
+   * raid-event adds count, so a configured-1-target scenario like Add Waves
+   * carries a real split under the key "1" while plain Patchwerk at one
+   * target carries none. An entry's absence is "not a defined question",
+   * never zero.
    */
   priorityDps?: Record<string, number>;
   /** Per-count standard error in percent, for the tie rule (hypot of two). */
@@ -1274,11 +1277,13 @@ export interface ComputedContender {
   iterations: number;
   /**
    * Damage on the priority target, measured in the same anchored run as `dps`.
-   * Present on multi-target rows since the 5/10-target passes; what travels to
-   * the published figure is the *ratio* between two contenders' values, never
-   * the absolute (same reasoning as the ranking margin). Issue #99 is the
-   * finding this field exists to surface: a marked build can do less on the
-   * boss while doing more overall.
+   * The published document also carries it on most one-target rows, where it
+   * simply equals `dps` — a single-enemy cell has no second axis, and readers
+   * must treat that signature as "no split" rather than as a boss figure. What
+   * travels to the published figure is the *ratio* between two contenders'
+   * values, never the absolute (same reasoning as the ranking margin). Issue
+   * #99 is the finding this field exists to surface: a marked build can do
+   * less on the boss while doing more overall.
    */
   priorityDps?: number;
 }

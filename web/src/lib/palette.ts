@@ -95,6 +95,13 @@ export function classColor(wowClass: string): string {
  * A fill this faint is not carrying any information -- the chip's border, icon
  * and text do that -- so it has no contrast obligation of its own. It exists so
  * a row reads as belonging to a class at a glance.
+ *
+ * One carved-out exception: the overview's boss/overall split uses a 32% wash
+ * as a *data mark* (the measured non-boss remainder of a bar). What makes that
+ * legal is not the wash's own contrast -- at 32% the darkest class tokens sit
+ * under the 3:1 mark floor -- but the full-strength solid|wash boundary that
+ * carries the reading, plus the tooltip, the table twin and the caption saying
+ * it in words. Do not lean a third reading on the wash alone.
  */
 export function classWash(wowClass: string, percent = 14): string {
   return `color-mix(in oklab, ${classColor(wowClass)} ${percent}%, transparent)`

@@ -157,10 +157,12 @@ class SpecResult:
             # overview derives its offered counts from these keys, so the keys are
             # the contract. "priorityDps" and "dpsError" ride along per count:
             # the first is what the boss/overall split and the priority sort read
-            # (absent at one target, where prioritydps == dps, and absent for a
-            # single-enemy scenario, where simc emits none), the second is what
-            # the tie rule needs -- a lead is only a lead beyond
-            # hypot(errA, errB), and the summary rows carried no errors at all.
+            # -- absent wherever the cell had a single enemy, because simc emits
+            # prioritydps only when enemy_targets > 1, and raid-event adds count,
+            # so Add Waves at a configured one target carries a real split while
+            # plain Patchwerk at one target carries none -- the second is what
+            # the tie rule needs: a lead is only a lead beyond hypot(errA, errB),
+            # and the summary rows carried no errors at all.
             entry: dict = {"dps": {}}
             priority: dict[str, float] = {}
             errors: dict[str, float] = {}

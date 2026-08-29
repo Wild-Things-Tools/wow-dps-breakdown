@@ -50,7 +50,7 @@ on:
         description: "Space-separated tiers to simulate: names, 'latest', 'previous'"
         default: 'latest'
       scenarios:
-        description: "Scenario flags passed straight to `wowdps build`, e.g. '--scenario patchwerk'. Empty uses the default set plus every boss with facts"
+        description: "Scenario flags passed straight to `wowdps build`, e.g. '--scenario patchwerk'. Empty uses the default set plus every boss with facts. CAUTION: a restricted set REPLACES the published spec files and manifest rather than augmenting them -- a '--scenario bosses'-only dispatch strips patchwerk and the other sweeps from every published build, and boss cells run without patchwerk lose their funnelGain baseline. Publish new scenarios by letting the default set run."
         default: ''
       include_unvalidated:
         description: "Also simulate the profiles simc wrote and left commented out. They are labelled everywhere they appear"

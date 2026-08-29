@@ -290,3 +290,26 @@ describe('the other axis of the trade (#99)', () => {
     expect(verdict.priorityGain).toBeNull()
   })
 })
+
+describe('the single-enemy signature', () => {
+  // The live computed-builds.json carries priorityDps == dps on 49 of its 52
+  // one-target rows. Rendering that "ratio" as a boss figure would print the
+  // ANCHORED total margin beside the shipped-gear mark — a manufactured trade
+  // whose whole size is the gear basis (the #52 anchor artefact).
+  it('nulls priorityGain when both sides priorityDps equal their dps', () => {
+    const simc = { ...contender(100_000, 0.05), priorityDps: 100_000 }
+    const best = { ...contender(102_000, 0.05), priorityDps: 102_000 }
+    const verdict = bestBuildFor(232_961.2, entry(simc, best))
+    expect(verdict.projected).toBe(true)
+    expect(verdict.priorityGain).toBeNull()
+  })
+
+  it('keeps a real split at a configured one target (raid-event adds)', () => {
+    const simc = { ...contender(100_000, 0.05), priorityDps: 62_000 }
+    const best = { ...contender(102_000, 0.05), priorityDps: 60_000 }
+    expect(bestBuildFor(232_961.2, entry(simc, best)).priorityGain).toBeCloseTo(
+      60_000 / 62_000 - 1,
+      10,
+    )
+  })
+})

@@ -95,7 +95,11 @@ function writeUrl(state: UrlState): void {
   if (state.view !== 'overview') params.set('view', state.view)
   if (state.tier) params.set('tier', state.tier)
   if (state.scenario) params.set('scenario', state.scenario)
-  if (state.targets) params.set('targets', String(state.targets))
+  // Only where it means something: the count is the overview's state, and a
+  // stale targets= on every other view would state something the page is not
+  // showing. The overview also rewrites it to the effective count on scenario
+  // switches, for the same honesty reason.
+  if (state.view === 'overview' && state.targets) params.set('targets', String(state.targets))
   if (state.focus) params.set('spec', state.focus)
   if (state.boss) params.set('boss', String(state.boss))
   const query = params.toString()
