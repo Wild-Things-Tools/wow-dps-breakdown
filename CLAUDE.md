@@ -5140,6 +5140,36 @@ enum values come from that mirror, not from the live server. So the first CI run
 and expect the `table` payload shape (`_table_entries` guesses between `entries`/`series`/
 `targets`) to need pinning against a real response.
 
+## The product surface is nextpull; this repo is the calculator (2026-08-29)
+
+Owner's words: *"es gibt keine react seite mehr, es wird nicht mehr gehostet.
+Stelle sicher, dass dies klar ist und wir alles über nextpull machen! das
+wowdpsbreakdown repo ist eigentlich nur noch für Kalkulationen vorhanden, da
+das repository öffentlich ist."* Four consequences, each of which supersedes
+older sentences in this file where they conflict:
+
+- **Every user-facing view of this data lives in wtt-frontend (nextpull).**
+  New view work — the boss axis, the sort toggle, the Loot-breakdown split,
+  the build×targets matrix — goes there and only there. A view built here
+  instead of there is work on a surface nobody is served.
+- **`web/` stays, as the pipeline's own inspection tool and schema twin.**
+  Its types and vitest suite are what pin the published documents' shape, and
+  a local `vite preview` remains the cheapest way to look at a dataset. Keep
+  it compiling and consistent with the schema; it needs no product polish and
+  no parity beyond that.
+- **Do not dispatch `Deploy` (deploy.yml → wt-gate).** The wt-gate hosting is
+  off per the owner's statement (2026-08-29; taken as policy, not
+  independently verified from here). The "after any workflow commits data,
+  dispatch Deploy by hand" rule below is superseded. Data still reaches
+  nextpull without it: its views fetch `<backendUrl>/embed/wow-dps/data/…`,
+  i.e. the committed `web/public/data/` files served through wtt-backend
+  (presumably synced by its `wtt-dps-data-sync` Cloud Run job — inferred
+  from the job's name, not traced end to end). So committing a dataset
+  remains the whole publishing step for the surface that matters.
+- **Public is deliberate and load-bearing**: it is what makes the
+  simulation workflows free to run (see the Actions-minutes section). Do not
+  move anything into this repo that could not be public.
+
 ## Touching production: allowed as of 2026-08-26
 
 Owner's words: *"du darfst ab jetzt auch Sachen in Richtung Produktion anfassen."*

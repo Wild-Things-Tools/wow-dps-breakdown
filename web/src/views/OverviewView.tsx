@@ -160,6 +160,16 @@ export function OverviewView({
   const [mode, setMode] = useState<Mode>("chart");
   const [sortBy, setSortBy] = useState<SortMetric>("total");
 
+  // The default axis follows the scenario (owner decision, 2026-08-29): base
+  // sweeps open on Overall, a boss scenario opens on Boss DPS -- there the
+  // boss is the question. The toggle still overrides for the current view;
+  // switching scenarios re-applies the default rather than carrying a choice
+  // made about a different fight. Keyed on the id string, so an unrelated
+  // re-render cannot eat a reader's toggle.
+  useEffect(() => {
+    setSortBy(scenario.id.startsWith("boss_") ? "boss" : "total");
+  }, [scenario.id]);
+
   // The counts actually measured for this scenario, read off the summary's own
   // keys rather than a fixed list. A boss scenario has exactly one; patchwerk
   // in an old dataset has 1/3/5/10 and in a new one all ten.

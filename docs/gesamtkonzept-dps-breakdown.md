@@ -519,6 +519,59 @@ Scoping-Regel (Abschnitt 5) vergrößert **jeden** dieser Läufe.
    nextpull, nur React-Site, oder beide? (Empfehlung: beide, sonst driftet
    die Navigation; kostet die View-Arbeit doppelt.)
 
+### Entschieden am 2026-08-29 (Owner)
+
+Die acht Fragen oben bleiben als gestellte Fragen stehen; hier die Antworten
+und was aus ihnen folgt. Wo eine Antwort eine Empfehlung dieses Dokuments
+überschreibt, gilt die Antwort.
+
+1. **Achsen-Default: wie empfohlen.** Patchwerk → Overall, Boss-Szenarien →
+   Boss-DMG. Umgesetzt in beiden Overviews: der Default folgt dem Szenario,
+   der Toggle überschreibt für die aktuelle Ansicht, ein Szenariowechsel
+   wendet den Default neu an. (#99 damit geschlossen.)
+2. **Heroic: hauptsächlich Mythic relevant.** HC nur für die letzten 2–3
+   Bosse andenken (die oft schwerer sind), und ohne viel Rechenzeit.
+   Konsequenz: HC-Promotions nur für Bosse ohne Mythic-Kills, `difficulty`
+   am Fakt, Anzeige klar als HC gelabelt; keine eigenen HC-Rechenpässe über
+   das hinaus, was fight-probe ohnehin liest. (#48)
+3. **Gear-Budget: freigegeben.** Die Rückfrage des Owners ist mit ja
+   beantwortet: der Sweep läuft in wow-dps-breakdown, das Repo ist public,
+   GitHub-Actions-Minuten kosten dort nichts — die ~1.140 CPU-min sind
+   reine Laufzeit, kein Geld. Vor dem Dispatch bleibt allein der
+   `merge_gear_shards`-Provenienz-Fix (#95) Blocker.
+4. **#100: keine Owner-Entscheidung nötig** (Rückfrage „verstehe die Frage
+   nicht", hiermit aufgelöst): Es geht darum, dass das Manifest je
+   (Szenario, Targets)-Zelle ausweist, aus welchem Lauf (simc-Stand,
+   Präzision) sie stammt — heute steht dort ein einziger Wert für den
+   ganzen Datensatz, obwohl Boss-Zellen und Patchwerk-Zellen aus
+   verschiedenen Nächten stammen können. Wird als per-Zelle-Provenienz
+   umgesetzt, dieselbe Form wie #95 Punkt 1.
+5. **Computed als Basis: Stufe 2.** Basis-Override auch in Gear/Buffs, mit
+   `talentsSource`-Ausweis je Zeile. Harvested-Gear-Standard wie
+   vorgeschlagen (Geschwister-Profil-Gear, Anchor nur wo keines existiert).
+6. **Varianten-Anzeige: zweidimensional.** Die Overview zeigt je Spec nur
+   den besten Build der aktuellen Achse/Targets; das Spec-Detail zeigt eine
+   Build×Targets-Matrix — welcher Build bei welcher Targetzahl vorn liegt
+   *und* was z. B. der 10T-Build im Single-Target macht. Konsequenz für die
+   Scoping-Regel aus Abschnitt 5: eine Variante läuft über die
+   Matrix-Zellen, nicht nur auf ihrem Boss + 1T-Anker (mehr Zellen als die
+   Regel dort vorsah — der Kostenrahmen aus Abschnitt 10 ist entsprechend
+   neu zu rechnen, bevor der Sweep aufgesetzt wird).
+7. **Sichtung: automatisch, nicht manuell.** Sims und WCL-Abgleich laufen
+   frequenziell; neue Loadouts werden ohne PR-Gate übernommen, gesichert
+   durch die maschinellen Prüfungen (Decode, Spec-Regel, Legalität,
+   Konsens-Kriterium, Gear-Anchor) statt durch eine Hand-Sichtung.
+   Zusätzlich benannt: die Tuning-Sichtbarkeit fehlt in nextpull — welcher
+   Spielstand/Hotfix in den Sim-Zahlen steckt, zeigt dort bisher nichts
+   (das Patch-State-Panel hat kein nextpull-Gegenstück).
+8. **Oberflächen: nur nextpull.** Die React-Site wird nicht mehr gehostet;
+   wow-dps-breakdown ist nur noch Kalkulation (public, wegen kostenloser
+   Actions-Minuten). Alle Views — Boss-Achse, Toggle, Loot-Breakdown —
+   entstehen ausschließlich in nextpull. `web/` bleibt als
+   Inspektionswerkzeug und Schema-Zwilling der Pipeline bestehen; der
+   Deploy nach wt-gate wird nicht mehr dispatcht. Jede Stelle dieses
+   Dokuments, die „beide Frontends" sagt, ist damit auf nextpull reduziert.
+
 ## 12. Phasenplan
 
 **P0 — Boss-Achse sichtbar machen** (kein neuer Datenpfad):
