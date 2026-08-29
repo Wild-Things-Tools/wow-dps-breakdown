@@ -36,10 +36,6 @@ log = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 
-#: Target counts summarised in the manifest so the overview can rank without
-#: loading per-spec files.
-SUMMARY_TARGETS = (1, 3, 5, 10)
-
 #: Target count whose funnel number represents the spec in the overview.
 SUMMARY_FUNNEL_TARGETS = 5
 
@@ -153,11 +149,30 @@ class SpecResult:
             out["errors"] = self.errors
 
         for scenario_id, by_target in self.cells.items():
+            # Every measured target count, not a fixed subset. A summary keyed on
+            # (1, 3, 5, 10) -- which this was until 2026-08-29 -- silently dropped
+            # any scenario whose only cell sits elsewhere: a boss scenario runs at
+            # its measured composition (Vashnik at 2 targets), and an empty "dps"
+            # map meant the whole scenario vanished from the manifest row. The
+            # overview derives its offered counts from these keys, so the keys are
+            # the contract. "priorityDps" and "dpsError" ride along per count:
+            # the first is what the boss/overall split and the priority sort read
+            # (absent at one target, where prioritydps == dps, and absent for a
+            # single-enemy scenario, where simc emits none), the second is what
+            # the tie rule needs -- a lead is only a lead beyond
+            # hypot(errA, errB), and the summary rows carried no errors at all.
             entry: dict = {"dps": {}}
-            for targets in SUMMARY_TARGETS:
-                cell = by_target.get(targets)
-                if cell:
-                    entry["dps"][str(targets)] = round(cell.dps, 1)
+            priority: dict[str, float] = {}
+            errors: dict[str, float] = {}
+            for targets, cell in sorted(by_target.items()):
+                entry["dps"][str(targets)] = round(cell.dps, 1)
+                errors[str(targets)] = round(cell.dps_error, 4)
+                if cell.priority_dps is not None:
+                    priority[str(targets)] = round(cell.priority_dps, 1)
+            if errors:
+                entry["dpsError"] = errors
+            if priority:
+                entry["priorityDps"] = priority
             funnel_cell = by_target.get(SUMMARY_FUNNEL_TARGETS)
             if funnel_cell and funnel_cell.concentration is not None:
                 entry["concentration"] = round(funnel_cell.concentration, 4)

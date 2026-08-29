@@ -77,7 +77,22 @@ export interface SpecDetail {
 }
 
 export interface SpecSummaryScenario {
+  /**
+   * Keyed by target count, one entry per measured cell. The keys are the
+   * contract: the overview derives its offered counts from them, which is what
+   * lets a boss scenario measured at 2 targets appear at all. Datasets written
+   * before 2026-08-29 carry only the counts 1/3/5/10 here and none of the two
+   * maps below -- every reader degrades to "no split, no per-count error".
+   */
   dps: Record<string, number>;
+  /**
+   * Damage on the priority target, per count. Absent at one target
+   * (prioritydps == dps there) and for single-enemy scenarios (simc emits
+   * none), so an entry's absence is "not a defined question", never zero.
+   */
+  priorityDps?: Record<string, number>;
+  /** Per-count standard error in percent, for the tie rule (hypot of two). */
+  dpsError?: Record<string, number>;
   /** Measured at five targets. */
   concentration?: number;
   priorityShare?: number;
@@ -1257,6 +1272,15 @@ export interface ComputedContender {
   /** Percent standard error of the mean, as simc reports it. */
   dpsError: number;
   iterations: number;
+  /**
+   * Damage on the priority target, measured in the same anchored run as `dps`.
+   * Present on multi-target rows since the 5/10-target passes; what travels to
+   * the published figure is the *ratio* between two contenders' values, never
+   * the absolute (same reasoning as the ranking margin). Issue #99 is the
+   * finding this field exists to surface: a marked build can do less on the
+   * boss while doing more overall.
+   */
+  priorityDps?: number;
 }
 
 export interface ComputedSpec {

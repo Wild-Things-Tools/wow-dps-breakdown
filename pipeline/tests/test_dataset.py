@@ -809,3 +809,75 @@ def test_build_command_never_enables_ptr_data():
     # The CLI default follows the constant rather than repeating it.
     parsed = build_parser().parse_args(["build"])
     assert parsed.ptr is simc_runner.USES_PTR_DATA is False
+
+
+# ---------------------------------------------------------------------------
+# The summary carries every measured target count, with priorityDps and dpsError
+# beside it. Until 2026-08-29 it emitted dps only for the fixed counts
+# (1, 3, 5, 10), so a boss scenario measured at 2 targets -- Vashnik's baseline
+# composition -- produced an empty dps map and vanished from the manifest row
+# entirely. The overview derives its offered counts from these keys and the tie
+# rule needs the per-count error, so the three maps are the contract.
+
+from wowdps.dataset import SpecResult  # noqa: E402
+from wowdps.parse import Cell  # noqa: E402
+from wowdps.profiles import SpecProfile  # noqa: E402
+
+
+def _summary_profile() -> SpecProfile:
+    return SpecProfile(
+        path=Path("/tmp/x.simc"),
+        tier="MID2",
+        wow_class="Mage",
+        spec="Arcane",
+        hero_talent="Sunfury",
+        role="spell",
+        talent_hash=None,
+    )
+
+
+def _summary_cell(targets: int, dps: float, priority_dps: float | None) -> Cell:
+    share = priority_dps / dps if priority_dps is not None else None
+    return Cell(
+        targets=targets,
+        dps=dps,
+        dps_error=0.1234,
+        dps_stddev=0.0,
+        priority_dps=priority_dps,
+        priority_share=share,
+        concentration=None,
+        iterations=1000,
+        fight_length_mean=300.0,
+    )
+
+
+def test_a_boss_cell_at_two_targets_reaches_the_summary():
+    """The exact cell the fixed-count summary dropped: one scenario, one cell, 2T."""
+    result = SpecResult(profile=_summary_profile())
+    result.add("boss_53455", _summary_cell(2, 300_000.0, 180_000.0))
+
+    entry = result.summary()["scenarios"]["boss_53455"]
+    assert entry["dps"] == {"2": 300_000.0}
+    assert entry["priorityDps"] == {"2": 180_000.0}
+    assert entry["dpsError"] == {"2": 0.1234}
+
+
+def test_the_summary_carries_every_measured_count_not_a_fixed_subset():
+    result = SpecResult(profile=_summary_profile())
+    for targets in (1, 2, 3):
+        result.add("patchwerk", _summary_cell(targets, 100_000.0 * targets, None))
+
+    entry = result.summary()["scenarios"]["patchwerk"]
+    assert sorted(entry["dps"]) == ["1", "2", "3"]
+    assert sorted(entry["dpsError"]) == ["1", "2", "3"]
+
+
+def test_priority_dps_is_absent_not_empty_when_no_cell_carries_it():
+    """A single-enemy scenario has no prioritydps; the summary must omit the map
+    rather than publish an empty object that reads as "measured, zero"."""
+    result = SpecResult(profile=_summary_profile())
+    result.add("boss_53470", _summary_cell(1, 250_000.0, None))
+
+    entry = result.summary()["scenarios"]["boss_53470"]
+    assert "priorityDps" not in entry
+    assert entry["dpsError"] == {"1": 0.1234}

@@ -46,6 +46,10 @@ const VIEWS: ViewId[] = [
   'builds',
   'gear',
   'fights',
+  // Was missing until 2026-08-29, so a shared ?view=buffs link silently opened
+  // the overview instead. The tab always rendered; only the URL round-trip
+  // dropped it.
+  'buffs',
   'logs',
   'timing',
   'spec',
@@ -65,6 +69,8 @@ interface UrlState {
   /** Which tier's dataset is loaded. Null follows whichever tier is current. */
   tier: string | null
   scenario: string | null
+  /** Overview: which target count is open. Null follows the first offered. */
+  targets: number | null
   /** Spec detail: which build is open. Null opens the top build of the scenario. */
   focus: string | null
   /** Fights view: which encounter is open. */
@@ -78,6 +84,7 @@ function readUrl(): UrlState {
     view: VIEWS.includes(view as ViewId) ? (view as ViewId) : 'overview',
     tier: params.get('tier'),
     scenario: params.get('scenario'),
+    targets: Number(params.get('targets')) || null,
     focus: params.get('spec'),
     boss: Number(params.get('boss')) || null,
   }
@@ -88,6 +95,7 @@ function writeUrl(state: UrlState): void {
   if (state.view !== 'overview') params.set('view', state.view)
   if (state.tier) params.set('tier', state.tier)
   if (state.scenario) params.set('scenario', state.scenario)
+  if (state.targets) params.set('targets', String(state.targets))
   if (state.focus) params.set('spec', state.focus)
   if (state.boss) params.set('boss', String(state.boss))
   const query = params.toString()
@@ -121,6 +129,7 @@ export default function App() {
 
   const [view, setView] = useState<ViewId>(initial.view)
   const [scenarioId, setScenarioId] = useState<string | null>(initial.scenario)
+  const [targets, setTargets] = useState<number | null>(initial.targets)
   const [focus, setFocus] = useState<string | null>(initial.focus)
   const [boss, setBoss] = useState<number | null>(initial.boss)
 
@@ -380,8 +389,8 @@ export default function App() {
   }, [fights])
 
   useEffect(() => {
-    writeUrl({ view, tier, scenario: scenario?.id ?? null, focus, boss })
-  }, [view, tier, scenario, focus, boss])
+    writeUrl({ view, tier, scenario: scenario?.id ?? null, targets, focus, boss })
+  }, [view, tier, scenario, targets, focus, boss])
 
   const openSpec = useCallback((id: string) => {
     setFocus(id)
@@ -440,6 +449,8 @@ export default function App() {
           specIndex={specIndex}
           computedBuilds={computedBuilds}
           computedSettled={computedSettled}
+          targets={targets}
+          onTargetsChange={setTargets}
           onScenarioChange={setScenarioId}
           onOpenSpec={openSpec}
         />

@@ -82,6 +82,16 @@ export interface BestBuild {
   gain: number | null
   /** The tie band that lead had to clear. */
   noise: number | null
+  /**
+   * What the marked build does *on the boss*, relative to simc's own — the
+   * other axis of the trade issue #99 names. Measured in the anchored run (both
+   * contenders on one kit, so the ratio travels the way the margin does), and
+   * null wherever either side carries no priorityDps: at one target the two
+   * axes are the same number, and older documents never measured it. This is
+   * disclosure, not a verdict — no tie band is applied, because the run
+   * publishes no error for the priority figures.
+   */
+  priorityGain: number | null
   /** The winning candidate, for the tooltip. */
   computed: ComputedContender | null
 }
@@ -131,6 +141,7 @@ export function bestBuildFor(simcDps: number, entry: ComputedSpec | null): BestB
     marginBasis: null,
     gain: null,
     noise: null,
+    priorityGain: null,
     computed: null,
   }
   if (!entry) return plain
@@ -151,6 +162,16 @@ export function bestBuildFor(simcDps: number, entry: ComputedSpec | null): BestB
   const noise = measured ? measured.tieBand : combinedNoise(best.dpsError, simc.dpsError)
   if (margin <= noise) return plain
 
+  // Both sides measured in one anchored run, so the ratio is meaningful the
+  // same way the anchored margin is. Zero on simc's side means the question is
+  // undefined (nothing landed on a boss that is not there), not a lead.
+  const priorityGain =
+    Number.isFinite(best.priorityDps) &&
+    Number.isFinite(simc.priorityDps) &&
+    (simc.priorityDps as number) > 0
+      ? (best.priorityDps as number) / (simc.priorityDps as number) - 1
+      : null
+
   return {
     rankDps: simcDps * (1 + margin),
     simcDps,
@@ -158,6 +179,7 @@ export function bestBuildFor(simcDps: number, entry: ComputedSpec | null): BestB
     marginBasis: measured ? 'shipped-gear' : 'anchor',
     gain: margin,
     noise,
+    priorityGain,
     computed: best,
   }
 }

@@ -253,3 +253,40 @@ describe('which margin the ranking uses', () => {
     expect(best.rankDps).toBe(1000)
   })
 })
+
+describe('the other axis of the trade (#99)', () => {
+  // A marked build can gain overall and lose on the boss. The disclosure is a
+  // measured ratio between the two contenders' anchored priority figures --
+  // never a projection, never gated by a tie band the run did not publish.
+  function withPriority(c: ComputedContender, priorityDps: number): ComputedContender {
+    return { ...c, priorityDps }
+  }
+
+  it('reports the priority delta when both contenders measured one', () => {
+    const simc = withPriority(contender(100_000, 0.05), 60_000)
+    const best = withPriority(contender(102_000, 0.05), 57_000)
+    const verdict = bestBuildFor(232_961.2, entry(simc, best))
+    expect(verdict.projected).toBe(true)
+    expect(verdict.priorityGain).toBeCloseTo(57_000 / 60_000 - 1, 10)
+  })
+
+  it('stays null when either side never measured priority damage', () => {
+    const simc = contender(100_000, 0.05)
+    const best = withPriority(contender(102_000, 0.05), 57_000)
+    expect(bestBuildFor(232_961.2, entry(simc, best)).priorityGain).toBeNull()
+  })
+
+  it('stays null when simc measured zero on the boss — undefined, not a lead', () => {
+    const simc = withPriority(contender(100_000, 0.05), 0)
+    const best = withPriority(contender(102_000, 0.05), 57_000)
+    expect(bestBuildFor(232_961.2, entry(simc, best)).priorityGain).toBeNull()
+  })
+
+  it('is null on an unmarked row: no winner, no trade to disclose', () => {
+    const simc = withPriority(contender(100_000, 0.05), 60_000)
+    const best = withPriority(contender(100_050, 0.05), 61_000)
+    const verdict = bestBuildFor(232_961.2, entry(simc, best))
+    expect(verdict.projected).toBe(false)
+    expect(verdict.priorityGain).toBeNull()
+  })
+})

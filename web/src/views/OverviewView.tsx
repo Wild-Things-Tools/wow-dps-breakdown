@@ -1,8 +1,12 @@
 /**
  * Ranking view: every spec at one scenario and target count.
  *
- * Reads only the manifest, so it renders without fetching per-spec files. That
- * is why the target count is restricted to the four the manifest summarises.
+ * Reads only the manifest, so it renders without fetching per-spec files. The
+ * offered target counts are derived from the summary's own keys -- whatever the
+ * pipeline measured for the scenario is what can be picked, which is what lets
+ * a boss scenario measured at 2 targets appear at all. Datasets written before
+ * 2026-08-29 carry only the counts 1/3/5/10 and no per-count priority damage;
+ * everything below degrades to exactly the view that shipped against them.
  *
  * Nothing is selected here and nothing ever was -- this view is the precedent
  * the rest of the site was rebuilt against. Every build in the tier, sorted,
@@ -49,7 +53,7 @@ import {
   percent,
   samplingError,
 } from "../lib/format";
-import { classColor } from "../lib/palette";
+import { classColor, classWash } from "../lib/palette";
 import {
   bestBuildFor,
   bestBuildMark,
@@ -66,33 +70,55 @@ import type {
   SpecSummary,
 } from "../lib/types";
 
-const SUMMARY_TARGETS = [1, 3, 5, 10];
-
 /** Two lines of tick text plus the icon need more room than a bare name. */
 const ROW_HEIGHT = 32;
 const TICK_WIDTH = 205;
 
 type Mode = "chart" | "table";
 
+/**
+ * Which axis the ranking is sorted by. "total" is overall damage; "boss" is
+ * damage on the priority target -- the axis that decides a fight where the boss
+ * is what has to die. Only offered where the summary carries a measured split.
+ */
+type SortMetric = "total" | "boss";
+
 interface Row {
   id: string;
   label: string;
   build: SpecSummary;
   /**
-   * The value the row is ranked and drawn by: simc's own measurement, unless a
-   * computed build beat it outside the tie band. See `lib/bestBuild.ts` -- a
-   * marked row carries a projection, never a measurement, and `best.simcDps`
-   * keeps the measured figure beside it.
+   * The value the row is ranked and drawn by under the total metric: simc's own
+   * measurement, unless a computed build beat it outside the tie band. See
+   * `lib/bestBuild.ts` -- a marked row carries a projection, never a
+   * measurement, and `best.simcDps` keeps the measured figure beside it.
    */
   dps: number;
   /** Which build won, and what that costs. Never null. */
   best: BestBuild;
   /** The part of the bar that is simc's own measurement. */
   simcDps: number;
-  /** The projected remainder, stacked on top of it. Zero on an unmarked row. */
-  uplift: number;
   /** "computed +2.20%", or null on a row simc still owns. */
   mark: string | null;
+  /**
+   * Measured damage on the priority target at this count. Undefined at one
+   * target (the two axes are one number there), for single-enemy scenarios
+   * (simc emits none) and on datasets written before the summary carried it.
+   */
+  priorityDps?: number;
+  /** Per-cell standard error in percent, for the note under the chart. */
+  dpsError?: number;
+  /**
+   * The stacked segments the chart draws. Exactly one decomposition is active
+   * per row: a row with a measured split draws boss (solid) + rest (wash), a
+   * row without draws solid alone -- never a full wash bar, which would claim
+   * "none of this lands on the boss" about a number nobody split.
+   */
+  bossPart: number;
+  restPart: number;
+  solidPart: number;
+  /** The projected remainder under the total metric. Zero on an unmarked row. */
+  uplift: number;
   funnelGain?: number;
   priorityShare?: number;
 }
@@ -103,6 +129,8 @@ export function OverviewView({
   specIndex,
   computedBuilds,
   computedSettled,
+  targets,
+  onTargetsChange,
   onScenarioChange,
   onOpenSpec,
 }: {
@@ -123,25 +151,79 @@ export function OverviewView({
   computedBuilds: ComputedBuildsDataset | null;
   /** True once the question "does that document exist?" has been answered. */
   computedSettled: boolean;
+  /** From the URL, so a configured ranking is a link. Null means "first offered". */
+  targets: number | null;
+  onTargetsChange: (targets: number) => void;
   onScenarioChange: (id: string) => void;
   onOpenSpec: (id: string) => void;
 }) {
-  const [targets, setTargets] = useState(1);
   const [mode, setMode] = useState<Mode>("chart");
+  const [sortBy, setSortBy] = useState<SortMetric>("total");
 
-  const available = useMemo(
-    () =>
-      SUMMARY_TARGETS.filter((count) => scenario.targetCounts.includes(count)),
-    [scenario],
+  // The counts actually measured for this scenario, read off the summary's own
+  // keys rather than a fixed list. A boss scenario has exactly one; patchwerk
+  // in an old dataset has 1/3/5/10 and in a new one all ten.
+  const available = useMemo(() => {
+    const counts = new Set<number>();
+    for (const spec of manifest.specs) {
+      const entry = spec.scenarios[scenario.id];
+      if (!entry) continue;
+      for (const key of Object.keys(entry.dps)) {
+        const count = Number(key);
+        if (Number.isFinite(count)) counts.add(count);
+      }
+    }
+    return [...counts].sort((a, b) => a - b);
+  }, [manifest.specs, scenario.id]);
+  const effectiveTargets =
+    targets !== null && available.includes(targets)
+      ? targets
+      : (available[0] ?? 1);
+
+  // Boss scenarios are ordinary scenarios with a `boss_` id -- one measured
+  // composition, one target count. They get their own select so the base
+  // sweeps stay a short list, but both selects write the same `scenario=`
+  // state: one axis, two projections of it, never a second source of truth.
+  const baseScenarios = useMemo(
+    () => manifest.scenarios.filter((entry) => !entry.id.startsWith("boss_")),
+    [manifest.scenarios],
   );
-  const effectiveTargets = available.includes(targets)
-    ? targets
-    : (available[0] ?? 1);
+  const bossScenarios = useMemo(
+    () => manifest.scenarios.filter((entry) => entry.id.startsWith("boss_")),
+    [manifest.scenarios],
+  );
+  const isBossScenario = scenario.id.startsWith("boss_");
+
+  // Whether this (scenario, targets) carries a measured boss/overall split at
+  // all. At one target the two axes are the same number, and a dataset from
+  // before the summary carried priorityDps has no split anywhere -- in both
+  // cases the toggle disappears and the chart draws exactly as it always did.
+  // Derived from the manifest, not from the built rows, because the sort state
+  // can outlive the data that justified it: a reader who picks "Boss DPS" at
+  // five targets and then switches to one must land back on the total sort --
+  // including its projection segments -- not on a boss sort of rows that have
+  // no boss axis.
+  const hasSplit = useMemo(
+    () =>
+      manifest.specs.some(
+        (spec) =>
+          spec.scenarios[scenario.id]?.priorityDps?.[String(effectiveTargets)] !==
+          undefined,
+      ),
+    [manifest.specs, scenario.id, effectiveTargets],
+  );
+  const effectiveSort: SortMetric = hasSplit ? sortBy : "total";
 
   const rows = useMemo(
     () =>
-      buildRows(manifest.specs, scenario.id, effectiveTargets, computedBuilds),
-    [manifest.specs, scenario.id, effectiveTargets, computedBuilds],
+      buildRows(
+        manifest.specs,
+        scenario.id,
+        effectiveTargets,
+        computedBuilds,
+        effectiveSort,
+      ),
+    [manifest.specs, scenario.id, effectiveTargets, computedBuilds, effectiveSort],
   );
 
   const scope: ComputedScope = computedScope(
@@ -152,6 +234,28 @@ export function OverviewView({
   const computedRows = rows.filter((row) => row.best.projected).length;
 
   const best = rows[0]?.dps ?? 0;
+  const bestBoss = Math.max(
+    0,
+    ...rows.map((row) => row.priorityDps ?? 0),
+  );
+
+  // The precision of *these* cells, not of the whole run: the manifest-level
+  // median pools every scenario, and pooling understates the noisier ones by
+  // a factor of two (issue #103's finding, Dungeon Slice measured). Per-count
+  // errors arrived in the summary alongside priorityDps; older datasets fall
+  // back to the pooled figure via samplingError().
+  const scenarioError = useMemo(() => {
+    const errors = rows
+      .map((row) => row.dpsError)
+      .filter((value): value is number => typeof value === "number")
+      .sort((a, b) => a - b);
+    if (errors.length === 0) return null;
+    const mid = Math.floor(errors.length / 2);
+    const upper = errors[mid] ?? 0;
+    const lower = errors[mid - 1] ?? upper;
+    const median = errors.length % 2 === 1 ? upper : (lower + upper) / 2;
+    return `${median < 0.1 ? median.toFixed(2) : median.toFixed(1)}%`;
+  }, [rows]);
 
   // Counted over the rows actually on screen rather than over the tier, so a
   // scenario that happens to contain no flagged build says nothing at all. The two
@@ -165,6 +269,9 @@ export function OverviewView({
     (row) => row.build.tierSetComparable === false,
   ).length;
   const faded = rows.filter((row) => buildOpacity(row.build) < 1).length;
+  const unsplit = hasSplit
+    ? rows.filter((row) => row.priorityDps === undefined).length
+    : 0;
 
   return (
     <div className="space-y-4">
@@ -178,22 +285,57 @@ export function OverviewView({
             <>
               <Select
                 label="Scenario"
-                value={scenario.id}
+                value={isBossScenario ? "" : scenario.id}
                 onChange={onScenarioChange}
-                options={manifest.scenarios.map((entry) => ({
-                  value: entry.id,
-                  label: entry.label,
-                }))}
+                options={[
+                  // A boss being open leaves the base select on a placeholder
+                  // rather than silently highlighting a sweep nobody is
+                  // looking at. Picking any sweep leaves boss mode.
+                  ...(isBossScenario
+                    ? [{ value: "", label: "— boss fight —" }]
+                    : []),
+                  ...baseScenarios.map((entry) => ({
+                    value: entry.id,
+                    label: entry.label,
+                  })),
+                ]}
               />
+              {bossScenarios.length > 0 ? (
+                <Select
+                  label="Boss"
+                  value={isBossScenario ? scenario.id : ""}
+                  onChange={(id) => {
+                    if (id) onScenarioChange(id);
+                  }}
+                  options={[
+                    { value: "", label: "—" },
+                    ...bossScenarios.map((entry) => ({
+                      value: entry.id,
+                      label: entry.label,
+                    })),
+                  ]}
+                />
+              ) : null}
               {available.length > 1 ? (
                 <Select
                   label="Targets"
                   value={effectiveTargets}
-                  onChange={setTargets}
+                  onChange={onTargetsChange}
                   options={available.map((count) => ({
                     value: count,
                     label: String(count),
                   }))}
+                />
+              ) : null}
+              {hasSplit ? (
+                <SegmentedControl
+                  label="Sort by"
+                  value={effectiveSort}
+                  onChange={setSortBy}
+                  options={[
+                    { value: "total", label: "Overall" },
+                    { value: "boss", label: "Boss DPS" },
+                  ]}
                 />
               ) : null}
               <SegmentedControl
@@ -215,17 +357,51 @@ export function OverviewView({
             these in as SimulationCraft adds profiles for the current tier.
           </EmptyState>
         ) : mode === "chart" ? (
-          <RankingChart rows={rows} best={best} onOpenSpec={onOpenSpec} />
+          <RankingChart
+            rows={rows}
+            best={best}
+            bestBoss={bestBoss}
+            sortBy={effectiveSort}
+            hasSplit={hasSplit}
+            onOpenSpec={onOpenSpec}
+          />
         ) : (
-          <RankingTable rows={rows} best={best} onOpenSpec={onOpenSpec} />
+          <RankingTable
+            rows={rows}
+            best={best}
+            bestBoss={bestBoss}
+            sortBy={effectiveSort}
+            hasSplit={hasSplit}
+            onOpenSpec={onOpenSpec}
+          />
         )}
 
         <Note>
-          Simulated damage per second against a stationary target with no
-          external buffs, using SimulationCraft's own tier profiles. Treat gaps
-          under a few percent as a tie — the sampling error alone is around{" "}
-          {samplingError(manifest.settings)}. Bars carry each build's class
-          colour; the icon and the name beside it are what identify it.
+          Simulated damage per second against{" "}
+          {isBossScenario
+            ? "this boss's measured composition and kill length, from real logged first kills"
+            : "a stationary target with no external buffs"}
+          , using SimulationCraft&rsquo;s own tier profiles. Treat gaps under a
+          few percent as a tie — the sampling error alone is around{" "}
+          {scenarioError ?? samplingError(manifest.settings)}
+          {scenarioError ? " on these cells" : ""}. Bars carry each build&rsquo;s
+          class colour; the icon and the name beside it are what identify it.
+          {hasSplit ? (
+            <>
+              {" "}
+              <strong className="font-medium text-ink-secondary">
+                Each bar is split where the split was measured: the solid part
+                is damage on the priority target, the washed-out remainder is
+                everything else.
+              </strong>{" "}
+              {effectiveSort === "boss"
+                ? "Sorted by damage on the boss — the solid segments — so a build that tops the meter can sit below one that kills the boss faster."
+                : "Sorted by overall damage."}
+              {unsplit > 0
+                ? ` ${unsplit} ${unsplit === 1 ? "row draws" : "rows draw"} solid because no split was measured there — that says "not measured", never "all of it lands on the boss".`
+                : ""}
+            </>
+          ) : null}
           {/* Three sentences, not one. "No talent search has run at this target
               count" and "a search ran and simc's builds all held" are different
               claims, and `computed-builds.json` covers Patchwerk at one target
@@ -234,17 +410,24 @@ export function OverviewView({
             <>
               {" "}
               <strong className="font-medium text-ink-secondary">
-                Ranked by the best build known for each row.
+                Ranked by the best build known for each row
+                {effectiveSort === "boss"
+                  ? " on the overall axis; under this sort, marked rows sit by simc's measured boss damage"
+                  : ""}
+                .
               </strong>{" "}
               {computedRows} {computedRows === 1 ? "build is" : "builds are"}{" "}
               ranked by talents this project computed rather than the ones
               SimulationCraft ships, because they beat simc&rsquo;s by more than
               the two runs&rsquo; combined sampling error. Those bars carry a
-              paler segment at the end &mdash; that segment is the gain, and it
+              hatched segment at the end &mdash; that segment is the gain, and it
               is a projection rather than a measurement: the gain was measured
               with both builds on one normalised kit, then carried forward onto
               simc&rsquo;s own published figure, which the table beside this
-              chart prints next to it. Every other row is
+              chart prints next to it. Where the same run measured boss damage,
+              the mark also says what the computed build does <em>there</em>{" "}
+              &mdash; a build can gain overall and lose on the boss, which is
+              the trade to see before picking one. Every other row is
               SimulationCraft&rsquo;s build, unchanged.
             </>
           ) : scope === "searched" ? (
@@ -320,6 +503,7 @@ function buildRows(
   scenarioId: string,
   targets: number,
   computedBuilds: ComputedBuildsDataset | null,
+  sortBy: SortMetric,
 ): Row[] {
   const rows: Row[] = [];
   for (const spec of specs) {
@@ -332,6 +516,8 @@ function buildRows(
       dps,
       findComputedSpec(computedBuilds, spec.id, scenarioId, targets),
     );
+    const priorityDps = entry?.priorityDps?.[String(targets)];
+    const hasSplit = typeof priorityDps === "number";
     rows.push({
       id: spec.id,
       label: spec.displayName,
@@ -339,26 +525,52 @@ function buildRows(
       dps: best.rankDps,
       best,
       simcDps: best.simcDps,
-      uplift: best.rankDps - best.simcDps,
       mark: bestBuildMark(best),
+      priorityDps: hasSplit ? priorityDps : undefined,
+      dpsError: entry?.dpsError?.[String(targets)],
+      // One decomposition per row. The projection segment is a total-axis
+      // claim, so it is drawn only under the total sort -- under the boss sort
+      // it would stack a total gain onto a bar being read for boss damage.
+      bossPart: hasSplit ? priorityDps : 0,
+      restPart: hasSplit ? Math.max(0, best.simcDps - priorityDps) : 0,
+      solidPart: hasSplit ? 0 : best.simcDps,
+      uplift: sortBy === "total" ? best.rankDps - best.simcDps : 0,
       funnelGain: entry?.funnelGain,
       priorityShare: entry?.priorityShare,
     });
   }
-  // Ranked by the best build known for each row -- the whole reason this view
-  // carries the computed document. Rows nobody computed a build for are ranked
-  // by simc's number, unchanged.
-  rows.sort((a, b) => b.dps - a.dps);
+  // Ranked by the best build known for each row under the total metric -- the
+  // whole reason this view carries the computed document. Under the boss
+  // metric the sort key is simc's *measured* priority damage: the computed
+  // margin is a total-axis measurement and is never projected onto an axis
+  // nobody measured it on. Rows without a measured split sort after the ones
+  // with one, by total, rather than being dropped.
+  if (sortBy === "boss") {
+    rows.sort((a, b) => {
+      const aBoss = a.priorityDps ?? -1;
+      const bBoss = b.priorityDps ?? -1;
+      if (aBoss !== bBoss) return bBoss - aBoss;
+      return b.dps - a.dps;
+    });
+  } else {
+    rows.sort((a, b) => b.dps - a.dps);
+  }
   return rows;
 }
 
 function RankingChart({
   rows,
   best,
+  bestBoss,
+  sortBy,
+  hasSplit,
   onOpenSpec,
 }: {
   rows: Row[];
   best: number;
+  bestBoss: number;
+  sortBy: SortMetric;
+  hasSplit: boolean;
   onOpenSpec: (id: string) => void;
 }) {
   // Horizontal bars: the labels are long spec names, which read far better along
@@ -372,6 +584,11 @@ function RankingChart({
     () => makeBuildTick(byLabel, { width: TICK_WIDTH }),
     [byLabel],
   );
+
+  const openRow = (entry: unknown) => {
+    const row = (entry as { payload?: Row } | undefined)?.payload;
+    if (row) onOpenSpec(row.id);
+  };
 
   return (
     <div className="px-2 py-4">
@@ -423,11 +640,17 @@ function RankingChart({
               return (
                 <TooltipCard
                   title={row.label}
-                  subtitle={`${percent(row.dps / best, 0)} of the top build`}
+                  subtitle={
+                    sortBy === "boss" && row.priorityDps !== undefined
+                      ? `${percent(bestBoss > 0 ? row.priorityDps / bestBoss : 0, 0)} of the top build's boss damage`
+                      : `${percent(best > 0 ? row.dps / best : 0, 0)} of the top build`
+                  }
                   rows={[
                     {
                       id: "dps",
-                      label: row.best.projected ? "DPS, best build" : "DPS",
+                      label: row.best.projected
+                        ? "Overall DPS, best build"
+                        : "Overall DPS",
                       color: classColor(row.build.class),
                       value: fullNumber(row.dps),
                       ...(row.best.projected
@@ -436,13 +659,27 @@ function RankingChart({
                           }
                         : {}),
                     },
+                    ...(row.priorityDps !== undefined
+                      ? [
+                          {
+                            id: "boss",
+                            label: "On the priority target",
+                            value: fullNumber(row.priorityDps),
+                            hint: "measured — the solid part of the bar",
+                          },
+                        ]
+                      : []),
                     ...(row.best.projected
                       ? [
                           {
                             id: "simc",
                             label: "SimulationCraft's own build",
                             value: fullNumber(row.simcDps),
-                            hint: `${row.mark}, measured with both builds on one normalised kit`,
+                            hint: `${row.mark}, measured with both builds on one normalised kit${
+                              row.best.priorityGain !== null
+                                ? ` — on the boss it measures ${row.best.priorityGain >= 0 ? "+" : ""}${(row.best.priorityGain * 100).toFixed(2)}% there`
+                                : ""
+                            }`,
                           },
                         ]
                       : []),
@@ -465,14 +702,16 @@ function RankingChart({
               magnitude, the hue carries which class it belongs to, and the icon and
               name on the axis carry which build.
 
-              Two stacked segments rather than one, because the two halves are not
-              the same kind of number. The solid part is simc's own measurement;
-              the hatched part is the projected talent gain, which nobody has
-              simulated on this gear. A single solid bar would present the sum as
-              one measured figure -- the whole failure `lib/bestBuild.ts` exists to
-              prevent, restated in pixels. It is never the only channel: the row's
-              tooltip prints both numbers, the table twin repeats them, and the
-              note under the chart says it in words.
+              Up to three stacked segments, because the parts are not the same kind
+              of number, and each claim gets its own channel:
+
+              - solid class colour: measured damage on the priority target (or the
+                whole measurement, on a row with no measured split);
+              - the same hue washed out (classWash): the measured remainder --
+                damage that lands elsewhere. A flat wash, not a texture, so it
+                cannot be confused with the hatch;
+              - the 135-degree HATCH: the projected computed-build gain, a
+                total-axis claim, drawn only under the total sort.
 
               HATCHING, NOT A SECOND OPACITY, and the reason is measured. The
               projected segment used to be drawn at `buildOpacity(row) * 0.42`,
@@ -480,25 +719,17 @@ function RankingChart({
               a row can be ranked against its neighbours, and the 0.42 says
               measured-versus-projected. On a row that is both incomparable and
               improved the product is 0.45 x 0.42 = 0.189, which is invisible on
-              this surface -- and that is not a rare corner: the builds this
-              project computes talents for are overwhelmingly the ones simc ships
-              no validated profile for, so five of the six largest gains in MID2
-              were drawn at 0.189 and only the small ones were legible (#61).
-
-              Texture is the right channel because it is orthogonal to opacity, so
-              the two claims stop multiplying: the hatch says projected, the
-              opacity says comparable, and each survives the other. Same reasoning
-              and the same 135-degree hatch as the Angular twin, which never had
-              this bug because it never multiplied. */}
+              this surface (#61). Texture is orthogonal to opacity, so the two
+              claims stop multiplying -- and the wash is orthogonal to both: it is
+              a lighter mix of the same hue with no texture, while the hatch is
+              full-strength stripes. The tooltip, the table twin and the caption
+              say all three in words. */}
           <Bar
-            dataKey="simcDps"
+            dataKey="bossPart"
             stackId="dps"
             barSize={16}
             isAnimationActive={false}
-            onClick={(entry: unknown) => {
-              const row = (entry as { payload?: Row } | undefined)?.payload;
-              if (row) onOpenSpec(row.id);
-            }}
+            onClick={openRow}
           >
             {rows.map((row) => (
               <Cell
@@ -514,15 +745,44 @@ function RankingChart({
             ))}
           </Bar>
           <Bar
+            dataKey="restPart"
+            stackId="dps"
+            barSize={16}
+            isAnimationActive={false}
+            onClick={openRow}
+          >
+            {rows.map((row) => (
+              <Cell
+                key={row.id}
+                cursor="pointer"
+                fill={classWash(row.build.class, 32)}
+                fillOpacity={buildOpacity(row.build)}
+              />
+            ))}
+          </Bar>
+          <Bar
+            dataKey="solidPart"
+            stackId="dps"
+            barSize={16}
+            isAnimationActive={false}
+            onClick={openRow}
+          >
+            {rows.map((row) => (
+              <Cell
+                key={row.id}
+                cursor="pointer"
+                fill={classColor(row.build.class)}
+                fillOpacity={buildOpacity(row.build)}
+              />
+            ))}
+          </Bar>
+          <Bar
             dataKey="uplift"
             stackId="dps"
             radius={[0, 4, 4, 0]}
             barSize={16}
             isAnimationActive={false}
-            onClick={(entry: unknown) => {
-              const row = (entry as { payload?: Row } | undefined)?.payload;
-              if (row) onOpenSpec(row.id);
-            }}
+            onClick={openRow}
           >
             {rows.map((row) => (
               <Cell
@@ -535,6 +795,15 @@ function RankingChart({
           </Bar>
         </BarChart>
       </ResponsiveContainer>
+      {hasSplit ? (
+        <p className="mt-1 px-2 text-[11.5px] text-ink-muted">
+          Solid&nbsp;= on the priority target (measured) · washed&nbsp;= the
+          rest of the damage (measured)
+          {sortBy === "total"
+            ? " · hatched = projected computed-build gain"
+            : ""}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -554,10 +823,16 @@ function hatchId(wowClass: string): string {
 function RankingTable({
   rows,
   best,
+  bestBoss,
+  sortBy,
+  hasSplit,
   onOpenSpec,
 }: {
   rows: Row[];
   best: number;
+  bestBoss: number;
+  sortBy: SortMetric;
+  hasSplit: boolean;
   onOpenSpec: (id: string) => void;
 }) {
   return (
@@ -574,6 +849,11 @@ function RankingTable({
             <th scope="col" className="px-4 py-2.5 text-right font-medium">
               DPS
             </th>
+            {hasSplit ? (
+              <th scope="col" className="px-4 py-2.5 text-right font-medium">
+                On the boss
+              </th>
+            ) : null}
             <th scope="col" className="px-4 py-2.5 font-medium">
               Build shown
             </th>
@@ -604,6 +884,15 @@ function RankingTable({
               <td className="tnum px-4 py-2 text-right font-medium text-ink">
                 {fullNumber(row.dps)}
               </td>
+              {hasSplit ? (
+                <td className="tnum px-4 py-2 text-right text-ink-secondary">
+                  {row.priorityDps !== undefined ? (
+                    fullNumber(row.priorityDps)
+                  ) : (
+                    <span className="text-ink-muted">—</span>
+                  )}
+                </td>
+              ) : null}
               {/* simc's own figure stays on screen wherever a computed build
                   replaced it, so the substitution can always be undone by a
                   reader. That is the difference between showing the better
@@ -618,6 +907,21 @@ function RankingTable({
                       simc&rsquo;s own build:{" "}
                       <span className="tnum">{fullNumber(row.simcDps)}</span>
                     </span>
+                    {/* The other axis of the trade (#99): what the marked build
+                        does on the boss, measured in the same anchored run the
+                        mark's margin came from. Disclosure without a verdict --
+                        the run publishes no error for the priority figures, so
+                        no tie band is claimed. */}
+                    {row.best.priorityGain !== null ? (
+                      <span className="mt-0.5 block text-[11.5px] text-ink-muted">
+                        on the boss:{" "}
+                        <span className="tnum">
+                          {row.best.priorityGain >= 0 ? "+" : ""}
+                          {(row.best.priorityGain * 100).toFixed(2)}%
+                        </span>{" "}
+                        (measured on the normalised kit)
+                      </span>
+                    ) : null}
                   </>
                 ) : (
                   <span className="text-[11.5px] text-ink-muted">
@@ -626,7 +930,9 @@ function RankingTable({
                 )}
               </td>
               <td className="tnum px-4 py-2 text-right text-ink-secondary">
-                {percent(row.dps / best, 0)}
+                {sortBy === "boss" && row.priorityDps !== undefined
+                  ? percent(bestBoss > 0 ? row.priorityDps / bestBoss : 0, 0)
+                  : percent(best > 0 ? row.dps / best : 0, 0)}
               </td>
               <td className="px-4 py-2 text-right text-ink-secondary">
                 {row.funnelGain !== undefined ? (
