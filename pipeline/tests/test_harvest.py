@@ -1585,6 +1585,7 @@ def _args(tmp_path, **overrides) -> _Namespace:
         encounter=[3470],
         difficulty=5,
         metric="dps",
+        also_metric=[],
         reports=1,
         rankings_pages=1,
         page=1,
@@ -2006,3 +2007,142 @@ def test_a_kills_player_details_payload_is_parsed_once():
     with unittest.mock.patch.object(harvest, "player_detail_rows", counting):
         harvest.harvest_encounter(client, 3470, settings, {}, harvest.QueryPlan(), tables())
     assert len(parsed) == 1
+
+
+# --------------------------------------------------------------------------------
+# The double pass: a second ranking metric (#111)
+# --------------------------------------------------------------------------------
+
+
+class _MetricClient(StubClient):
+    """A stub whose ranking answer depends on the metric asked for.
+
+    The base stub ignores the metric, which is the right default for every test
+    written before a second pass existed -- but it also means those tests cannot
+    tell a second metric that reached new kills from one that re-ranked the same
+    ones. That distinction is the whole point of the pass, so it needs a stub that
+    can express both.
+    """
+
+    def __init__(self, per_metric, roster, **kwargs):
+        super().__init__(per_metric["dps"], roster, **kwargs)
+        self.per_metric = per_metric
+
+    def encounter_rankings(self, encounter_id, difficulty=5, metric="dps", page=1):
+        self.calls.append(f"rankings:{encounter_id}:{metric}:{page}")
+        self.kills = self.per_metric.get(metric, [])
+        return self._page(encounter_id)
+
+
+def _passes(summary):
+    return {row["metric"]: (row["reports"], row["newReports"]) for row in summary["metricPasses"]}
+
+
+def test_a_second_ranking_metric_widens_the_pool_and_publishes_what_it_added():
+    """`bossdps` ranks the players who did the most to the BOSS, which is a different
+    question from total damage and can surface kills the damage ranking does not."""
+    client = _MetricClient(
+        {
+            "dps": [("shared01", 7), ("dpsOnly1", 2)],
+            "bossdps": [("shared01", 7), ("bossOnly", 4)],
+        },
+        [DPS_ROW],
+    )
+    settings = harvest.HarvestSettings(
+        encounter_ids=(3470,), difficulty=5, reports=10, also_metrics=("bossdps",)
+    )
+    plan = harvest.QueryPlan()
+
+    found, summary, _ = harvest.harvest_encounter(client, 3470, settings, {}, plan, tables())
+
+    # Three distinct reports out of two two-kill rankings: the shared one is read
+    # once, which is `select_report_fights`'s one-fight-per-report rule doing the
+    # deduplication rather than a second copy of it here.
+    assert summary["killsRead"] == 3
+    assert [call for call in client.calls if call.startswith("player-details")] == [
+        "player-details:shared01:7",
+        "player-details:dpsOnly1:2",
+        "player-details:bossOnly:4",
+    ]
+    assert len(found) == 3
+
+    # Two ranking queries, and nothing extra per kill -- the affordability claim.
+    assert plan.rankings == 2
+    assert plan.player_details == 3
+    assert _passes(summary) == {"dps": (2, 2), "bossdps": (2, 1)}
+
+
+def test_a_second_metric_that_ranks_the_same_kills_is_published_as_having_added_nothing():
+    """The finding this field exists for. `bossdps` reaching nothing new is a real
+    answer about the encounter, and an unpublished one would read as untried."""
+    client = _MetricClient(
+        {"dps": [("shared01", 7)], "bossdps": [("shared01", 7)]},
+        [DPS_ROW],
+    )
+    settings = harvest.HarvestSettings(
+        encounter_ids=(3470,), difficulty=5, reports=10, also_metrics=("bossdps",)
+    )
+    plan = harvest.QueryPlan()
+
+    _, summary, _ = harvest.harvest_encounter(client, 3470, settings, {}, plan, tables())
+
+    assert summary["killsRead"] == 1
+    assert _passes(summary) == {"dps": (1, 1), "bossdps": (1, 0)}
+    # It still cost its own query. That is what makes zero worth publishing.
+    assert plan.rankings == 2
+
+
+def test_a_single_metric_pass_publishes_no_metric_passes_key_at_all():
+    """A field on every encounter of every past run would move bytes nobody asked to
+    move, and `metricPasses` over one metric says nothing a reader can use."""
+    client = StubClient([("aBcD1234", 7)], [DPS_ROW])
+    settings = harvest.HarvestSettings(encounter_ids=(3470,), difficulty=5, reports=1)
+
+    _, summary, _ = harvest.harvest_encounter(
+        client, 3470, settings, {}, harvest.QueryPlan(), tables()
+    )
+
+    assert "metricPasses" not in summary
+
+
+def test_the_second_metric_asks_the_id_the_first_one_resolved():
+    """Which id a boss's kills live under is a property of the encounter, not of the
+    metric. Asking `bossdps` about the PTR id would spend a query to learn what the
+    first pass already established, and on a tier filed under PTR ids that is every
+    boss."""
+    client = _MetricClient(
+        {"dps": [("aBcD1234", 7)], "bossdps": [("aBcD1234", 7)]},
+        [DPS_ROW],
+        names={NEKZALI_PTR: NEKZALI, NEKZALI_LIVE: NEKZALI},
+        ranked_ids={NEKZALI_LIVE},
+    )
+    settings = harvest.HarvestSettings(
+        encounter_ids=(NEKZALI_PTR,), difficulty=5, reports=1, also_metrics=("bossdps",)
+    )
+
+    _, summary, _ = harvest.harvest_encounter(
+        client, NEKZALI_PTR, settings, {}, harvest.QueryPlan(), tables()
+    )
+
+    assert summary["idResolution"]["used"] == NEKZALI_LIVE
+    assert [call for call in client.calls if call.startswith("rankings")] == [
+        f"rankings:{NEKZALI_PTR}:dps:1",
+        f"rankings:{NEKZALI_LIVE}:dps:1",
+        f"rankings:{NEKZALI_LIVE}:bossdps:1",
+    ]
+
+
+def test_naming_the_primary_metric_again_costs_no_second_query():
+    """`--metric bossdps --also-metric bossdps` is a plausible thing to type and
+    would otherwise pay twice for one ranking and publish a pass that added nothing
+    because it was the same pass."""
+    client = _MetricClient({"dps": [("aBcD1234", 7)]}, [DPS_ROW])
+    settings = harvest.HarvestSettings(
+        encounter_ids=(3470,), difficulty=5, reports=1, also_metrics=("dps",)
+    )
+    plan = harvest.QueryPlan()
+
+    _, summary, _ = harvest.harvest_encounter(client, 3470, settings, {}, plan, tables())
+
+    assert plan.rankings == 1
+    assert "metricPasses" not in summary
