@@ -4476,10 +4476,46 @@ file: naming one clears the raid events. Mappings:
 - there is no "fire once" switch on a raid event, so a one-shot is a cooldown longer than
   any fight (`_NEVER_AGAIN = 100000`)
 
-An amplification on an *add* has no mapping: simc's generated adds have no name to pass to
-`target=`. `ScenarioPlan.unrepresented` carries it out as text rather than dropping it —
-a scenario that silently models three quarters of a fight is worse than one that says which
-quarter is missing.
+- a phase in which the boss cannot be hit → `raid_events+=/invulnerable,timestamps=,duration=`
+  (`ImmunityWindow`). **This file used to say no event expressed that**, and the
+  sentence was published in `ScenarioPlan.unrepresented`. Measured false on simc
+  `b0ea612`, 2026-08-30, MID2 Shadow Priest at two targets, 1000 deterministic
+  iterations: two 25-second windows cost **14.8%** (342.265 → 291.615 DPS), and
+  `timestamps=` takes a colon-separated list of absolute seconds, which is exactly
+  the shape a measured phase list already has.
+
+  The near-miss alternative was also run rather than reasoned about:
+  `vulnerable,multiplier=-0.99` returned **198.811** against `invulnerable`'s
+  **197.670** on Shadow at one target over one 25s window — 0.6% apart. So the
+  choice between them is about semantics (`invulnerable` wipes the target's debuffs
+  and interrupts casts; the negative multiplier leaves DoTs running) and not about
+  the number.
+
+**Neither `vulnerable` nor `invulnerable` can be aimed at a generated add, and the
+failure is silent.** Measured the same day: `target=` is resolved at option-parse
+time against `sim->target_list`, where a raid-event add does not exist yet, so
+`vulnerable,target=stone1` over an `adds,name=stone` wave printed `Unknown
+vulnerability raid event target 'stone1'`, **fell back to `sim->target`** and exited
+0. A scenario claiming "the add takes 20% more" would publish "the boss takes 20%
+more" and nothing downstream could tell — which is why adding `name=` to
+`AddWave.simc_option` was considered and **not** done: it makes the add nameable in
+simc's own output and still does not make it addressable, so it would be a field
+nothing reads. Permanent enemies *are* addressable (`desired_targets=2` yields
+`Fluffy_Pillow` and `Dummy_Enemy_1`, both in the list at parse time).
+
+`ScenarioPlan.unrepresented` carries every such case out as text rather than dropping
+it — a scenario that silently models three quarters of a fight is worse than one that
+says which quarter is missing.
+
+**A scenario carrying a timeline pins its fight length.** `vary_combat_length`
+defaults to 0.2, so a 396-second cell actually runs 317–475 seconds, while every
+option above states a time measured from the pull. Left varying, a window near the
+measured end never happens in a short iteration and a repeating wave repeats more
+often than it was observed to. `to_plan` appends `vary_combat_length=0` **only when
+it emitted at least one option**, so a plain N-targets-for-a-length cell keeps simc's
+ordinary variance and no published number moves. MID2 carries no wave, amplification
+or phase fact today, so this is in place for the first fact that lands rather than a
+change to anything on the site.
 
 ### Provenance, and why hand facts are first-class
 
