@@ -44,12 +44,22 @@ What SimulationCraft can and cannot represent
 ---------------------------------------------
 Target counts and add waves map cleanly onto ``desired_targets`` and the ``adds``
 raid event. A damage-amplification window maps onto the ``vulnerable`` raid event,
-which takes a ``multiplier`` and, without a ``target=``, lands on the priority
-target -- so a profile that says the buff goes on *an add* has nothing to map onto,
-because simc's add names are generated rather than named by the profile. Anything
-that cannot be expressed is returned in ``ScenarioPlan.unrepresented`` rather than
-dropped: a scenario that silently models three quarters of an encounter is worse
-than one that says which quarter is missing.
+and a phase in which the boss cannot be hit maps onto ``invulnerable`` with
+``timestamps=`` -- see ``ImmunityWindow``, which carries the measurement that
+replaced this file's earlier claim that no such event existed.
+
+Both of those land on the priority target and **cannot be aimed at an add**, which
+is measured rather than inferred (simc ``b0ea612``, 2026-08-30): ``target=`` is
+resolved at option-parse time against ``sim->target_list``, and a raid-event add
+does not exist yet then. An unresolved name does not fail -- it falls back to
+``sim->target``, exits 0, and prints one "Trivial" log line, so a scenario claiming
+"the add takes 20% more" would silently publish "the boss takes 20% more" and
+nothing downstream could tell. That is why those cases stay unrepresented rather
+than being aimed somewhere plausible.
+
+Anything that cannot be expressed is returned in ``ScenarioPlan.unrepresented``
+rather than dropped: a scenario that silently models three quarters of an encounter
+is worse than one that says which quarter is missing.
 
 And the trap that has already cost this project a run once: a scenario carrying its
 own raid events **must not name a fight style**. ``sim_t::init_fight_style`` calls
@@ -192,6 +202,80 @@ class AddWave:
             first=float(raw["first"]),
             duration=float(raw["duration"]),
             cadence=float(raw["cadence"]) if raw.get("cadence") is not None else None,
+        )
+
+
+@dataclass(frozen=True)
+class ImmunityWindow:
+    """A stretch in which the priority target cannot be damaged.
+
+    An intermission is the ordinary case: the boss leaves, or shields, and the raid
+    has nothing to hit. MID2's Entombed Sentinels is the measured example -- three
+    windows of *Vitriolic Stasis* at 46.4-74.4s, 165.4-191.4s and 282.4-292.4s on
+    the representative pull, published twice over in ``fights.json`` (as phase
+    windows and, agreeing to about ten milliseconds, as aura windows on the
+    carriers).
+
+    **This used to be published as unrepresentable and that was wrong.**
+    ``to_plan`` said "no raid event expresses a target being unattackable for part
+    of a fight without also moving the players". Measured on simc ``b0ea612``,
+    2026-08-30, MID2 Shadow Priest at two targets, 1000 deterministic iterations:
+
+        baseline                                    342.265 DPS
+        two 25s windows, both targets immune        291.615 DPS   -14.8%
+
+    So the event exists, it takes the measured times directly, and the claim cost
+    a real 15% of a boss cell's shape.
+
+    Two decisions in the mapping, and the second is a refusal:
+
+    - **``timestamps=``, not ``first``/``cooldown``.** simc's ``invulnerable`` event
+      takes a colon-separated list of absolute seconds, which is exactly the shape a
+      measured phase list already has. Expressing three unequal windows as a cadence
+      would be a claim about regularity nobody measured.
+    - **The priority target only.** ``target=`` is resolved at option-parse time
+      against ``sim->target_list``, and a raid-event add does not exist yet then --
+      so a name that does not resolve **silently falls back to the boss**, with exit
+      0 and one "Trivial" log line. Measured: ``vulnerable,target=stone1`` against an
+      ``adds,name=stone`` wave printed ``Unknown vulnerability raid event target
+      'stone1'`` and amplified ``sim->target`` instead. A scenario claiming "the add
+      was immune" would therefore silently publish "the boss was immune", which is
+      indistinguishable from outside. So a window on an add stays ``unrepresented``,
+      and the sentence names the reason rather than the old, refuted one.
+
+    ``multiplier`` is deliberately absent. simc's ``invulnerable`` is binary: it
+    zeroes the damage, wipes the target's debuffs and interrupts casts. The
+    near-miss alternative, ``vulnerable,multiplier=-0.99``, was also run --
+    198.811 against 197.670 DPS on Shadow at one target over a single 25s window,
+    a 0.6% difference -- so the choice between them is about DoT and cast semantics
+    rather than about the number, and this models the semantics an intermission
+    actually has.
+    """
+
+    name: str
+    #: Absolute seconds from the pull at which each window opens.
+    starts: tuple[float, ...]
+    duration: float
+    #: "priority" | "add" | "unknown" -- which target the window applies to.
+    target: str = TARGET_PRIORITY
+
+    def simc_option(self) -> str | None:
+        """The raid event, or ``None`` when this window cannot be expressed."""
+        if self.target != TARGET_PRIORITY or not self.starts or self.duration <= 0:
+            return None
+        stamps = ":".join(f"{start:g}" for start in self.starts)
+        return f"raid_events+=/invulnerable,timestamps={stamps},duration={self.duration:g}"
+
+    @classmethod
+    def from_json(cls, raw: dict) -> ImmunityWindow:
+        starts = raw.get("starts")
+        if starts is None and raw.get("first") is not None:
+            starts = [raw["first"]]
+        return cls(
+            name=raw.get("name", "intermission"),
+            starts=tuple(float(value) for value in (starts or ())),
+            duration=float(raw.get("duration", 0.0)),
+            target=raw.get("target", TARGET_PRIORITY),
         )
 
 
@@ -376,6 +460,41 @@ class FightProfile:
             return []
         return list(value.value)
 
+    @property
+    def immunity_windows(self) -> list[ImmunityWindow]:
+        """Windows in which a target cannot be damaged, from the ``phases`` fact.
+
+        Read off the same fact the plan already walks rather than a new one: a
+        phase with stated ``downtime`` IS an immunity window, and giving it a
+        second home would let the two disagree about one fight.
+
+        A phase carrying no ``downtime`` yields nothing -- most phases change the
+        target count or the damage taken, and those are already adds and
+        amplifications.
+        """
+        windows: list[ImmunityWindow] = []
+        for phase in self.phases:
+            downtime = phase.get("downtime")
+            if not downtime:
+                continue
+            starts = phase.get("starts")
+            if starts is None and phase.get("first") is not None:
+                starts = [phase["first"]]
+            if not starts:
+                # A stated downtime with no time to put it at. Left to `to_plan`,
+                # which reports it unrepresented with that as the reason -- an
+                # invented start would be a measurement nobody took.
+                continue
+            windows.append(
+                ImmunityWindow(
+                    name=phase.get("name", "intermission"),
+                    starts=tuple(float(value) for value in starts),
+                    duration=float(downtime),
+                    target=phase.get("target", TARGET_PRIORITY),
+                )
+            )
+        return windows
+
     # -- turning a profile into a simulation ---------------------------------------
 
     @property
@@ -416,15 +535,44 @@ class FightProfile:
         # Phases are recorded because they are the reason a boss has a shape at
         # all, but simc has no phase concept: a phase that changes the target
         # count is already expressed as adds, and one that changes the boss's
-        # damage taken is already an amplification. Anything else is genuinely
-        # not modelled, and says so.
+        # damage taken is already an amplification. A phase with stated downtime
+        # is the third kind, and it IS expressible -- see `ImmunityWindow` for the
+        # measurement that replaced the sentence which used to sit here.
+        for window in self.immunity_windows:
+            option = window.simc_option()
+            if option:
+                options.append(option)
+            else:
+                unrepresented.append(
+                    f"phase {window.name!r} makes {window.target!r} unattackable; "
+                    f"simc's invulnerable raid event resolves target= at option-parse "
+                    f"time, before a generated add exists, and an unresolved name "
+                    f"falls back to the boss silently"
+                )
         for phase in self.phases:
-            if phase.get("downtime"):
+            if phase.get("downtime") and not (phase.get("starts") or phase.get("first")):
                 unrepresented.append(
                     f"phase {phase.get('name')!r} has {phase['downtime']}s of stated "
-                    f"downtime; no raid event expresses a target being unattackable "
-                    f"for part of a fight without also moving the players"
+                    f"downtime and no stated time to put it at"
                 )
+
+        # A timeline is absolute, and simc's fight length is not.
+        #
+        # `vary_combat_length` defaults to 0.2, so a 396-second cell actually runs
+        # 317-475 seconds. Every option above states a time measured from the pull:
+        # `adds,first=`, `vulnerable,first=`, `invulnerable,timestamps=`. Left
+        # varying, a window scheduled near the measured end lands after the end of a
+        # short iteration and never happens, while a repeating wave repeats more
+        # often than it was observed to -- so the same scenario would model a
+        # different fight in each iteration and average them.
+        #
+        # It is pinned only where a timeline exists. On a scenario that is N targets
+        # for a length, the variance is simc's ordinary behaviour and every published
+        # cell in this project has it; switching it off there would move numbers for
+        # no reason. MID2 carries no wave, amplification or phase fact today, so this
+        # changes nothing published and is in place for the first fact that lands.
+        if options:
+            options.append("vary_combat_length=0")
 
         length = self.fight_length.value
         return ScenarioPlan(
@@ -451,7 +599,8 @@ class FightProfile:
             description=(
                 f"{self.name} as logged: {plan.targets} target(s) at the pull, "
                 f"{len(self.add_waves)} add wave(s), {len(self.amplifications)} damage "
-                f"amplification window(s). Built from a fight profile, not a fight style."
+                f"amplification window(s), {len(self.immunity_windows)} window(s) with "
+                f"the boss unattackable. Built from a fight profile, not a fight style."
             ),
             fight_style=None,
             target_counts=(plan.targets,),

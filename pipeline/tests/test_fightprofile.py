@@ -110,7 +110,11 @@ def test_an_add_wave_becomes_an_adds_raid_event():
             [{"name": "zealots", "count": 5, "first": 20, "duration": 20, "cadence": 60}]
         ),
     ).to_plan()
-    assert plan.options == ("raid_events+=/adds,count=5,first=20,duration=20,cooldown=60",)
+    assert plan.options == (
+        "raid_events+=/adds,count=5,first=20,duration=20,cooldown=60",
+        # `first=20` is absolute, so the fight length is pinned with it.
+        "vary_combat_length=0",
+    )
 
 
 def test_a_one_off_wave_gets_a_cooldown_longer_than_any_fight():
@@ -134,8 +138,12 @@ def test_an_amplification_on_the_priority_target_becomes_a_vulnerable_event():
             ]
         )
     ).to_plan()
+    # The fight length is pinned beside it: `first=0,duration=20` is absolute, and
+    # simc's default +/-20% length variance would leave the same window covering a
+    # different share of each iteration's fight.
     assert plan.options == (
         "raid_events+=/vulnerable,first=0,duration=20,cooldown=100000,multiplier=1.2",
+        "vary_combat_length=0",
     )
     assert plan.unrepresented == ()
 
@@ -673,3 +681,86 @@ def test_a_withheld_measurement_is_not_reported_as_disagreeing_with_a_person():
     assert plan["targets"].disagrees is False
     assert plan["targets"].blocked_by == SOURCE_HAND
     assert "in no condition to argue" in plan["targets"].reason
+
+
+# --------------------------------------------------------------------------------
+# Intermissions: a target that cannot be hit for part of the fight
+# --------------------------------------------------------------------------------
+
+
+def test_a_phase_with_downtime_becomes_an_invulnerable_raid_event():
+    """The claim this replaces was published and was measured false.
+
+    `to_plan` used to report a phase with downtime as unrepresentable -- "no raid
+    event expresses a target being unattackable for part of a fight without also
+    moving the players". simc's `invulnerable` event does exactly that and takes
+    the measured times directly: on simc b0ea612, MID2 Shadow Priest at two
+    targets, two 25s windows cost 14.8% (342.265 -> 291.615 DPS).
+
+    The three starts here are MID2 Entombed Sentinels' own Vitriolic Stasis
+    windows, rounded to the second.
+    """
+    plan = profile(
+        targets=hand({"baseline": 3, "constant": True}),
+        phases=hand([{"name": "Vitriolic Stasis", "starts": [46, 165, 282], "downtime": 25}]),
+    ).to_plan()
+
+    assert "raid_events+=/invulnerable,timestamps=46:165:282,duration=25" in plan.options
+    assert plan.unrepresented == ()
+
+
+def test_an_immunity_window_on_an_add_is_refused_rather_than_aimed_at_the_boss():
+    """The dangerous case, and it is dangerous because it is silent.
+
+    simc resolves `target=` at option-parse time against `sim->target_list`, where
+    a raid-event add does not exist yet, so an unresolved name falls back to
+    `sim->target` with exit 0 and one "Trivial" log line. Measured:
+    `vulnerable,target=stone1` over an `adds,name=stone` wave printed "Unknown
+    vulnerability raid event target 'stone1'" and amplified the boss instead. A
+    scenario claiming the add was immune would publish the boss being immune, and
+    nothing downstream could tell.
+    """
+    plan = profile(
+        phases=hand(
+            [
+                {
+                    "name": "Shielded add",
+                    "starts": [30],
+                    "downtime": 10,
+                    "target": "add",
+                }
+            ]
+        )
+    ).to_plan()
+
+    assert not any("invulnerable" in option for option in plan.options)
+    assert len(plan.unrepresented) == 1
+    assert "falls back to the boss silently" in plan.unrepresented[0]
+
+
+def test_downtime_with_no_stated_time_is_reported_rather_than_placed():
+    """An invented start would be a measurement nobody took."""
+    plan = profile(phases=hand([{"name": "Intermission", "downtime": 20}])).to_plan()
+
+    assert not any("invulnerable" in option for option in plan.options)
+    assert len(plan.unrepresented) == 1
+    assert "no stated time to put it at" in plan.unrepresented[0]
+
+
+def test_a_phase_without_downtime_produces_nothing_at_all():
+    """Most phases change the target count or the damage taken, and those are
+    already adds and amplifications. A phase list must not become a raid event
+    merely by existing."""
+    plan = profile(phases=hand([{"name": "Stage One", "starts": [0], "duration": 60}])).to_plan()
+
+    assert plan.options == ()
+    assert plan.unrepresented == ()
+
+
+def test_a_scenario_with_no_timeline_keeps_simc_default_length_variance():
+    """The pin is only where a timeline exists. Every published cell in this
+    project runs with simc's ordinary +/-20%, and switching it off on a plain
+    N-targets-for-a-length cell would move numbers for no reason."""
+    plan = profile(targets=hand({"baseline": 3, "constant": True})).to_plan()
+
+    assert plan.options == ()
