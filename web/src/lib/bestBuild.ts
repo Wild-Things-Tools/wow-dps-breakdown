@@ -101,6 +101,24 @@ export interface BestBuild {
   priorityGain: number | null
   /** The winning candidate, for the tooltip. */
   computed: ComputedContender | null
+  /**
+   * Set when the margin was measured against a build the manifest no longer
+   * publishes, in which case the mark is withheld and the row falls back to
+   * simc's own number.
+   *
+   * simc repairs its own profiles: measured 2026-08-30 over the committed MID2
+   * pair, six build ids carry a different `talentHash` in the two documents --
+   * both Havoc, both Affliction, Arms and Fury, all repaired between the search
+   * run and the nightly that republished the manifest -- and **13 rows across
+   * the three target counts were being marked** with a lead measured against a
+   * build the ranking beside them does not show.
+   *
+   * Null covers three states, and only one of them is this one: the hashes
+   * agree, or one of them is absent. Absent is never divergence -- a manifest
+   * from before the summary carried the hash would otherwise blank every mark
+   * in the tier.
+   */
+  staleAgainst: 'talent-hash' | null
 }
 
 /** True when both a DPS and an error can be read. Half a side is not a side. */
@@ -140,7 +158,41 @@ export function combinedNoise(errorPctA: number, errorPctB: number): number {
   return Math.hypot(errorPctA / 100, errorPctB / 100)
 }
 
-export function bestBuildFor(simcDps: number, entry: ComputedSpec | null): BestBuild {
+/**
+ * True when the entry's `simc` side is a build the manifest no longer publishes.
+ *
+ * Two hashes, three answers. They agree — nothing to say. They differ — the
+ * margin on this row was measured against a different talent build from the one
+ * the ranking shows, and the product `publishedDps x (1 + margin)` is a claim
+ * about neither. Either is missing — **nothing is concluded**: a manifest from
+ * before `talentHash` reached the summary row, a profile that states no hash, or
+ * a computed row for a build the tier has since dropped all land here, and
+ * reading absence as divergence would blank every mark in the tier the first
+ * time an older dataset is read.
+ *
+ * The check cannot live at write time: a search measures simc's hash as it is
+ * that minute, so the two always agree there. The divergence opens later, when a
+ * nightly republishes the manifest — which is why it has to be the reader's.
+ */
+function measuredAgainstAnotherBuild(
+  entry: ComputedSpec,
+  shippedTalentHash: string | null | undefined,
+): boolean {
+  const measured = entry.simc?.talentHash
+  if (!measured || !shippedTalentHash) return false
+  return measured !== shippedTalentHash
+}
+
+export function bestBuildFor(
+  simcDps: number,
+  entry: ComputedSpec | null,
+  /**
+   * The talent hash the manifest publishes for this build, when it publishes one.
+   * Optional by contract: every tier built before this field reached the summary
+   * row passes nothing, and behaves exactly as it did.
+   */
+  shippedTalentHash?: string | null,
+): BestBuild {
   const plain: BestBuild = {
     rankDps: simcDps,
     simcDps,
@@ -150,8 +202,18 @@ export function bestBuildFor(simcDps: number, entry: ComputedSpec | null): BestB
     noise: null,
     priorityGain: null,
     computed: null,
+    staleAgainst: null,
   }
   if (!entry) return plain
+
+  // Before anything is read off the entry: a margin against a build the ranking
+  // does not show is not a smaller claim than no margin, it is a different one.
+  // Falling back to simc's published number understates (the computed build may
+  // really be ahead) rather than inventing, which is the direction this project
+  // fails in.
+  if (measuredAgainstAnotherBuild(entry, shippedTalentHash)) {
+    return { ...plain, staleAgainst: 'talent-hash' }
+  }
 
   const simc = usable(entry.simc) ? entry.simc : null
   const best = usable(entry.best) ? entry.best : null
@@ -198,6 +260,7 @@ export function bestBuildFor(simcDps: number, entry: ComputedSpec | null): BestB
     noise,
     priorityGain,
     computed: best,
+    staleAgainst: null,
   }
 }
 

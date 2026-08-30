@@ -7,6 +7,7 @@ these tests are the only thing on this side of the wire that can catch a rename.
 """
 
 import json
+from pathlib import Path
 
 from wowdps import buildsearch, computedbuilds, gearanchor
 from wowdps.buildsearch import Candidate, Measurement
@@ -679,3 +680,92 @@ def test_a_document_written_before_runs_existed_gains_no_invented_blocks(tmp_pat
 
     assert [block["targets"] for block in written["runs"]] == [10]
     assert {row["targets"] for row in written["specs"]} == {1, 10}, "the old rows are still there"
+
+
+def _stale_document(candidate_hash: str, *, separates: bool = True) -> dict:
+    return {
+        "specs": [
+            {
+                "id": "warrior_arms_default",
+                "scenario": "patchwerk",
+                "targets": 1,
+                "simc": {"talentHash": candidate_hash, "dps": 100.0},
+                "best": {"talentHash": "COMPUTED", "dps": 102.0},
+                "shipped": {"separates": separates, "margin": 0.02, "tieBand": 0.001},
+            }
+        ]
+    }
+
+
+def _stale_manifest(published_hash: str | None) -> dict:
+    row: dict = {"id": "warrior_arms_default"}
+    if published_hash is not None:
+        row["talentHash"] = published_hash
+    return {"specs": [row]}
+
+
+def test_a_row_measured_against_another_build_is_reported():
+    """simc repairs its own profiles, so the build a search measured against can
+    change under a document nobody re-ran. Measured 2026-08-30 over the committed
+    MID2 pair: six build ids diverge and 13 rows carrying that divergence were
+    being MARKED on the site."""
+    rows = computedbuilds.stale_rows(_stale_document("AS-SEARCHED"), _stale_manifest("REPAIRED"))
+
+    assert len(rows) == 1
+    assert rows[0].build_id == "warrior_arms_default"
+    assert rows[0].targets == 1
+    assert rows[0].marked is True
+    assert rows[0].computed_hash == "AS-SEARCHED"
+    assert rows[0].manifest_hash == "REPAIRED"
+
+
+def test_agreeing_hashes_are_not_a_finding():
+    assert computedbuilds.stale_rows(_stale_document("SAME"), _stale_manifest("SAME")) == []
+
+
+def test_an_unmarked_stale_row_is_reported_but_says_it_is_unmarked():
+    """Still worth reporting -- the search's "simc's build held" verdict was also
+    measured against the wrong build -- but it is not a claim the site is making,
+    and the two must not be counted together."""
+    rows = computedbuilds.stale_rows(
+        _stale_document("AS-SEARCHED", separates=False), _stale_manifest("REPAIRED")
+    )
+
+    assert len(rows) == 1
+    assert rows[0].marked is False
+
+
+def test_an_absent_hash_on_either_side_concludes_nothing():
+    """Absent is not divergence. A manifest from before `talentHash` reached the
+    summary row, a profile that states none, or a computed row for a build the tier
+    has dropped all land here -- and reading absence as a finding would flag a whole
+    tier the first time an older document is read."""
+    assert computedbuilds.stale_rows(_stale_document("AS-SEARCHED"), _stale_manifest(None)) == []
+    assert computedbuilds.stale_rows(_stale_document("AS-SEARCHED"), {"specs": []}) == []
+
+    no_candidate = _stale_document("AS-SEARCHED")
+    no_candidate["specs"][0]["simc"] = {"dps": 100.0}
+    assert computedbuilds.stale_rows(no_candidate, _stale_manifest("REPAIRED")) == []
+
+    empty_candidate = _stale_document("")
+    assert computedbuilds.stale_rows(empty_candidate, _stale_manifest("REPAIRED")) == []
+
+
+def test_the_committed_mid2_pair_is_checked_by_the_same_walk():
+    """The corpus half, as a property rather than a count: whatever a nightly
+    publishes, a row this reports must genuinely carry two different hashes, and a
+    row it does not report must not.
+
+    Note the manifest committed today states no `talentHash` at all, so the honest
+    answer over it is an empty list -- which is what the CLI reports as "nothing can
+    be compared" rather than as "nothing is stale".
+    """
+    data = Path(__file__).resolve().parents[2] / "web" / "public" / "data" / "MID2"
+    manifest = json.loads((data / "index.json").read_text(encoding="utf-8"))
+    document = json.loads((data / "computed-builds.json").read_text(encoding="utf-8"))
+
+    published = {
+        row["id"]: row.get("talentHash") for row in manifest["specs"] if isinstance(row, dict)
+    }
+    for row in computedbuilds.stale_rows(document, manifest):
+        assert row.computed_hash != published[row.build_id]

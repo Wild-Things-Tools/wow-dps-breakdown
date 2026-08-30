@@ -111,6 +111,20 @@ export interface SpecSummary {
   specId: string;
   displayName: string;
   role: string;
+  /**
+   * The talent build simc ships for this row, as the manifest publishes it.
+   *
+   * The build's own spec file has always carried it; what this is for is the
+   * *join*, and the join needs it here because the ranking reads the manifest
+   * and nothing else. A computed row's margin was measured against simc's build
+   * as it stood on the day the search ran, and simc repairs its own profiles —
+   * so `bestBuildFor` compares the two and withholds the mark when they differ.
+   *
+   * Optional: absent on every tier built before 2026-08-30, and absent on a
+   * profile that states no hash. Absent means the comparison is not made, never
+   * that it failed.
+   */
+  talentHash?: string | null;
   scenarios: Record<string, SpecSummaryScenario>;
   errors?: string[];
   /**

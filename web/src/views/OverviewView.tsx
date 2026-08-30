@@ -252,6 +252,11 @@ export function OverviewView({
     effectiveTargets,
   );
   const computedRows = rows.filter((row) => row.best.projected).length;
+  // Rows whose computed margin was measured against a talent build the manifest
+  // no longer publishes. The mark is withheld on those, so without this count the
+  // "a search ran and beat nothing" branch below could fire on a search that beat
+  // plenty -- a finding nobody made, produced by the guard against a false one.
+  const staleRows = rows.filter((row) => row.best.staleAgainst !== null).length;
 
   // Independent of the sort order, deliberately: under the boss sort rows[0]
   // is the best *boss* row, whose total need not be the maximum, and a
@@ -464,13 +469,25 @@ export function OverviewView({
               &mdash; a build can gain overall and lose on the boss, which is
               the trade to see before picking one. Every other row is
               SimulationCraft&rsquo;s build, unchanged.
+              <StaleNote count={staleRows} />
             </>
           ) : scope === "searched" ? (
             <>
               {" "}
-              A talent search ran for this scenario at this target count and beat
-              none of SimulationCraft&rsquo;s own builds by more than the
-              combined sampling error, so every row here is simc&rsquo;s build.
+              {staleRows > 0 ? (
+                <>
+                  A talent search ran for this scenario at this target count, and
+                  every build it found is priced against talents SimulationCraft
+                  has since changed, so no row here carries a computed mark.
+                  <StaleNote count={staleRows} />
+                </>
+              ) : (
+                <>
+                  A talent search ran for this scenario at this target count and
+                  beat none of SimulationCraft&rsquo;s own builds by more than the
+                  combined sampling error, so every row here is simc&rsquo;s build.
+                </>
+              )}
             </>
           ) : scope === "not-searched" ? (
             <>
@@ -533,6 +550,36 @@ export function OverviewView({
   );
 }
 
+/**
+ * The one sentence a withheld mark owes the reader.
+ *
+ * A row loses its mark when the computed margin was measured against a talent
+ * build the manifest no longer publishes -- simc repairs its own profiles, and a
+ * nightly republishes the manifest without re-running the search. Silence there
+ * would be the failure this whole panel exists to prevent, one layer in: the row
+ * would read as "the search found nothing here", which is a finding nobody made.
+ *
+ * Deliberately not a number of *builds*: the count is of rows in the view, which
+ * is what a reader is looking at.
+ */
+function StaleNote({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return (
+    <>
+      {" "}
+      <strong className="font-medium text-ink-secondary">
+        {count} {count === 1 ? "row shows" : "rows show"} SimulationCraft&rsquo;s
+        number where a computed build was found.
+      </strong>{" "}
+      Their lead was measured against the talents simc shipped when the search
+      ran, and simc has changed them since &mdash; so the lead is over a build
+      this ranking no longer shows, and pricing it against the figure here would
+      be a comparison of two different characters. The next search restores{" "}
+      {count === 1 ? "it" : "them"}.
+    </>
+  );
+}
+
 function buildRows(
   specs: SpecSummary[],
   scenarioId: string,
@@ -550,6 +597,10 @@ function buildRows(
     const best = bestBuildFor(
       dps,
       findComputedSpec(computedBuilds, spec.id, scenarioId, targets),
+      // The manifest's own hash for this build. Without it the mark can be a
+      // lead measured against a talent build this ranking does not show -- 13
+      // rows of the committed MID2 pair were exactly that on 2026-08-30.
+      spec.talentHash,
     );
     const priorityDps = entry?.priorityDps?.[String(targets)];
     const hasSplit = typeof priorityDps === "number";

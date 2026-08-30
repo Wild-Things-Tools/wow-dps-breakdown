@@ -2549,6 +2549,121 @@ def cmd_fight_promote(args: argparse.Namespace) -> int:
     return fightpromote.cmd_fight_promote(args)
 
 
+def _hash_difference(computed: str, manifest: str) -> str:
+    """Where two talent hashes first disagree, as a printable line.
+
+    Talent hashes of one spec share a long header -- version, spec id and the 128
+    zero bits simc's exporter writes for the tree hash -- so a fixed-length prefix
+    of two *different* builds prints as two identical strings.
+    """
+    limit = min(len(computed), len(manifest))
+    at = next((i for i in range(limit) if computed[i] != manifest[i]), limit)
+    lo = max(0, at - 4)
+    hi = at + 8
+    return (
+        f"first differ at character {at} of {len(computed)}/{len(manifest)}: "
+        f"computed ...{computed[lo:hi]}... manifest ...{manifest[lo:hi]}..."
+    )
+
+
+def cmd_check_computed(args: argparse.Namespace) -> int:
+    """Join a published ``computed-builds.json`` against the manifest beside it.
+
+    The one thing this answers: is the ``simc`` side of each computed row still the
+    build the manifest publishes for that id? A marked row is drawn as
+    ``publishedDps x (1 + margin)``, and the margin is a head-to-head against simc's
+    talents *as they were on the day the search ran*. simc repairs its own profiles,
+    so a nightly that republishes the manifest can move that build under a document
+    nobody re-ran.
+
+    Offline and free: two files, no simc, no network, no credentials. It is deliberately
+    **not** a CI gate on pull requests -- the staleness is a property of the committed
+    data, not of anybody's diff, and failing unrelated PRs on it would train people to
+    ignore it. It runs in the nightly publish job, where the divergence is *created*,
+    and `--strict` is there for whoever does want an exit code.
+
+    Exit 0 with the report by default; 1 on ``--strict`` with any stale row; 2 when the
+    documents needed are not there, which is not a finding about the data.
+    """
+    from . import computedbuilds
+
+    log = logging.getLogger(__name__)
+    root = Path(args.data)
+    tier = args.tier
+    if not tier or tier == "latest":
+        index = root / "tiers.json"
+        if not index.is_file():
+            log.error("no tier index at %s -- run `wowdps build` first", index)
+            return 2
+        tier = json.loads(index.read_text(encoding="utf-8"))["current"]
+
+    manifest_path = root / tier / "index.json"
+    document_path = root / tier / "computed-builds.json"
+    if not manifest_path.is_file():
+        log.error("no manifest at %s", manifest_path)
+        return 2
+    if not document_path.is_file():
+        # Not a finding: most tiers have never been through `wowdps build-search`,
+        # and "no computed builds" is a supported state everywhere else too.
+        print(f"{tier}: no computed-builds.json; nothing to check")
+        return 0
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    document = json.loads(document_path.read_text(encoding="utf-8"))
+
+    rows = document.get("specs") or []
+    published = sum(
+        1
+        for row in manifest.get("specs") or []
+        if isinstance(row, dict) and isinstance(row.get("talentHash"), str)
+    )
+    if not published:
+        # A manifest from before the summary carried the hash. Saying "0 stale" here
+        # would be the same lie as reading an absent field as a passing check -- this
+        # repository's signature defect, so it says which it is.
+        print(
+            f"{tier}: the manifest states no talentHash on any of its "
+            f"{len(manifest.get('specs') or [])} builds, so nothing can be compared. "
+            "Re-run `wowdps build` to publish it."
+        )
+        return 0
+
+    stale = computedbuilds.stale_rows(document, manifest)
+    marked = [row for row in stale if row.marked]
+    print(
+        f"{tier}: {len(rows)} computed row(s), {published} build(s) in the manifest "
+        f"state a talent hash"
+    )
+    if not stale:
+        print("every computed row measured against the build the manifest publishes")
+        return 0
+
+    by_build: dict[str, list] = {}
+    for row in stale:
+        by_build.setdefault(row.build_id, []).append(row)
+    print(
+        f"\n{len(stale)} row(s) over {len(by_build)} build(s) measured against a "
+        f"different build than the manifest publishes; {len(marked)} of them are marked "
+        "on the site:"
+    )
+    for build_id, group in sorted(by_build.items()):
+        cells = ", ".join(
+            f"{row.scenario}@{row.targets}T{' MARKED' if row.marked else ''}" for row in group
+        )
+        print(f"  {build_id}: {cells}")
+        # A window around the first differing character, not a prefix. Every talent
+        # hash of one spec starts with the same header, so `hash[:24]` printed two
+        # identical strings for two different builds -- a diagnostic that cannot
+        # show the difference it exists to show.
+        print(f"    {_hash_difference(group[0].computed_hash, group[0].manifest_hash)}")
+    print(
+        "\nA `wowdps build-search` pass over the affected target counts heals this; "
+        "the readers suppress the mark on a stale row meanwhile, so nothing on the "
+        "site claims a gain against a build it does not show."
+    )
+    return 1 if (args.strict and stale) else 0
+
+
 def cmd_logs_analyse(args: argparse.Namespace) -> int:
     from . import logsanalysis
 
@@ -3205,6 +3320,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     logsanalysis.add_arguments(p_logs_analyse)
     p_logs_analyse.set_defaults(func=cmd_logs_analyse)
+
+    p_check_computed = sub.add_parser(
+        "check-computed",
+        help="join a published computed-builds.json against the manifest and report "
+        "rows measured against a talent build the manifest no longer publishes",
+    )
+    p_check_computed.add_argument(
+        "--data", default=str(DEFAULT_OUT), help="published dataset directory"
+    )
+    p_check_computed.add_argument(
+        "--tier", default="latest", help="tier directory such as MID2, or 'latest' (default)"
+    )
+    p_check_computed.add_argument(
+        "--strict",
+        action="store_true",
+        help="exit non-zero when any row is stale (off by default: the staleness is a "
+        "property of the data, not of the run, and a nightly must not lose its work over it)",
+    )
+    p_check_computed.set_defaults(func=cmd_check_computed)
 
     return parser
 
