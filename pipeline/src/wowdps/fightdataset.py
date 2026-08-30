@@ -1109,16 +1109,34 @@ def _no_fights_caveats(payload: dict) -> list[str]:
 #: `measurements` carries all of them; a reader is never left inferring it from a
 #: number's size.
 def _hardest(at_difficulty: dict[int | None, dict]) -> dict | None:
-    """The entry for the hardest difficulty present, or None when there is none.
+    """The headline difficulty: the hardest one that actually READ a fight.
 
     ``None`` -- a fight that stated no difficulty -- sorts last rather than first: it
     is the weakest row, and letting an unknown outrank a measured Mythic would be the
     "unknown is not zero" rule inverted.
+
+    **"Present" is not "read", and taking the first for the second published an empty
+    headline over a full measurement.** Measured against the committed MID2 file on
+    2026-08-30: Sszorak carries ``{5: 0 kills, 4: 17 kills}`` and The Twin Fangs
+    ``{5: 0, 4: 10}``. Both had `measuredDifficulty: 5` and a `measured` block reading
+    nothing, so the view -- which reads `measured` alone -- drew its never-probed
+    state over 27 kills that were paid for and sitting in the same document. That is
+    the same shape as `coverage == 1.0` on a pull that read nothing: the field says
+    the run looked, and what it looked at is empty.
+
+    So a block that read fights beats one that did not, and only then does difficulty
+    decide. The fallback is deliberate: when NOTHING read a fight the hardest present
+    block still wins, because "probed and read nothing" and "never probed" are
+    different sentences and dropping to ``None`` here would publish the second for the
+    first.
     """
     usable = [(k, v) for k, v in at_difficulty.items() if v]
     if not usable:
         return None
-    return max(usable, key=lambda kv: kv[0] if kv[0] is not None else -1)[1]
+    return max(
+        usable,
+        key=lambda kv: (bool(kv[1].get("fights")), kv[0] if kv[0] is not None else -1),
+    )[1]
 
 
 def _measured_block(
