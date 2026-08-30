@@ -707,7 +707,21 @@ def sweep_spec(
 ) -> SpecSlotResult:
     """Run the whole three-step comparison for one spec, at each target count."""
     slot = pool.slot
-    primary = primary_stat(profile.path)
+
+    # An unreadable primary stat costs this spec's row, never the shard. The six
+    # materialised MID2 profiles (Devastation, Feral, Balance and their hero-tree
+    # twins) carry no '# gear_<stat>=' summary -- simc's generator writes that block
+    # only into shipped profiles -- and on 2026-08-30 this ValueError escaped through
+    # `cmd_gear` and killed all six shards of runs #8 and #9 at their first such
+    # profile, publishing 29 of 52 builds. There is no derived fallback: simc ships
+    # no primary-stat-per-spec table (its class modules hard-code it in C++), and a
+    # hand table is exactly what `primary_stat`'s docstring rejects.
+    try:
+        primary = primary_stat(profile.path)
+    except ValueError as exc:
+        log.error("  SKIPPED %s: %s", profile.id, exc)
+        return SpecSlotResult(profile=profile, slot=slot, primary_stat="unknown", errors=[str(exc)])
+
     result = SpecSlotResult(profile=profile, slot=slot, primary_stat=primary)
 
     baseline_pool = pool.baseline_candidates(primary)

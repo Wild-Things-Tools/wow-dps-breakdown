@@ -1752,3 +1752,122 @@ def test_the_sweep_publishes_after_every_spec_and_not_once_more_at_the_end(monke
     # One write per spec, each carrying everything swept so far -- never a final
     # duplicate of the last one.
     assert written == [1, 2, 3]
+
+
+# --------------------------------------------------------------------------------
+# A profile the sweep cannot read costs its row, never the shard
+# --------------------------------------------------------------------------------
+
+
+def test_a_profile_without_a_gear_summary_costs_its_row_and_not_the_sweep(tmp_path):
+    """The 2026-08-30 shard deaths, pinned at the layer that raised.
+
+    Six materialised MID2 profiles carry no ``# gear_<stat>=`` summary line, so
+    ``primary_stat`` raised and the ValueError escaped ``sweep_spec`` -- it sat
+    before the per-target try -- and killed every shard of gear runs #8 and #9 at
+    its first such profile. The sweep published 29 of 52 builds and reported exit 1.
+
+    The contract is the one CLAUDE.md already states for buffs: a refused profile
+    costs a row's numbers and not a shard. Reverting the ``primary_stat`` guard in
+    ``sweep_spec`` turns this red with the original ValueError.
+    """
+    path = tmp_path / "MID2_Evoker_Devastation_FS.simc"
+    # A materialised profile's shape: player line and options, no gear summary block.
+    path.write_text("evoker=MID2_Evoker_Devastation_FS\nspec=devastation\n", encoding="utf-8")
+    profile = SpecProfile(
+        path=path,
+        tier="MID2",
+        wow_class="Evoker",
+        spec="Devastation",
+        hero_talent="Flameshaper",
+        role="spell",
+        talent_hash=None,
+    )
+
+    result = gearsweep.sweep_spec(Path("simc"), profile, POOL, SimSettings(), [1])
+
+    assert result.targets == []
+    assert result.errors, "the refusal must be recorded, not silent"
+    assert "gear_<stat>" in result.errors[0]
+    # 'unknown' is the stat the pool machinery already refuses to match items to
+    # (test_unknown_primary_stat_excludes_everything_rather_than_guessing), so even
+    # a caller that ignores the early return cannot equip wrong-stat items.
+    assert result.primary_stat == "unknown"
+
+
+def test_a_spec_that_raises_costs_its_row_and_the_rest_still_sweep(monkeypatch, tmp_path):
+    """The loop-level guard in ``cmd_gear``, for whatever raises next.
+
+    ``primary_stat`` was the fourth instance of "a new call placed beside a guard
+    that already existed rather than inside it" in this repository, so the loop over
+    (profile, slot) now guards the whole call: profile 2 of 3 raising must cost its
+    row alone, with profiles 1 and 3 swept and published. Reverting the try/except
+    around ``gearsweep.sweep_spec`` in ``cmd_gear`` turns this red.
+    """
+    from wowdps import cli, dataset, equipment, profiles, simc_runner
+    from wowdps import gearsweep as sweep
+
+    written: list[int] = []
+
+    def fake_write_gear(out_dir, results, pools, tier, simc_meta, settings, specs_available):
+        written.append(len(results))
+        path = Path(out_dir) / "gear.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}", encoding="utf-8")
+        return path
+
+    discovered = [
+        SpecProfile(
+            path=tmp_path / f"MID2_Mage_Arcane_{name}.simc",
+            tier="MID2",
+            wow_class="Mage",
+            spec="Arcane",
+            hero_talent=name,
+            role="spell",
+            talent_hash=None,
+        )
+        for name in ("Sunfury", "Spellslinger", "Frostfire")
+    ]
+
+    def fake_sweep_spec(simc, profile, pool, settings, targets, timeout):
+        if profile.hero_talent == "Spellslinger":
+            raise ValueError(f"{profile.path.name} has no '# gear_<stat>=' summary line")
+        return sweep.SpecSlotResult(
+            profile=profile,
+            slot=POOL.slot,
+            primary_stat="intellect",
+            targets=[
+                sweep.TargetResult(
+                    targets=1,
+                    empty_dps=1.0,
+                    baseline=[MPLUS[0]],
+                    baseline_ilevel=334,
+                    baseline_dps=1.0,
+                    baseline_dps_error=0.05,
+                )
+            ],
+        )
+
+    monkeypatch.setattr(dataset, "write_gear", fake_write_gear)
+    monkeypatch.setattr(profiles, "discover", lambda *a, **k: discovered)
+    monkeypatch.setattr(simc_runner, "find_simc", lambda *a, **k: Path("simc"))
+    monkeypatch.setattr(cli, "_resolve_tier", lambda *a, **k: "MID2")
+    monkeypatch.setattr(cli, "_probe_simc_metadata", lambda *a, **k: {"version": "stub"})
+    monkeypatch.setattr(
+        equipment,
+        "load_pools",
+        lambda *a, **k: equipment.GearPools(tier="MID2", slots={"finger": POOL}),
+    )
+    monkeypatch.setattr(sweep, "sweep_spec", fake_sweep_spec)
+
+    args = cli.build_parser().parse_args(
+        ["gear", "--profiles", str(tmp_path), "--tier", "MID2", "--out", str(tmp_path / "out")]
+    )
+    assert cli.cmd_gear(args) == 0
+
+    # Profile 2 raised: its row is missing, and the sweep carried on to profile 3.
+    # The middle write repeats the unchanged single-result document because
+    # `publish()` runs per profile whenever anything has been swept -- the same
+    # behaviour a no-targets result already produces, and harmless in a shard,
+    # whose output is merged rather than served.
+    assert written == [1, 1, 2]

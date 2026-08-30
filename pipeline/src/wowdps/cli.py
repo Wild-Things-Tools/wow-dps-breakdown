@@ -477,9 +477,18 @@ def cmd_gear(args: argparse.Namespace) -> int:
     for index, profile in enumerate(selected, start=1):
         logging.info("[%d/%d] %s", index, len(selected), profile.display_name)
         for slot_id in wanted_slots:
-            result = gearsweep.sweep_spec(
-                simc, profile, pools.slots[slot_id], settings, targets, timeout=args.timeout
-            )
+            # The general guard the 2026-08-30 shard deaths were missing: any
+            # per-(profile, slot) failure costs that row, not the run. This repo has
+            # shipped "a new call placed beside a guard that already existed" four
+            # times now; the guard belongs at the loop, so the next failure mode
+            # lands inside it too.
+            try:
+                result = gearsweep.sweep_spec(
+                    simc, profile, pools.slots[slot_id], settings, targets, timeout=args.timeout
+                )
+            except Exception:  # noqa: BLE001 - one spec must not kill the shard
+                logging.exception("  FAILED %s / %s", profile.id, slot_id)
+                continue
             if result.targets:
                 results.append(result)
             else:
