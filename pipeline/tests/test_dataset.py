@@ -819,6 +819,8 @@ def test_build_command_never_enables_ptr_data():
 # entirely. The overview derives its offered counts from these keys and the tie
 # rule needs the per-count error, so the three maps are the contract.
 
+from dataclasses import replace  # noqa: E402
+
 from wowdps.dataset import SpecResult  # noqa: E402
 from wowdps.parse import Cell  # noqa: E402
 from wowdps.profiles import SpecProfile  # noqa: E402
@@ -881,3 +883,29 @@ def test_priority_dps_is_absent_not_empty_when_no_cell_carries_it():
     entry = result.summary()["scenarios"]["boss_53470"]
     assert "priorityDps" not in entry
     assert entry["dpsError"] == {"1": 0.1234}
+
+
+def test_the_summary_publishes_the_talent_hash_so_a_second_document_can_be_joined():
+    """The field that lets a reader tell whether computed-builds.json still
+    describes this build.
+
+    The ranking multiplies a margin out of that document by a DPS out of this
+    manifest. The margin was measured against whatever talents simc shipped the day
+    the search ran, and simc repairs its own profiles -- so the two can drift, and
+    without the hash *here* the only way to notice is to fetch every spec file.
+    """
+    profile = replace(_summary_profile(), talent_hash="CsPAAAAAAA")
+    result = SpecResult(profile=profile)
+    result.add("patchwerk", _summary_cell(1, 250_000.0, None))
+
+    assert result.summary()["talentHash"] == "CsPAAAAAAA"
+
+
+def test_a_profile_that_states_no_talent_hash_publishes_no_key():
+    """Emitted only when set, like every other optional key in the summary: a tier
+    of hashless profiles produces the bytes it did before this existed, and a
+    reader sees "not stated" rather than a null it might read as a value."""
+    result = SpecResult(profile=_summary_profile())
+    result.add("patchwerk", _summary_cell(1, 250_000.0, None))
+
+    assert "talentHash" not in result.summary()

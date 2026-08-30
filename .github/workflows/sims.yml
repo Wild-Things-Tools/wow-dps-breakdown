@@ -473,6 +473,29 @@ jobs:
               --since "$PREVIOUS_SIMC"
           done
 
+      # This job is where the divergence is CREATED: it republishes index.json with
+      # whatever talents simc ships tonight, while computed-builds.json still holds a
+      # margin measured against the talents simc shipped when the search ran. simc
+      # repairs its own profiles, so the two drift with nobody doing anything wrong.
+      #
+      # Never fatal, and no `--strict`. It runs under `bash -e` in a job that has not
+      # committed yet, so a non-zero exit here would discard a whole night of
+      # simulations over a report -- exactly the failure `wowdps hero-trees` already
+      # cost this workflow once. `|| true` is belt as well as braces.
+      #
+      # The readers withhold the mark on a stale row by themselves, so this is a
+      # prompt to re-run `build-search`, not a guard against publishing something
+      # false.
+      - name: Report computed rows measured against a build simc has since changed
+        run: |
+          for tier in $(python3 -c "
+          import json, pathlib
+          index = json.loads(pathlib.Path('web/public/data/tiers.json').read_text())
+          print(' '.join(t['id'] for t in index['tiers']))
+          "); do
+            wowdps check-computed --tier "$tier" | tee -a "$GITHUB_STEP_SUMMARY" || true
+          done
+
       - name: Commit
         run: |
           git config user.name 'github-actions[bot]'

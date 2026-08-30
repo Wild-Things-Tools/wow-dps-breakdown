@@ -132,6 +132,27 @@ class SpecResult:
             # pieces, so that tier emits this key nowhere and its published bytes do
             # not move at all.
             out["tierSetComparable"] = False
+        if self.profile.talent_hash:
+            # The one field that lets a reader tell whether a *second* document's
+            # claim about this build is still about this build.
+            #
+            # The ranking multiplies a margin out of computed-builds.json by a DPS
+            # out of this manifest, and that margin was measured against whatever
+            # talents simc shipped on the day the search ran. simc repairs its own
+            # profiles: measured 2026-08-30 against the committed MID2 pair, six
+            # build ids -- both Havoc, both Affliction, Arms, Fury -- carry a
+            # different hash in each document, and 13 rows across the three target
+            # counts were being *marked* on a margin measured against a build the
+            # manifest no longer describes.
+            #
+            # The per-build spec file has carried this all along, so nothing new is
+            # derived here. What is new is that it is in the *summary*, which is the
+            # document the ranking reads: without it the Overview would have to
+            # fetch 52 spec files to notice, which is why nothing noticed.
+            # Emitted only when the profile states one, like every other optional
+            # key here -- and a build whose hash is unknown is compared against
+            # nothing rather than reported as divergent.
+            out["talentHash"] = self.profile.talent_hash
         if self.profile.unvalidated:
             # Emitted only when true, so a tier of shipped profiles produces the
             # same bytes it did before this existed and a quiet night still has

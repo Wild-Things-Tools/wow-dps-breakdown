@@ -313,3 +313,87 @@ describe('the single-enemy signature', () => {
     )
   })
 })
+
+describe('a margin measured against a build the manifest no longer publishes', () => {
+  // simc repairs its own profiles. Measured on 2026-08-30 against the committed
+  // MID2 pair: six build ids carry a different `talentHash` in index.json than
+  // the `simc` candidate in computed-builds.json -- both Havoc, both Affliction,
+  // Arms and Fury -- and 13 rows over the three target counts were MARKED on a
+  // lead measured against a build the ranking beside them does not show.
+  //
+  // The safe direction is to understate: fall back to simc's published number
+  // rather than price a gain against a different character.
+  const simc = { ...contender(100_000, 0.05), talentHash: 'AS-SEARCHED' }
+  const best = { ...contender(102_000, 0.05), talentHash: 'COMPUTED' }
+
+  it('withholds the mark and falls back to the published number', () => {
+    const verdict = bestBuildFor(232_961.2, entry(simc, best), 'REPAIRED-SINCE')
+    expect(verdict.staleAgainst).toBe('talent-hash')
+    expect(verdict.projected).toBe(false)
+    expect(verdict.rankDps).toBe(232_961.2)
+    expect(verdict.gain).toBeNull()
+    expect(bestBuildMark(verdict)).toBeNull()
+  })
+
+  it('marks the row when the two hashes agree — the control', () => {
+    const verdict = bestBuildFor(232_961.2, entry(simc, best), 'AS-SEARCHED')
+    expect(verdict.staleAgainst).toBeNull()
+    expect(verdict.projected).toBe(true)
+    expect(verdict.rankDps).toBeGreaterThan(232_961.2)
+  })
+
+  // Absent is not divergence. A manifest from before `talentHash` reached the
+  // summary row would otherwise blank every mark in the tier, which is a claim
+  // about the data made out of a gap in the reader.
+  it('concludes nothing when the manifest states no hash', () => {
+    for (const missing of [undefined, null, '']) {
+      const verdict = bestBuildFor(232_961.2, entry(simc, best), missing)
+      expect(verdict.staleAgainst).toBeNull()
+      expect(verdict.projected).toBe(true)
+    }
+  })
+
+  it('concludes nothing when the computed row states no hash', () => {
+    const noHash = { ...simc, talentHash: null } as ComputedContender
+    const verdict = bestBuildFor(232_961.2, entry(noHash, best), 'REPAIRED-SINCE')
+    expect(verdict.staleAgainst).toBeNull()
+    expect(verdict.projected).toBe(true)
+  })
+
+  // The suppression must not read as "no computed build exists here". It is a
+  // different state, and the caption branches on it.
+  it('is distinguishable from a row that was never searched', () => {
+    const never = bestBuildFor(232_961.2, null, 'REPAIRED-SINCE')
+    expect(never.staleAgainst).toBeNull()
+    expect(never.projected).toBe(false)
+  })
+})
+
+describe('the committed MID2 pair, joined on the talent hash', () => {
+  // The corpus half: a property, not a count. Whatever the nightly publishes,
+  // a row whose two hashes disagree must never be marked, and a row that IS
+  // marked must have been compared against the build the manifest publishes.
+  const manifest = JSON.parse(
+    readFileSync(join(DATA, 'index.json'), 'utf8'),
+  ) as { specs: Array<{ id: string; talentHash?: string | null }> }
+  const computed = JSON.parse(
+    readFileSync(join(DATA, 'computed-builds.json'), 'utf8'),
+  ) as ComputedBuildsDataset
+
+  const shipped = new Map(manifest.specs.map((row) => [row.id, row.talentHash ?? null]))
+
+  it('never marks a row whose margin was measured against another build', () => {
+    for (const row of computed.specs) {
+      const verdict = bestBuildFor(200_000, row, shipped.get(row.id))
+      if (verdict.staleAgainst === 'talent-hash') {
+        expect(verdict.projected).toBe(false)
+        expect(verdict.rankDps).toBe(200_000)
+      }
+      if (verdict.projected) {
+        const measured = row.simc?.talentHash
+        const current = shipped.get(row.id)
+        if (measured && current) expect(measured).toBe(current)
+      }
+    }
+  })
+})

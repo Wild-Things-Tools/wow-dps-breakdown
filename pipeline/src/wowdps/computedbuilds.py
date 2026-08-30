@@ -589,3 +589,90 @@ def write_computed_builds(out_dir: Path, document: dict) -> Path:
                 document = published
     path.write_text(json.dumps(document, indent=1) + "\n", encoding="utf-8")
     return path
+
+
+@dataclass(frozen=True)
+class StaleRow:
+    """One row of ``computed-builds.json`` whose ``simc`` side is a build the
+    manifest no longer describes.
+
+    The ranking presents a marked row as ``publishedDps x (1 + margin)``, where the
+    DPS comes from the manifest and the margin from this document. The margin is a
+    head-to-head against *simc's build* -- whichever talents simc shipped on the day
+    the search ran. simc repairs its own profiles, so that build can change under a
+    document nobody re-ran, and the product then prices a computed gain against
+    something the manifest no longer carries.
+
+    ``marked`` is what makes a row's staleness reach a reader: it is the document's
+    own ``shipped.separates``, the field the site marks on.
+    """
+
+    build_id: str
+    scenario: str
+    targets: int
+    marked: bool
+    computed_hash: str
+    manifest_hash: str
+
+
+def stale_rows(document: dict, manifest: dict) -> list[StaleRow]:
+    """Rows whose ``simc`` candidate is not the build the manifest publishes.
+
+    Three states, and only one of them is a finding -- the same discipline
+    ``derived.inRotation`` and the tier-set flag already follow:
+
+    - the two hashes **agree**: nothing to say;
+    - the two hashes **differ**: reported, and if the row is marked it is a claim
+      the site is making today;
+    - **either hash is absent**: reported as nothing at all. A manifest written
+      before ``talentHash`` reached the summary row, a profile that states no
+      hash, or a computed row for a build the tier no longer ships all land here,
+      and reading absence as divergence would flag a whole tier the first time an
+      older document is read. Under-claiming is the safe direction: the reader
+      falls back to showing the mark, which is what it did before this existed.
+
+    Pure over two already-published documents, so it needs no simc, no binary and
+    no network -- and it can therefore run anywhere the data is, which is the only
+    place the divergence is visible at all. A check at *write* time could never
+    fire: a search measures simc's current hash, so the two agree in that moment
+    and the divergence opens later, when a nightly republishes the manifest.
+    """
+    published: dict[str, str] = {}
+    for row in manifest.get("specs") or []:
+        if not isinstance(row, dict):
+            continue
+        build_id = row.get("id")
+        talents = row.get("talentHash")
+        if isinstance(build_id, str) and isinstance(talents, str) and talents:
+            published[build_id] = talents
+
+    out: list[StaleRow] = []
+    for row in document.get("specs") or []:
+        if not isinstance(row, dict):
+            continue
+        build_id = row.get("id")
+        if not isinstance(build_id, str):
+            continue
+        candidate = ((row.get("simc") or {}) if isinstance(row.get("simc"), dict) else {}).get(
+            "talentHash"
+        )
+        current = published.get(build_id)
+        if not isinstance(candidate, str) or not candidate or not current:
+            continue
+        if candidate == current:
+            continue
+        shipped = row.get("shipped")
+        marked = bool(isinstance(shipped, dict) and shipped.get("separates"))
+        targets = row.get("targets")
+        out.append(
+            StaleRow(
+                build_id=build_id,
+                scenario=str(row.get("scenario") or ""),
+                targets=int(targets) if isinstance(targets, int) else 0,
+                marked=marked,
+                computed_hash=candidate,
+                manifest_hash=current,
+            )
+        )
+    out.sort(key=lambda r: (r.build_id, r.scenario, r.targets))
+    return out
