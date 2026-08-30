@@ -4892,6 +4892,49 @@ and `size`. Those are metadata about the pull, not counted out of the event stre
 made yet. `--max-pages 3` is the current default. Raise it and re-measure before
 concluding anything about a long fight.
 
+### "Present" is not "read", and the headline named the empty one
+
+`_hardest` chose the hardest difficulty **present** where CLAUDE.md said, and the
+readers assumed, the hardest one **read**. Measured against the committed MID2
+`fights.json` on 2026-08-30:
+
+```
+Sszorak           blocks {5: 0 kills, 4: 17}   measuredDifficulty 5   measured.fightsSampled 0
+The Twin Fangs    blocks {5: 0,       4: 10}   measuredDifficulty 5   measured.fightsSampled 0
+Entombed Sentinels       {5: 8,       4: 27}   measuredDifficulty 5   measured.fightsSampled 8
+```
+
+The Fights view reads `measured` alone, so on the first two it drew its
+never-probed state over **27 kills that were paid for and are in the same
+document**. Same shape as `coverage == 1.0` on a pull that read nothing: the field
+says the run looked, and what it looked at is empty.
+
+A block that read fights now beats one that did not, and only then does difficulty
+decide. **The fallback is deliberate**: when nothing read a fight, the hardest
+present block still wins rather than dropping to `None` -- "probed and read
+nothing" and "never probed" are different sentences, and MID2's The Coiled Altar
+and Ula'tek are the first at both difficulties.
+
+**What the Heroic pass is actually worth, measured.** Four bosses have zero Mythic
+kills; two of those have real Heroic ones (17 and 10). On the four where both were
+read the *shape* agrees -- peak targets 3/3, 2/3, 2.5/2, 3/3; mean 2.25/2.34,
+1.03/1.26, 1.46/1.23, 2.99/2.99 -- and two things do **not**:
+
+```
+Nek'zali            kill length   286 s Mythic   497 s Heroic     +74%
+The Lost Explorers  raid size      20   Mythic    30   Heroic
+```
+
+A scenario is built from fight length *and* target count, so a Heroic length inside
+a Mythic scenario is a wrong simulation, not a bigger sample. That is why the answer
+is "Mythic, falling back to Heroic where no Mythic kill exists, and saying which"
+rather than pooling. wtt-frontend draws the note (its `measuredDifficultyNote`);
+nothing is blended.
+
+**Nothing published moves until a probe run writes.** The fix is in the pipeline;
+`fights.json` is regenerated from a probe payload, which is a CI artifact, so the
+committed document still carries `measuredDifficulty: 5` on both bosses.
+
 ### The mean counts what is being *fought*, not what is alive
 
 Separate from truncation and not fixable by fetching more. An enemy is counted from

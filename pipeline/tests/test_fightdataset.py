@@ -1025,6 +1025,40 @@ def test_a_boss_with_only_heroic_data_surfaces_it_rather_than_nothing():
     assert encounter["measured"]["fightsSampled"] == 5
 
 
+def test_a_difficulty_that_read_nothing_never_outranks_one_that_read_something():
+    """The defect this rule was written wrong for, and it is in the published file.
+
+    Measured against the committed MID2 document on 2026-08-30: Sszorak carries a
+    Mythic block that read **0** kills and a Heroic block that read **17**, and the
+    headline named Mythic. The Fights view reads `measured` alone, so it drew its
+    never-probed state over seventeen kills that had been paid for and were sitting
+    in the same file. The Twin Fangs is the same at 0 and 10.
+
+    "Present" is not "read" -- the same distinction `_measured_block` already makes
+    between `None` and `fightsSampled: 0`, applied one level up where the headline is
+    chosen.
+    """
+    encounter = find(_document_with(_at(5, "M", 0), _at(4, "H", 17)), 3180)
+
+    assert encounter["measuredDifficulty"] == 4
+    assert encounter["measured"]["fightsSampled"] == 17
+    # Both blocks still survive; only which one is the headline changed.
+    assert [m["difficulty"] for m in encounter["measurements"]] == [5, 4]
+    assert encounter["measurements"][0]["fightsSampled"] == 0
+
+
+def test_when_nothing_read_a_fight_the_hardest_probed_difficulty_still_leads():
+    """The fallback, and it is not a detail. Dropping to `None` here would publish
+    "never probed" for a boss that WAS probed at both difficulties and read nothing
+    at either -- MID2's The Coiled Altar and Ula'tek are exactly that. Those are two
+    different sentences and the view says something different for each."""
+    encounter = find(_document_with(_at(5, "M", 0), _at(4, "H", 0)), 3180)
+
+    assert encounter["measuredDifficulty"] == 5
+    assert encounter["measured"] is not None
+    assert encounter["measured"]["fightsSampled"] == 0
+
+
 def test_an_unknown_difficulty_never_outranks_a_measured_one():
     """ "Stated no difficulty" is the weakest row, not the hardest. Letting it win would
     invert the "unknown is not zero" rule this file applies everywhere else."""
