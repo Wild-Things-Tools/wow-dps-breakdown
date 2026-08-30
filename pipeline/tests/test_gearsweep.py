@@ -1770,6 +1770,13 @@ def test_a_profile_without_a_gear_summary_costs_its_row_and_not_the_sweep(tmp_pa
     The contract is the one CLAUDE.md already states for buffs: a refused profile
     costs a row's numbers and not a shard. Reverting the ``primary_stat`` guard in
     ``sweep_spec`` turns this red with the original ValueError.
+
+    Since #118 the profile's silence is no longer the end of it -- simc is asked to
+    regenerate the block (the test below) -- so what this pins is the case where
+    *both* routes fail. There is no simc binary at ``Path("simc")`` here, which is
+    the honest version of that: the derivation raises, and the error names both
+    halves so a reader can tell "the profile says nothing" from "and simc would not
+    say either".
     """
     path = tmp_path / "MID2_Evoker_Devastation_FS.simc"
     # A materialised profile's shape: player line and options, no gear summary block.
@@ -1793,6 +1800,105 @@ def test_a_profile_without_a_gear_summary_costs_its_row_and_not_the_sweep(tmp_pa
     # (test_unknown_primary_stat_excludes_everything_rather_than_guessing), so even
     # a caller that ignores the early return cannot equip wrong-stat items.
     assert result.primary_stat == "unknown"
+    assert "simc could not regenerate it either" in result.errors[0]
+
+
+def test_a_profile_without_a_gear_summary_is_recovered_by_asking_simc(monkeypatch, tmp_path):
+    """The recovery, and the reason it is simc rather than a table.
+
+    Eight MID2 builds -- Balance and Feral Druid, Devastation Evoker and Retribution
+    Paladin, both hero builds each -- are materialised from simc's disabled generator
+    blocks, which carry no ``# gear_<stat>=`` line. Skipping them costs the sweep 8 of
+    51 rows, and the primary stat is not a thing to look up: simc's own ``save=``
+    export regenerates the block with the code that wrote every shipped profile's.
+    Measured 2026-08-30: 10 of 11 such profiles derive, at 0.112 s each, and
+    Retribution correctly reads ``strength`` where a class table keyed on "Paladin"
+    would have to know which spec.
+
+    Deleting the ``derive_primary_stat`` fallback turns this red: the row comes back
+    with no targets and ``primary_stat == "unknown"``.
+    """
+    path = tmp_path / "MID2_Paladin_Retribution_Templar.simc"
+    path.write_text("paladin=MID2_Paladin_Retribution_Templar\nspec=retribution\n", "utf-8")
+    profile = spec_profile(path)
+
+    # A strength pool, because the point of deriving rather than tabulating is that
+    # the answer is per *build*: Retribution is the strength spec of a class whose
+    # other two profiled specs are not, so a table keyed on "Paladin" cannot answer.
+    strength_pool = SlotPool(
+        tier="MID2",
+        slot=TRINKET,
+        items=(
+            gear(301, "mythicplus", "strength"),
+            gear(302, "mythicplus", "strength"),
+            gear(303, "raid", "strength"),
+        ),
+        item_levels=(HEROIC, MYTHIC),
+        baseline_source="mythicplus",
+        candidate_source="raid",
+    )
+    asked: list[Path] = []
+
+    def derive(simc, profile_path, timeout=120):
+        asked.append(profile_path)
+        return "strength"
+
+    swept_against: list[str] = []
+
+    def fake_sweep_one(simc, profile, pool, settings, count, primary, *rest):
+        # Record the stat the sweep was *run with*, not only the one it reports:
+        # `pool.candidates(primary)` is what a wrong stat would silently empty, and
+        # the two are separate arguments in `sweep_spec`.
+        swept_against.append(primary)
+        return gearsweep.TargetResult(
+            targets=count,
+            empty_dps=1.0,
+            baseline=[MPLUS[0]],
+            baseline_ilevel=334,
+            baseline_dps=1.0,
+            baseline_dps_error=0.05,
+        )
+
+    monkeypatch.setattr(gearsweep, "derive_primary_stat", derive)
+    monkeypatch.setattr(gearsweep, "_sweep_one", fake_sweep_one)
+
+    result = gearsweep.sweep_spec(Path("simc"), profile, strength_pool, SimSettings(), [1])
+
+    assert asked == [path], "the profile's own path is what simc is handed"
+    assert result.errors == []
+    assert result.primary_stat == "strength"
+    assert swept_against == ["strength"]
+
+
+def test_a_profile_that_states_its_own_stat_is_never_sent_to_simc(monkeypatch, profile):
+    """The profile is the first authority and simc is the fallback, not the other way.
+
+    Worth pinning even though the derivation agrees: 43 of 51 builds state the block
+    themselves, and a fallback promoted to the default would add a simc invocation per
+    (build, slot, target) for an answer already on disk -- and would put simc's reading
+    of a *shipped* profile ahead of what that profile says, which is a different claim
+    from the one #118 makes.
+    """
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("simc must not be asked about a profile that states its stat")
+
+    monkeypatch.setattr(gearsweep, "derive_primary_stat", refuse)
+    monkeypatch.setattr(
+        gearsweep,
+        "_sweep_one",
+        lambda simc, prof, pool, settings, count, primary, *rest: gearsweep.TargetResult(
+            targets=count,
+            empty_dps=1.0,
+            baseline=[MPLUS[0]],
+            baseline_ilevel=334,
+            baseline_dps=1.0,
+            baseline_dps_error=0.05,
+        ),
+    )
+
+    result = gearsweep.sweep_spec(Path("simc"), profile, POOL, SimSettings(), [1])
+    assert result.primary_stat == "intellect"
 
 
 def test_a_spec_that_raises_costs_its_row_and_the_rest_still_sweep(monkeypatch, tmp_path):

@@ -93,6 +93,7 @@ from .equipment import (
     SlotAdornment,
     SlotPool,
     adorn,
+    derive_primary_stat,
     primary_stat,
     read_adornments,
 )
@@ -708,19 +709,33 @@ def sweep_spec(
     """Run the whole three-step comparison for one spec, at each target count."""
     slot = pool.slot
 
-    # An unreadable primary stat costs this spec's row, never the shard. The six
-    # materialised MID2 profiles (Devastation, Feral, Balance and their hero-tree
-    # twins) carry no '# gear_<stat>=' summary -- simc's generator writes that block
-    # only into shipped profiles -- and on 2026-08-30 this ValueError escaped through
-    # `cmd_gear` and killed all six shards of runs #8 and #9 at their first such
-    # profile, publishing 29 of 52 builds. There is no derived fallback: simc ships
-    # no primary-stat-per-spec table (its class modules hard-code it in C++), and a
-    # hand table is exactly what `primary_stat`'s docstring rejects.
+    # A profile this project materialises carries no '# gear_<stat>=' summary --
+    # simc's generator writes that block only into the profiles it ships -- so the
+    # question goes to simc, which regenerates the block from the equipped items
+    # with the code that wrote every shipped profile's. Same quantity, same
+    # authority; the profile is simply silent rather than wrong.
+    #
+    # The binary is already in hand here, which is why the derivation lives at
+    # sweep time rather than at materialisation: `wowdps unvalidated` and
+    # `wowdps extra-builds` take a simc *source checkout* and no binary, and the
+    # publish job that runs them has none to give.
+    #
+    # Both routes failing costs this spec's row and never the shard. That guard is
+    # the older half and it is what runs #8 and #9 of 2026-08-30 needed: the
+    # ValueError escaped through `cmd_gear` and killed all six shards at their
+    # first materialised profile, publishing 29 of 52 builds.
     try:
         primary = primary_stat(profile.path)
-    except ValueError as exc:
-        log.error("  SKIPPED %s: %s", profile.id, exc)
-        return SpecSlotResult(profile=profile, slot=slot, primary_stat="unknown", errors=[str(exc)])
+    except ValueError as stated:
+        try:
+            primary = derive_primary_stat(simc, profile.path)
+        except Exception as derived:  # noqa: BLE001 - a refusal, never a guess
+            message = f"{stated}; simc could not regenerate it either: {derived}"
+            log.error("  SKIPPED %s: %s", profile.id, message)
+            return SpecSlotResult(
+                profile=profile, slot=slot, primary_stat="unknown", errors=[message]
+            )
+        log.info("  %s states no gear summary; simc regenerated it as %s", profile.id, primary)
 
     result = SpecSlotResult(profile=profile, slot=slot, primary_stat=primary)
 
