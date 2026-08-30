@@ -12,9 +12,24 @@ name: Deploy
 # Going public later is a variable change, not a rewrite. Point SITE_BASE and
 # HUB_PATH at an ungated Cloudflare project (or set SITE_BASE=/ for a project root)
 # and nothing else moves — the built output is identical.
+#
+# STOOD DOWN 2026-08-30 (issue #112, owner decision 8 of 2026-08-29: "es gibt keine
+# react seite mehr, es wird nicht mehr gehostet ... wir machen alles über nextpull").
+# The product surface is nextpull (wtt-frontend), which fetches the committed
+# `web/public/data/` files through wtt-backend, so committing a dataset is the whole
+# publishing step and this workflow contributes nothing to it.
+#
+# `push: branches: [main]` is REMOVED rather than left to fire harmlessly, because it
+# was not harmless: measured on 2026-08-30, the four most recent merges to main each
+# ran this workflow to success and pushed a fresh copy of the built site into
+# wt-gate. Against a project nobody serves that is pure git-history growth in another
+# repository -- and this README's own cost section names history growth, not the
+# Cloudflare quota, as the binding constraint there.
+#
+# `workflow_dispatch` stays so the route can be re-opened by hand without a rewrite,
+# which is also how the hosting decision gets reversed if it ever is: dispatch once,
+# and add the trigger back.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
