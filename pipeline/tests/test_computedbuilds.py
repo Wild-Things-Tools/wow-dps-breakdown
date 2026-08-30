@@ -107,13 +107,20 @@ def test_no_undeclared_field_reaches_a_row_the_site_reads():
     a producer grows a field, nothing reads it, and the next person takes it for part
     of the contract. So the rows are pinned to exactly the declared sets.
 
-    Two deliberate exceptions, both at document level and both named here so they stay
-    the only two: ``notes`` carries per-run sentences (which seed sources were
-    available) and ``calibration`` carries the gate's own table. Neither has a home in
-    the declared interface, ``dps-computed.ts`` reads neither, and both are omitted
-    entirely when there is nothing to say.
+    Three deliberate exceptions, all at document level and all named here so they stay
+    the only three: ``notes`` carries per-run sentences (which seed sources were
+    available), ``calibration`` carries the gate's own table, and ``runs`` carries
+    provenance per ``(scenario, targets)`` -- which simc measured that pair, since
+    ``merge_specs`` lets one file hold pairs from different nights (#100). The first
+    two have no home in the declared interface and ``dps-computed.ts`` reads neither;
+    the third is a field the site *should* grow a reader for, and is listed here rather
+    than quietly excluded so that stays visible.
+
+    ``notes`` and ``calibration`` are omitted entirely when there is nothing to say.
+    ``runs`` is not: a document with rows always covers at least one pair, and an empty
+    list would mean "no pair", which is a different claim from "no calibration ran".
     """
-    assert set(document()) == DATASET_KEYS
+    assert set(document()) - DATASET_KEYS == {"runs"}
     doc = computedbuilds.build_document(
         "MID2",
         [entry()],
@@ -123,7 +130,7 @@ def test_no_undeclared_field_reaches_a_row_the_site_reads():
         calibration=computedbuilds.Calibration(rows=[]),
         notes=["a note"],
     )
-    assert set(doc) - DATASET_KEYS == {"notes", "calibration"}
+    assert set(doc) - DATASET_KEYS == {"notes", "calibration", "runs"}
     for row in doc["specs"]:
         assert set(row) == SPEC_KEYS
         assert set(row["anchor"]) == ANCHOR_KEYS
@@ -524,3 +531,151 @@ def test_coverage_of_an_empty_document_claims_nothing():
     assert coverage["specs"] == 0
     assert coverage["rows"] == 0
     assert coverage["targetCounts"] == []
+
+
+# --------------------------------------------------------------------------------
+# Provenance per (scenario, targets) -- #100
+# --------------------------------------------------------------------------------
+
+
+def a_run(scenario="patchwerk", targets=1, revision="rev"):
+    return {
+        "scenario": scenario,
+        "targets": targets,
+        "generatedAt": "2026-08-26T05:00:00+00:00",
+        "settings": {"iterations": 3000, "deterministic": True},
+        "simc": {"gitRevision": revision},
+    }
+
+
+def test_every_pair_the_run_produced_gets_a_block_and_no_other_does():
+    """The #95 rule, one document across: only pairs this run measured are stamped.
+
+    A block on a pair whose rows the merge folds in from the published document would
+    claim this run's simc for numbers measured on another night, which is the defect
+    being fixed rather than a smaller version of it.
+    """
+    rows = [
+        {"scenario": "patchwerk", "targets": 1, "id": "a"},
+        {"scenario": "patchwerk", "targets": 1, "id": "b"},
+        {"scenario": "patchwerk", "targets": 5, "id": "a"},
+    ]
+    blocks = computedbuilds.pair_runs(
+        rows, stamped_at="2026-08-30T00:00:00+00:00", simc={"gitRevision": "abc"}, settings={}
+    )
+
+    assert [(b["scenario"], b["targets"]) for b in blocks] == [("patchwerk", 1), ("patchwerk", 5)]
+    assert all(b["simc"] == {"gitRevision": "abc"} for b in blocks)
+
+
+def test_an_unreadable_simc_leaves_the_block_unattributed_rather_than_empty():
+    """`_probe_simc_metadata` warns and returns {} when the probe run fails.
+
+    "Unknown" and "none" are different answers, and an empty `simc: {}` reads as the
+    second. The pair still gets a block -- it names the settings and when it ran --
+    and simply does not claim a revision.
+    """
+    [block] = computedbuilds.pair_runs(
+        [{"scenario": "patchwerk", "targets": 1}],
+        stamped_at="2026-08-30T00:00:00+00:00",
+        simc={},
+        settings={"iterations": 3000},
+    )
+    assert "simc" not in block
+    assert block["settings"] == {"iterations": 3000}
+
+
+def test_a_carried_pair_keeps_its_own_provenance_across_two_revisions(tmp_path):
+    """The measured case: the 5- and 10-target passes ran on different simc revisions.
+
+    `merge_specs` carries the 5-target rows forward untouched, so before this the one
+    document held rows from `0711f60` and `aa2da21` and said nothing. The blocks must
+    follow the rows they describe -- not the newest run, and not the document.
+
+    Reverting `merge_runs` to keep only this run's blocks turns this red on the
+    5-target lookup; keying `covered` off the *merged* rows instead of this run's
+    turns it red the other way, by dropping the carried block.
+    """
+    published = {
+        "schemaVersion": computedbuilds.SCHEMA_VERSION,
+        "generatedAt": "2026-08-26T16:33:00+00:00",
+        "tier": "MID2",
+        "note": "",
+        "settings": {"iterations": 3000, "deterministic": True},
+        "coverage": {"specs": 1, "specsAvailable": 52, "rows": 1, "targetCounts": [5]},
+        "runs": [a_run(targets=5, revision="0711f60")],
+        "specs": [{"scenario": "patchwerk", "targets": 5, "id": "mage_arcane_sunfury"}],
+    }
+    (tmp_path / "computed-builds.json").write_text(json.dumps(published), encoding="utf-8")
+
+    fresh = dict(published)
+    fresh["generatedAt"] = "2026-08-27T00:00:00+00:00"
+    fresh["runs"] = [a_run(targets=10, revision="aa2da21")]
+    fresh["specs"] = [{"scenario": "patchwerk", "targets": 10, "id": "mage_arcane_sunfury"}]
+
+    computedbuilds.write_computed_builds(tmp_path, fresh)
+    written = json.loads((tmp_path / "computed-builds.json").read_text(encoding="utf-8"))
+
+    by_targets = {block["targets"]: block for block in written["runs"]}
+    assert set(by_targets) == {5, 10}
+    assert by_targets[5]["simc"]["gitRevision"] == "0711f60", "the carried pair keeps its own"
+    assert by_targets[10]["simc"]["gitRevision"] == "aa2da21"
+    # And both target counts' rows survived, which is what makes the two blocks needed.
+    assert {row["targets"] for row in written["specs"]} == {5, 10}
+
+
+def test_a_re_measured_pair_takes_the_new_provenance_and_leaves_no_duplicate(tmp_path):
+    """Re-running a pair replaces its rows, so it must replace its block too.
+
+    Keeping both would leave two blocks for one pair, and a reader taking the first
+    would report the revision that no longer measured anything.
+    """
+    published = {
+        "schemaVersion": computedbuilds.SCHEMA_VERSION,
+        "generatedAt": "2026-08-26T16:33:00+00:00",
+        "tier": "MID2",
+        "note": "",
+        "settings": {"iterations": 3000, "deterministic": True},
+        "coverage": {"specs": 1, "specsAvailable": 52, "rows": 1, "targetCounts": [1]},
+        "runs": [a_run(targets=1, revision="old")],
+        "specs": [{"scenario": "patchwerk", "targets": 1, "id": "mage_arcane_sunfury"}],
+    }
+    (tmp_path / "computed-builds.json").write_text(json.dumps(published), encoding="utf-8")
+
+    fresh = dict(published)
+    fresh["generatedAt"] = "2026-08-30T00:00:00+00:00"
+    fresh["runs"] = [a_run(targets=1, revision="new")]
+    computedbuilds.write_computed_builds(tmp_path, fresh)
+    written = json.loads((tmp_path / "computed-builds.json").read_text(encoding="utf-8"))
+
+    assert len(written["runs"]) == 1
+    assert written["runs"][0]["simc"]["gitRevision"] == "new"
+
+
+def test_a_document_written_before_runs_existed_gains_no_invented_blocks(tmp_path):
+    """Absent stays absent, exactly as `merge_gear_shards` treats a pre-#95 slot.
+
+    The published MID2 file has no `runs` key at all, and its 1- and 5-target rows
+    were measured on a revision nobody recorded. Stamping them with the next run's
+    would be worse than saying nothing: it would make an unknown look answered.
+    """
+    published = {
+        "schemaVersion": computedbuilds.SCHEMA_VERSION,
+        "generatedAt": "2026-08-26T16:33:00+00:00",
+        "tier": "MID2",
+        "note": "",
+        "settings": {"iterations": 3000, "deterministic": True},
+        "coverage": {"specs": 1, "specsAvailable": 52, "rows": 1, "targetCounts": [1]},
+        "specs": [{"scenario": "patchwerk", "targets": 1, "id": "mage_arcane_sunfury"}],
+    }
+    (tmp_path / "computed-builds.json").write_text(json.dumps(published), encoding="utf-8")
+
+    fresh = dict(published)
+    fresh["generatedAt"] = "2026-08-30T00:00:00+00:00"
+    fresh["runs"] = [a_run(targets=10, revision="new")]
+    fresh["specs"] = [{"scenario": "patchwerk", "targets": 10, "id": "mage_arcane_sunfury"}]
+    computedbuilds.write_computed_builds(tmp_path, fresh)
+    written = json.loads((tmp_path / "computed-builds.json").read_text(encoding="utf-8"))
+
+    assert [block["targets"] for block in written["runs"]] == [10]
+    assert {row["targets"] for row in written["specs"]} == {1, 10}, "the old rows are still there"

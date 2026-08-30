@@ -363,6 +363,67 @@ class SpecEntry:
         return entry
 
 
+def pair_runs(
+    rows: list[dict], *, stamped_at: str, simc: dict | None, settings: dict
+) -> list[dict]:
+    """One provenance block per ``(scenario, targets)`` pair these rows cover.
+
+    **The pair is the unit because the pair is what ``merge_specs`` replaces.** A
+    document-level block is wrong the moment two runs stand side by side, which for
+    this document is immediately: the 5- and 10-target passes of 2026-08-26/27 ran on
+    different simc revisions (`0711f60` and `aa2da21`) and `merge_specs` carried the
+    earlier rows forward untouched, so one file held rows from two revisions and said
+    nothing at all. Exactly the #95 defect one document across -- there a `simc` block
+    over three gear slots, here one over three target counts.
+
+    It matters because the ranking **multiplies across the two documents**:
+    `publishedDps` comes from `index.json` (which does state its revision) and
+    `margin` from here. Measured on 2026-08-26, the two had already diverged in the
+    profiles themselves -- `demon_hunter_devourer_void_scarred` carried a different
+    talent hash in each -- and nothing in this file could say so.
+
+    Only pairs this run actually produced rows for are stamped, never the pairs the
+    merge folds in from the published document: a block on a pair whose numbers came
+    from a different night would claim this run's simc for them, which is the same
+    defect one level down (`write_gear` refuses it for the same reason).
+    """
+    seen: dict[tuple[str | None, int | None], dict] = {}
+    for row in rows:
+        key = (row.get("scenario"), row.get("targets"))
+        if key in seen:
+            continue
+        block: dict = {
+            "scenario": key[0],
+            "targets": key[1],
+            "generatedAt": stamped_at,
+            "settings": dict(settings),
+        }
+        # Absent rather than null when the probe could not read it. "Which simc" is
+        # unknown then, and an empty block would read as an answer.
+        if simc:
+            block["simc"] = dict(simc)
+        seen[key] = block
+    return [seen[key] for key in sorted(seen, key=lambda k: (str(k[0]), k[1] or 0))]
+
+
+def merge_runs(published: list[dict], fresh: list[dict], covered: set) -> list[dict]:
+    """This run's provenance blocks, plus every published one at a pair it did not cover.
+
+    Same union rule and the same key as ``merge_specs``, so the two cannot drift: a
+    pair whose rows are carried forward keeps the block that describes them, and a
+    pair this run re-measured gets this run's.
+    """
+    kept = [
+        block
+        for block in published
+        if isinstance(block, dict) and (block.get("scenario"), block.get("targets")) not in covered
+    ]
+    return sorted(
+        [*fresh, *kept],
+        key=lambda block: (str(block.get("scenario")), block.get("targets") or 0),
+    )
+
+
 def build_document(
     tier: str,
     entries: list[SpecEntry],
@@ -372,16 +433,25 @@ def build_document(
     builds_available: int,
     calibration: Calibration | None,
     notes: list[str] | None = None,
+    simc: dict | None = None,
 ) -> dict:
     """The whole ``computed-builds.json``.
 
     ``coverage`` is carried rather than inferred: the site's own field comment states
     the project rule that a view must never read "N of M" off an array length, and the
     two numbers differ the moment a shard stops early.
+
+    ``runs`` carries provenance per ``(scenario, targets)`` -- see ``pair_runs``. The
+    document-level ``settings`` stays where it was, so nothing that reads it breaks;
+    it describes the newest run rather than every row, which is precisely why the
+    per-pair block exists beside it.
     """
+    stamped_at = datetime.now(UTC).isoformat(timespec="seconds")
+    settings = {"iterations": iterations, "deterministic": deterministic}
+    rows = [entry.to_json() for entry in entries]
     document: dict = {
         "schemaVersion": SCHEMA_VERSION,
-        "generatedAt": datetime.now(UTC).isoformat(timespec="seconds"),
+        "generatedAt": stamped_at,
         "tier": tier,
         "note": (
             "Builds this project computed, beside SimulationCraft's own where simc "
@@ -391,9 +461,10 @@ def build_document(
             "Every comparison is profileset against profileset on one anchored kit, so "
             "the difference is the talents."
         ),
-        "settings": {"iterations": iterations, "deterministic": deterministic},
-        "coverage": coverage_of([entry.to_json() for entry in entries], builds_available),
-        "specs": [entry.to_json() for entry in entries],
+        "settings": settings,
+        "coverage": coverage_of(rows, builds_available),
+        "runs": pair_runs(rows, stamped_at=stamped_at, simc=simc, settings=settings),
+        "specs": rows,
     }
     if calibration is not None:
         document["calibration"] = calibration.to_json()
@@ -470,6 +541,16 @@ def write_computed_builds(out_dir: Path, document: dict) -> Path:
     ``merge_specs``. ``coverage.specs`` is recomputed from the merged list, because it
     is the count a reader is told the document holds and reading it off the array is
     the thing this project's own rule forbids.
+
+    ``runs`` is merged on the **same key by the same rule**, so a carried-forward pair
+    keeps the provenance block that describes it rather than inheriting this run's.
+    Held apart, the two merges would be one refactor away from disagreeing, and the
+    disagreement would be invisible: every row would still have a block, naming the
+    wrong simc.
+
+    A published document written before ``runs`` existed contributes none, so its
+    carried pairs stay unattributed -- absent, never invented. That is the same rule
+    ``merge_gear_shards`` applies to a pre-#95 slot.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "computed-builds.json"
@@ -481,12 +562,24 @@ def write_computed_builds(out_dir: Path, document: dict) -> Path:
         if isinstance(published, dict):
             previous = published.get("specs")
             if isinstance(previous, list) and isinstance(document.get("specs"), list):
+                # THIS RUN's pairs, taken before the merge replaces `specs`. Read off
+                # the merged list instead it would include the carried pairs, and
+                # `merge_runs` would then drop exactly the blocks describing them --
+                # leaving every row attributed to this run's simc. The wrong version
+                # of this line was written first and is the reason for this comment.
+                covered = {(row.get("scenario"), row.get("targets")) for row in document["specs"]}
                 merged = merge_specs(previous, document["specs"])
                 if merged != document["specs"]:
                     document = dict(document)
                     document["specs"] = merged
                     document["coverage"] = coverage_of(
                         merged, (document.get("coverage") or {}).get("specsAvailable")
+                    )
+                was_published = published.get("runs")
+                if isinstance(was_published, list):
+                    document = dict(document)
+                    document["runs"] = merge_runs(
+                        was_published, list(document.get("runs") or []), covered
                     )
             settled = dict(document)
             for key in _PROVENANCE:

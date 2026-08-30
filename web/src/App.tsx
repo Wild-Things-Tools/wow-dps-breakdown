@@ -14,7 +14,7 @@ import {
   loadSpecs,
   loadTierIndex,
 } from './lib/data'
-import { describeConvergence, describeGameBuild, samplingError } from './lib/format'
+import { describeConvergence, describeGameBuild, describeSamplingError } from './lib/format'
 import type {
   BuffDataset,
   ComputedBuildsDataset,
@@ -557,7 +557,7 @@ function Footer({ manifest }: { manifest: Manifest }) {
       <p className="max-w-3xl">
         Every number here comes from SimulationCraft {simc.simcVersion ?? ''} running its own{' '}
         {tier} tier profiles: {describeConvergence(settings)}, which measures DPS to about{' '}
-        {samplingError(settings)} standard error. Sims model a stationary target and perfect
+        {describeSamplingError(manifest)} standard error. Sims model a stationary target and perfect
         play; real fights add movement, mechanics and mistakes. Use this to understand the
         shape of a spec, not to predict your own parse.
       </p>
