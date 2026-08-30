@@ -556,15 +556,38 @@ export interface GearSlot {
   itemLevels: GearItemLevel[];
   items: GearItemMeta[];
   specs: GearSpecResult[];
+  /**
+   * The run that measured THIS slot (#95). A single-slot re-run merges into the
+   * published document, so two slots of one file may name different simc
+   * revisions, precisions and coverage -- the document-level blocks cannot say
+   * which slot they describe. On a slot whose rows were merged across runs,
+   * `coverage.specs` is recounted and `settings.medianDpsError` recomputed from
+   * the merged rows; `simc` is the newest contributor's and bounds the newest
+   * measurement. Absent on slots last measured before the blocks existed --
+   * fall back to the document level, which is then the old, weaker claim.
+   */
+  simc?: SimcMeta;
+  settings?: RunSettings;
+  coverage?: { specs: number; specsAvailable: number };
 }
 
 export interface GearDataset {
   schemaVersion: number;
   generatedAt: string;
   tier: string;
+  /**
+   * The newest contributing run's blocks. After a single-slot re-run they
+   * describe that run, not every slot -- the per-slot blocks on `GearSlot` are
+   * what a reader behind a slot selector must show. `settings.medianDpsError`
+   * alone is recomputed by the merge over every row the document holds.
+   */
   simc: SimcMeta;
   settings: RunSettings;
-  /** How much of the tier this run actually covered. Never inferred from length. */
+  /**
+   * The UNION of build ids over all slots -- a claim about the document, never
+   * about the slot on screen (#95: the Trinket tab counted 28 over a table of
+   * 26). Show `GearSlot.coverage` where a slot is selected.
+   */
   coverage: { specs: number; specsAvailable: number };
   slots: GearSlot[];
 }

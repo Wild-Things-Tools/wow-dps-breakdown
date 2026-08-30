@@ -993,18 +993,60 @@ def merge_gear_shards(shard_dirs: list[Path], out_dir: Path) -> Path | None:
     slots: dict[str, dict] = {}
     for document in documents:
         for slot in document.get("slots", []):
-            existing = slots.setdefault(slot["id"], {**slot, "specs": []})
-            by_id = {spec["id"]: spec for spec in existing["specs"]}
-            for spec in slot.get("specs", []):
+            incoming = slot.get("specs", [])
+            previous = slots.get(slot["id"])
+            by_id = {spec["id"]: spec for spec in (previous or {}).get("specs", [])}
+            for spec in incoming:
                 by_id[spec["id"]] = spec
-            existing["specs"] = [by_id[key] for key in sorted(by_id)]
+            # The slot's own fields -- the pool definition and, since #95, its
+            # per-slot `simc`/`settings`/`coverage` -- come from the newest
+            # document that actually measured it, never from the empty
+            # placeholder `write_gear` emits for a pool this run did not sweep.
+            # A document written before the per-slot blocks existed then leaves
+            # the slot without them rather than inheriting another run's:
+            # absent is not invented, and the reader falls back to the
+            # document-level blocks exactly as it did before they existed.
+            base = slot if (incoming or previous is None) else previous
+            merged_slot = {key: value for key, value in base.items() if key != "specs"}
+            merged_slot["specs"] = [by_id[key] for key in sorted(by_id)]
+            slots[slot["id"]] = merged_slot
+
+    for slot in slots.values():
+        # A single-slot re-run unions its rows with the published ones, so the
+        # stamped per-slot count and precision describe one contributor rather
+        # than the union. The count is recounted, and the precision recomputed
+        # from the merged rows' own `dpsError` fields -- the same correction
+        # `merge_shards` applies to the manifest. `simc` cannot be recomputed
+        # from rows; on a slot merged across runs it is the newest
+        # contributor's and bounds the newest measurement, the same rule
+        # `_keep_measurements` documents for the fight dataset.
+        if isinstance(slot.get("coverage"), dict):
+            slot["coverage"] = {**slot["coverage"], "specs": len(slot["specs"])}
+        if isinstance(slot.get("settings"), dict):
+            recomputed = _median_gear_error_json(slot["specs"])
+            if recomputed is not None:
+                slot["settings"] = {**slot["settings"], "medianDpsError": recomputed}
 
     merged["slots"] = [slots[key] for key in sorted(slots)]
+    # The document-level coverage is the union of build ids over all slots -- a
+    # claim about the document, never about the slot on screen (issue #95: the
+    # Trinket tab counted 28 over a table of 26). The per-slot block above is
+    # what a reader with a slot selector shows.
     covered = {spec["id"] for slot in merged["slots"] for spec in slot["specs"]}
     merged["coverage"] = {
         "specs": len(covered),
         "specsAvailable": (merged.get("coverage") or {}).get("specsAvailable", len(covered)),
     }
+    # And the document-level precision describes every row the document holds,
+    # not whichever run happened to sort newest -- `merged` starts as a copy of
+    # that run's document, which is the `merge_shards` manifest defect one file
+    # across (issue #95).
+    if isinstance(merged.get("settings"), dict):
+        overall = _median_gear_error_json(
+            [spec for slot in merged["slots"] for spec in slot["specs"]]
+        )
+        if overall is not None:
+            merged["settings"] = {**merged["settings"], "medianDpsError": overall}
 
     path = out_dir / "gear.json"
     path.write_text(json.dumps(merged, separators=(",", ":")) + "\n", encoding="utf-8")
@@ -1057,25 +1099,38 @@ def write_gear(
 
     slots = []
     for slot_id, pool in pools.items():
-        slots.append(
-            {
-                "id": slot_id,
-                "label": pool.slot.label,
-                "sockets": list(pool.slot.sockets),
-                "baselineSource": pool.baseline_source,
-                "baselineSourceLabel": SOURCE_LABELS.get(
-                    pool.baseline_source, pool.baseline_source
-                ),
-                "candidateSource": pool.candidate_source,
-                "candidateSourceLabel": SOURCE_LABELS.get(
-                    pool.candidate_source, pool.candidate_source
-                ),
-                "note": pool.note,
-                "itemLevels": [level.to_json() for level in pool.item_levels],
-                "items": [item.to_json() for item in pool.items],
-                "specs": [result.to_json() for result in by_slot.get(slot_id, [])],
+        slot_results = by_slot.get(slot_id, [])
+        entry = {
+            "id": slot_id,
+            "label": pool.slot.label,
+            "sockets": list(pool.slot.sockets),
+            "baselineSource": pool.baseline_source,
+            "baselineSourceLabel": SOURCE_LABELS.get(pool.baseline_source, pool.baseline_source),
+            "candidateSource": pool.candidate_source,
+            "candidateSourceLabel": SOURCE_LABELS.get(pool.candidate_source, pool.candidate_source),
+            "note": pool.note,
+            "itemLevels": [level.to_json() for level in pool.item_levels],
+            "items": [item.to_json() for item in pool.items],
+            "specs": [result.to_json() for result in slot_results],
+        }
+        # This run's provenance describes only the slots this run measured, so
+        # the per-slot blocks go on swept slots alone. An unswept pool keeps no
+        # block: `merge_gear_shards` folds the published document in, and a
+        # block here would claim this run's simc for numbers another run
+        # produced -- exactly the document-level defect issue #95 records.
+        if slot_results:
+            entry["coverage"] = {
+                "specs": len({result.profile.id for result in slot_results}),
+                "specsAvailable": specs_available,
             }
-        )
+            entry["simc"] = simc_meta
+            entry["settings"] = {
+                "targetError": settings.target_error,
+                "maxIterations": settings.max_iterations,
+                "deterministic": settings.target_error == 0,
+                "medianDpsError": _median_gear_error(slot_results),
+            }
+        slots.append(entry)
 
     covered = sorted({result.profile.id for result in results})
     document = {
@@ -1096,6 +1151,38 @@ def write_gear(
     path = out_dir / "gear.json"
     path.write_text(json.dumps(document, separators=(",", ":")) + "\n", encoding="utf-8")
     return path
+
+
+def _median_gear_error_json(specs: list[dict]) -> float | None:
+    """``_median_gear_error`` over the published row shape instead of the dataclasses.
+
+    ``merge_gear_shards`` unions rows measured by different runs into one slot, so a
+    stamped median describes one contributor and not the union. The merged rows carry
+    their own ``dpsError`` fields, so the honest figure is recomputed from what the
+    document actually holds -- the same correction ``merge_shards`` applies to the
+    manifest's ``medianDpsError``.
+
+    Deliberately a second walk rather than a shared one: this reads the JSON a
+    document holds, ``_median_gear_error`` below reads the dataclasses a run
+    produced, and ``test_the_json_error_walk_agrees_with_the_dataclass_walk`` pins
+    the two against each other so a change to either shape breaks loudly.
+    """
+    errors = sorted(
+        error
+        for spec in specs
+        for target in spec.get("targets", [])
+        for error in (
+            (target.get("baseline") or {}).get("dpsError", 0.0),
+            *(entry.get("dpsError", 0.0) for entry in target.get("pool", [])),
+            *(entry.get("dpsError", 0.0) for entry in target.get("candidates", [])),
+        )
+        if isinstance(error, int | float) and error > 0
+    )
+    if not errors:
+        return None
+    middle = len(errors) // 2
+    median = errors[middle] if len(errors) % 2 else (errors[middle - 1] + errors[middle]) / 2
+    return round(median, 4)
 
 
 def _median_gear_error(results: list[gearsweep.SpecSlotResult]) -> float | None:

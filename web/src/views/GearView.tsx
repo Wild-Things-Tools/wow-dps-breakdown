@@ -113,18 +113,27 @@ export function GearView({
   // rings. The landing slot is the richest comparison instead -- most items in the
   // pool -- which is a property of the data rather than a name hard-coded here, and
   // picks the trinket sweep for as long as it is the largest.
-  // The sweep's own two numbers describe the sweep. The tier's size comes from the
-  // manifest, which is the only thing that can say whether the sweep is behind.
-  const coverage = useMemo(
-    () => sweepCoverage(gear?.coverage.specs ?? 0, gear?.coverage.specsAvailable, tierBuilds),
-    [gear, tierBuilds],
-  )
   const richest = useMemo(
     () => [...swept].sort((a, b) => b.items.length - a.items.length)[0] ?? null,
     [swept],
   )
   const [slotId, setSlotId] = useState<string | null>(null)
   const slot = swept.find((entry) => entry.id === slotId) ?? richest
+  // The sweep's own two numbers describe the sweep. The tier's size comes from the
+  // manifest, which is the only thing that can say whether the sweep is behind.
+  // The counts are the DISPLAYED SLOT's where the document carries them (#95):
+  // the document-level pair is the union over all slots, so above a slot
+  // selector it counted 28 over a trinket table of 26. Older documents carry no
+  // per-slot block and fall back to the document level, the old, weaker claim.
+  const coverage = useMemo(
+    () =>
+      sweepCoverage(
+        slot?.coverage?.specs ?? gear?.coverage.specs ?? 0,
+        slot?.coverage?.specsAvailable ?? gear?.coverage.specsAvailable,
+        tierBuilds,
+      ),
+    [slot, gear, tierBuilds],
+  )
   const [levelId, setLevelId] = useState<string | null>(null)
   const [targets, setTargets] = useState<number | null>(null)
   const [itemId, setItemId] = useState<number | null>(null)
