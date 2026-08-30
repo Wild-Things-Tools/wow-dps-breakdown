@@ -759,7 +759,24 @@ export interface MeasuredPhase {
   isIntermission: boolean;
   start: FightSpread | null;
   duration: FightSpread | null;
+  /**
+   * How many sampled kills carried this phase at all — not how many windows they
+   * carried. A phase recurs within one pull, so the two differ by a factor: on
+   * MID2's Entombed Sentinels, two of eight kills contribute four Stage One
+   * windows each, and the spreads' `n` of 8 is those windows.
+   *
+   * Warcraft Logs does not return `phaseTransitions` on every fight, so a low
+   * count here beside a high `fightsSampled` is ordinary rather than a defect —
+   * and it is the number a reader has to see before treating the timings as
+   * evidence about the encounter.
+   */
   seenInFights: number;
+  /**
+   * The window count, i.e. what `start.n` and `duration.n` are computed over.
+   * Optional because a document written before this field existed has none, and
+   * a reader must not read its absence as zero.
+   */
+  windows?: number;
 }
 
 export interface FightPhaseWindow {
