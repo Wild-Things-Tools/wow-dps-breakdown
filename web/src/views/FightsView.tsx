@@ -1680,12 +1680,19 @@ function MeasurementPanel({ measured }: { measured: MeasuredFight }) {
       {measured.phases?.length ? (
         <SubTable
           title="Phases"
-          columns={['Phase', 'Starts', 'Lasts', 'Seen in']}
+          columns={['Phase', 'Starts', 'Lasts', 'Seen in', 'Windows']}
           rows={measured.phases.map((phase) => [
             `${phase.id}. ${phase.name}${phase.isIntermission ? ' (intermission)' : ''}`,
             spreadText(phase.start, 0, 's'),
             spreadText(phase.duration, 0, 's'),
-            `${phase.seenInFights} fight(s)`,
+            // Kills, not windows. A phase recurring four times in one pull used
+            // to be published as four fights, so this column read "8 fight(s)"
+            // over a sample of eight for a phase two of them carried.
+            `${phase.seenInFights} of ${measured.fightsSampled} kill(s)`,
+            // What the two spreads beside it are actually averaged over. Absent
+            // on a document written before the field existed, and absent is not
+            // zero, so it degrades to an em dash rather than to "0".
+            phase.windows === undefined ? <Muted>—</Muted> : `${phase.windows}`,
           ])}
         />
       ) : null}

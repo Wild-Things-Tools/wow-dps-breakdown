@@ -1232,6 +1232,12 @@ class EncounterObservation:
                     "key": key,
                     "name": group[0].name,
                     "gameId": group[0].game_id,
+                    # A fight count, and correctly so: `add_patterns` emits exactly
+                    # one AddPattern per (fight, NPC), so the group's length is the
+                    # number of fights the NPC appeared in and `instances` carries
+                    # how many copies. This is the control for the three siblings
+                    # that got it wrong -- phases counted windows, auras and their
+                    # carriers counted reports. Do not "simplify" it to match them.
                     "seenInFights": len(group),
                     "instances": instances.to_json() if instances else None,
                     "firstSeen": _pooled(group, lambda add: add.first_seen),
@@ -1247,6 +1253,12 @@ class EncounterObservation:
     def pooled_auras(self, min_fights: int = 2, encounter_only: bool = True) -> list[dict]:
         """Auras on enemies seen in at least ``min_fights`` of the sampled fights.
 
+        Fights, counted as ``(report, fight id)`` -- the gate and the published
+        ``seenInFights`` both used to count distinct *reports*, which is the same
+        number under today's sampler and a smaller one under any sampler that
+        takes two kills from one log. ``applications`` is the window count and
+        always was.
+
         A one-off is dropped by default because a single fight cannot separate
         "this encounter does this" from "this pull went badly". Raising the floor
         is the knob; inventing a window from one observation is not.
@@ -1258,17 +1270,29 @@ class EncounterObservation:
         real *nine-boss* run did it again -- self-buffs frequently carry no source
         id at all, so only the target test catches them.
         """
-        buckets: dict[int, list[tuple[str, AuraWindow]]] = {}
+        buckets: dict[int, list[tuple[tuple[str, int], AuraWindow]]] = {}
         for fight in self.fights:
             for aura in fight.auras:
                 if encounter_only and not fight.is_encounter_aura(aura):
                     continue
-                buckets.setdefault(aura.ability_id, []).append((fight.report_code, aura))
+                key = (fight.report_code, fight.fight_id)
+                buckets.setdefault(aura.ability_id, []).append((key, aura))
 
         pooled: list[dict] = []
         for ability_id, group in buckets.items():
-            reports = {code for code, _ in group}
-            if len(reports) < min_fights:
+            # Fights, not reports. The docstring above says "fights" and the gate
+            # said reports, so two sampled kills out of one guild's log counted
+            # once -- an under-count, the safe direction, and still a field whose
+            # name promised more than its computation delivered.
+            #
+            # No published number moves: `select_report_fights` takes the earliest
+            # N *distinct reports*, so the two counts are equal by construction of
+            # today's sampler. Checked against the committed MID2 fights.json --
+            # zero duplicated report codes in any of its ten measurements. That is
+            # a property of the sampler, not of the format, and `--order public`
+            # already reads a zone's reports rather than one kill each.
+            seen_in = {key for key, _ in group}
+            if len(seen_in) < min_fights:
                 continue
             windows = [aura for _, aura in group]
             carriers = self._aura_carriers(ability_id, encounter_only=encounter_only)
@@ -1276,7 +1300,7 @@ class EncounterObservation:
                 {
                     "abilityId": ability_id,
                     "ability": windows[0].ability_name,
-                    "seenInFights": len(reports),
+                    "seenInFights": len(seen_in),
                     "applications": len(windows),
                     "start": _pooled(windows, lambda aura: aura.start),
                     "duration": _pooled(windows, lambda aura: aura.duration),
@@ -1328,13 +1352,15 @@ class EncounterObservation:
                         "gameId": game_id,
                         "applications": 0,
                         "instances": set(),
-                        "reports": set(),
+                        # Fights, not reports -- see `pooled_auras`. Two kills out
+                        # of one log are two observations of who carried the aura.
+                        "fights": set(),
                         "roles": set(),
                     },
                 )
                 entry["applications"] += 1
                 entry["instances"].add(aura.instance)
-                entry["reports"].add(fight.report_code)
+                entry["fights"].add((fight.report_code, fight.fight_id))
                 entry["roles"].add(fight.priority.role_of(aura.actor_id))
 
         resolved = [
@@ -1343,7 +1369,7 @@ class EncounterObservation:
                 "gameId": entry["gameId"],
                 "applications": entry["applications"],
                 "instances": len(entry["instances"]),
-                "seenInFights": len(entry["reports"]),
+                "seenInFights": len(entry["fights"]),
                 "role": _one_role(entry["roles"]),
             }
             for entry in carriers.values()
@@ -1360,10 +1386,38 @@ class EncounterObservation:
         return f"carried by {named}. Priority target nominated because: " + "; ".join(nominations)
 
     def pooled_phases(self) -> list[dict]:
+        """Per phase, what the fights agreed on -- and in how many of them.
+
+        ``seenInFights`` counts **fights**, and ``windows`` counts the windows
+        those fights contributed. A phase recurs within one pull, so the two are
+        not the same number and the second used to be published as the first.
+
+        Measured against the committed MID2 ``fights.json`` (2026-08-30), which
+        is the cleanest possible demonstration because it needs no probe payload:
+        the *representative pull alone* of Entombed Sentinels carries four
+        ``Stage One`` windows and three ``Intermission`` windows, and the pooled
+        spreads read n=8 and n=6. So a reader was told "seen in 8 of 8 fights"
+        about a phase **two** of the eight kills observed, and the other six say
+        nothing about it -- Warcraft Logs does not return ``phaseTransitions`` on
+        every fight. The Lost Explorers is the same shape: 4 + 1 + 1 + 1 in the
+        representative against pooled 8 + 2 + 2 + 2, so two of nine.
+
+        This matters beyond the label. #115 wants the intermission windows
+        promoted into ``invulnerable`` events on the boss scenarios, and a
+        promotion gate that checks sample size would be reading a four-fold
+        overstatement of it. Input first, reader second.
+
+        The spreads' own ``n`` is unchanged and still counts windows, which is
+        what it has always been -- honest arithmetic that was merely unreadable
+        beside a fights count that lied. With ``windows`` published it can be
+        read for what it is.
+        """
         buckets: dict[int, list[PhaseWindow]] = {}
+        fights_seen: dict[int, set[tuple[str, int]]] = {}
         for fight in self.fights:
             for phase in fight.phases:
                 buckets.setdefault(phase.id, []).append(phase)
+                fights_seen.setdefault(phase.id, set()).add((fight.report_code, fight.fight_id))
         return [
             {
                 "id": phase_id,
@@ -1371,7 +1425,8 @@ class EncounterObservation:
                 "isIntermission": group[0].is_intermission,
                 "start": _pooled(group, lambda phase: phase.start),
                 "duration": _pooled(group, lambda phase: phase.duration),
-                "seenInFights": len(group),
+                "seenInFights": len(fights_seen[phase_id]),
+                "windows": len(group),
             }
             for phase_id, group in sorted(buckets.items())
         ]

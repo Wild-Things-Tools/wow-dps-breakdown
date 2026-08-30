@@ -1060,3 +1060,106 @@ def test_reading_nothing_is_zero_coverage_and_not_the_whole_fight():
     # The ordinary partial read is untouched.
     read_half = TargetCountTimeline(steps=((0.0, 2),), duration=100.0, observed=50.0)
     assert read_half.coverage == 0.5
+
+
+# --------------------------------------------------------------------------------
+# seenInFights means fights, at all three sites that publish it
+# --------------------------------------------------------------------------------
+
+
+def transitions(*pairs: tuple[int, float]) -> list[dict]:
+    """``phaseTransitions`` as WCL sends it: report-relative milliseconds."""
+    return [
+        {"id": phase_id, "startTime": FIGHT_START + int(second * 1000)}
+        for phase_id, second in pairs
+    ]
+
+
+PHASE_NAMES = [
+    {"id": 1, "name": "Stage One: Entombed Sentinels", "isIntermission": False},
+    {"id": 2, "name": "Intermission: Vitriolic Stasis", "isIntermission": True},
+]
+
+# One pull of Entombed Sentinels, in the shape the committed MID2 dataset has:
+# the phase cycles, so a single kill contributes four Stage One windows and three
+# Intermissions.
+SENTINELS_PULL = transitions(
+    (1, 0.0), (2, 46.4), (1, 74.4), (2, 165.4), (1, 191.4), (2, 282.4), (1, 292.4)
+)
+
+
+def sentinels_fight(report_code: str, *, with_phases: bool) -> object:
+    return observe_fight(
+        report_code=report_code,
+        fight=fight(phaseTransitions=SENTINELS_PULL if with_phases else []),
+        damage_events=[damage(1, 50)],
+        death_events=[],
+        aura_events=[],
+        phase_metadata=PHASE_NAMES,
+        actor_names={50: "Sentinel"},
+        actor_game_ids={50: 258558},
+    )
+
+
+def test_a_phase_is_counted_once_per_fight_however_often_it_recurs():
+    """The defect this replaces published four-window pulls as four fights.
+
+    Two of these four kills carry `phaseTransitions` at all -- which is ordinary,
+    Warcraft Logs does not return them on every fight -- and each of those two
+    cycles Stage One four times. The old count published 8, i.e. every kill in
+    the sample, for a phase six of them say nothing about.
+
+    Reverting `seenInFights` to `len(group)` turns this red at 8 != 2.
+    """
+    observation = EncounterObservation(53445, "Entombed Sentinels", 5)
+    observation.fights = [
+        sentinels_fight("r1", with_phases=True),
+        sentinels_fight("r2", with_phases=True),
+        sentinels_fight("r3", with_phases=False),
+        sentinels_fight("r4", with_phases=False),
+    ]
+
+    stage_one, intermission = observation.pooled_phases()
+
+    assert observation.to_json()["fightsSampled"] == 4
+    assert stage_one["seenInFights"] == 2
+    assert intermission["seenInFights"] == 2
+    # The window count is not lost -- it moves to a field that says what it is,
+    # and it is what the spreads' own `n` counts.
+    assert stage_one["windows"] == 8
+    assert intermission["windows"] == 6
+    assert stage_one["start"]["n"] == 8
+    assert intermission["duration"]["n"] == 6
+
+
+def test_two_kills_from_one_report_are_two_fights_for_an_aura():
+    """`pooled_auras` and its carriers counted distinct *reports*.
+
+    No published number moves: today's sampler takes the earliest N distinct
+    reports, so the two counts coincide on every measurement in the committed
+    MID2 file. This is the sampler that would break it -- and the gate is the
+    sharper half, because at `min_fights=2` a genuine two-kill observation from
+    one log used to be dropped entirely rather than merely mislabelled.
+
+    Reverting either site to a set of `report_code` turns this red.
+    """
+    observation = EncounterObservation(53445, "Entombed Sentinels", 5)
+
+    def kill(fight_id: int):
+        return observe_fight(
+            report_code="one-log",
+            fight=fight(id=fight_id),
+            damage_events=[damage(1, 50)],
+            death_events=[],
+            aura_events=[aura(5, "applybuff", 1284207, 50), aura(30, "removebuff", 1284207, 50)],
+            phase_metadata=[],
+            actor_names={50: "Breath of Ula'tek"},
+            actor_game_ids={50: 258557},
+        )
+
+    observation.fights = [kill(11), kill(12)]
+
+    [pooled] = observation.pooled_auras()
+    assert pooled["seenInFights"] == 2
+    assert pooled["applications"] == 2
+    assert pooled["carriedBy"][0]["seenInFights"] == 2
