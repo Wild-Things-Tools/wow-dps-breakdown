@@ -1368,12 +1368,43 @@ export interface ComputedShipped {
   separates: boolean;
 }
 
+/**
+ * Which run measured one `(scenario, targets)` pair.
+ *
+ * The pair is the unit because it is what `merge_specs` replaces, so one document
+ * routinely holds pairs from different nights on different simc revisions — the
+ * 5- and 10-target passes of 2026-08-26/27 did exactly that. A document-level block
+ * would be wrong immediately, which is the same defect `gear.json` had over three
+ * slots (#95) and this document had over three target counts (#100).
+ *
+ * `simc` is absent, never empty, when the run could not read its own metadata:
+ * unknown is not "no revision".
+ */
+export interface ComputedRun {
+  scenario: string | null;
+  targets: number | null;
+  generatedAt: string;
+  settings: { iterations: number; deterministic: boolean };
+  simc?: SimcMeta;
+}
+
 export interface ComputedBuildsDataset {
   schemaVersion: number;
   generatedAt: string;
   tier: string;
   note: string;
+  /**
+   * The NEWEST run's settings, not every row's. `runs` is the per-pair truth; this
+   * stays because readers predate it.
+   */
   settings: { iterations: number; deterministic: boolean };
   coverage: { specs: number; specsAvailable: number };
+  /**
+   * One entry per `(scenario, targets)` pair. Optional: a document written before
+   * this existed carries none, and the merge invents no blocks for its rows —
+   * absent means "nobody recorded which simc measured this", which is the honest
+   * state and not the same as a missing field being zero.
+   */
+  runs?: ComputedRun[];
   specs: ComputedSpec[];
 }

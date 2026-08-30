@@ -1391,6 +1391,15 @@ def cmd_build_search(args: argparse.Namespace) -> int:
         else None
     )
 
+    # Which simc measured these margins, captured once. The ranking multiplies a
+    # margin from this document by a DPS from `index.json`, which states its own
+    # revision -- so without this the product has one attributable factor and one
+    # anonymous one (#100). One throwaway 10-iteration run, and a failure to read it
+    # costs the attribution and never the pass: `_probe_simc_metadata` warns and
+    # returns {}, and `pair_runs` then omits the block rather than writing an empty
+    # one, because "which simc" is unknown and not "none".
+    simc_meta = _probe_simc_metadata(simc, contexts[0].profile) if contexts else {}
+
     entries: list[computedbuilds.SpecEntry] = []
     rows: list[computedbuilds.CalibrationRow] = []
     notes: list[str] = []
@@ -1408,7 +1417,7 @@ def cmd_build_search(args: argparse.Namespace) -> int:
             logging.warning("%s: %s", context.profile.id, context.blocked)
             entries.append(_unsearched_entry(context, args.targets, gearanchor))
             if publishing:
-                _publish(args, tier, entries, rows, notes, len(found), out_dir)
+                _publish(args, tier, entries, rows, notes, len(found), out_dir, simc_meta)
             continue
         try:
             outcome = buildsearchrun.run_build(
@@ -1427,7 +1436,7 @@ def cmd_build_search(args: argparse.Namespace) -> int:
             logging.error("%s: search failed: %s", context.profile.id, exc)
             entries.append(_unsearched_entry(context, args.targets, gearanchor, reason=str(exc)))
             if publishing:
-                _publish(args, tier, entries, rows, notes, len(found), out_dir)
+                _publish(args, tier, entries, rows, notes, len(found), out_dir, simc_meta)
             continue
 
         # Inside its own guard, and this is the third time this repository has had to
@@ -1450,7 +1459,7 @@ def cmd_build_search(args: argparse.Namespace) -> int:
             logging.error("%s: head-to-head failed: %s", context.profile.id, exc)
             entries.append(_unsearched_entry(context, args.targets, gearanchor, reason=str(exc)))
             if publishing:
-                _publish(args, tier, entries, rows, notes, len(found), out_dir)
+                _publish(args, tier, entries, rows, notes, len(found), out_dir, simc_meta)
             continue
 
         if row is not None:
@@ -1464,7 +1473,7 @@ def cmd_build_search(args: argparse.Namespace) -> int:
             )
         entries.append(_entry_for(context, outcome, head_to_head, args, computedbuilds, gearanchor))
         if publishing:
-            _publish(args, tier, entries, rows, notes, len(found), out_dir)
+            _publish(args, tier, entries, rows, notes, len(found), out_dir, simc_meta)
 
     # A head-to-head runs on every build, blind or not -- it is what fills the
     # document's `simc` side. It is only *calibration* when the search was blind,
@@ -1483,7 +1492,7 @@ def cmd_build_search(args: argparse.Namespace) -> int:
         print()
 
     if publishing:
-        path = _publish(args, tier, entries, rows, notes, len(found), out_dir)
+        path = _publish(args, tier, entries, rows, notes, len(found), out_dir, simc_meta)
         logging.info("wrote %s (%d entr(ies))", path, len(entries))
     else:
         logging.info("calibration run: nothing published (pass --write-calibration to record it)")
@@ -1495,7 +1504,7 @@ def cmd_build_search(args: argparse.Namespace) -> int:
     return 0
 
 
-def _publish(args, tier, entries, rows, notes, builds_available, out_dir):
+def _publish(args, tier, entries, rows, notes, builds_available, out_dir, simc_meta=None):
     """Rewrite the whole document. Called after **every** build, not once at the end.
 
     CLAUDE.md records this exact defect in the gear sweep: the entry claimed a per-spec
@@ -1524,6 +1533,7 @@ def _publish(args, tier, entries, rows, notes, builds_available, out_dir):
             builds_available=builds_available,
             calibration=calibration,
             notes=notes,
+            simc=simc_meta,
         ),
     )
 
