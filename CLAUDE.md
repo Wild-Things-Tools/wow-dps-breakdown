@@ -2592,6 +2592,52 @@ What *was* checked offline: both new documents validate against all three mirror
 (`RANKINGS_QUERY`, `REPORT_KILLS_QUERY`, `FIGHT_STRUCTURE_QUERY`), which is the control
 showing the mirrors are a fair judge.
 
+### The double pass: `bossdps` is a metric, and whether it reaches new kills is a measurement
+
+`--also-metric bossdps` (workflow input `also_metrics`), the first implementable step
+of #111. `characterRankings` takes a `CharacterRankingMetricType`, and read out in
+full on 2026-08-30 that enum carries **`bossdps`** beside `dps` -- ranking the players
+who did the most damage *to the boss*, which is the question the funnel half of this
+project is about and a different question from total damage. So the kills a boss-damage
+ranking surfaces need not be the kills a damage ranking surfaces.
+
+**Need not, and the run says whether they were.** Every encounter summary of a
+multi-metric pass carries `metricPasses`: per metric, how many distinct reports it
+surfaced and how many of those no earlier metric had. The second pass reaching
+`newReports: 0` is a real finding about the encounter and is published as one -- the
+same discipline as the twin resolution, which recovers nothing for
+`characterRankings` and something for `fightRankings`, and where reading either as
+general would be wrong.
+
+Four decisions in it that are not arithmetic:
+
+- **The primary metric settles the id; every further metric is asked about the id it
+  settled.** Which id a boss's kills live under is a property of the encounter, not of
+  the metric, so asking `bossdps` about a PTR id with no parses under any metric spends
+  a query to learn what the first pass established. On a tier filed under PTR ids that
+  is every boss.
+- **Deduplication is `select_report_fights`'s, not a second copy.** Both metrics' pages
+  are concatenated and handed to the function that already answers "one fight per
+  report, in which order" -- the rule this repository has got wrong before and fixed in
+  one place.
+- **`metricPasses` measures reach, not the sample.** `--reports` then takes N of the
+  union, so a second metric can widen the pool without changing which kills are read.
+  That is why it is published beside `killsRead` rather than instead of it.
+- **Absent over one metric.** A single-metric pass writes the bytes it wrote before this
+  existed; a field on every past encounter would move data nobody asked to move, and
+  `metricPasses` over one metric says nothing a reader can use.
+
+Cost is one ranking query per page per extra metric and **nothing per kill** -- the same
+shape as `--spec`, and the reason the harvest can afford a second question at all. The
+full MID2 pass measured 58 queries of which 12 were rankings; a `bossdps` pass adds
+eight, about 14% of the query count for a different sample of the same size.
+
+**Nothing has been run with it yet.** The behaviour is pinned offline (five tests, each
+confirmed by a canary that turns exactly it red) and the argument is verified against
+the live schema, but no harvest has asked for `bossdps`. Treat the first dispatch as a
+schema check as much as a harvest, the same position every other new query in this file
+started from.
+
 ### Two queries per kill, not two per player
 
 The cost shape is the whole design. `playerDetails` returns **every player in the

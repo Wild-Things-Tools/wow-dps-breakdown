@@ -1270,6 +1270,13 @@ class HarvestSettings:
     encounter_ids: tuple[int, ...]
     difficulty: int
     metric: str = "dps"
+    #: Further ranking metrics to gather *in addition* to ``metric``, deduplicated
+    #: against it by report. ``bossdps`` is the one this exists for: it ranks the
+    #: players who did the most damage **to the boss**, which is a different
+    #: question from total damage and therefore a different set of kills. Whether
+    #: it is a different set in practice is a measurement, not an assumption --
+    #: ``metricPasses`` on the encounter summary publishes what each pass added.
+    also_metrics: tuple[str, ...] = ()
     #: Distinct kills to read per encounter. The main cost dial: each one is two
     #: report-level queries, and each one yields a whole raid's worth of players.
     reports: int = 10
@@ -1524,7 +1531,9 @@ class ProbeCapture:
             self.codes = dict(codes)
 
 
-def gather_rankings(client, encounter_id: int, settings, plan: QueryPlan, capture=None):
+def gather_rankings(
+    client, encounter_id: int, settings, plan: QueryPlan, capture=None, metric: str | None = None
+):
     """The ranking pages one encounter's kills are chosen from.
 
     Two behaviours worth stating, because both were wrong:
@@ -1545,6 +1554,9 @@ def gather_rankings(client, encounter_id: int, settings, plan: QueryPlan, captur
     from . import fightprobe
     from .warcraftlogs import _ranking_entries
 
+    # Named rather than read off the settings, because a second pass asks the same
+    # encounter under a different metric and the settings carry only the first.
+    metric = settings.metric if metric is None else metric
     targets: tuple[tuple[str, str] | None, ...] = settings.spec_targets or (None,)
     pages: list[dict] = []
     for target in targets:
@@ -1554,7 +1566,7 @@ def gather_rankings(client, encounter_id: int, settings, plan: QueryPlan, captur
                 page = client.encounter_rankings(
                     encounter_id,
                     difficulty=settings.difficulty,
-                    metric=settings.metric,
+                    metric=metric,
                     page=settings.page + offset,
                 )
             else:
@@ -1563,7 +1575,7 @@ def gather_rankings(client, encounter_id: int, settings, plan: QueryPlan, captur
                     target[0],
                     target[1],
                     difficulty=settings.difficulty,
-                    metric=settings.metric,
+                    metric=metric,
                     page=settings.page + offset,
                 )
             plan.rankings += 1
@@ -1573,6 +1585,25 @@ def gather_rankings(client, encounter_id: int, settings, plan: QueryPlan, captur
             if not _ranking_entries(page):
                 break
     return pages
+
+
+def _metric_pass(metric: str, pages: list[dict]) -> dict:
+    """One ranking metric's contribution, as the report codes it surfaced.
+
+    Report codes rather than a count, because the question the double pass exists to
+    answer is *whether the second metric reaches kills the first did not* -- and a
+    count cannot say that. `select_report_fights` deduplicates by report, so the
+    codes are exactly the unit the sample is built from.
+    """
+    from .warcraftlogs import _ranking_entries
+
+    codes: list[str] = []
+    for page in pages:
+        for entry in _ranking_entries(page):
+            code = (entry.get("report") or {}).get("code")
+            if isinstance(code, str) and code not in codes:
+                codes.append(code)
+    return {"metric": metric, "codes": codes}
 
 
 def harvest_encounter(
@@ -1619,6 +1650,10 @@ def harvest_encounter(
     # where nothing has been resolved yet and saying "harvested as filed" would be a
     # claim about a query that never came back.
     choice = IdChoice(encounter_id, encounter_id, "the pass stopped before this id was resolved")
+    # Reports each ranking metric surfaced. Empty until the first gather returns, so
+    # a budget abort before any query publishes no claim about any metric rather
+    # than a claim of zero.
+    passes: list[dict] = []
     try:
         pages = gather_rankings(client, encounter_id, settings, plan, capture)
         name = next((page.get("name") for page in pages if page.get("name")), name)
@@ -1634,12 +1669,25 @@ def harvest_encounter(
             lookup_name,
         )
         if choice.refused:
-            return [], _encounter_summary(settings, choice, name, 0, [], [], None), []
+            return [], _encounter_summary(settings, choice, name, 0, [], [], None, passes), []
         if choice.substituted:
             if capture is not None:
                 capture.forget_rankings()
             pages = gather_rankings(client, choice.used, settings, plan, capture)
             name = next((page.get("name") for page in pages if page.get("name")), name)
+
+        # The second pass, and it runs *after* the id is settled on purpose: which
+        # id a boss's kills live under is a property of the encounter, not of the
+        # metric, and asking `bossdps` about a PTR id that has no parses under any
+        # metric would spend a query to learn nothing. So the primary metric decides
+        # the id and every further metric is asked about the id it decided.
+        passes = [_metric_pass(settings.metric, pages)]
+        for extra in settings.also_metrics:
+            if extra == settings.metric:
+                continue
+            more = gather_rankings(client, choice.used, settings, plan, capture, metric=extra)
+            passes.append(_metric_pass(extra, more))
+            pages = pages + more
 
         # The rankings query is already scoped to one difficulty, so this can only
         # fire when that scoping did not hold -- which is exactly why it is a refusal
@@ -1696,7 +1744,9 @@ def harvest_encounter(
     except fightprobe.PointBudgetExhausted as exc:
         stopped = str(exc)
 
-    summary = _encounter_summary(settings, choice, name, read, observations, unresolved, stopped)
+    summary = _encounter_summary(
+        settings, choice, name, read, observations, unresolved, stopped, passes
+    )
     return observations, summary, sorted(set(buckets))
 
 
@@ -1708,6 +1758,7 @@ def _encounter_summary(
     observations: list[Observation],
     unresolved: list[int],
     stopped: str | None,
+    passes: list[dict] | None = None,
 ) -> dict:
     """One encounter's row of the published document.
 
@@ -1752,7 +1803,36 @@ def _encounter_summary(
         # raid that wears nothing.
         "playersWithoutCombatantInfo": sum(1 for o in observations if o.combatant_info_missing),
         **({"stoppedBy": stopped} if stopped else {}),
+        # Only when more than one metric ran. A single-metric pass publishes the
+        # bytes it published before this existed, and `bossdps` reaching nothing new
+        # is a finding rather than an absent field.
+        **({"metricPasses": _metric_contributions(passes)} if passes and len(passes) > 1 else {}),
     }
+
+
+def _metric_contributions(passes: list[dict]) -> list[dict]:
+    """What each ranking metric added, in the order the passes ran.
+
+    ``newReports`` counts the reports a metric surfaced that no earlier metric had.
+    The first pass therefore has ``newReports == reports`` by construction, and the
+    number worth reading is the second one: zero means the second metric ranked the
+    same kills in a different order and the pass bought nothing but its own queries.
+
+    Note this measures the *reach* of the metric, not what the sample kept.
+    ``select_report_fights`` then takes ``--reports`` of the union, so a second
+    metric can widen the pool without changing the sample at all -- which is why
+    this is published beside `killsRead` rather than instead of it.
+    """
+    seen: set[str] = set()
+    rows = []
+    for entry in passes:
+        codes = entry.get("codes") or []
+        fresh = [code for code in codes if code not in seen]
+        seen.update(codes)
+        rows.append(
+            {"metric": entry.get("metric"), "reports": len(codes), "newReports": len(fresh)}
+        )
+    return rows
 
 
 def warcraftlogs_select(pages: list[dict], limit: int, order: str):
@@ -1932,6 +2012,18 @@ def add_arguments(parser) -> None:
     )
     parser.add_argument("--metric", default="dps", help="ranking metric used to pick kills")
     parser.add_argument(
+        "--also-metric",
+        action="append",
+        default=[],
+        metavar="METRIC",
+        help="gather a second ranking metric as well, deduplicated against --metric "
+        "by report. Repeatable. 'bossdps' ranks the players who did the most damage "
+        "to the boss, which is a different question from total damage and can reach "
+        "kills the damage ranking does not; what it actually added is published per "
+        "encounter as metricPasses. Costs one ranking query per page per metric and "
+        "nothing per kill.",
+    )
+    parser.add_argument(
         "--reports",
         type=int,
         default=10,
@@ -2085,6 +2177,7 @@ def cmd_harvest_builds(args) -> int:
         encounter_ids=tuple(encounter_ids),
         difficulty=args.difficulty,
         metric=args.metric,
+        also_metrics=tuple(dict.fromkeys(args.also_metric)),
         reports=1 if args.probe else args.reports,
         rankings_pages=1 if args.probe else args.rankings_pages,
         page=args.page,

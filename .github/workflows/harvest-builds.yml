@@ -46,6 +46,9 @@ on:
       spec:
         description: 'Space-separated spec ids, e.g. death_knight_frost. Targets the ranking sample at those specs as well as narrowing the file'
         default: ''
+      also_metrics:
+        description: 'Space-separated extra ranking metrics, e.g. bossdps. Ranks by damage to the BOSS as well as total damage; one ranking query per page per metric, nothing per kill. What each pass added is published as metricPasses'
+        default: ''
       point_ceiling:
         description: 'Abort once this fraction of the hourly point budget is spent'
         default: '0.8'
@@ -154,6 +157,7 @@ jobs:
           REPORTS: ${{ inputs.reports || '10' }}
           ENCOUNTERS: ${{ inputs.encounter }}
           SPECS: ${{ inputs.spec }}
+          ALSO_METRICS: ${{ inputs.also_metrics }}
           POINT_CEILING: ${{ inputs.point_ceiling || '0.8' }}
           USE_CACHE: ${{ steps.cachemode.outputs.use }}
         run: |
@@ -164,6 +168,7 @@ jobs:
           # cap a dispatch at one boss.
           for id in $ENCOUNTERS; do args+=(--encounter "$id"); done
           for key in $SPECS; do args+=(--spec "$key"); done
+          for m in $ALSO_METRICS; do args+=(--also-metric "$m"); done
           if [ "$MODE" = "probe" ]; then args+=(--probe); fi
           # `| tee` makes tee's status the pipeline's, so without pipefail a refusal
           # or a crash would report as a clean run and the commit below would fire.
