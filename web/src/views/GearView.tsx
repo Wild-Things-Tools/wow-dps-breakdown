@@ -68,7 +68,7 @@ import type {
   GearSlot,
   GearSpecResult,
 } from '../lib/types'
-import { sweepCoverage } from '../lib/sweepCoverage'
+import { displayedCoverage, sweepCoverage } from '../lib/sweepCoverage'
 
 /** Two lines of tick text plus the icon, and the axis band beneath the plot. */
 const ROW_HEIGHT = 32
@@ -121,18 +121,13 @@ export function GearView({
   const slot = swept.find((entry) => entry.id === slotId) ?? richest
   // The sweep's own two numbers describe the sweep. The tier's size comes from the
   // manifest, which is the only thing that can say whether the sweep is behind.
-  // The counts are the DISPLAYED SLOT's where the document carries them (#95):
-  // the document-level pair is the union over all slots, so above a slot
-  // selector it counted 28 over a trinket table of 26. Older documents carry no
-  // per-slot block and fall back to the document level, the old, weaker claim.
+  // The counts are the DISPLAYED SLOT's where the document carries them (#95),
+  // through `displayedCoverage`, whose doc holds the reasoning and whose tests
+  // hold the fallback.
+  const shown = displayedCoverage(slot, gear)
   const coverage = useMemo(
-    () =>
-      sweepCoverage(
-        slot?.coverage?.specs ?? gear?.coverage.specs ?? 0,
-        slot?.coverage?.specsAvailable ?? gear?.coverage.specsAvailable,
-        tierBuilds,
-      ),
-    [slot, gear, tierBuilds],
+    () => sweepCoverage(shown?.specs ?? 0, shown?.specsAvailable, tierBuilds),
+    [shown, tierBuilds],
   )
   const [levelId, setLevelId] = useState<string | null>(null)
   const [targets, setTargets] = useState<number | null>(null)

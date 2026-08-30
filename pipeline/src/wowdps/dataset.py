@@ -974,23 +974,29 @@ def merge_gear_shards(shard_dirs: list[Path], out_dir: Path) -> Path | None:
     if not documents:
         return None
 
-    documents.sort(key=lambda doc: doc.get("generatedAt", ""))
-    merged = dict(documents[-1])
-
-    # What is already published joins the merge as the *oldest* document, so a slot
-    # this run did not sweep keeps the results it had. Without this a single-slot
-    # sweep silently deletes the others: `write_gear` emits an entry for every pool,
-    # so a neck run writes a trinket slot with an empty `specs` array, and a merge
-    # over shards alone would publish that as the trinket comparison. Union semantics
-    # mean an empty array removes nothing, so this only ever preserves.
+    # What is already published joins the merge as one more document, at its own
+    # timestamp, so a slot this run did not sweep keeps the results it had.
+    # Without this a single-slot sweep silently deletes the others: `write_gear`
+    # emits an entry for every pool, so a neck run writes a trinket slot with an
+    # empty `specs` array, and a merge over shards alone would publish that as
+    # the trinket comparison. Union semantics mean an empty array removes
+    # nothing, so this only ever preserves. It joins at its own age rather than
+    # being forced oldest, because a stale shard artifact re-published later --
+    # one click on an old workflow run's publish job -- must not regress rows
+    # the published document measured after that artifact was built, relabel
+    # their provenance, or move `generatedAt` backwards.
     published_path = out_dir / "gear.json"
     if published_path.is_file():
         try:
-            documents.insert(0, json.loads(published_path.read_text(encoding="utf-8")))
+            documents.append(json.loads(published_path.read_text(encoding="utf-8")))
         except ValueError:
             log.warning("%s is not readable JSON; publishing this run alone", published_path)
 
+    documents.sort(key=lambda doc: doc.get("generatedAt", ""))
+    merged = dict(documents[-1])
+
     slots: dict[str, dict] = {}
+    changed: set[str] = set()
     for document in documents:
         for slot in document.get("slots", []):
             incoming = slot.get("specs", [])
@@ -1010,16 +1016,27 @@ def merge_gear_shards(shard_dirs: list[Path], out_dir: Path) -> Path | None:
             merged_slot = {key: value for key, value in base.items() if key != "specs"}
             merged_slot["specs"] = [by_id[key] for key in sorted(by_id)]
             slots[slot["id"]] = merged_slot
+            # Compared as id -> row, not as lists: the union is re-sorted by id
+            # while a fresh document's rows arrive in sweep order, and an
+            # order-only difference must not count as a change.
+            if by_id != {spec["id"]: spec for spec in base.get("specs", [])}:
+                changed.add(slot["id"])
 
-    for slot in slots.values():
+    for slot_id, slot in slots.items():
         # A single-slot re-run unions its rows with the published ones, so the
         # stamped per-slot count and precision describe one contributor rather
         # than the union. The count is recounted, and the precision recomputed
         # from the merged rows' own `dpsError` fields -- the same correction
-        # `merge_shards` applies to the manifest. `simc` cannot be recomputed
-        # from rows; on a slot merged across runs it is the newest
-        # contributor's and bounds the newest measurement, the same rule
-        # `_keep_measurements` documents for the fight dataset.
+        # `merge_shards` applies to the manifest. Only for slots whose rows this
+        # merge actually changed: on an untouched slot the stamped blocks
+        # describe exactly the rows beneath them, and re-deriving the median
+        # from the *rounded* published errors can move the last digit of a
+        # figure the run never re-measured. `simc` cannot be recomputed from
+        # rows; on a slot merged across runs it is the newest contributor's and
+        # bounds the newest measurement, the same rule `_keep_measurements`
+        # documents for the fight dataset.
+        if slot_id not in changed:
+            continue
         if isinstance(slot.get("coverage"), dict):
             slot["coverage"] = {**slot["coverage"], "specs": len(slot["specs"])}
         if isinstance(slot.get("settings"), dict):

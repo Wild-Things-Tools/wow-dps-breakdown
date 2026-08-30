@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
-import { sweepCoverage } from './sweepCoverage'
+import { displayedCoverage, sweepCoverage } from './sweepCoverage'
 
 describe('sweepCoverage', () => {
   it('does not call a stale sweep complete', () => {
@@ -166,6 +166,28 @@ describe('against the committed MID2 documents', () => {
         /specsAvailable/,
       )
     }
+
+    // Same guard, one layer up, for the #95 half: GearView must route the pair
+    // through `displayedCoverage` so the DISPLAYED SLOT's block wins over the
+    // document union. Reverting to the direct document read passes every
+    // behavioural test here (the mutation that confirmed it left all green),
+    // because the pre-fix call also contains `specsAvailable`.
+    expect(
+      view('GearView.tsx'),
+      'GearView shows the displayed slot through displayedCoverage',
+    ).toMatch(/displayedCoverage\(/)
+  })
+
+  it('prefers the displayed slot’s own coverage and falls back to the document (#95)', () => {
+    const document = { coverage: { specs: 28, specsAvailable: 28 } }
+    const slot = { coverage: { specs: 26, specsAvailable: 52 } }
+    // A swept slot carries the run that measured IT; the union must not win.
+    expect(displayedCoverage(slot, document)).toEqual({ specs: 26, specsAvailable: 52 })
+    // A slot from before the per-slot block existed falls back to the document —
+    // the old, weaker claim, never an invented one.
+    expect(displayedCoverage({}, document)).toEqual({ specs: 28, specsAvailable: 28 })
+    expect(displayedCoverage(null, document)).toEqual({ specs: 28, specsAvailable: 28 })
+    expect(displayedCoverage(null, null)).toBeNull()
   })
 
   it('reproduces the sentence the old code got wrong', () => {
