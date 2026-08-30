@@ -3527,8 +3527,26 @@ anything the service says about a *request* ceiling arrives in the headers, and 
 client read no header until 2026-08-26. A pass can sit inside 18,000 points and hit a
 limit it never measured -- and the 429 branch would call that "the hourly point budget
 is spent", the wrong diagnosis with the right shape. `PointLedger.requests_sent` and
-`request_headers` record it; nothing enforces it, because that such a header exists is
-not established from this side.
+`request_headers` record it; nothing enforces it.
+
+**The header exists, and it is now established rather than suspected.** Read off a
+live introspection run's own responses (CI 33306938396, 2026-08-30) rather than from
+documentation:
+
+```
+POST /api/v2/client    x-ratelimit-limit 800   x-ratelimit-remaining 798 -> 797 -> 796
+POST /oauth/token      x-ratelimit-limit 300   x-ratelimit-remaining 299
+```
+
+**Two separate counters, and the token endpoint's is the smaller.** The remaining
+count really does decrement per query, so this is a request ceiling and not a
+decoration. What the header does **not** say is the window -- per hour, per minute,
+per something else -- and that matters, because the Heroic fight-probe pass sent
+**2,616 queries** and did not 429. So either the window is much shorter than an hour
+(and 800 is a burst allowance a paced client never reaches), or it is scoped
+differently again. Do not turn 800 into a per-pass budget until somebody has measured
+the window; what is safe to say today is that the number is there to be read, which
+is what this paragraph previously could not.
 
 ### The metric was neither a floor nor a ceiling, and nothing said which (2026-08-27)
 
@@ -5152,10 +5170,35 @@ approximated by sorting a window of damage-ranked parses by date. It can, two wa
 | `Encounter.fightRankings(metric: progress\|speed)` | fight-level ranking -- the progress race, per guild | yes |
 | `ReportData.reports(zoneID:, startTime:, endTime:, limit:, page:)` | every log uploaded in a time window | **no** |
 
-`FightRankingMetricType` = `default, execution, feats, score, speed, progress`.
-`CharacterRankingMetricType` is the long list of dps/hps variants plus
-`playerspeed` -- no date ordering anywhere in it, which is why the current probe
-has to sort client-side.
+`FightRankingMetricType` = `default, execution, feats, score, speed, progress`
+(re-read 2026-08-30, unchanged since 2026-08-16).
+
+**`CharacterRankingMetricType` was recorded here as "the long list of dps/hps
+variants plus `playerspeed`", and that summary hid the one value the funnel side
+needs.** Read out in full on **2026-08-30** (CI 33306938396):
+
+```
+bosscdps  bossdps  bossndps  bossrdps  default  dps  hps  krsi
+playerscore  playerspeed  cdps  ndps  rdps  tankhps  wdps
+healercombined{dps,bossdps,cdps,bosscdps,ndps,bossndps,rdps,bossrdps}
+tankcombined{dps,bossdps,cdps,bosscdps,ndps,bossndps,rdps,bossrdps}
+```
+
+**`bossdps` is a first-class ranking metric**, so "rank the players who did the most
+to the boss" is one argument away -- which is what the harvest double-pass (#111)
+needs, at one extra ranking query per boss and nothing per kill. `bossrdps` is beside
+it and is *not* the same question: `r` is the raid-normalised variant, with borrowed
+power divided out, so it is the fairer metric for a spec that receives a lot of
+external buffs and a different claim from `bossdps`.
+
+Still true, and the reason the probe sorts client-side: **no date ordering anywhere in
+either enum.**
+
+The lesson is the summary rather than the list. "The long list of dps/hps variants" is
+a true sentence that made the enum look like it held nothing worth returning for, and
+it stood for two weeks over the exact value a planned feature turns on. Write the
+values down when they are cheap to write down; three queries cost nothing here and the
+counter did not move.
 
 **The reports route is the one that answers the owner's question.** It goes nowhere
 near rankings, so a public log Warcraft Logs never ranked is still in it, and it is
