@@ -139,6 +139,49 @@ def run(
             return json.load(fh)
 
 
+def regenerate_profile(simc: Path, profile: Path, timeout: int = 120) -> str:
+    """Ask simc to write ``profile`` back out, and return what it wrote.
+
+    ``save=`` is a profile EXPORT rather than a report: simc parses the actor,
+    regenerates the file it would have generated -- the ``# Gear Summary`` block
+    included -- and exits without simulating. Measured on simc ``b0ea612``,
+    2026-08-30: **0.112 s** for a materialised MID2 profile, ``user`` under
+    0.06 s, and the emitted block is the same shape a shipped profile carries.
+
+    That is the whole reason this exists. simc's generator writes the gear
+    summary only into the profiles it ships, so a profile this project
+    *materialises* from a disabled generator block has none -- and that summary
+    is where ``equipment.primary_stat`` reads which primary stat a build is
+    built around. Asking simc to regenerate it computes the same quantity with
+    simc's own code rather than with a class/spec table kept here, which is
+    exactly what that function's docstring refuses.
+
+    A failed export is an error and never a value. Measured the same day:
+    ``MID2_Paladin_Retribution`` carries a talent hash simc's own parser
+    refuses, so simc exits **81 and writes no file at all** -- and a caller that
+    reuses one output path across profiles silently reads the PREVIOUS
+    profile's export and gets a confident wrong answer. (That happened while
+    measuring this: four unrelated profiles reported an identical primary stat,
+    one of them a strength spec reading as intellect.) Hence a fresh temporary
+    directory per call, an exit-code check, and a file-exists check.
+    """
+    with tempfile.TemporaryDirectory(prefix="wowdps-save-") as tmp:
+        out = Path(tmp) / "regenerated.simc"
+        # Options come after the profile path, as everywhere else here.
+        cmd = [str(simc), str(profile), f"save={out}"]
+        log.debug("running: %s", " ".join(cmd))
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+
+        if proc.returncode != 0:
+            tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-5:]
+            raise SimcError(
+                f"simc exited {proc.returncode} regenerating {profile.name}:\n" + "\n".join(tail)
+            )
+        if not out.is_file():
+            raise SimcError(f"simc wrote no profile for {profile.name}")
+        return out.read_text(encoding="utf-8", errors="replace")
+
+
 def requests_for(profiles: list[SpecProfile], scenarios: list[Scenario]) -> Iterator[SimRequest]:
     """Every (profile, scenario, target count) triple the run should cover."""
     for profile in profiles:
