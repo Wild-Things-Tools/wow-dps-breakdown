@@ -517,6 +517,411 @@ def test_sweeping_one_slot_does_not_delete_the_others(tmp_path):
     assert [s["id"] for s in by_slot["neck"]["specs"]] == ["a"]
 
 
+# --------------------------------------------------------------------------------
+# Per-slot provenance (#95): a document's slots need not come from one run
+# --------------------------------------------------------------------------------
+
+
+def measured_result(
+    hero: str, dps_error: float, slot: EquipmentSlot = TRINKET
+) -> gearsweep.SpecSlotResult:
+    """A minimal measured result whose rows carry a real error field."""
+    profile = SpecProfile(
+        path=Path("/dev/null"),
+        tier="MID2",
+        wow_class="Mage",
+        spec="Arcane",
+        hero_talent=hero,
+        role="spell",
+        talent_hash=None,
+        # `SpecProfile.id` is built from `name_hero`, not `hero_talent` -- two
+        # results without it would collapse to one id and the coverage count.
+        name_hero=hero,
+    )
+    return gearsweep.SpecSlotResult(
+        profile=profile,
+        slot=slot,
+        primary_stat="intellect",
+        targets=[
+            gearsweep.TargetResult(
+                targets=1,
+                empty_dps=1.0,
+                baseline=[MPLUS[0], MPLUS[1]],
+                baseline_ilevel=334,
+                baseline_dps=100.0,
+                baseline_dps_error=dps_error,
+            )
+        ],
+    )
+
+
+def test_write_gear_stamps_provenance_on_the_swept_slots_only(tmp_path):
+    """This run's simc and precision describe only the slots this run measured.
+
+    Stamping them on every pool would claim this run's provenance for the numbers
+    `merge_gear_shards` folds in from the published document -- the document-level
+    version of exactly that is what issue #95 measured.
+
+    Two slots are swept with different populations and errors on purpose: with a
+    single swept slot, per-slot and document-wide figures coincide, and a writer
+    stamping the document's numbers on every swept slot -- the #95 defect
+    re-created one level down -- passes undetected. Verified by mutation before
+    the second slot existed.
+    """
+    import json
+
+    from wowdps import dataset
+    from wowdps.equipment import FINGER, NECK
+
+    def pool_for(slot):
+        return SlotPool(
+            tier="MID2",
+            slot=slot,
+            items=(MPLUS[0],),
+            item_levels=(HEROIC,),
+            baseline_source="mythicplus",
+            candidate_source="raid",
+        )
+
+    path = dataset.write_gear(
+        tmp_path,
+        [
+            measured_result("Sunfury", 0.05),
+            measured_result("Spellslinger", 0.07),
+            measured_result("Frostfire", 0.2, slot=NECK),
+        ],
+        {"trinket": POOL, "neck": pool_for(NECK), "finger": pool_for(FINGER)},
+        "MID2",
+        {"gitRevision": "OLDREV"},
+        SimSettings(),
+        specs_available=26,
+    )
+    document = json.loads(path.read_text(encoding="utf-8"))
+    by_slot = {slot["id"]: slot for slot in document["slots"]}
+
+    assert by_slot["trinket"]["coverage"] == {"specs": 2, "specsAvailable": 26}
+    assert by_slot["trinket"]["simc"] == {"gitRevision": "OLDREV"}
+    assert by_slot["trinket"]["settings"]["medianDpsError"] == 0.06
+    assert by_slot["neck"]["coverage"] == {"specs": 1, "specsAvailable": 26}
+    assert by_slot["neck"]["settings"]["medianDpsError"] == 0.2
+    assert "coverage" not in by_slot["finger"]
+    assert "simc" not in by_slot["finger"]
+    assert "settings" not in by_slot["finger"]
+
+
+def _provenanced_slot(
+    slot_id: str, revision: str, rows: list[dict], error: float, available: int = 26
+) -> dict:
+    return {
+        "id": slot_id,
+        "label": slot_id.title(),
+        "specs": rows,
+        "coverage": {"specs": len(rows), "specsAvailable": available},
+        "simc": {"gitRevision": revision},
+        "settings": {
+            "targetError": 0,
+            "maxIterations": 3000,
+            "deterministic": True,
+            "medianDpsError": error,
+        },
+    }
+
+
+def _row(spec_id: str, error: float) -> dict:
+    return {
+        "id": spec_id,
+        "targets": [{"targets": 1, "baseline": {"dpsError": error}, "pool": [], "candidates": []}],
+    }
+
+
+def test_a_single_slot_rerun_keeps_each_slots_own_provenance(tmp_path):
+    """The #95 scenario, run through the real merge.
+
+    A trinket-only re-run at a new simc revision must not relabel the finger
+    numbers as its own: each slot keeps the provenance of the run that measured
+    it, a slot whose union holds rows from two runs gets its count recounted and
+    its precision recomputed from the rows themselves, and the document-level
+    blocks describe the document rather than whichever run sorted newest.
+
+    Two deliberately awkward numbers in the fixture, both mutation-tested:
+
+    * finger's stamped median is 0.1234 while its rows derive 0.125 -- the merge
+      must not re-derive an untouched slot's figure, because the published
+      errors are rounded and a re-derivation can move the last digit of a
+      number the run never re-measured;
+    * the document-level median over every row (0.1, 0.15, 0.2, 0.4 -> 0.175)
+      differs from any composition of the slot medians (0.2117/0.2125), so an
+      implementation that composes instead of walking the rows fails here.
+    """
+    import json
+
+    from wowdps.dataset import merge_gear_shards
+
+    out = tmp_path / "MID2"
+    out.mkdir()
+    (out / "gear.json").write_text(
+        json.dumps(
+            {
+                "generatedAt": "2026-08-21T00:00:00+00:00",
+                "simc": {"gitRevision": "OLDREV"},
+                "settings": {
+                    "targetError": 0,
+                    "maxIterations": 3000,
+                    "deterministic": True,
+                    "medianDpsError": 0.15,
+                },
+                "coverage": {"specs": 2, "specsAvailable": 26},
+                "slots": [
+                    _provenanced_slot(
+                        "finger", "OLDREV", [_row("a", 0.1), _row("b", 0.15)], 0.1234
+                    ),
+                    _provenanced_slot("trinket", "OLDREV", [_row("a", 0.2)], 0.2),
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    shard = tmp_path / "shard-0"
+    shard.mkdir()
+    (shard / "gear.json").write_text(
+        json.dumps(
+            {
+                "generatedAt": "2026-08-26T00:00:00+00:00",
+                "simc": {"gitRevision": "NEWREV"},
+                "settings": {
+                    "targetError": 0,
+                    "maxIterations": 3000,
+                    "deterministic": True,
+                    "medianDpsError": 0.4,
+                },
+                "coverage": {"specs": 1, "specsAvailable": 52},
+                "slots": [
+                    # The empty placeholder write_gear emits for a pool this run
+                    # did not sweep -- deliberately without provenance blocks.
+                    {"id": "finger", "label": "Finger", "specs": []},
+                    _provenanced_slot("trinket", "NEWREV", [_row("b", 0.4)], 0.4, available=52),
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    merge_gear_shards([shard], out)
+    merged = json.loads((out / "gear.json").read_text(encoding="utf-8"))
+    by_slot = {slot["id"]: slot for slot in merged["slots"]}
+
+    # Finger was not re-swept: numbers and provenance both stay the old run's,
+    # the stamped-but-not-row-derived median included.
+    assert by_slot["finger"]["simc"] == {"gitRevision": "OLDREV"}
+    assert by_slot["finger"]["settings"]["medianDpsError"] == 0.1234
+    assert by_slot["finger"]["coverage"] == {"specs": 2, "specsAvailable": 26}
+    # Trinket was re-swept at NEWREV and its union holds rows from both runs.
+    assert by_slot["trinket"]["simc"] == {"gitRevision": "NEWREV"}
+    assert by_slot["trinket"]["coverage"] == {"specs": 2, "specsAvailable": 52}
+    assert by_slot["trinket"]["settings"]["medianDpsError"] == pytest.approx(0.3)
+    # Document level: the union stays the union, and the precision describes
+    # every row the document holds.
+    assert merged["coverage"] == {"specs": 2, "specsAvailable": 52}
+    assert merged["settings"]["medianDpsError"] == pytest.approx(0.175)
+    assert merged["simc"] == {"gitRevision": "NEWREV"}
+
+
+def test_an_old_artifact_republished_later_cannot_regress_the_newer_rows(tmp_path):
+    """Re-running an old workflow run's publish job merges a stale shard artifact
+    over a newer published document -- one click, artifacts live ~90 days. The
+    published document joins the merge at its own timestamp, so the newer rows,
+    their provenance and `generatedAt` all survive; forcing it oldest (the
+    pre-#95 arrangement) replaced them with the stale run's."""
+    import json
+
+    from wowdps.dataset import merge_gear_shards
+
+    out = tmp_path / "MID2"
+    out.mkdir()
+    (out / "gear.json").write_text(
+        json.dumps(
+            {
+                "generatedAt": "2026-08-28T00:00:00+00:00",
+                "simc": {"gitRevision": "NEWPUB"},
+                "coverage": {"specs": 1, "specsAvailable": 52},
+                "slots": [_provenanced_slot("trinket", "NEWPUB", [_row("a", 0.3)], 0.3)],
+            }
+        ),
+        encoding="utf-8",
+    )
+    shard = tmp_path / "shard-0"
+    shard.mkdir()
+    (shard / "gear.json").write_text(
+        json.dumps(
+            {
+                "generatedAt": "2026-08-20T00:00:00+00:00",
+                "simc": {"gitRevision": "OLDRUN"},
+                "coverage": {"specs": 1, "specsAvailable": 26},
+                "slots": [_provenanced_slot("trinket", "OLDRUN", [_row("a", 0.1)], 0.1)],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    merge_gear_shards([shard], out)
+    merged = json.loads((out / "gear.json").read_text(encoding="utf-8"))
+
+    assert merged["generatedAt"] == "2026-08-28T00:00:00+00:00"
+    assert merged["simc"] == {"gitRevision": "NEWPUB"}
+    slot = merged["slots"][0]
+    assert slot["simc"] == {"gitRevision": "NEWPUB"}
+    assert slot["specs"][0]["targets"][0]["baseline"]["dpsError"] == 0.3
+
+
+def test_a_first_publish_tolerates_a_placeholder_before_the_rows(tmp_path):
+    """On a tier's first publish there is no published document, so the oldest
+    document carrying a slot can be the empty placeholder itself -- a shard
+    whose specs all failed for one slot of a two-slot dispatch. The base
+    selection has to survive `previous is None` with empty rows; collapsing the
+    condition to `slot if incoming else previous` crashes exactly here."""
+    import json
+
+    from wowdps.dataset import merge_gear_shards
+
+    out = tmp_path / "MID2"
+    out.mkdir()
+    shard_a = tmp_path / "shard-a"
+    shard_a.mkdir()
+    (shard_a / "gear.json").write_text(
+        json.dumps(
+            {
+                "generatedAt": "2026-08-26T00:00:00+00:00",
+                "slots": [{"id": "neck", "label": "Neck", "specs": []}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    shard_b = tmp_path / "shard-b"
+    shard_b.mkdir()
+    (shard_b / "gear.json").write_text(
+        json.dumps(
+            {
+                "generatedAt": "2026-08-26T01:00:00+00:00",
+                "slots": [_provenanced_slot("neck", "NEWREV", [_row("a", 0.2)], 0.2)],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    merge_gear_shards([shard_a, shard_b], out)
+    merged = json.loads((out / "gear.json").read_text(encoding="utf-8"))
+    slot = merged["slots"][0]
+    assert [spec["id"] for spec in slot["specs"]] == ["a"]
+    assert slot["simc"] == {"gitRevision": "NEWREV"}
+
+
+def test_a_pre_fix_document_gains_no_invented_slot_provenance(tmp_path):
+    """A slot last measured before the per-slot blocks existed keeps none.
+
+    The published document cannot say which run measured which of its slots, so
+    attaching the document-level blocks to a slot would manufacture provenance.
+    Absent stays absent, and the reader falls back to the document level exactly
+    as it did before the blocks existed.
+    """
+    import json
+
+    from wowdps.dataset import merge_gear_shards
+
+    out = tmp_path / "MID2"
+    out.mkdir()
+    (out / "gear.json").write_text(
+        json.dumps(
+            {
+                "generatedAt": "2026-08-17T00:00:00+00:00",
+                "simc": {"gitRevision": "OLDREV"},
+                "coverage": {"specs": 1, "specsAvailable": 26},
+                "slots": [{"id": "trinket", "label": "Trinket", "specs": [_row("a", 0.2)]}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    shard = tmp_path / "shard-0"
+    shard.mkdir()
+    (shard / "gear.json").write_text(
+        json.dumps(
+            {
+                "generatedAt": "2026-08-26T00:00:00+00:00",
+                "simc": {"gitRevision": "NEWREV"},
+                "coverage": {"specs": 1, "specsAvailable": 52},
+                "slots": [
+                    {"id": "trinket", "label": "Trinket", "specs": []},
+                    _provenanced_slot("neck", "NEWREV", [_row("a", 0.3)], 0.3),
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    merge_gear_shards([shard], out)
+    merged = json.loads((out / "gear.json").read_text(encoding="utf-8"))
+    by_slot = {slot["id"]: slot for slot in merged["slots"]}
+
+    assert "simc" not in by_slot["trinket"]
+    assert "settings" not in by_slot["trinket"]
+    assert "coverage" not in by_slot["trinket"]
+    assert by_slot["neck"]["simc"] == {"gitRevision": "NEWREV"}
+
+
+def test_the_json_error_walk_agrees_with_the_dataclass_walk():
+    """`_median_gear_error_json` and `_median_gear_error` are deliberately two
+    walks over two shapes of the same data; this is the pin that keeps them from
+    drifting apart when either shape changes. The zero-error pool entry is in
+    the fixture on purpose: both walks must drop it (a zero error is a variant
+    that never measured, not perfect precision), and without one the `> 0`
+    filter is dead fixture-side and can be deleted from either walk unnoticed."""
+    from wowdps.dataset import _median_gear_error, _median_gear_error_json
+
+    result = gearsweep.SpecSlotResult(
+        profile=PROFILE,
+        slot=TRINKET,
+        primary_stat="intellect",
+        targets=[
+            gearsweep.TargetResult(
+                targets=1,
+                empty_dps=1.0,
+                baseline=[MPLUS[0], MPLUS[1]],
+                baseline_ilevel=334,
+                baseline_dps=100.0,
+                baseline_dps_error=0.05,
+                pool=[
+                    gearsweep.PoolEntry(
+                        item=MPLUS[0], ilevel=334, dps=90.0, dps_error=0.07, standalone_gain=1.0
+                    ),
+                    gearsweep.PoolEntry(
+                        item=MPLUS[2], ilevel=334, dps=0.0, dps_error=0.0, standalone_gain=0.0
+                    ),
+                ],
+                candidates=[
+                    gearsweep.CandidateResult(
+                        item=RAID[0],
+                        item_level=MYTHIC,
+                        replaces=MPLUS[1],
+                        dps=101.0,
+                        dps_error=0.09,
+                        priority_dps=None,
+                        gain=0.01,
+                        gain_error=0.001,
+                    )
+                ],
+            )
+        ],
+    )
+    row = result.to_json()
+    assert _median_gear_error([result]) == _median_gear_error_json([row]) == 0.07
+
+    # The JSON walk reads baseline, pool and candidates and nothing else: a
+    # `bestSets` block carries its own error fields, and one walk starting to
+    # read them while the other does not is exactly the drift this test pins.
+    row["targets"][0]["bestSets"] = [{"dpsError": 99.0}]
+    assert _median_gear_error_json([row]) == 0.07
+
+
 def test_a_one_socket_sweep_runs_end_to_end(monkeypatch, tmp_path):
     """The seam the unit tests did not cover, and where it actually broke.
 

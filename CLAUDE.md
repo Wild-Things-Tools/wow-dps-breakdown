@@ -715,6 +715,21 @@ Finger table holding 28 -- trading a false sentence for a more confident one. A 
 that replaces one error with a better-dressed error is not a repair. #95 holds the
 three-part fix and the priced pass.
 
+**Fixed on 2026-08-30, and the shape of the fix is worth keeping.** `write_gear`
+stamps `coverage`/`simc`/`settings` per slot -- on swept slots only, because a block
+on an unswept pool would claim this run's simc for numbers the merge folds in from
+the published document, which is the same defect one level down. `merge_gear_shards`
+takes a slot's fields from the newest document that *contributed rows* to it (the
+empty placeholder never wins), recounts the slot's `coverage.specs` from the union,
+and recomputes `medianDpsError` -- per slot and document-wide -- from the merged
+rows' own `dpsError` fields, the same correction `merge_shards` applies to the
+manifest. `simc` cannot be recomputed from rows; on a slot merged across runs it is
+the newest contributor's and *bounds the newest measurement*, the `_keep_measurements`
+rule. A pre-fix document's slots gain no invented blocks: absent stays absent and the
+reader falls back to the document level, which is then the old, weaker claim. Both
+readers (`GearView` here, `dps-loot` in wtt-frontend) show the displayed slot's
+coverage with that fallback. Nothing published moves until a gear run writes.
+
 ## The gear anchor: what a computed build wears
 
 `gearanchor.py` + `wowdps gear-anchor`. A build this project *computes* -- from a

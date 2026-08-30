@@ -137,3 +137,21 @@ export function sweepCoverage(
       `and ${plural(missing, 'build is', 'builds are')} missing.`,
   }
 }
+
+/**
+ * The coverage pair the view should show for a displayed slot (#95).
+ *
+ * `gear.json`'s document-level pair is the UNION of build ids over all slots --
+ * a claim about the document, never about the slot on screen: above a slot
+ * selector it counted 28 builds over a trinket table of 26. Since #95 every
+ * slot a run swept carries its own block, kept per slot across single-slot
+ * re-runs by `merge_gear_shards`. A slot last measured before the block
+ * existed carries none and falls back to the document level -- the old,
+ * weaker claim, never an invented one.
+ */
+export function displayedCoverage(
+  slot: { coverage?: { specs: number; specsAvailable: number } } | null | undefined,
+  document: { coverage: { specs: number; specsAvailable: number } } | null | undefined,
+): { specs: number; specsAvailable: number } | null {
+  return slot?.coverage ?? document?.coverage ?? null
+}
