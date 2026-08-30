@@ -730,6 +730,32 @@ reader falls back to the document level, which is then the old, weaker claim. Bo
 readers (`GearView` here, `dps-loot` in wtt-frontend) show the displayed slot's
 coverage with that fallback. Nothing published moves until a gear run writes.
 
+**The runs have written, and the fix is visible in the published file.** Three
+sweeps on 2026-08-30 -- trinket, then neck, then finger -- each a separate
+dispatch, and `web/public/data/MID2/gear.json` at `37fbb20`:
+
+```
+document   coverage {specs: 51, specsAvailable: 52}   simc 3a9d776   med 0.0965
+  finger   rows 51   {51, 52}   simc 3a9d776   med 0.0973
+  neck     rows 51   {51, 52}   simc 3a9d776   med 0.0957
+  trinket  rows 51   {51, 52}   simc 5f3ee6d   med 0.0967
+```
+
+**Trinket keeps `5f3ee6d` while the other two carry `3a9d776`**, and all three
+medians differ. That is the whole point of the fix demonstrated on real data: a
+slot the later runs did not touch kept its own run's provenance instead of being
+relabelled with theirs, which is precisely what the pre-fix document did.
+
+All 51 of the manifest's builds are in all three slots, none carrying an `errors`
+string. The 52nd is the profile whose talent hash simc refuses -- the same one
+that costs a row's numbers in `buffs.json` -- so it produces no summary row to
+join to, and `51 of 52` is the honest count rather than a gap in the sweep.
+
+Coverage went **trinket 26 -> 51, neck 26 -> 51, finger 28 -> 51**. The figures
+elsewhere in this section (28/26/26, and the `gear.json (trinket, 2026-08-21)`
+row in the sweep-coverage table above) describe the pre-fix document and are kept
+as what the defect looked like, not as the current state.
+
 ## The gear anchor: what a computed build wears
 
 `gearanchor.py` + `wowdps gear-anchor`. A build this project *computes* -- from a
