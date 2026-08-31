@@ -909,15 +909,42 @@ export interface TargetBandPoint {
  * event fetch read in full.
  */
 export interface TargetBand {
+  /**
+   * Distinct kills the band is built from — not sampled rows. Warcraft Logs
+   * indexes uploads, so one kill logged by six people in the same raid arrives
+   * as six rows; left in, that kill would occupy six of the ranks every
+   * percentile is taken over and publish an IQR of zero as consensus.
+   */
   fights: number;
   buckets: number;
   medianLengthSeconds: number;
   band: TargetBandPoint[];
   why: string;
+  /**
+   * Kills excluded because their event fetch read nothing at all — a curve of
+   * zero targets across the whole pull, which is not an observation. Absent
+   * when none were, and absent on a document written before it was published.
+   */
+  unobservedKills?: number;
+  /**
+   * Rows dropped as further uploads of a kill already in the band. This is what
+   * explains `fights` being smaller than the encounter's `fightsSampled`;
+   * without it the gap reads as kills silently discarded.
+   */
+  duplicateUploads?: number;
 }
 
 export interface MeasuredFight {
+  /** Sampled pull rows — how many fights the probe read, not how many kills. */
   fightsSampled: number;
+  /**
+   * How many kills those rows are. One raid where six people log produces six
+   * reports carrying the same kills, so a boss can be sampled thirty times and
+   * hold eighteen kills. Optional because a document written before this was
+   * published has none — and absent must not be read as "the same as
+   * `fightsSampled`", which is the reading that was wrong.
+   */
+  distinctKills?: number;
   reports: string[];
   durationSeconds?: FightSpread | null;
   raidSize?: FightSpread | null;
