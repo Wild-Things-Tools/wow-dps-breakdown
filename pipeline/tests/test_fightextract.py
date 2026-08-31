@@ -1240,3 +1240,41 @@ def test_the_two_fight_aura_floor_counts_kills_and_not_uploads():
     # are two kills keep the aura.
     observation.fights = [one_fight("r1", 20, 300), one_fight("r2", 20, 290)]
     assert 555_001 in {entry["abilityId"] for entry in observation.pooled_auras()}
+
+
+def test_a_fight_publishes_when_its_kill_happened():
+    """The one field that could settle the duplicate question before paying for it.
+
+    Two uploads of one kill are found today by comparing length and target-count
+    curve, which needs the kill to have been read first -- seven event queries per
+    kill. If two uploads carry the same absolute start, ``select_report_fights``
+    could drop them for the price of a ranking row instead. Nobody has checked
+    that, because it is in no payload written so far; publishing it per fight is
+    what makes the next probe able to answer.
+
+    Pooled as ``killedBetween`` already, which is a different question (when was
+    this *sample* taken) and cannot answer this one.
+    """
+    observed = observe_fight(
+        report_code="r1",
+        fight=fight(),
+        damage_events=[damage(1, 10)],
+        death_events=[],
+        aura_events=[],
+        phase_metadata=[],
+        started_at=1_700_000_000_000.0,
+    )
+    assert observed.to_json()["startedAt"] == 1_700_000_000_000.0
+
+    # Zero rather than absent when the ranking row carried no timestamp, which is
+    # what `started_at` already means everywhere else -- a second spelling of
+    # "unknown" here would need every reader to learn it.
+    plain = observe_fight(
+        report_code="r2",
+        fight=fight(endTime=FIGHT_END + apart("r2")),
+        damage_events=[damage(1, 10)],
+        death_events=[],
+        aura_events=[],
+        phase_metadata=[],
+    )
+    assert plain.to_json()["startedAt"] == 0.0
