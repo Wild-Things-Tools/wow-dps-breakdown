@@ -4907,12 +4907,9 @@ Three decisions in it that are not arithmetic:
   side by side and unconditionally. The row count is what the run's cost is measured
   in; the kill count is what every derived number is an observation of. An absent
   field would read as "the same number", which is the reading that was wrong.
-- **The pooled spreads still count rows.** `meanTargets`, `peakTargets`,
-  `durationSeconds` and the rest are computed in `fightextract.EncounterObservation`
-  before the document builder sees them, so a heavily duplicated boss still weights
-  one pull's numbers by how many people logged it. That is stated in the encounter's
-  caveats rather than quietly fixed here, because fixing it belongs on the probe side
-  and needs a run.
+- **The pooled spreads counted rows, and now do not** -- see the entry below. When
+  #130 shipped they were still row-based, which the encounter's caveats said in
+  words; #131 closed it one layer down.
 
 **It has been regenerated, and the published file carries it** (`deb23ae`,
 2026-08-31, a `fight-probe --publish --resume` dispatch that skipped every
@@ -5117,6 +5114,56 @@ nothing is blended.
 **Nothing published moves until a probe run writes.** The fix is in the pipeline;
 `fights.json` is regenerated from a probe payload, which is a CI artifact, so the
 committed document still carries `measuredDifficulty: 5` on both bosses.
+
+#### One rule, two shapes: the probe side counts kills too (#131)
+
+#130 deduplicated the two things that *present* a distribution -- the target band
+and the shape presets -- and left everything pooled in
+`fightextract.EncounterObservation` counting rows, because those are computed in
+the probe path before the document builder sees a payload. That split published two
+counting conventions in one document, and it reached a finding: `pooled_adds`'
+`seenInFights` is per row, so *"Burning Venom is absent in 4 of 30 kills"* -- offered
+in #115 as evidence for Vashnik's phase choice -- is four **rows** of thirty, and
+whether they are four kills or four uploads of one raid's kill is not answerable
+from the published document at all.
+
+**`EncounterObservation.distinct_fights()` is the fix**, and every pooled number now
+goes through it: `_values` (which is the single funnel for every `Spread`),
+`pooled_adds`, `pooled_auras`, `aura_carriers` and `pooled_phases`.
+`fightsSampled` stays the row count -- it is what the run's cost is measured in --
+and `distinctKills` is published beside it.
+
+**The rule lives once, in `fightextract.group_uploads`, and is accessor-driven.**
+The probe holds a pull as a `FightObservation` and the document builder holds it as
+a payload dict; a second implementation of one rule is exactly the thing that
+drifts, so `fightdataset.group_duplicate_uploads` is now three lambdas over the same
+function. Both layers are still needed and neither is redundant: the document
+builder must dedup payloads written *before* any of this existed.
+
+**It moves the `min_fights` aura gate, which is the point of the gate.** An aura
+seen in a single kill that two people uploaded used to clear a floor of two on its
+own -- satisfied by the number of loggers in the raid rather than by the number of
+kills.
+
+**Nothing published moves until a probe writes a new payload.** `--publish
+--resume` republishes the *document* from a stored payload, so it picks up #130 and
+not this; the pooled blocks in `fights.json` are frozen in the payload until an
+encounter is actually re-read. That is the cost of fixing it in the right layer, and
+it was the stated trade in #131.
+
+**Seven test fixtures stated impossible physics**, in two files, and each gave
+several "different guilds" a pull identical to the millisecond -- which is what an
+upload set is. `apart(code)` in `test_fightextract.py` gives each report code its
+own length. Note the shape: those fixtures were not wrong *before*, they were
+untested in this dimension, and the dedup is what made the claim they encode
+visible.
+
+**One canary did not fire, and the finding was about the canary.** Reverting
+`_values` to `self.fights` left the suite green -- because `ruff format` had
+reflowed that comprehension across four lines and the patch string no longer
+matched. Re-applied against the real text it turns
+`test_one_kill_uploaded_three_times_is_pooled_once` red by name. Check the *diff* a
+canary produces, not only the suite's colour.
 
 ### The mean counts what is being *fought*, not what is alive
 

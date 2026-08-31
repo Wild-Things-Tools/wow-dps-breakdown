@@ -1125,6 +1125,90 @@ def _spread(values: list[float]) -> Spread | None:
     )
 
 
+#: Two sampled pulls are one kill uploaded twice when their lengths agree to within
+#: this many seconds **and** their target-count curves agree step for step.
+#:
+#: Warcraft Logs indexes uploads, not raid nights: six people in one raid who each
+#: run a logger produce six reports carrying the same kills, and the sampler picks
+#: kills per report. Measured over the committed MID2 document on 2026-08-31, 145
+#: rows across ten (encounter, difficulty) pairs: sorting each pair's pulls by
+#: length, the 65 closest consecutive gaps are all under **0.082 s** and the next
+#: smallest is **1.074 s**. The threshold sits in that break -- six times the widest
+#: duplicate spread observed, half the distance to the closest pair of genuinely
+#: different kills. Calibrated, not derived; redo it when the sample grows.
+DUPLICATE_UPLOAD_SECONDS = 0.5
+
+
+def curves_agree(left, right, tolerance: float = DUPLICATE_UPLOAD_SECONDS) -> bool:
+    """Do two pulls' target-count curves describe the same events?
+
+    Length alone is circumstantial -- two guilds can kill a boss in the same number
+    of seconds -- so the step function has to agree too: the same number of
+    transitions, each to exactly the same count, each within ``tolerance`` of the
+    other's time. Two uploads of one kill differ only by the recording clients'
+    clocks, about 30 ms across MID2 Vashnik's six; two different kills do not line
+    up at all.
+
+    The count test is equality rather than a tolerance, deliberately: it is an
+    integer, and a curve reaching three targets where the other reaches two is a
+    different fight however well the times match.
+    """
+    left = list(left)
+    right = list(right)
+    if len(left) != len(right):
+        return False
+    for step, other in zip(left, right, strict=True):
+        if len(step) < 2 or len(other) < 2:
+            return False
+        if abs(float(step[0]) - float(other[0])) > tolerance:
+            return False
+        if float(step[1]) != float(other[1]):
+            return False
+    return True
+
+
+def group_uploads(items, *, duration_of, steps_of, report_of) -> list[list]:
+    """Partition sampled pulls into one group per distinct kill.
+
+    Accessor-driven so **one rule** serves both shapes this repository carries a
+    pull in: ``FightObservation`` objects here, and the payload dicts the document
+    builder reads. A second implementation is exactly the thing that drifts.
+
+    A kill logged once is a group of one, so the result is always a partition of
+    the input and a sample with no duplicates comes back unchanged in shape.
+
+    The grouping is anchored rather than transitive -- an item joins a group by
+    matching that group's **first** member -- so a chain of near-misses cannot walk
+    a group across a gap wider than the threshold. Items are sorted by length
+    first, so the answer does not depend on the order they arrived in.
+
+    One structural guard: **a report cannot contain the same kill twice**, so two
+    items sharing a report code are two pulls however alike they look. Checked
+    against the whole committed MID2 document -- over 34 multi-member groups
+    spanning 93 rows it never fired once, which makes it an independent
+    confirmation of the length-and-curve rule rather than a guard doing work. It
+    also means an item with no report code never merges, which is the safe
+    direction: under-claiming a duplicate costs a count, over-claiming loses a kill.
+    """
+    ordered = sorted(items, key=lambda item: (duration_of(item), report_of(item)))
+    groups: list[list] = []
+    for item in ordered:
+        duration = duration_of(item)
+        for group in groups:
+            anchor = group[0]
+            if abs(duration - duration_of(anchor)) > DUPLICATE_UPLOAD_SECONDS:
+                continue
+            if not curves_agree(steps_of(item), steps_of(anchor)):
+                continue
+            if report_of(item) in {report_of(member) for member in group}:
+                continue
+            group.append(item)
+            break
+        else:
+            groups.append([item])
+    return groups
+
+
 @dataclass
 class EncounterObservation:
     """What several fights of one encounter agree and disagree about."""
@@ -1144,8 +1228,44 @@ class EncounterObservation:
     #: not ask for", and those look identical on a view that only has a count.
     difficulties_seen: dict[int | None, int] = field(default_factory=dict)
 
+    def distinct_fights(self) -> list[FightObservation]:
+        """The sampled pulls, one row per kill: the upload of each read furthest.
+
+        ``fights`` is what the probe read and is what its cost is measured in.
+        Everything *pooled* is an observation of a kill, and one kill logged by six
+        people is one observation -- so every median, spread and "seen in N fights"
+        below goes through here. Measured on MID2: Vashnik at Mythic is six rows of
+        one 434.78 s pull, and its Heroic sample is 30 rows of 18 kills.
+
+        Uploads of one kill are near-identical by construction, so which one is kept
+        barely moves a number -- but it must be deterministic, and it must prefer the
+        copy whose event fetch got furthest, because that is the one whose tail is
+        real.
+        """
+        groups = group_uploads(
+            self.fights,
+            duration_of=lambda fight: float(fight.duration or 0.0),
+            steps_of=lambda fight: fight.significant_timeline.steps,
+            report_of=lambda fight: str(fight.report_code or ""),
+        )
+        return [
+            max(
+                group,
+                key=lambda fight: (
+                    not fight.truncated,
+                    float(fight.event_coverage or 0.0),
+                    str(fight.report_code or ""),
+                ),
+            )
+            for group in groups
+        ]
+
     def _values(self, pick) -> list[float]:
-        return [value for value in (pick(fight) for fight in self.fights) if value is not None]
+        return [
+            value
+            for value in (pick(fight) for fight in self.distinct_fights())
+            if value is not None
+        ]
 
     # `fights_sampled` and `reports` are the two things a promotion decision needs
     # that are not a Spread. They are named to match the published document's keys
@@ -1220,7 +1340,11 @@ class EncounterObservation:
         compromise the site's own tooltips make.
         """
         buckets: dict[object, list[AddPattern]] = {}
-        for fight in self.fights:
+        # Kills, not rows. `seenInFights` and every spread below would otherwise
+        # count a kill once per person who uploaded it -- MID2's Vashnik at Heroic
+        # is 30 rows and 18 kills, so "in 30 of 30 fights" was a row count wearing
+        # a kill count's name.
+        for fight in self.distinct_fights():
             for add in fight.adds:
                 buckets.setdefault(add.game_id or add.name, []).append(add)
 
@@ -1271,7 +1395,10 @@ class EncounterObservation:
         id at all, so only the target test catches them.
         """
         buckets: dict[int, list[tuple[tuple[str, int], AuraWindow]]] = {}
-        for fight in self.fights:
+        # Kills, not rows -- and here it also moves the `min_fights` gate, which is
+        # the point of the gate: an aura seen in one kill that six people uploaded
+        # used to clear a floor of two on its own.
+        for fight in self.distinct_fights():
             for aura in fight.auras:
                 if encounter_only and not fight.is_encounter_aura(aura):
                     continue
@@ -1337,7 +1464,7 @@ class EncounterObservation:
         priority target is a property of that pull's own damage.
         """
         carriers: dict[object, dict] = {}
-        for fight in self.fights:
+        for fight in self.distinct_fights():
             for aura in fight.auras:
                 if aura.ability_id != ability_id:
                     continue
@@ -1414,7 +1541,7 @@ class EncounterObservation:
         """
         buckets: dict[int, list[PhaseWindow]] = {}
         fights_seen: dict[int, set[tuple[str, int]]] = {}
-        for fight in self.fights:
+        for fight in self.distinct_fights():
             for phase in fight.phases:
                 buckets.setdefault(phase.id, []).append(phase)
                 fights_seen.setdefault(phase.id, set()).add((fight.report_code, fight.fight_id))
@@ -1437,6 +1564,11 @@ class EncounterObservation:
             "encounterName": self.encounter_name,
             "difficulty": self.difficulty,
             "fightsSampled": len(self.fights),
+            # How many kills those rows are. Published beside the row count and
+            # never instead of it: the row count is what the run's cost is measured
+            # in, the kill count is what every pooled number above is an
+            # observation of.
+            "distinctKills": len(self.distinct_fights()),
             "reports": sorted({fight.report_code for fight in self.fights}),
             "durationSeconds": _json(self.duration),
             "raidSize": _json(self.raid_size),
