@@ -4914,10 +4914,36 @@ Three decisions in it that are not arithmetic:
   caveats rather than quietly fixed here, because fixing it belongs on the probe side
   and needs a run.
 
-**Nothing published moves until `fights.json` is regenerated.** The fix is in the
-document builder, which reads the probe payload -- a CI artifact -- so a
-`fight-probe` dispatch with `--publish` and `--resume` rewrites the file from the
-cached payload at no Warcraft Logs cost.
+**It has been regenerated, and the published file carries it** (`deb23ae`,
+2026-08-31, a `fight-probe --publish --resume` dispatch that skipped every
+encounter and spent **no** Warcraft Logs points -- the resume reads the cached
+payload before a query is sent):
+
+```
+boss                     diff  rows  kills  band  dupes  unobs
+Sszorak                     4    17      9     9      8      -
+The Twin Fangs              4    10      6     6      4      -
+Entombed Sentinels          5     8      6     6      2      -
+Entombed Sentinels          4    27     21    21      6      -
+Vashnik the Malignant       5     6      1     1      5      -
+Vashnik the Malignant       4    30     18    18     12      -
+Nek'zali the Soulcoiler     5     6      3     3      3      -
+Nek'zali the Soulcoiler     4    25     15    15     10      -
+The Lost Explorers          5     9      3     2      6      1
+The Lost Explorers          4     7      4     3      3      -
+```
+
+Vashnik at Mythic now carries the caveat it was defeating: *"1 distinct kill(s)
+sampled: too few to tell an encounter's shape from one guild's pull."*
+
+**`distinctKills` and the band's `fights` need not agree, and both rows where they
+do not are explicable rather than a defect.** `distinctKills` counts over *every*
+sampled row; the band counts over the rows it admits. The Lost Explorers at Mythic
+differs by the pull whose fetch read nothing -- it has no curve, so it matches no
+group and counts as its own kill, which under-claims the dedup in the safe
+direction -- and at Heroic by a truncated pull. Read `duplicateUploads` and
+`unobservedKills` on the band and the arithmetic closes.
+
 
 **"First kills" is bounded by the ranking window, and that bound was invisible.**
 `select_report_fights` sorts by kill date, but only over the rows it was handed,
