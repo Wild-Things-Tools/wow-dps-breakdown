@@ -5044,9 +5044,15 @@ the other difficulty, and `measurements[]` already holds it.
 
 ### What Vashnik's adds look like, and why Mythic cannot show it
 
-Read out of the committed `fights.json`, no new run. Mythic n=6, Heroic n=30:
+Read out of the committed `fights.json`, no new run.
 
-| NPC | instances (median, range) | first seen | lifetime | cadence | damage share | in kills |
+**The sample sizes in this section are ROWS, and the section that follows this one
+is why.** Vashnik's "n=6 Mythic" is **one kill uploaded six times** and its "n=30
+Heroic" is **18 kills**; `pooled_adds`' `seenInFights` counts rows and, in the
+committed document, still does -- the probe-side fix needs a new payload. The
+figures are kept as measured, with the denominators named for what they are:
+
+| NPC | instances (median, range) | first seen | lifetime | cadence | damage share | in rows |
 |---|---|---|---|---|---|---|
 | Vashnik | 1 | 0.1 s | 460 s | -- | 0.812 | 30/30 H |
 | Clotting Venom | **3** (2-4) | 115 s | 18.6 s | **125 s** | 0.042 | 30/30 H |
@@ -5056,14 +5062,21 @@ Read out of the committed `fights.json`, no new run. Mythic n=6, Heroic n=30:
 125 s is a recurring wave; **0.39 s is a cascade** -- instances appearing within a
 fraction of a second of each other, 2 rising to 6. That is the shape of "one big
 add splits into two, each into two" and it is visible without anybody asserting it.
-And 4 of 30 kills carry no Burning Venom at all, which is a phase *choice* showing
-up from outside.
+A cadence is a property of the pull rather than of the sample, so duplicate uploads
+do not move it; what they move is how many pulls it rests on.
 
-**Mythic has neither.** Its six kills hold one Clotting Venom at 193 s for 11.9 s,
-no Burning Venom, peak 2 concurrent and mean **1.026** over a 435 s fight -- a
-second enemy up about 3% of the time. Two readings and six kills cannot separate
-them: all six guilds picked the cheap phase, or Mythic adds die too fast for a
-measure that counts an enemy only while it is being damaged.
+**The phase-choice reading does not survive the correction, and it was the
+interesting half.** "4 of 30 kills carry no Burning Venom" is four **rows** of
+thirty, and `pooled_adds` is pooled per encounter rather than per pull, so whether
+those are four kills or four uploads of one raid that skipped the phase is not
+answerable from the published document at all. Stated as a finding rather than
+quietly dropped: it was offered in #115 as evidence and it is weaker than it read.
+
+**Mythic has neither, and Mythic is one kill.** That kill holds one Clotting Venom
+at 193 s for 11.9 s, no Burning Venom, peak 2 concurrent and mean **1.026** over a
+435 s fight -- a second enemy up about 3% of the time. The old sentence here
+offered two readings and said "six kills cannot separate them"; with n=1 there is
+nothing to separate. One guild picked one phase, which is what one guild does.
 
 Two things this does not establish. The owner describes **three** add colours and
 the extraction names **two** NPCs -- either two colours share a game id or the
