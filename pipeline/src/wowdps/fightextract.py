@@ -451,6 +451,15 @@ class FightObservation:
             "encounterName": self.encounter_name,
             "difficulty": self.difficulty,
             "kill": self.kill,
+            # When the kill happened, epoch milliseconds from the ranking row, and
+            # 0 when that row carried none. Pooled as `killedBetween` already; here
+            # per fight because it is the one piece of evidence that could settle
+            # the duplicate question *before* a kill is paid for. Two uploads of one
+            # kill should carry the same absolute start, which would let
+            # `select_report_fights` drop the duplicates for the price of a ranking
+            # row rather than seven event queries. Nobody has checked that -- it is
+            # not in any payload written so far, which is exactly why it is here.
+            "startedAt": self.started_at,
             "durationSeconds": self.duration,
             "raidSize": self.raid_size,
             "playersListed": self.players,
