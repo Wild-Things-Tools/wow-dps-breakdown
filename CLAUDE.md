@@ -2686,6 +2686,33 @@ carry **`guild`** and **`server`** beside the ten keys this file lists (read
 252, `permanentEnchant` 115 of 252, against 62 and 94) because it is a different
 kill wearing a different kit -- not schema drift.
 
+**And then it was asked, on a boss where the question is decidable** (CI 33433849263,
+same evening, Nek'zali 53470 -- filed under a PTR id that *has* its own parses, so no
+twin resolution and nothing to confound the count):
+
+```
+--- what each ranking metric reached ---
+  dps: 7 report(s)
+  bossdps: 7 report(s), 0 of them new
+  the extra metric(s) surfaced NOTHING the first had not
+```
+
+**Zero.** The second metric ranked the same seven reports in a different order and
+bought nothing but its own queries. That is a real finding about this encounter and
+is published as one -- the same discipline as the twin resolution, which recovers
+nothing for `characterRankings` and something for `fightRankings`.
+
+**Do not read it as a fact about the metric.** MID2's Nek'zali has **seven** ranked
+reports at Mythic against a `--reports` default of 10, so the sample already takes
+every report there is and no ordering can widen it. Two metrics over a pool smaller
+than the sample must agree on membership; that is arithmetic, not evidence. The
+question stays open for an encounter with a deep ranking, and `metricPasses` is now
+what answers it on any run rather than only on a harvest.
+
+Cost, as an internal check: **7.16 points over 6 queries** here against 9.17 over 8
+on Sszorak. The difference is exactly the twin resolution -- two extra ranking
+queries for the id Sszorak had to resolve and Nek'zali did not.
+
 ### Two queries per kill, not two per player
 
 The cost shape is the whole design. `playerDetails` returns **every player in the
