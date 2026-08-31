@@ -1835,6 +1835,41 @@ def _metric_contributions(passes: list[dict]) -> list[dict]:
     return rows
 
 
+def describe_metric_passes(passes: list[dict] | None) -> list[str]:
+    """What a multi-metric pass bought, for the probe transcript.
+
+    The probe is the schema check for `--also-metric`, and until this existed it
+    was the one thing the probe could not report: `ProbeCapture` keeps a single
+    rankings page -- the first pass's -- so a run could prove the service accepts
+    `bossdps` (it did, live, 2026-08-31) and still say nothing about whether that
+    pass reached a kill the first one had not. That is the whole question the
+    metric exists to answer, and the only other way to ask it was a full harvest,
+    which commits.
+
+    Reads the encounter summary's own `metricPasses` rather than recomputing, so
+    the probe prints exactly what a harvest would publish and the two cannot
+    disagree. Silent over a single metric, where the block says nothing usable.
+    """
+    if not passes or len(passes) < 2:
+        return []
+    lines = ["--- what each ranking metric reached ---"]
+    for index, row in enumerate(passes):
+        fresh = row.get("newReports")
+        # The first pass has newReports == reports by construction, so saying it
+        # would read as a finding about the metric rather than about the order.
+        note = "" if index == 0 else f", {fresh} of them new"
+        lines.append(f"  {row.get('metric')}: {row.get('reports')} report(s){note}")
+    later = sum(row.get("newReports") or 0 for row in passes[1:])
+    if later:
+        lines.append(f"  the extra metric(s) surfaced {later} report(s) the first did not")
+    else:
+        # A real finding about this encounter, and published as one: the second
+        # metric ranked the same kills in a different order and bought nothing but
+        # its own queries.
+        lines.append("  the extra metric(s) surfaced NOTHING the first had not")
+    return lines
+
+
 def warcraftlogs_select(pages: list[dict], limit: int, order: str):
     """Indirection so the tests can drive the sweep without importing the client.
 
@@ -2205,6 +2240,10 @@ def cmd_harvest_builds(args) -> int:
             before.get("limitPerHour"),
             before.get("pointsResetIn"),
         )
+        # What each ranking metric reached, from the last encounter the loop got a
+        # summary for. `None` rather than `[]` when the loop never got one, so the
+        # probe says nothing instead of saying no metric reached anything.
+        metric_passes: list[dict] | None = None
         for encounter_id in encounter_ids:
             try:
                 found, summary, buckets = harvest_encounter(
@@ -2245,6 +2284,7 @@ def cmd_harvest_builds(args) -> int:
                 summary["killsRead"],
                 summary["playersRead"],
             )
+            metric_passes = summary.get("metricPasses")
             if summary.get("stoppedBy"):
                 # The encounter kept the kills it had already paid for; the pass
                 # stops here and is resumable by re-running once points reset.
@@ -2252,6 +2292,8 @@ def cmd_harvest_builds(args) -> int:
                 stopped_early = True
                 break
 
+        if args.probe:
+            transcript.extend(describe_metric_passes(metric_passes))
         if args.probe and capture is not None:
             # No second fetch. The sweep above already paid for these three
             # payloads; asking again made the probe's own request count wrong by

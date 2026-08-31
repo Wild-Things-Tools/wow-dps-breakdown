@@ -2146,3 +2146,48 @@ def test_naming_the_primary_metric_again_costs_no_second_query():
 
     assert plan.rankings == 1
     assert "metricPasses" not in summary
+
+
+def test_the_probe_says_what_a_second_metric_reached():
+    """The probe is the schema check for ``--also-metric`` and could not report it.
+
+    ``ProbeCapture`` keeps a single rankings page -- the first pass's -- so a probe
+    could prove the service accepts ``bossdps`` (it did, live, 2026-08-31, eight
+    queries against a single metric's five) and still say nothing about whether
+    that pass reached a kill the first one had not. That is the whole question the
+    metric exists to answer, and the only other way to ask it was a full harvest,
+    which commits.
+
+    Reads the encounter summary's own ``metricPasses`` rather than recomputing, so
+    the probe prints exactly what a harvest publishes.
+    """
+    from wowdps.harvest import describe_metric_passes
+
+    widened = describe_metric_passes(
+        [
+            {"metric": "dps", "reports": 4, "newReports": 4},
+            {"metric": "bossdps", "reports": 4, "newReports": 2},
+        ]
+    )
+    assert any("bossdps: 4 report(s), 2 of them new" in line for line in widened)
+    assert any("surfaced 2 report(s) the first did not" in line for line in widened)
+
+    # The first pass has newReports == reports by construction, so it is not
+    # reported as a finding about the metric.
+    assert not any("4 of them new" in line for line in widened)
+
+    # Reaching nothing new is a real finding about the encounter and is said as
+    # one, rather than left as a number a reader has to subtract.
+    inert = describe_metric_passes(
+        [
+            {"metric": "dps", "reports": 4, "newReports": 4},
+            {"metric": "bossdps", "reports": 4, "newReports": 0},
+        ]
+    )
+    assert any("surfaced NOTHING the first had not" in line for line in inert)
+
+    # Silent over one metric, and over a pass that never got a summary -- the
+    # second is `None` rather than `[]` so "nothing was measured" cannot read as
+    # "no metric reached anything".
+    assert describe_metric_passes([{"metric": "dps", "reports": 4, "newReports": 4}]) == []
+    assert describe_metric_passes(None) == []

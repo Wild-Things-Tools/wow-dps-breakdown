@@ -2661,11 +2661,30 @@ shape as `--spec`, and the reason the harvest can afford a second question at al
 full MID2 pass measured 58 queries of which 12 were rankings; a `bossdps` pass adds
 eight, about 14% of the query count for a different sample of the same size.
 
-**Nothing has been run with it yet.** The behaviour is pinned offline (five tests, each
-confirmed by a canary that turns exactly it red) and the argument is verified against
-the live schema, but no harvest has asked for `bossdps`. Treat the first dispatch as a
-schema check as much as a harvest, the same position every other new query in this file
-started from.
+**It has been run, on 2026-08-31** (CI 33433361451, probe mode, MID2, Mythic, cold
+cache). The service accepts the metric: exit 0, and the double pass shows in the
+query count -- **8 queries and 9.17 points for one kill** against the 5 queries and
+6.2 points a single-metric probe measured. The twin resolution fired first and the
+second metric was asked about the id it settled (53420 -> 3420, name verified),
+which is the ordering decision above, live.
+
+Extrapolated by the run itself and labelled as such: 240 kills is about **2,201
+points, 12.2% of one hour** -- affordable, and roughly double the single-metric
+pass, which is the shape "one ranking query per page per metric, nothing per kill"
+predicts once the fixed overhead is in.
+
+**And the probe could not answer the question the metric exists for.** `ProbeCapture`
+keeps a *single* rankings page -- the first pass's -- so the run proved `bossdps` is
+accepted and said nothing about whether it reached a kill `dps` had not. That is
+`metricPasses`, which only a *harvest* published, and a harvest commits. The probe
+prints it now (`describe_metric_passes`), read off the encounter summary rather than
+recomputed, so the probe and a harvest cannot disagree. Silent over one metric.
+
+Two smaller things the same run recorded, neither a defect: `characterRankings` rows
+carry **`guild`** and **`server`** beside the ten keys this file lists (read
+2026-08-23), and the gear-key counts differ from the 2026-08-23 reading (gems 72 of
+252, `permanentEnchant` 115 of 252, against 62 and 94) because it is a different
+kill wearing a different kit -- not schema drift.
 
 ### Two queries per kill, not two per player
 
@@ -5044,9 +5063,15 @@ the other difficulty, and `measurements[]` already holds it.
 
 ### What Vashnik's adds look like, and why Mythic cannot show it
 
-Read out of the committed `fights.json`, no new run. Mythic n=6, Heroic n=30:
+Read out of the committed `fights.json`, no new run.
 
-| NPC | instances (median, range) | first seen | lifetime | cadence | damage share | in kills |
+**The sample sizes in this section are ROWS, and the section that follows this one
+is why.** Vashnik's "n=6 Mythic" is **one kill uploaded six times** and its "n=30
+Heroic" is **18 kills**; `pooled_adds`' `seenInFights` counts rows and, in the
+committed document, still does -- the probe-side fix needs a new payload. The
+figures are kept as measured, with the denominators named for what they are:
+
+| NPC | instances (median, range) | first seen | lifetime | cadence | damage share | in rows |
 |---|---|---|---|---|---|---|
 | Vashnik | 1 | 0.1 s | 460 s | -- | 0.812 | 30/30 H |
 | Clotting Venom | **3** (2-4) | 115 s | 18.6 s | **125 s** | 0.042 | 30/30 H |
@@ -5056,14 +5081,21 @@ Read out of the committed `fights.json`, no new run. Mythic n=6, Heroic n=30:
 125 s is a recurring wave; **0.39 s is a cascade** -- instances appearing within a
 fraction of a second of each other, 2 rising to 6. That is the shape of "one big
 add splits into two, each into two" and it is visible without anybody asserting it.
-And 4 of 30 kills carry no Burning Venom at all, which is a phase *choice* showing
-up from outside.
+A cadence is a property of the pull rather than of the sample, so duplicate uploads
+do not move it; what they move is how many pulls it rests on.
 
-**Mythic has neither.** Its six kills hold one Clotting Venom at 193 s for 11.9 s,
-no Burning Venom, peak 2 concurrent and mean **1.026** over a 435 s fight -- a
-second enemy up about 3% of the time. Two readings and six kills cannot separate
-them: all six guilds picked the cheap phase, or Mythic adds die too fast for a
-measure that counts an enemy only while it is being damaged.
+**The phase-choice reading does not survive the correction, and it was the
+interesting half.** "4 of 30 kills carry no Burning Venom" is four **rows** of
+thirty, and `pooled_adds` is pooled per encounter rather than per pull, so whether
+those are four kills or four uploads of one raid that skipped the phase is not
+answerable from the published document at all. Stated as a finding rather than
+quietly dropped: it was offered in #115 as evidence and it is weaker than it read.
+
+**Mythic has neither, and Mythic is one kill.** That kill holds one Clotting Venom
+at 193 s for 11.9 s, no Burning Venom, peak 2 concurrent and mean **1.026** over a
+435 s fight -- a second enemy up about 3% of the time. The old sentence here
+offered two readings and said "six kills cannot separate them"; with n=1 there is
+nothing to separate. One guild picked one phase, which is what one guild does.
 
 Two things this does not establish. The owner describes **three** add colours and
 the extraction names **two** NPCs -- either two colours share a game id or the
