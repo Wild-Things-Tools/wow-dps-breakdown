@@ -223,7 +223,7 @@ jobs:
           fi
 
       - name: Summary
-        if: steps.creds.outputs.enabled == 'true'
+        if: always() && steps.creds.outputs.enabled == 'true'
         run: |
           {
             echo '## Fight probe'
@@ -265,9 +265,29 @@ jobs:
         env:
           TIER: ${{ inputs.tier || 'MID2' }}
 
+      # `always()`, and it is load-bearing rather than tidiness. A custom `if:`
+      # without a status function still gets `success()` ANDed in by GitHub, so
+      # this step used to be skipped on exactly the failures the partial payload
+      # exists for. The pass writes per encounter and the step above says so in
+      # its own comment ("whatever was collected is still written") -- that
+      # output was then thrown away one step later, along with the Warcraft Logs
+      # points that bought it.
+      #
+      # Exit 2 (point ceiling) and 3 (outstanding) are already downgraded to
+      # warnings above, so those uploaded. What did not: exit 1, the
+      # one-difficulty refusal, and any crash -- the two cases where a human most
+      # needs to see how far the pass got.
+      #
+      # Same defect `gear.yml` shipped and fixed; CLAUDE.md there names `buffs`
+      # and `sims` as having the same shape and left them deliberately, because
+      # whether THEIR sweeps write partial output is an open question. This one
+      # is not open: it writes.
       - uses: actions/upload-artifact@v4
-        if: steps.creds.outputs.enabled == 'true'
+        if: always() && steps.creds.outputs.enabled == 'true'
         with:
           name: fight-probe
           path: fight-probe
+          # A pass that died before its first encounter has nothing to upload,
+          # and that is not itself a failure worth failing the run over.
+          if-no-files-found: ignore
           retention-days: 14

@@ -599,6 +599,35 @@ carry the same `always()` publish job over an upload step with no condition. Whe
 their sweeps write partial output at all is a separate question from this one, so
 that is a finding for a human rather than a change made in passing.
 
+**Surveyed across all eight workflows on 2026-08-31**, because "the same shape" was
+never counted. Five result uploads already carry `always()` -- `build-search`,
+`gear`, `harvest-builds`, `progress-hours`, `projection-check`. Four did not:
+
+| workflow | upload | writes partial output? |
+|---|---|---|
+| `fight-probe.yml` | `if: steps.creds…` | **yes** -- fixed |
+| `loot-sources.yml` | `if: steps.creds…` | unestablished |
+| `sims.yml` | no `if:` | unestablished |
+| `buffs.yml` | no `if:` | unestablished |
+
+Note the trap in the first two: **a custom `if:` with no status function still gets
+`success()` ANDed in**, so `if: steps.creds.outputs.enabled == 'true'` reads like a
+credentials guard and is also a success guard. That is harder to see than a missing
+`if:` and fails the same way.
+
+Only `fight-probe.yml` is changed, and only because its own Probe step already
+states that partial output is written ("whatever was collected is still written")
+-- exit 2 and 3 are downgraded to warnings there, so those uploaded; exit 1 (the
+one-difficulty refusal) and any crash did not, which are the two cases where a
+person most needs to see how far a pass got. Its Summary step had the identical
+guard and is fixed with it.
+
+The other three stay open for the reason above: `always()` on a sweep that writes
+nothing until the end uploads an empty directory and *looks* like a fix. The
+`simc-bundle` uploads in `buffs`, `gear` and `sims` are deliberately left on
+`success()` -- they are inputs to a later job, and a bundle build that failed has
+nothing worth keeping.
+
 ### Two sweeps covered simc's profiles and the ranking covered the tier
 
 `buffs.yml` and `gear.yml` did not run `wowdps unvalidated` or `wowdps extra-builds`
@@ -4892,6 +4921,54 @@ and `size`. Those are metadata about the pull, not counted out of the event stre
 made yet. `--max-pages 3` is the current default. Raise it and re-measure before
 concluding anything about a long fight.
 
+### `searchExhausted` works, and it is what a young tier feels like (2026-08-31)
+
+Dispatched a Mythic probe of Vashnik (53455) at `--reports 30` against a payload
+holding 6, expecting the "fewer kills than `--reports`" branch of `is_complete` to
+re-open it. It did not:
+
+```
+encounter 53455 already has 6 fights; skipping
+```
+
+Correct, and worth having seen once: the search had already run to completion, so
+`searchExhausted` is set and 6 is all there is. **No amount of `--reports` produces
+a seventh Mythic kill of a boss that has six.** The run cost nothing, which is the
+whole point of that branch -- MID2 stalled for two days before it existed.
+
+So "get a bigger Mythic sample" is not a dial on a young tier. What IS available is
+the other difficulty, and `measurements[]` already holds it.
+
+### What Vashnik's adds look like, and why Mythic cannot show it
+
+Read out of the committed `fights.json`, no new run. Mythic n=6, Heroic n=30:
+
+| NPC | instances (median, range) | first seen | lifetime | cadence | damage share | in kills |
+|---|---|---|---|---|---|---|
+| Vashnik | 1 | 0.1 s | 460 s | -- | 0.812 | 30/30 H |
+| Clotting Venom | **3** (2-4) | 115 s | 18.6 s | **125 s** | 0.042 | 30/30 H |
+| Burning Venom | **2** (2-**6**) | 277 s | 24.5 s | **0.39 s** | 0.026 | **26/30** H |
+
+**The cadence separates two different shapes and is the useful column here.**
+125 s is a recurring wave; **0.39 s is a cascade** -- instances appearing within a
+fraction of a second of each other, 2 rising to 6. That is the shape of "one big
+add splits into two, each into two" and it is visible without anybody asserting it.
+And 4 of 30 kills carry no Burning Venom at all, which is a phase *choice* showing
+up from outside.
+
+**Mythic has neither.** Its six kills hold one Clotting Venom at 193 s for 11.9 s,
+no Burning Venom, peak 2 concurrent and mean **1.026** over a 435 s fight -- a
+second enemy up about 3% of the time. Two readings and six kills cannot separate
+them: all six guilds picked the cheap phase, or Mythic adds die too fast for a
+measure that counts an enemy only while it is being damaged.
+
+Two things this does not establish. The owner describes **three** add colours and
+the extraction names **two** NPCs -- either two colours share a game id or the
+third sits under the significance floor, and nothing here decides which. And a
+scenario built from the Heroic numbers would be a wrong simulation rather than a
+bigger sample: fight length and raid size differ, so the *shape* travels and the
+*numbers* do not.
+
 ### "Present" is not "read", and the headline named the empty one
 
 `_hardest` chose the hardest difficulty **present** where CLAUDE.md said, and the
@@ -5484,6 +5561,19 @@ identical from the outside -- queued, never triggered, wrong API -- and only the
 list separates them. This is the same lesson as the paragraph above, one layer
 further out: **an empty result is not a measurement until you know the thing you
 asked would have answered.**
+
+**A fourth reading, measured on 2026-08-31, and it is the one to check FIRST
+because it is a single call.** PR #129 sat at `total_count: 0` on `check-runs`
+with no path filter in the way and `pull_request:` unfiltered -- so it should
+have run. It could not: the PR was **`mergeable_state: dirty`**, a merge conflict
+in `CLAUDE.md`. A `pull_request` workflow runs against the *merge ref*, and
+GitHub cannot build one for a conflicted PR, so no check is ever created.
+
+Resolving the conflict and pushing produced three checks within a minute, all
+green. So the reading order is: **`GET /pulls/N` for `mergeable_state` before
+waiting on anything.** A conflicted PR looks exactly like a queued one from the
+check list, and unlike the other three cases, waiting never fixes it -- which is
+how an hour goes by on a PR that was never going to start.
 
 Related, and it saves a wait in the sibling repo: **`wtt-backend` has no GitHub
 Actions workflows at all** (`list_workflows` returns `total_count: 0`, checked
