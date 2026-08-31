@@ -4921,6 +4921,54 @@ and `size`. Those are metadata about the pull, not counted out of the event stre
 made yet. `--max-pages 3` is the current default. Raise it and re-measure before
 concluding anything about a long fight.
 
+### `searchExhausted` works, and it is what a young tier feels like (2026-08-31)
+
+Dispatched a Mythic probe of Vashnik (53455) at `--reports 30` against a payload
+holding 6, expecting the "fewer kills than `--reports`" branch of `is_complete` to
+re-open it. It did not:
+
+```
+encounter 53455 already has 6 fights; skipping
+```
+
+Correct, and worth having seen once: the search had already run to completion, so
+`searchExhausted` is set and 6 is all there is. **No amount of `--reports` produces
+a seventh Mythic kill of a boss that has six.** The run cost nothing, which is the
+whole point of that branch -- MID2 stalled for two days before it existed.
+
+So "get a bigger Mythic sample" is not a dial on a young tier. What IS available is
+the other difficulty, and `measurements[]` already holds it.
+
+### What Vashnik's adds look like, and why Mythic cannot show it
+
+Read out of the committed `fights.json`, no new run. Mythic n=6, Heroic n=30:
+
+| NPC | instances (median, range) | first seen | lifetime | cadence | damage share | in kills |
+|---|---|---|---|---|---|---|
+| Vashnik | 1 | 0.1 s | 460 s | -- | 0.812 | 30/30 H |
+| Clotting Venom | **3** (2-4) | 115 s | 18.6 s | **125 s** | 0.042 | 30/30 H |
+| Burning Venom | **2** (2-**6**) | 277 s | 24.5 s | **0.39 s** | 0.026 | **26/30** H |
+
+**The cadence separates two different shapes and is the useful column here.**
+125 s is a recurring wave; **0.39 s is a cascade** -- instances appearing within a
+fraction of a second of each other, 2 rising to 6. That is the shape of "one big
+add splits into two, each into two" and it is visible without anybody asserting it.
+And 4 of 30 kills carry no Burning Venom at all, which is a phase *choice* showing
+up from outside.
+
+**Mythic has neither.** Its six kills hold one Clotting Venom at 193 s for 11.9 s,
+no Burning Venom, peak 2 concurrent and mean **1.026** over a 435 s fight -- a
+second enemy up about 3% of the time. Two readings and six kills cannot separate
+them: all six guilds picked the cheap phase, or Mythic adds die too fast for a
+measure that counts an enemy only while it is being damaged.
+
+Two things this does not establish. The owner describes **three** add colours and
+the extraction names **two** NPCs -- either two colours share a game id or the
+third sits under the significance floor, and nothing here decides which. And a
+scenario built from the Heroic numbers would be a wrong simulation rather than a
+bigger sample: fight length and raid size differ, so the *shape* travels and the
+*numbers* do not.
+
 ### "Present" is not "read", and the headline named the empty one
 
 `_hardest` chose the hardest difficulty **present** where CLAUDE.md said, and the
