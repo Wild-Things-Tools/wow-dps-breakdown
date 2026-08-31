@@ -5562,6 +5562,19 @@ list separates them. This is the same lesson as the paragraph above, one layer
 further out: **an empty result is not a measurement until you know the thing you
 asked would have answered.**
 
+**A fourth reading, measured on 2026-08-31, and it is the one to check FIRST
+because it is a single call.** PR #129 sat at `total_count: 0` on `check-runs`
+with no path filter in the way and `pull_request:` unfiltered -- so it should
+have run. It could not: the PR was **`mergeable_state: dirty`**, a merge conflict
+in `CLAUDE.md`. A `pull_request` workflow runs against the *merge ref*, and
+GitHub cannot build one for a conflicted PR, so no check is ever created.
+
+Resolving the conflict and pushing produced three checks within a minute, all
+green. So the reading order is: **`GET /pulls/N` for `mergeable_state` before
+waiting on anything.** A conflicted PR looks exactly like a queued one from the
+check list, and unlike the other three cases, waiting never fixes it -- which is
+how an hour goes by on a PR that was never going to start.
+
 Related, and it saves a wait in the sibling repo: **`wtt-backend` has no GitHub
 Actions workflows at all** (`list_workflows` returns `total_count: 0`, checked
 2026-08-26). No PR there ever gets a check. Verify by hand and say so in the PR;
