@@ -599,6 +599,35 @@ carry the same `always()` publish job over an upload step with no condition. Whe
 their sweeps write partial output at all is a separate question from this one, so
 that is a finding for a human rather than a change made in passing.
 
+**Surveyed across all eight workflows on 2026-08-31**, because "the same shape" was
+never counted. Five result uploads already carry `always()` -- `build-search`,
+`gear`, `harvest-builds`, `progress-hours`, `projection-check`. Four did not:
+
+| workflow | upload | writes partial output? |
+|---|---|---|
+| `fight-probe.yml` | `if: steps.creds…` | **yes** -- fixed |
+| `loot-sources.yml` | `if: steps.creds…` | unestablished |
+| `sims.yml` | no `if:` | unestablished |
+| `buffs.yml` | no `if:` | unestablished |
+
+Note the trap in the first two: **a custom `if:` with no status function still gets
+`success()` ANDed in**, so `if: steps.creds.outputs.enabled == 'true'` reads like a
+credentials guard and is also a success guard. That is harder to see than a missing
+`if:` and fails the same way.
+
+Only `fight-probe.yml` is changed, and only because its own Probe step already
+states that partial output is written ("whatever was collected is still written")
+-- exit 2 and 3 are downgraded to warnings there, so those uploaded; exit 1 (the
+one-difficulty refusal) and any crash did not, which are the two cases where a
+person most needs to see how far a pass got. Its Summary step had the identical
+guard and is fixed with it.
+
+The other three stay open for the reason above: `always()` on a sweep that writes
+nothing until the end uploads an empty directory and *looks* like a fix. The
+`simc-bundle` uploads in `buffs`, `gear` and `sims` are deliberately left on
+`success()` -- they are inputs to a later job, and a bundle build that failed has
+nothing worth keeping.
+
 ### Two sweeps covered simc's profiles and the ranking covered the tier
 
 `buffs.yml` and `gear.yml` did not run `wowdps unvalidated` or `wowdps extra-builds`
