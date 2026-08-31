@@ -243,6 +243,10 @@ def test_running_out_of_budget_keeps_the_fights_already_paid_for():
 
 
 def one_fight(code: str) -> object:
+    # Each report code is its OWN kill, two seconds longer than the last. Two
+    # guilds never kill a boss in the same number of milliseconds, and
+    # `group_uploads` reads pulls that agree to the millisecond as one kill
+    # somebody uploaded twice -- which is what these fixtures would then be.
     return observe_fight(
         report_code=code,
         fight={
@@ -251,7 +255,7 @@ def one_fight(code: str) -> object:
             "name": "Lightblinded Vanguard",
             "size": 20,
             "startTime": START,
-            "endTime": END,
+            "endTime": END + 2_000 * (1 + sum(ord(character) for character in code) % 11),
             "friendlyPlayers": list(range(20)),
             "kill": True,
         },

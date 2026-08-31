@@ -63,6 +63,26 @@ def aura(second: float, kind: str, ability: int, actor: int, instance: int = 0) 
     }
 
 
+#: How far apart two fixture pulls of one encounter have to be to be two kills
+#: rather than one kill uploaded twice. ``group_uploads`` merges rows whose length
+#: agrees to within ``DUPLICATE_UPLOAD_SECONDS`` and whose curves line up, so a
+#: fixture that gives several report codes the identical start and end is stating
+#: physics that cannot happen -- two guilds never kill a boss in the same number of
+#: milliseconds -- and would pin whatever the code does with it.
+KILLS_APART_MS = 2_000
+
+
+def apart(code: str) -> int:
+    """A per-report length offset, so each fixture code is its OWN kill.
+
+    Deterministic, and comfortably outside the threshold. Two codes whose character
+    sums collide would land on the same length and be read as one kill -- which
+    fails loudly in the test that uses them rather than passing quietly, so this is
+    allowed to be simple.
+    """
+    return KILLS_APART_MS * (1 + sum(ord(character) for character in code) % 11)
+
+
 def fight(**overrides) -> dict:
     base = {
         "id": 7,
@@ -517,7 +537,7 @@ def test_an_aura_seen_in_one_fight_of_three_is_not_a_fight_pattern():
         aura_events=[aura(5, "applydebuff", 777, 10), aura(9, "removedebuff", 777, 10)],
         phase_metadata=[],
     )
-    observation.fights = [one_fight("r1", 20, 300), one_fight("r2", 20, 300), lonely]
+    observation.fights = [one_fight("r1", 20, 300), one_fight("r2", 20, 302), lonely]
 
     ids = {entry["abilityId"] for entry in observation.pooled_auras()}
     assert 555_001 in ids
@@ -539,7 +559,8 @@ def test_adds_are_pooled_on_game_id_because_actor_ids_are_report_local():
     # Same NPC, different report, different report-local actor id.
     second = observe_fight(
         report_code="r2",
-        fight=fight(),
+        # A different kill, not a second upload of the first -- see `apart`.
+        fight=fight(endTime=FIGHT_END + apart("r2")),
         damage_events=[damage(1, 77)],
         death_events=[],
         aura_events=[],
@@ -567,6 +588,8 @@ def test_player_debuffs_are_not_offered_as_encounter_mechanics():
     )
 
     def fight(code: str) -> FightObservation:
+        # Its own length, so two report codes are two kills -- see `apart`.
+        length = 300.0 + apart(code) / 1000
         return FightObservation(
             report_code=code,
             fight_id=1,
@@ -574,10 +597,10 @@ def test_player_debuffs_are_not_offered_as_encounter_mechanics():
             encounter_name="Lightblinded Vanguard",
             difficulty=5,
             kill=True,
-            duration=300.0,
+            duration=length,
             raid_size=20,
             players=20,
-            timeline=TargetCountTimeline(steps=((0.0, 3),), duration=300.0),
+            timeline=TargetCountTimeline(steps=((0.0, 3),), duration=length),
             significant_timeline=TargetCountTimeline(steps=((0.0, 3),), duration=300.0),
             enemies=(),
             adds=(),
@@ -720,7 +743,7 @@ def test_an_aura_names_the_enemy_that_carried_it():
     observation.fights = [
         observe_fight(
             report_code=code,
-            fight=fight(),
+            fight=fight(endTime=FIGHT_END + apart(code)),
             damage_events=[damage(1, actor) for actor in (10, 11, 12)],
             death_events=[],
             aura_events=[
@@ -750,7 +773,7 @@ def test_an_aura_on_the_boss_is_reported_as_being_on_the_priority_target():
     observation.fights = [
         observe_fight(
             report_code=code,
-            fight=fight(name="Warlord"),
+            fight=fight(name="Warlord", endTime=FIGHT_END + apart(code)),
             damage_events=[damage(1, 10, amount=9000), damage(1, 11, amount=1000)],
             death_events=[],
             aura_events=[
@@ -776,7 +799,7 @@ def test_aura_carriers_pool_on_game_id_across_reports():
     def pull(code: str, actor: int):
         return observe_fight(
             report_code=code,
-            fight=fight(),
+            fight=fight(endTime=FIGHT_END + apart(code)),
             damage_events=[damage(1, actor)],
             death_events=[],
             aura_events=[
@@ -890,6 +913,8 @@ def test_a_self_buff_with_no_source_is_not_an_encounter_mechanic():
     from wowdps.fightextract import AuraWindow, FightObservation, TargetCountTimeline
 
     def pull(code: str) -> FightObservation:
+        # Its own length, so two report codes are two kills -- see `apart`.
+        length = 300.0 + apart(code) / 1000
         return FightObservation(
             report_code=code,
             fight_id=1,
@@ -897,11 +922,11 @@ def test_a_self_buff_with_no_source_is_not_an_encounter_mechanic():
             encounter_name="Lightblinded Vanguard",
             difficulty=5,
             kill=True,
-            duration=300.0,
+            duration=length,
             raid_size=20,
             players=20,
-            timeline=TargetCountTimeline(steps=((0.0, 3),), duration=300.0),
-            significant_timeline=TargetCountTimeline(steps=((0.0, 3),), duration=300.0),
+            timeline=TargetCountTimeline(steps=((0.0, 3),), duration=length),
+            significant_timeline=TargetCountTimeline(steps=((0.0, 3),), duration=length),
             enemies=(),
             adds=(),
             phases=(),
@@ -1091,7 +1116,10 @@ SENTINELS_PULL = transitions(
 def sentinels_fight(report_code: str, *, with_phases: bool) -> object:
     return observe_fight(
         report_code=report_code,
-        fight=fight(phaseTransitions=SENTINELS_PULL if with_phases else []),
+        fight=fight(
+            phaseTransitions=SENTINELS_PULL if with_phases else [],
+            endTime=FIGHT_END + apart(report_code),
+        ),
         damage_events=[damage(1, 50)],
         death_events=[],
         aura_events=[],
@@ -1163,3 +1191,52 @@ def test_two_kills_from_one_report_are_two_fights_for_an_aura():
     assert pooled["seenInFights"] == 2
     assert pooled["applications"] == 2
     assert pooled["carriedBy"][0]["seenInFights"] == 2
+
+
+# --------------------------------------------------------------------------------
+# One kill, several uploads
+# --------------------------------------------------------------------------------
+
+
+def test_one_kill_uploaded_three_times_is_pooled_once():
+    """Warcraft Logs indexes uploads, not raid nights.
+
+    Six people in one raid who each run a logger produce six reports carrying the
+    same kills, and the sampler picks kills per report -- so one pull arrives as
+    several rows. Measured on the committed MID2 document, Vashnik at Mythic is six
+    rows of one 434.78 s pull and its Heroic sample is 30 rows of 18 kills.
+
+    Note the fixture: three calls differing only in report code produce three
+    byte-identical pulls, which is precisely what an upload set looks like and what
+    every fixture in this file used to state without meaning to.
+    """
+    observation = EncounterObservation(3180, "Lightblinded Vanguard", 5)
+    observation.fights = [one_fight(code, 20, 300) for code in ("r1", "r2", "r3")]
+    observation.fights.append(one_fight("r4", 20, 260))
+
+    assert observation.fights_sampled == 4
+    assert len(observation.distinct_fights()) == 2
+
+    document = observation.to_json()
+    # The row count says what the run read and is what its cost is measured in;
+    # the kill count is what every pooled number is an observation of. Both.
+    assert document["fightsSampled"] == 4
+    assert document["distinctKills"] == 2
+    assert document["durationSeconds"]["n"] == 2
+    assert all(add["seenInFights"] <= 2 for add in document["adds"])
+
+
+def test_the_two_fight_aura_floor_counts_kills_and_not_uploads():
+    """The gate exists so one pull cannot establish an encounter mechanic.
+
+    An aura seen in a single kill that two people uploaded used to clear a floor of
+    two on its own -- the gate satisfied by the number of loggers in the raid.
+    """
+    observation = EncounterObservation(3180, "Lightblinded Vanguard", 5)
+    observation.fights = [one_fight("r1", 20, 300), one_fight("r2", 20, 300)]
+    assert observation.pooled_auras() == []
+
+    # The control, so this is not simply refusing everything: two kills that really
+    # are two kills keep the aura.
+    observation.fights = [one_fight("r1", 20, 300), one_fight("r2", 20, 290)]
+    assert 555_001 in {entry["abilityId"] for entry in observation.pooled_auras()}

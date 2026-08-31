@@ -79,7 +79,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .fightextract import COMPLETE_EVENT_COVERAGE, Spread
+from .fightextract import COMPLETE_EVENT_COVERAGE, Spread, group_uploads
 from .fightprofile import (
     SOURCE_DEFAULT,
     SOURCE_HAND,
@@ -727,104 +727,26 @@ def _pattern_label(pull: dict) -> str:
     )
 
 
-#: Two sampled pulls are one kill uploaded twice when their lengths agree to within
-#: this many seconds **and** their target-count curves agree step for step.
-#:
-#: Warcraft Logs indexes uploads, not raid nights. Six people in one raid who each
-#: run a logger produce six reports carrying the same kills, and the sampler picks
-#: kills per report -- so one kill arrives as six rows, and nothing in a row says
-#: which raid it came from. What does say it is the clock.
-#:
-#: Measured over the committed MID2 ``fights.json`` on 2026-08-31, 145 sampled rows
-#: across ten (encounter, difficulty) pairs: sorting each pair's pulls by length, the
-#: 65 closest consecutive gaps are all under **0.082 s** and the next smallest gap is
-#: **1.074 s**. That is an order-of-magnitude break with nothing in it, and the
-#: threshold sits inside it -- six times the widest duplicate spread observed, half
-#: the distance to the closest pair of genuinely different kills. Calibrated, not
-#: derived, exactly like ``_PATTERN_DIFFERENT_SHARE`` above; redo it when the sample
-#: grows.
-_DUPLICATE_UPLOAD_SECONDS = 0.5
-
-
 def _fight_steps(fight: dict) -> list:
     """The significant target-count curve of a payload fight row."""
     return (fight.get("significantTargetCount") or {}).get("steps") or []
 
 
-def _curves_agree(left: list, right: list, tolerance: float = _DUPLICATE_UPLOAD_SECONDS) -> bool:
-    """Do two pulls' target-count curves describe the same events?
-
-    Length alone is circumstantial -- two guilds can kill a boss in the same number
-    of seconds -- so the step function has to agree too: the same number of
-    transitions, each to exactly the same count, each within ``tolerance`` of the
-    other's time. Two uploads of one kill differ only by the recording clients'
-    clocks, which on MID2's Vashnik is about 30 ms across six uploads; two different
-    kills do not line up at all.
-
-    The count test is equality rather than a tolerance on purpose. It is an integer
-    and the whole question is whether these rows describe the same events, so a
-    curve that reaches three targets where the other reaches two is a different
-    fight however well the times match.
-    """
-    if len(left) != len(right):
-        return False
-    for step, other in zip(left, right, strict=True):
-        if not isinstance(step, (list, tuple)) or not isinstance(other, (list, tuple)):
-            return False
-        if len(step) < 2 or len(other) < 2:
-            return False
-        if abs(float(step[0]) - float(other[0])) > tolerance:
-            return False
-        if float(step[1]) != float(other[1]):
-            return False
-    return True
-
-
 def group_duplicate_uploads(fights: list[dict]) -> list[list[dict]]:
-    """Partition sampled pulls into one group per distinct kill.
+    """Partition sampled pull *rows* into one group per distinct kill.
 
-    A kill logged once is a group of one, so the result is always a partition of the
-    input and a payload with no duplicates comes back unchanged in shape.
-
-    The grouping is anchored rather than transitive: a row joins a group by matching
-    that group's **first** member, so a chain of near-misses cannot walk a group
-    across a gap wider than the threshold. Rows are sorted by length first, so the
-    answer does not depend on the order the probe happened to write them in.
-
-    One structural guard: **a report cannot contain the same kill twice**, so two
-    rows sharing a report code are two pulls however alike they look. Checked
-    against the whole committed MID2 document -- over 34 multi-member groups
-    spanning 93 rows it never fired once, which makes it an independent
-    confirmation of the length-and-curve rule rather than a guard doing work.
+    The rule itself lives in ``fightextract.group_uploads`` and is shared with the
+    probe side, which holds pulls as ``FightObservation`` objects rather than as
+    payload dicts. Two implementations of one rule is the thing that drifts, so
+    this is accessors and nothing else -- see that function for the calibration,
+    the same-report guard and why the grouping is anchored rather than transitive.
     """
-    ordered = sorted(
-        (fight for fight in fights if isinstance(fight, dict)),
-        key=lambda fight: (
-            float(fight.get("durationSeconds") or 0.0),
-            str(fight.get("reportCode") or ""),
-            fight.get("fightId") if isinstance(fight.get("fightId"), int) else -1,
-        ),
+    return group_uploads(
+        [fight for fight in fights if isinstance(fight, dict)],
+        duration_of=lambda fight: float(fight.get("durationSeconds") or 0.0),
+        steps_of=_fight_steps,
+        report_of=lambda fight: str(fight.get("reportCode") or ""),
     )
-    groups: list[list[dict]] = []
-    for fight in ordered:
-        duration = float(fight.get("durationSeconds") or 0.0)
-        for group in groups:
-            anchor = group[0]
-            if (
-                abs(duration - float(anchor.get("durationSeconds") or 0.0))
-                > _DUPLICATE_UPLOAD_SECONDS
-            ):
-                continue
-            if not _curves_agree(_fight_steps(fight), _fight_steps(anchor)):
-                continue
-            codes = {str(member.get("reportCode") or "") for member in group}
-            if str(fight.get("reportCode") or "") in codes:
-                continue
-            group.append(fight)
-            break
-        else:
-            groups.append([fight])
-    return groups
 
 
 def distinct_kills(fights: list[dict]) -> list[dict]:
