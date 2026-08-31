@@ -2661,11 +2661,30 @@ shape as `--spec`, and the reason the harvest can afford a second question at al
 full MID2 pass measured 58 queries of which 12 were rankings; a `bossdps` pass adds
 eight, about 14% of the query count for a different sample of the same size.
 
-**Nothing has been run with it yet.** The behaviour is pinned offline (five tests, each
-confirmed by a canary that turns exactly it red) and the argument is verified against
-the live schema, but no harvest has asked for `bossdps`. Treat the first dispatch as a
-schema check as much as a harvest, the same position every other new query in this file
-started from.
+**It has been run, on 2026-08-31** (CI 33433361451, probe mode, MID2, Mythic, cold
+cache). The service accepts the metric: exit 0, and the double pass shows in the
+query count -- **8 queries and 9.17 points for one kill** against the 5 queries and
+6.2 points a single-metric probe measured. The twin resolution fired first and the
+second metric was asked about the id it settled (53420 -> 3420, name verified),
+which is the ordering decision above, live.
+
+Extrapolated by the run itself and labelled as such: 240 kills is about **2,201
+points, 12.2% of one hour** -- affordable, and roughly double the single-metric
+pass, which is the shape "one ranking query per page per metric, nothing per kill"
+predicts once the fixed overhead is in.
+
+**And the probe could not answer the question the metric exists for.** `ProbeCapture`
+keeps a *single* rankings page -- the first pass's -- so the run proved `bossdps` is
+accepted and said nothing about whether it reached a kill `dps` had not. That is
+`metricPasses`, which only a *harvest* published, and a harvest commits. The probe
+prints it now (`describe_metric_passes`), read off the encounter summary rather than
+recomputed, so the probe and a harvest cannot disagree. Silent over one metric.
+
+Two smaller things the same run recorded, neither a defect: `characterRankings` rows
+carry **`guild`** and **`server`** beside the ten keys this file lists (read
+2026-08-23), and the gear-key counts differ from the 2026-08-23 reading (gems 72 of
+252, `permanentEnchant` 115 of 252, against 62 and 94) because it is a different
+kill wearing a different kit -- not schema drift.
 
 ### Two queries per kill, not two per player
 
