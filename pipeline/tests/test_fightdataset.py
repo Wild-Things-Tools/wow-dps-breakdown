@@ -488,12 +488,26 @@ def test_the_comparison_asks_which_enemy_carries_the_amplification(tmp_path):
 # --------------------------------------------------------------------------------
 
 
+#: How far apart two fixture pulls have to be to be two kills rather than one kill
+#: uploaded twice. ``group_duplicate_uploads`` merges rows whose length agrees to
+#: within ``_DUPLICATE_UPLOAD_SECONDS`` and whose curves line up, so a fixture that
+#: gives several "different guilds" the identical duration to the microsecond is
+#: stating physics that cannot happen -- and would pin whatever the code does with
+#: it. Same lesson the progress-hours fixtures cost once.
+KILLS_APART = 1.5
+
+
 def waved_fight(code: str, duration: float, wave_at: float | None, length: float = 90.0):
     """A single-target pull, optionally with two extra enemies for a while.
 
     The wave is long by default -- a third of a five-minute pull -- because the
     threshold is a *share of the fight*, and a wave shorter than it is by design not
     a different pattern.
+
+    Give every pull meant to be a *distinct kill* its own ``duration``, at least
+    ``KILLS_APART`` from the others. Two real guilds never kill a boss in the same
+    number of milliseconds; two uploads of one kill do, which is exactly what
+    ``group_duplicate_uploads`` reads.
     """
     events = [damage(second, 10) for second in (0.4, duration - 1)]
     if wave_at is not None:
@@ -534,7 +548,9 @@ def timeline_of(payload) -> dict:
 
 
 def test_pulls_that_agree_yield_one_pattern_and_nothing_to_choose_between():
-    timeline = timeline_of(payload_of([waved_fight(f"F{i}", 300.0, 60.0) for i in range(4)]))
+    timeline = timeline_of(
+        payload_of([waved_fight(f"F{i}", 300.0 + i * KILLS_APART, 60.0) for i in range(4)])
+    )
 
     assert len(timeline["patterns"]) == 1
     assert timeline["patterns"][0]["pulls"] == 4
@@ -546,8 +562,8 @@ def test_pulls_that_agree_yield_one_pattern_and_nothing_to_choose_between():
 def test_two_shapes_are_two_presets_and_the_popular_one_comes_first():
     """Three pulls where the wave never arrived and two where it did. That is two
     patterns, not one pattern and two outliers, and the view must be able to say so."""
-    fights = [waved_fight(f"NONE{i}", 300.0, None) for i in range(3)]
-    fights += [waved_fight(f"WAVE{i}", 300.0, 60.0) for i in range(2)]
+    fights = [waved_fight(f"NONE{i}", 300.0 + i * KILLS_APART, None) for i in range(3)]
+    fights += [waved_fight(f"WAVE{i}", 320.0 + i * KILLS_APART, 64.0) for i in range(2)]
     timeline = timeline_of(payload_of(fights))
 
     patterns = timeline["patterns"]
@@ -577,7 +593,7 @@ def test_the_same_shape_at_two_lengths_is_one_pattern():
 
 def test_a_pull_nobody_else_matched_is_context_and_never_a_preset_of_one():
     """With a handful of pulls sampled, "one log did this" is not a pattern."""
-    fights = [waved_fight(f"NONE{i}", 300.0, None) for i in range(3)]
+    fights = [waved_fight(f"NONE{i}", 300.0 + i * KILLS_APART, None) for i in range(3)]
     fights += [waved_fight("ODD", 300.0, 60.0)]
     timeline = timeline_of(payload_of(fights))
 
@@ -604,8 +620,8 @@ def test_when_no_two_pulls_agree_a_chart_still_has_something_to_draw():
 
 def test_patterns_are_stable_across_runs_whatever_order_the_pulls_arrive_in():
     """Determinism is the whole point of committing this file."""
-    fights = [waved_fight(f"NONE{i}", 300.0, None) for i in range(3)]
-    fights += [waved_fight(f"WAVE{i}", 300.0, 60.0) for i in range(2)]
+    fights = [waved_fight(f"NONE{i}", 300.0 + i * KILLS_APART, None) for i in range(3)]
+    fights += [waved_fight(f"WAVE{i}", 320.0 + i * KILLS_APART, 64.0) for i in range(2)]
     forward = timeline_of(payload_of(fights))
     backward = timeline_of(payload_of(list(reversed(fights))))
 
@@ -706,7 +722,7 @@ def test_the_band_leaves_out_partly_read_kills():
     the last known value forward, so it freezes the target count at the cut point and
     asserts it for the rest of the fight. Since the end of a kill is where adds die
     off, that *overstates* how many were up at the end."""
-    good = [waved_fight(f"G{i}", 300.0, 60.0) for i in range(4)]
+    good = [waved_fight(f"G{i}", 300.0 + i * KILLS_APART, 60.0) for i in range(4)]
     enc = payload_of(good)["encounters"][0]
     # Force one fight to look partly read.
     enc["fights"][0]["truncated"] = True
@@ -718,7 +734,7 @@ def test_nearly_read_is_still_not_read():
     """The rule this replaced admitted anything over 95%, beside a docstring that
     already claimed only fully-read fights. A twentieth of a five-minute kill is
     fifteen seconds of held-flat target count at the moment the fight empties out."""
-    good = [waved_fight(f"G{i}", 300.0, 60.0) for i in range(4)]
+    good = [waved_fight(f"G{i}", 300.0 + i * KILLS_APART, 60.0) for i in range(4)]
     enc = payload_of(good)["encounters"][0]
     enc["fights"][0]["truncated"] = True
     enc["fights"][0]["eventCoverage"] = 0.95
@@ -732,7 +748,7 @@ def test_a_complete_fetch_is_kept_even_when_its_coverage_is_low():
     """Coverage is not completeness. A raid that stops damaging an add halfway
     through leaves a genuine flat tail -- that is the encounter, not missing data,
     and dropping it would throw away a real observation."""
-    good = [waved_fight(f"G{i}", 300.0, 60.0) for i in range(3)]
+    good = [waved_fight(f"G{i}", 300.0 + i * KILLS_APART, 60.0) for i in range(3)]
     enc = payload_of(good)["encounters"][0]
     for fight in enc["fights"]:
         fight["truncated"] = False
@@ -982,7 +998,9 @@ def test_the_point_meter_does_not_defeat_the_settle(tmp_path):
 def _at(difficulty: int, code: str, fights: int = 3) -> dict:
     """One encounter's probe entry at one difficulty."""
     observation = EncounterObservation(3180, "Lightblinded Vanguard", difficulty)
-    observation.fights = [waved_fight(f"{code}{i}", 300.0, 60.0) for i in range(fights)]
+    observation.fights = [
+        waved_fight(f"{code}{i}", 300.0 + i * KILLS_APART, 60.0) for i in range(fights)
+    ]
     return observation.to_json()
 
 
@@ -1124,3 +1142,166 @@ def test_the_band_excludes_a_pull_that_read_nothing():
     # And a payload of nothing but unobserved pulls has no band at all, rather than
     # a band of zeros.
     assert _target_band({"fights": [dict(read_nothing) for _ in range(3)]}) is None
+
+
+# --------------------------------------------------------------------------------
+# One kill, several uploads
+# --------------------------------------------------------------------------------
+
+
+def uploads_of_one_kill(codes, duration=434.78, jitter=0.012):
+    """The same kill as several people's logging clients recorded it.
+
+    Modelled on what MID2's Vashnik at Mythic actually contains: six report codes,
+    lengths spread over 37 ms of a 434 s pull, and every step transition inside
+    about 30 ms of the others. The jitter is deliberately non-zero -- two clients
+    never agree exactly, and a fixture in which they do would pass a rule that only
+    tested equality.
+    """
+    return [
+        {
+            "reportCode": code,
+            "fightId": 32,
+            "kill": True,
+            "truncated": False,
+            "eventCoverage": 0.9996,
+            "durationSeconds": duration + index * jitter,
+            "significantTargetCount": {
+                "steps": [
+                    [0.0, 0],
+                    [0.5 + index * jitter, 1],
+                    [192.74 + index * jitter, 2],
+                    [204.67 + index * jitter, 1],
+                    [duration + index * jitter, 0],
+                ]
+            },
+        }
+        for index, code in enumerate(codes)
+    ]
+
+
+def test_one_kill_uploaded_six_times_is_one_kill():
+    """The finding this exists for, in the shape the real document has it.
+
+    Warcraft Logs indexes uploads, not raid nights, so six people in one raid who
+    each run a logger produce six reports carrying the same kills -- and the sampler
+    picks kills per report. Measured on the committed MID2 ``fights.json``: Vashnik
+    at Mythic publishes six "kills" whose lengths are 434.752 to 434.789 s, four of
+    them fight 32, and the same six report codes appear again on The Lost Explorers.
+    """
+    from wowdps.fightdataset import distinct_kills, group_duplicate_uploads
+
+    rows = uploads_of_one_kill(["A", "B", "C", "D", "E", "F"])
+    groups = group_duplicate_uploads(rows)
+    assert [len(group) for group in groups] == [6]
+    assert len(distinct_kills(rows)) == 1
+
+    # Every row is in exactly one group: the return value is a partition, so nothing
+    # can be dropped by grouping.
+    assert sum(len(group) for group in groups) == len(rows)
+
+
+def test_two_real_kills_are_never_merged():
+    """The control, and the direction this rule is allowed to fail in.
+
+    A false merge would publish two kills as one and nothing downstream could see
+    it, so the evidence has to be more than a coincidence of length. These two pulls
+    differ by 1.1 s -- the smallest gap between genuinely different kills anywhere in
+    the committed MID2 document -- and their curves differ as well.
+    """
+    from wowdps.fightdataset import group_duplicate_uploads
+
+    first = uploads_of_one_kill(["A"], duration=434.78)
+    second = uploads_of_one_kill(["B"], duration=435.88)
+    assert len(group_duplicate_uploads(first + second)) == 2
+
+    # Same length to the millisecond, different shape: still two kills. Length alone
+    # is circumstantial and must never be enough on its own.
+    twin = uploads_of_one_kill(["C"], duration=434.78)
+    twin[0]["significantTargetCount"]["steps"][2] = [192.74, 3]
+    assert len(group_duplicate_uploads(first + twin)) == 2
+
+
+def test_two_fights_from_one_report_are_never_one_kill():
+    """A report cannot contain the same kill twice.
+
+    So two rows sharing a report code are two pulls however alike they look. On the
+    committed MID2 document this guard never fires -- 34 multi-member groups over 93
+    rows, no collision -- which makes it an independent check on the length-and-curve
+    rule rather than a guard doing work. It also means a row with **no** report code
+    never merges with another, which is the safe direction: under-claiming a
+    duplicate costs a count, over-claiming loses a kill.
+    """
+    from wowdps.fightdataset import group_duplicate_uploads
+
+    rows = uploads_of_one_kill(["SAME", "SAME"])
+    assert len(group_duplicate_uploads(rows)) == 2
+
+
+def test_the_band_is_a_distribution_over_kills_and_says_how_many_it_dropped():
+    """Six uploads of one pull are one observation, not six.
+
+    Left in, that curve occupies six of the ranks every percentile is taken over, so
+    the band publishes an inter-quartile range of zero -- which reads as six kills
+    agreeing perfectly and is a claim no run made.
+    """
+    from wowdps.fightdataset import _target_band
+
+    other = uploads_of_one_kill(["Z"], duration=470.0)
+    other[0]["significantTargetCount"]["steps"] = [[0.0, 3], [100.0, 2], [300.0, 1]]
+
+    band = _target_band({"fights": uploads_of_one_kill(["A", "B", "C", "D"]) + other})
+    assert band is not None
+    assert band["fights"] == 2
+    assert band["duplicateUploads"] == 3
+
+    # And a boss nobody double-logged says nothing about an exclusion that did not
+    # happen -- absent rather than zero, the same rule as `unobservedKills`.
+    clean = _target_band({"fights": uploads_of_one_kill(["A"]) + other})
+    assert clean["fights"] == 2
+    assert "duplicateUploads" not in clean
+
+
+def test_a_pattern_needs_two_kills_and_not_two_uploads():
+    """``_MIN_PATTERN_PULLS`` counts kills, or one pull becomes its own consensus.
+
+    The preset's whole claim is "a shape several of these kills shared". Six uploads
+    of one kill always cluster together, so without the deduplication a single pull
+    clears the floor by itself and is published as evidence about the encounter.
+    """
+    from wowdps.fightdataset import _patterns
+
+    rows = uploads_of_one_kill(["A", "B", "C", "D", "E", "F"])
+    patterns = _patterns({"fights": rows, "durationSeconds": {"median": 434.78}}, [])
+    assert len(patterns) == 1
+    assert patterns[0]["pulls"] == 1
+    assert patterns[0]["reportCodes"] == ["A"]
+
+
+def test_the_too_few_caveat_counts_kills():
+    """Six rows cleared a caveat about having fewer than three kills.
+
+    That is the caveat firing backwards: the boss it exists for -- one pull, read
+    six times -- is exactly the one the row count let through.
+    """
+    from wowdps.fightdataset import _caveats
+
+    notes = _caveats({"fights": uploads_of_one_kill(["A", "B", "C", "D", "E", "F"])}, None)
+    assert any("1 distinct kill(s) sampled" in note for note in notes)
+    assert any("6 sampled row(s) are 1 distinct kill(s)" in note for note in notes)
+
+
+def test_the_measured_block_publishes_both_counts():
+    """``fightsSampled`` is rows, ``distinctKills`` is kills, and both are needed.
+
+    The row count is a fact about what the run read and is what its cost is measured
+    in; the kill count is what every derived number is an observation of. Published
+    unconditionally, because a reader who finds the field absent must be able to
+    tell "this document predates it" from "they are the same number" -- and a
+    document that publishes only one of them cannot say either.
+    """
+    from wowdps.fightdataset import _measured_block
+
+    block = _measured_block({"fights": uploads_of_one_kill(["A", "B", "C"]), "reports": []}, None)
+    assert block["fightsSampled"] == 3
+    assert block["distinctKills"] == 1

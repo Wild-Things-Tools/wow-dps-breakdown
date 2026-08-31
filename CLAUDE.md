@@ -4839,6 +4839,86 @@ Note what this does *not* explain: why that fetch read nothing. The pull is a re
 kill of a real length, and the run reported no error. Unexplained, and named rather
 than smoothed over.
 
+#### Six of those "kills" were one kill, and every count over them was six votes
+
+Found on **2026-08-31** while reading the committed `fights.json` for #115, and it
+is the same family as the paragraph above: a field that says how many observations
+a number rests on, over-reporting by a factor.
+
+**Warcraft Logs indexes uploads, not raid nights.** Six people in one raid who each
+run a logger produce six reports carrying the same kills, and the sampler picks
+kills *per report* -- so one pull arrives as six rows. Nothing in a row says which
+raid it came from. What does say it is the clock. Measured over the committed
+MID2 document, Vashnik the Malignant at Mythic:
+
+```
+baxm3wf8MDvF6V7W f32  434.752   4jvB9GDFYf7PcnzT f32  434.769
+7Mf1gBVtCHvbFAPW f32  434.779   w9qF7tvNVZLKbcQ2 f32  434.780
+hfRvT8gryYF3mx91 f29  434.786   VP2gGb41rhKxZzwC f30  434.789
+```
+
+Six lengths inside **37 ms** of a 434-second pull, four of them fight 32, and every
+step transition within about 30 ms of the others. The *same six report codes* appear
+again on The Lost Explorers at Mythic. That is one raid, logged six times.
+
+Tier-wide, over the 145 sampled rows in the committed document: **86 distinct
+kills**. Worst affected are Vashnik Mythic **6 -> 1**, The Lost Explorers Mythic
+**9 -> 2** (six uploads of a 387.6 s kill against three of a 421.3 s one), Sszorak
+Heroic **17 -> 9** and Vashnik Heroic **30 -> 18**.
+
+**What it cost, and the count is the least of it.** The band's `fights` is a
+distribution's `n`: six copies of one curve occupy six of the ranks every percentile
+is taken over, so Vashnik Mythic published an inter-quartile range of zero -- which
+reads as six kills agreeing perfectly and is a claim no run ever made. A pattern
+preset claims "a shape at least two of these pulls shared", and six uploads always
+cluster, so **one pull became its own consensus**. And the caveat written for exactly
+this boss -- *"N fight(s) sampled: too few to tell an encounter's shape from one
+guild's pull"* -- counted rows, so six uploads of one kill **cleared it**.
+
+The medians move less than the counts: dedup shifts the band's median kill length by
+0 to 22 s on a ~400 s fight (largest, Nek'zali Heroic 497.1 -> 518.7).
+
+**The rule is length *and* curve, and neither alone.** Sorting each (encounter,
+difficulty) pair's pulls by length, the 65 closest consecutive gaps are all under
+**0.082 s** and the next smallest is **1.074 s** -- an order-of-magnitude break with
+nothing in it. `_DUPLICATE_UPLOAD_SECONDS` = 0.5 sits inside that gap, six times the
+widest duplicate spread and half the distance to the nearest distinct pair;
+calibrated, not derived, like `_PATTERN_DIFFERENT_SHARE`. Length alone would be
+circumstantial -- two guilds *can* kill a boss in the same number of seconds -- so
+the step function has to agree as well: same number of transitions, each to exactly
+the same count, each within the tolerance.
+
+**A report cannot contain the same kill twice**, so two rows sharing a report code
+are two pulls however alike they look. Over the committed document that guard fires
+**zero times across 34 multi-member groups spanning 93 rows** -- which makes it an
+independent confirmation of the length-and-curve rule rather than a guard doing any
+work. It also means a row with *no* report code never merges, which is the safe
+direction.
+
+Three decisions in it that are not arithmetic:
+
+- **Deduplication happens after the two existing exclusions**, not before. A pull
+  whose fetch read nothing has no curve to compare and could only ever be grouped on
+  length; it is already gone by then, which removes the question instead of answering
+  it with a special case. Note what that revealed: The Lost Explorers' `coverage: 1.0`
+  pull -- the one the section above documents as having read nothing -- is a *third
+  upload of a kill two other rows did read*. The two defects are the same pull.
+- **`fightsSampled` still counts rows and `distinctKills` counts kills**, published
+  side by side and unconditionally. The row count is what the run's cost is measured
+  in; the kill count is what every derived number is an observation of. An absent
+  field would read as "the same number", which is the reading that was wrong.
+- **The pooled spreads still count rows.** `meanTargets`, `peakTargets`,
+  `durationSeconds` and the rest are computed in `fightextract.EncounterObservation`
+  before the document builder sees them, so a heavily duplicated boss still weights
+  one pull's numbers by how many people logged it. That is stated in the encounter's
+  caveats rather than quietly fixed here, because fixing it belongs on the probe side
+  and needs a run.
+
+**Nothing published moves until `fights.json` is regenerated.** The fix is in the
+document builder, which reads the probe payload -- a CI artifact -- so a
+`fight-probe` dispatch with `--publish` and `--resume` rewrites the file from the
+cached payload at no Warcraft Logs cost.
+
 **"First kills" is bounded by the ranking window, and that bound was invisible.**
 `select_report_fights` sorts by kill date, but only over the rows it was handed,
 and Warcraft Logs sorts rankings **by damage**. A guild that killed the boss on the

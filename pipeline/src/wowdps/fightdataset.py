@@ -727,6 +727,126 @@ def _pattern_label(pull: dict) -> str:
     )
 
 
+#: Two sampled pulls are one kill uploaded twice when their lengths agree to within
+#: this many seconds **and** their target-count curves agree step for step.
+#:
+#: Warcraft Logs indexes uploads, not raid nights. Six people in one raid who each
+#: run a logger produce six reports carrying the same kills, and the sampler picks
+#: kills per report -- so one kill arrives as six rows, and nothing in a row says
+#: which raid it came from. What does say it is the clock.
+#:
+#: Measured over the committed MID2 ``fights.json`` on 2026-08-31, 145 sampled rows
+#: across ten (encounter, difficulty) pairs: sorting each pair's pulls by length, the
+#: 65 closest consecutive gaps are all under **0.082 s** and the next smallest gap is
+#: **1.074 s**. That is an order-of-magnitude break with nothing in it, and the
+#: threshold sits inside it -- six times the widest duplicate spread observed, half
+#: the distance to the closest pair of genuinely different kills. Calibrated, not
+#: derived, exactly like ``_PATTERN_DIFFERENT_SHARE`` above; redo it when the sample
+#: grows.
+_DUPLICATE_UPLOAD_SECONDS = 0.5
+
+
+def _fight_steps(fight: dict) -> list:
+    """The significant target-count curve of a payload fight row."""
+    return (fight.get("significantTargetCount") or {}).get("steps") or []
+
+
+def _curves_agree(left: list, right: list, tolerance: float = _DUPLICATE_UPLOAD_SECONDS) -> bool:
+    """Do two pulls' target-count curves describe the same events?
+
+    Length alone is circumstantial -- two guilds can kill a boss in the same number
+    of seconds -- so the step function has to agree too: the same number of
+    transitions, each to exactly the same count, each within ``tolerance`` of the
+    other's time. Two uploads of one kill differ only by the recording clients'
+    clocks, which on MID2's Vashnik is about 30 ms across six uploads; two different
+    kills do not line up at all.
+
+    The count test is equality rather than a tolerance on purpose. It is an integer
+    and the whole question is whether these rows describe the same events, so a
+    curve that reaches three targets where the other reaches two is a different
+    fight however well the times match.
+    """
+    if len(left) != len(right):
+        return False
+    for step, other in zip(left, right, strict=True):
+        if not isinstance(step, (list, tuple)) or not isinstance(other, (list, tuple)):
+            return False
+        if len(step) < 2 or len(other) < 2:
+            return False
+        if abs(float(step[0]) - float(other[0])) > tolerance:
+            return False
+        if float(step[1]) != float(other[1]):
+            return False
+    return True
+
+
+def group_duplicate_uploads(fights: list[dict]) -> list[list[dict]]:
+    """Partition sampled pulls into one group per distinct kill.
+
+    A kill logged once is a group of one, so the result is always a partition of the
+    input and a payload with no duplicates comes back unchanged in shape.
+
+    The grouping is anchored rather than transitive: a row joins a group by matching
+    that group's **first** member, so a chain of near-misses cannot walk a group
+    across a gap wider than the threshold. Rows are sorted by length first, so the
+    answer does not depend on the order the probe happened to write them in.
+
+    One structural guard: **a report cannot contain the same kill twice**, so two
+    rows sharing a report code are two pulls however alike they look. Checked
+    against the whole committed MID2 document -- over 34 multi-member groups
+    spanning 93 rows it never fired once, which makes it an independent
+    confirmation of the length-and-curve rule rather than a guard doing work.
+    """
+    ordered = sorted(
+        (fight for fight in fights if isinstance(fight, dict)),
+        key=lambda fight: (
+            float(fight.get("durationSeconds") or 0.0),
+            str(fight.get("reportCode") or ""),
+            fight.get("fightId") if isinstance(fight.get("fightId"), int) else -1,
+        ),
+    )
+    groups: list[list[dict]] = []
+    for fight in ordered:
+        duration = float(fight.get("durationSeconds") or 0.0)
+        for group in groups:
+            anchor = group[0]
+            if (
+                abs(duration - float(anchor.get("durationSeconds") or 0.0))
+                > _DUPLICATE_UPLOAD_SECONDS
+            ):
+                continue
+            if not _curves_agree(_fight_steps(fight), _fight_steps(anchor)):
+                continue
+            codes = {str(member.get("reportCode") or "") for member in group}
+            if str(fight.get("reportCode") or "") in codes:
+                continue
+            group.append(fight)
+            break
+        else:
+            groups.append([fight])
+    return groups
+
+
+def distinct_kills(fights: list[dict]) -> list[dict]:
+    """One row per distinct kill: the upload of it that was read furthest.
+
+    Uploads of one kill are near-identical by construction, so the choice barely
+    moves a number -- but it must be deterministic, and it must prefer the copy
+    whose event fetch got furthest, because that is the one whose tail is real.
+    """
+    return [
+        max(
+            group,
+            key=lambda fight: (
+                not fight.get("truncated"),
+                float(fight.get("eventCoverage") or 0.0),
+                str(fight.get("reportCode") or ""),
+            ),
+        )
+        for group in group_duplicate_uploads(fights)
+    ]
+
+
 def _patterns(payload: dict, pooled: list[dict]) -> list[dict]:
     """Every shape at least ``_MIN_PATTERN_PULLS`` of the sampled pulls share.
 
@@ -736,7 +856,13 @@ def _patterns(payload: dict, pooled: list[dict]) -> list[dict]:
     from the pull nearest the pooled middle, because a chart still has to draw
     something and "no two of these agreed" is what the caveats are for.
     """
-    fights = [fight for fight in payload.get("fights") or [] if isinstance(fight, dict)]
+    # Distinct kills, not sampled rows. Six uploads of one kill always cluster
+    # together, so without this a single pull clears ``_MIN_PATTERN_PULLS`` on its
+    # own and is published as "a shape five other pulls shared" -- which is the one
+    # claim this function exists to make and the one thing it must not invent.
+    fights = distinct_kills(
+        [fight for fight in payload.get("fights") or [] if isinstance(fight, dict)]
+    )
     if not fights:
         return []
 
@@ -894,14 +1020,29 @@ def _target_band(payload: dict) -> dict | None:
     # fixed records `coverage: 1.0` for exactly these pulls, so filtering on it
     # would leave every existing payload contaminated. A kill in which no target was
     # ever damaged is not a kill, so this cannot exclude a legitimate pull.
-    fights = [fight for fight in candidates if _observed_a_target(fight)]
-    unobserved = len(candidates) - len(fights)
+    observed = [fight for fight in candidates if _observed_a_target(fight)]
+    unobserved = len(candidates) - len(observed)
+
+    # One kill logged by six people is one observation, not six. Left in, its curve
+    # occupies six of the ranks every percentile below is taken over, so the band
+    # reports a distribution of one kill as though six kills had agreed -- an IQR of
+    # zero that reads as consensus. Measured on the committed MID2 document:
+    # Vashnik at Mythic publishes a band over six "kills" that are six uploads of a
+    # 434.78 s pull, and The Lost Explorers at Mythic gives one kill six votes
+    # against another kill's two.
+    #
+    # Deduplication happens *after* the two exclusions above, deliberately. A pull
+    # whose fetch read nothing has no curve to compare, so it could only ever be
+    # grouped on length -- and it is already gone by here, which removes the
+    # question instead of answering it with a special case.
+    fights = distinct_kills(observed)
+    duplicates = len(observed) - len(fights)
     if not fights:
         return None
 
     curves = [
         _resample(
-            (fight.get("significantTargetCount") or {}).get("steps") or [],
+            _fight_steps(fight),
             float(fight.get("durationSeconds") or 0.0),
             _BAND_BUCKETS,
         )
@@ -926,6 +1067,9 @@ def _target_band(payload: dict) -> dict | None:
         )
 
     block = {
+        # Distinct kills, which is what a band is a distribution over. The
+        # encounter's `fightsSampled` is the row count beside it, and
+        # `duplicateUploads` below is what separates the two.
         "fights": len(fights),
         "buckets": _BAND_BUCKETS,
         "medianLengthSeconds": round(median_length, 1),
@@ -943,6 +1087,11 @@ def _target_band(payload: dict) -> dict | None:
     # two numbers disagree with nothing explaining it.
     if unobserved:
         block["unobservedKills"] = unobserved
+    # Same rule, and the larger of the two on real data: a band drawn over one kill
+    # that six people uploaded has to say so, or `fights: 1` beside
+    # `fightsSampled: 6` reads as five kills silently discarded.
+    if duplicates:
+        block["duplicateUploads"] = duplicates
     return block
 
 
@@ -985,11 +1134,25 @@ def _caveats(payload: dict, rankings_page: int | None, order: str | None = None)
     """Everything about the measurement that limits how far it can be read."""
     notes: list[str] = []
     fights = [fight for fight in payload.get("fights") or [] if isinstance(fight, dict)]
+    kills = distinct_kills(fights)
+    duplicates = len(fights) - len(kills)
 
-    if len(fights) < 3:
+    if duplicates:
+        # First, because it changes how every other number in this block reads.
         notes.append(
-            f"{len(fights)} fight(s) sampled: too few to tell an encounter's shape from "
-            f"one guild's pull."
+            f"{len(fights)} sampled row(s) are {len(kills)} distinct kill(s): "
+            f"{duplicates} of them are the same pull uploaded by more than one "
+            f"person in the same raid, matched on fight length and target-count "
+            f"curve. The band and the shape presets count kills; the pooled spreads "
+            f"beside them still count rows, so a heavily duplicated boss weights "
+            f"one pull's numbers by how many people logged it."
+        )
+    # Counted in kills rather than rows: six uploads of one pull cleared this test
+    # while being exactly the case it exists to warn about.
+    if len(kills) < 3:
+        notes.append(
+            f"{len(kills)} distinct kill(s) sampled: too few to tell an encounter's "
+            f"shape from one guild's pull."
         )
     coverages = [
         float(fight["eventCoverage"])
@@ -1155,6 +1318,13 @@ def _measured_block(
     if measured is not None and payload is not None:
         return {
             "fightsSampled": len(measured.fights),
+            # How many kills those rows are. Warcraft Logs indexes uploads, so one
+            # kill logged by six people in the same raid arrives as six rows and
+            # every count derived from them is six times an observation of one
+            # pull. Published unconditionally beside `fightsSampled`, because an
+            # absent field would read as "the same number" -- which is exactly the
+            # reading that was wrong.
+            "distinctKills": len(distinct_kills(measured.fights)),
             "reports": list(payload.get("reports") or []),
             "durationSeconds": payload.get("durationSeconds"),
             "raidSize": payload.get("raidSize"),
