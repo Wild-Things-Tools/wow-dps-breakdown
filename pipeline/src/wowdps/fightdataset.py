@@ -749,6 +749,49 @@ def group_duplicate_uploads(fights: list[dict]) -> list[list[dict]]:
     )
 
 
+def upload_start_times(fights: list[dict]) -> dict:
+    """The #135 reading over payload *rows*, the twin of the probe-side one.
+
+    Both are needed for the same reason ``group_duplicate_uploads`` exists beside
+    ``EncounterObservation.distinct_fights``: the probe holds a pull as an object and
+    a stored payload holds it as a dict. The rule is one function; only the accessors
+    differ.
+
+    This half is what makes the reading **free**. ``probe_encounter`` computes it only
+    for encounters it actually reads, so a ``--publish --resume`` pass -- which skips
+    every complete encounter before a query is sent, and therefore costs nothing --
+    would print nothing at all. Every sampled row in the payload has carried
+    ``startedAt`` since #134, so the answer is already on disk and needs no queries to
+    read back.
+
+    Same two numbers and the same refusals as the probe-side reading; see
+    ``EncounterObservation.upload_start_times`` for why each is what it is.
+    """
+    rows = [fight for fight in fights if isinstance(fight, dict)]
+    groups = group_duplicate_uploads(rows)
+    stamped = [[f.get("startedAt") for f in group if f.get("startedAt")] for group in groups]
+    unstamped = sum(1 for fight in rows if not fight.get("startedAt"))
+
+    multi = [stamps for stamps in stamped if len(stamps) > 1]
+    widest = max(((max(s) - min(s)) / 1000.0 for s in multi), default=None)
+
+    closest = None
+    for index, left in enumerate(stamped):
+        for right in stamped[index + 1 :]:
+            for a in left:
+                for b in right:
+                    gap = abs(a - b) / 1000.0
+                    closest = gap if closest is None else min(closest, gap)
+
+    return {
+        "groups": len(groups),
+        "groupsWithSeveralUploads": len(multi),
+        "unstamped": unstamped,
+        "widestWithinGroup": round(widest, 3) if widest is not None else None,
+        "closestBetweenGroups": round(closest, 3) if closest is not None else None,
+    }
+
+
 def distinct_kills(fights: list[dict]) -> list[dict]:
     """One row per distinct kill: the upload of it that was read furthest.
 

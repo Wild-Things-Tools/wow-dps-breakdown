@@ -1019,7 +1019,9 @@ def test_the_probe_reports_what_a_start_time_rule_would_have_to_fit_between():
     """
     base = 1_700_000_000_000.0
     lines = fightprobe.describe_upload_start_times(
-        _observation_with((base, 300.0), (base + 300, 300.0), (base + 90_000, 240.0))
+        _observation_with(
+            (base, 300.0), (base + 300, 300.0), (base + 90_000, 240.0)
+        ).upload_start_times()
     )
     joined = "\n".join(lines)
     assert "1 of 2 kill(s) were uploaded more than once" in joined
@@ -1034,7 +1036,7 @@ def test_the_probe_says_nothing_when_no_kill_was_uploaded_twice():
     base = 1_700_000_000_000.0
     assert (
         fightprobe.describe_upload_start_times(
-            _observation_with((base, 300.0), (base + 5_000, 240.0))
+            _observation_with((base, 300.0), (base + 5_000, 240.0)).upload_start_times()
         )
         == []
     )
@@ -1045,7 +1047,9 @@ def test_the_probe_names_a_sample_a_start_time_rule_could_not_separate():
     two different kills stating starts closer together than one kill's uploads do."""
     base = 1_700_000_000_000.0
     lines = fightprobe.describe_upload_start_times(
-        _observation_with((base, 300.0), (base + 10_000, 300.0), (base + 10_100, 240.0))
+        _observation_with(
+            (base, 300.0), (base + 10_000, 300.0), (base + 10_100, 240.0)
+        ).upload_start_times()
     )
     assert any("cannot separate this sample" in line for line in lines)
 
@@ -1054,6 +1058,149 @@ def test_a_row_with_no_start_time_is_named_in_the_transcript():
     """It can be placed on neither side of a threshold, so it is counted apart."""
     base = 1_700_000_000_000.0
     lines = fightprobe.describe_upload_start_times(
-        _observation_with((base, 300.0), (base + 200, 300.0), (0.0, 300.0), (base + 60_000, 240.0))
+        _observation_with(
+            (base, 300.0), (base + 200, 300.0), (0.0, 300.0), (base + 60_000, 240.0)
+        ).upload_start_times()
     )
     assert any("state no start time" in line for line in lines)
+
+
+def test_the_payload_wide_reading_never_pools_two_encounters_rows():
+    """Reading the payload's fights as one flat list is simpler and wrong twice.
+
+    `group_duplicate_uploads` merges on length and curve alone, so two bosses' pulls
+    of the same length group together and count as one kill uploaded twice; and
+    `closestBetweenGroups` would then measure how close two DIFFERENT encounters' kills
+    sit on the clock, which is a fact about a raid night's schedule. Both push the
+    "different kills" number down -- the direction that makes a workable threshold look
+    impossible.
+
+    Two encounters, each holding two pulls of identical length, three seconds apart on
+    the clock. Pooled they are one group of four with nothing to compare it to; read
+    apart they are two encounters of one duplicate group each.
+    """
+    from wowdps import fightdataset
+
+    def rows(base: float) -> list[dict]:
+        return [
+            {
+                "reportCode": f"r{index}",
+                "durationSeconds": 300.0,
+                "startedAt": base + index * 100,
+                "steps": [[0.0, 2]],
+            }
+            for index in range(2)
+        ]
+
+    base = 1_700_000_000_000.0
+    per_encounter = [
+        fightdataset.upload_start_times(rows(base)),
+        fightdataset.upload_start_times(rows(base + 3_000)),
+    ]
+    folded = fightprobe.fold_upload_start_times(per_encounter)
+
+    # Two encounters, one duplicate group each, and NOT one group of four.
+    assert folded["groups"] == 2
+    assert folded["groupsWithSeveralUploads"] == 2
+    assert folded["widestWithinGroup"] == 0.1
+    # Neither encounter has a second group, so nothing measures a cross-group gap --
+    # and the 3.0s between the two encounters is emphatically not it.
+    assert folded["closestBetweenGroups"] is None
+
+
+def test_the_fold_keeps_the_extremes_a_threshold_would_have_to_fit_between():
+    """A rule must tolerate the widest within-group disagreement ANYWHERE and stay
+    under the closest cross-group pair ANYWHERE, so the fold takes max and min."""
+    folded = fightprobe.fold_upload_start_times(
+        [
+            {
+                "groups": 3,
+                "groupsWithSeveralUploads": 1,
+                "unstamped": 0,
+                "widestWithinGroup": 0.2,
+                "closestBetweenGroups": 90.0,
+            },
+            {
+                "groups": 2,
+                "groupsWithSeveralUploads": 1,
+                "unstamped": 2,
+                "widestWithinGroup": 0.9,
+                "closestBetweenGroups": 40.0,
+            },
+            # An encounter that could produce neither number contributes neither,
+            # rather than a zero that would collapse the max or the min.
+            {
+                "groups": 1,
+                "groupsWithSeveralUploads": 0,
+                "unstamped": 0,
+                "widestWithinGroup": None,
+                "closestBetweenGroups": None,
+            },
+        ]
+    )
+    assert folded == {
+        "groups": 6,
+        "groupsWithSeveralUploads": 2,
+        "unstamped": 2,
+        "widestWithinGroup": 0.9,
+        "closestBetweenGroups": 40.0,
+    }
+
+
+def test_the_command_reads_the_start_times_per_encounter_and_not_pooled(tmp_path, monkeypatch):
+    """The call site, driven end to end -- and the reason this test exists.
+
+    `fold_upload_start_times` has its own unit tests, and swapping the CALL SITE back
+    to one flat list over every encounter's rows left every one of them green: the
+    fold was tested and the thing that uses it was not. That is the shape this repo
+    keeps producing (`seen_difficulties` declared and never written to,
+    `PointBudgetExhausted` beside the guard rather than inside it), so the fix is a
+    test that runs the command.
+
+    Two encounters, each holding two byte-identical uploads of one kill and nothing
+    else. Pooled, `group_duplicate_uploads` merges all four into ONE group -- their
+    lengths and curves agree -- and the transcript would say "1 of 1 kill(s)". Read
+    per encounter it says "2 of 2".
+    """
+    from wowdps import cli, fightdataset, warcraftlogs
+
+    stub = StubClient(
+        structure=structure_payload(),
+        events={"DamageTaken": [damage(s, a) for a in (10, 11, 12) for s in (0.5, 299.0)]},
+        tables={},
+    )
+    monkeypatch.setattr(
+        warcraftlogs.Credentials,
+        "from_env",
+        classmethod(lambda cls: warcraftlogs.Credentials("i", "s")),
+    )
+    monkeypatch.setattr(fightprobe, "WarcraftLogsClient", lambda *a, **k: stub)
+
+    real = fightdataset.upload_start_times
+    captured: list[int] = []
+
+    def spy(fights):
+        captured.append(len(fights))
+        return real(fights)
+
+    monkeypatch.setattr(fightdataset, "upload_start_times", spy)
+
+    # NO `--encounter`, deliberately: with one encounter, "pooled" and "per encounter"
+    # are the same list and the canary cannot fire. The first version of this test did
+    # exactly that and stayed green against the pooled call site. MID1 carries nine
+    # encounters, and the stub answers each identically -- so pooled they would be one
+    # group of nine byte-identical pulls, which is the merge this guards against.
+    args = cli.build_parser().parse_args(
+        ["fight-probe", "--tier", VOIDSPIRE_TIER, "--reports", "1", "--out", str(tmp_path)]
+    )
+    assert fightprobe.cmd_fight_probe(args) == 0
+
+    import json
+
+    payload = json.loads((tmp_path / f"fight-probe-{VOIDSPIRE_TIER}.json").read_text())
+    encounters = payload["encounters"]
+    assert len(encounters) > 1, "this test needs several encounters to say anything"
+
+    # Once per encounter, each handed only that encounter's rows -- never one call
+    # over the union, which is what would let two bosses' pulls group as one kill.
+    assert captured == [len(entry.get("fights") or []) for entry in encounters]
