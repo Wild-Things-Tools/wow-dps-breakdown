@@ -22,6 +22,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1071,10 +1072,26 @@ def merge_gear_shards(shard_dirs: list[Path], out_dir: Path) -> Path | None:
     # Trinket tab counted 28 over a table of 26). The per-slot block above is
     # what a reader with a slot selector shows.
     covered = {spec["id"] for slot in merged["slots"] for spec in slot["specs"]}
+    available = _latest_builds_available(documents)
     merged["coverage"] = {
         "specs": len(covered),
-        "specsAvailable": (merged.get("coverage") or {}).get("specsAvailable", len(covered)),
+        "specsAvailable": (
+            len(available)
+            if available is not None
+            else (merged.get("coverage") or {}).get("specsAvailable", len(covered))
+        ),
     }
+    if available is not None:
+        merged["coverage"]["buildsAvailable"] = sorted(available)
+    # Issue #114: the union never retires a row, so a build simc stops shipping
+    # leaves its row in every future document. Naming the excess ids is the whole
+    # fix -- not clamping `specs` down to the tier size, which would hide rows the
+    # document still holds, and not publishing a bare count, which cannot say
+    # *which* build to check. Same rule as `gearpool`'s `unplaced` and `legacy`.
+    # Emitted only when non-empty, so a healthy document produces the bytes it did
+    # before this existed; and only when the tier's ids are known, because a
+    # document written before `buildsAvailable` cannot support the claim either way.
+    _mark_stale_gear_rows(merged, available)
     # And the document-level precision describes every row the document holds,
     # not whichever run happened to sort newest -- `merged` starts as a copy of
     # that run's document, which is the `merge_shards` manifest defect one file
@@ -1090,6 +1107,57 @@ def merge_gear_shards(shard_dirs: list[Path], out_dir: Path) -> Path | None:
     path.write_text(json.dumps(merged, separators=(",", ":")) + "\n", encoding="utf-8")
     log.info("merged %d gear shards -> %d specs", len(documents), len(covered))
     return path
+
+
+def _latest_builds_available(documents: list[dict]) -> set[str] | None:
+    """The newest document that states which builds the tier had, as a set of ids.
+
+    Newest-first rather than "the newest document", because `merge_gear_shards`
+    folds the published file in at its own age and a pre-#114 document carries no
+    list at all. Reading `documents[-1]` alone would then answer `None` whenever the
+    published file happens to sort last -- which is exactly the run after a
+    single-slot sweep. Returns `None` when nothing states it: unknown is not empty,
+    and an empty set would make every row in the document look stale.
+    """
+    for document in reversed(documents):
+        listed = (document.get("coverage") or {}).get("buildsAvailable")
+        if isinstance(listed, list) and listed:
+            return {str(build) for build in listed}
+    return None
+
+
+def _mark_stale_gear_rows(merged: dict, available: set[str] | None) -> None:
+    """Name the rows whose build the tier no longer ships, document-wide and per slot.
+
+    Recomputed for **every** slot carrying a coverage block, not only the ones this
+    merge changed: a row goes stale because the *tier* moved, which can happen while
+    a slot's own rows sit untouched. That is a different question from the median
+    `merge_gear_shards` deliberately leaves alone on an unchanged slot -- a set
+    difference is exact where re-deriving a median from rounded errors is not.
+
+    Whether the tier has a build is a document-wide fact, so both levels are judged
+    against one list rather than against each slot's own `specsAvailable`, which is
+    that slot's run's view of a tier that has since moved.
+
+    With no list, a previously published `staleRows` is left standing rather than
+    dropped: it recorded a real finding, and this run has no evidence against it.
+    """
+    if available is None:
+        return
+    everywhere = {spec["id"] for slot in merged["slots"] for spec in slot["specs"]}
+    per_slot = [
+        (slot.get("coverage"), {spec["id"] for spec in slot["specs"]}) for slot in merged["slots"]
+    ]
+    for block, rows in [(merged.get("coverage"), everywhere), *per_slot]:
+        if not isinstance(block, dict):
+            continue
+        stale = sorted(rows - available)
+        if stale:
+            block["staleRows"] = stale
+        else:
+            # A build that comes back is not stale any more, so the field goes
+            # rather than standing as a claim the current rows contradict.
+            block.pop("staleRows", None)
 
 
 # --------------------------------------------------------------------------------
@@ -1116,7 +1184,7 @@ def write_gear(
     tier: str,
     simc_meta: dict,
     settings: SimSettings,
-    specs_available: int,
+    builds_available: Sequence[str],
 ) -> Path:
     """Write the gear-comparison dataset for one tier.
 
@@ -1128,8 +1196,19 @@ def write_gear(
     ``coverage`` is written whether or not the run was complete. A gear dataset
     covering six specs of twenty-six is a useful thing to publish and a misleading
     thing to publish silently.
+
+    ``builds_available`` is the tier's build **ids**, not a count, and that is the
+    whole of issue #114. The merge unions rows across runs and never retires one, so
+    a build simc stops shipping leaves its row behind forever -- and from two counts
+    the merge can say only *that* the document holds more rows than the tier has
+    builds, never *which*. With the ids it can name them (``coverage.staleRows``),
+    which is the same discipline ``gearpool`` applies to an item the journal never
+    placed: report it, do not quietly keep or drop it. ``specsAvailable`` is derived
+    from the list rather than passed beside it, so the two cannot disagree.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    available = sorted(set(builds_available))
 
     by_slot: dict[str, list[gearsweep.SpecSlotResult]] = {}
     for result in results:
@@ -1159,7 +1238,7 @@ def write_gear(
         if slot_results:
             entry["coverage"] = {
                 "specs": len({result.profile.id for result in slot_results}),
-                "specsAvailable": specs_available,
+                "specsAvailable": len(available),
             }
             entry["simc"] = simc_meta
             entry["settings"] = {
@@ -1182,7 +1261,14 @@ def write_gear(
             "deterministic": settings.target_error == 0,
             "medianDpsError": _median_gear_error(results),
         },
-        "coverage": {"specs": len(covered), "specsAvailable": specs_available},
+        "coverage": {
+            "specs": len(covered),
+            "specsAvailable": len(available),
+            # The ids, so a later merge can name a row whose build the tier has
+            # since dropped. ~1.5 KB against a few hundred, and it is what makes
+            # the claim checkable from outside the run that made it.
+            "buildsAvailable": available,
+        },
         "slots": slots,
     }
 

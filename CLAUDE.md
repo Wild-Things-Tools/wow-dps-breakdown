@@ -785,6 +785,77 @@ elsewhere in this section (28/26/26, and the `gear.json (trinket, 2026-08-21)`
 row in the sweep-coverage table above) describe the pre-fix document and are kept
 as what the defect looked like, not as the current state.
 
+### The union never retires a row, and two counts cannot say which one to retire
+
+The other half of #95's arithmetic, closed as #114. `merge_gear_shards` unions rows
+by build id and **nothing ever removes one**, which is correct -- a slot this run did
+not sweep must keep what it had -- and has a consequence nobody had stated: a build
+simc stops shipping keeps its row in every future document. `specs` can then exceed
+`specsAvailable`, and `sweepCoverage(53, 52, 52)` reaches `covered >= now` and says
+*"Covers all 52 builds in the tier"* over a table holding 53. That is the same trade
+this file already refuses one paragraph up -- **a wrong sentence replaced by a more
+confident wrong sentence is not a repair**.
+
+It is not hypothetical. `computed-builds.json` carried
+`demon_hunter_devourer_annihilator` after simc dropped the profile, which
+`projection-check` found by being unable to measure it; `gear.json` has the same
+shape with no such check in front of it.
+
+**Two counts cannot support the fix, and that is the whole design decision.** From
+`specs` and `specsAvailable` a reader learns only *that* the document holds more rows
+than the tier has builds -- never *which* row to go and look at. So `write_gear`
+publishes the tier's build **ids** (`coverage.buildsAvailable`, ~1.5 KB against a few
+hundred), `specsAvailable` is derived from that list rather than passed beside it, and
+`merge_gear_shards` names the excess as `coverage.staleRows`.
+
+Four decisions in it, each one this file's own rule applied:
+
+- **Named, not clamped, not counted.** Clamping `specs` down to the tier size hides
+  rows the document still holds; a count says a row is stale and cannot say which.
+  Naming is what `gearpool` already does for an item the journal never placed
+  (`unplaced`) and for a Legion ring a profile wears (`legacy`): report it, do not
+  quietly keep or drop it.
+- **The rows themselves are kept.** Deleting somebody's measured data is a decision a
+  merge does not get to make, and the row is still the honest record of a build that
+  was simulated.
+- **Per slot as well as per document**, because the slot block is what a reader behind
+  a slot selector shows -- and judged against **one** list, since whether the tier has
+  a build is a document-wide fact rather than a property of the neck pool. This is
+  deliberately *not* under the `changed` guard the median sits behind: a row goes stale
+  because the **tier** moved, which happens while a slot's own rows sit untouched, and
+  a set difference is exact where re-deriving a median from rounded errors is not.
+- **Unknown is not empty.** A document written before this carries no id list, so
+  nothing is claimed -- reading the absence as an empty set would mark *every* row in
+  the document stale, which is the loudest possible wrong answer. `_latest_builds_available`
+  therefore walks newest-**first** rather than reading `documents[-1]`: the merge folds
+  the published file in at its own age, so the newest document is frequently a pre-#114
+  one, and reading only it would answer "unknown" for exactly the run after a
+  single-slot sweep.
+
+A build that comes back drops its mark, so the field cannot outlive its own evidence.
+**The test for that needed the slot this run did NOT sweep**, and the first version of
+it could not reach the code at all: a swept slot's block comes from the shard, which
+never carried the old mark, so the drop was untested and its canary stayed green. An
+unswept slot keeps the published block verbatim -- which is what the merge is built to
+do -- and that is where a stale mark survives.
+
+**Both readers say it, and neither says it silently.** `sweepCoverage` gains a fifth
+state, `stale`, which wins over `complete`/`behind`/`partial` because it is the
+surprising half and the half somebody acts on; the live sentence is kept verbatim and
+the finding is appended, so nothing that was true stops being said. wtt-frontend's
+`dps-loot` appends the same clause -- its sentence ("of the N builds the tier had when
+this slot was swept") stays true either way, and a stale row makes it *incomplete*
+rather than false.
+
+**Nothing published moves until a gear run writes.** The committed `gear.json` carries
+no `buildsAvailable`, so both readers see "nothing to report" -- which is right, since
+that document cannot support the claim in either direction. MID2 has no stale row
+today, measured against the committed documents on 2026-09-01: `gear.json` holds 51
+distinct build ids across its three slots and every one of them is in `index.json`'s
+51 builds. (`specsAvailable` reads 52 there, which is the tier's profile count -- the
+52nd is the profile whose talent hash simc refuses, so it produces no row to be stale.
+That mismatch is the ordinary state, not a finding.)
+
 ## The gear anchor: what a computed build wears
 
 `gearanchor.py` + `wowdps gear-anchor`. A build this project *computes* -- from a

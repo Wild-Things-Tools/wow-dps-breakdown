@@ -594,7 +594,7 @@ def test_write_gear_stamps_provenance_on_the_swept_slots_only(tmp_path):
         "MID2",
         {"gitRevision": "OLDREV"},
         SimSettings(),
-        specs_available=26,
+        builds_available=[f"build_{n}" for n in range(26)],
     )
     document = json.loads(path.read_text(encoding="utf-8"))
     by_slot = {slot["id"]: slot for slot in document["slots"]}
@@ -1693,7 +1693,7 @@ def test_the_sweep_publishes_after_every_spec_and_not_once_more_at_the_end(monke
 
     written: list[int] = []
 
-    def fake_write_gear(out_dir, results, pools, tier, simc_meta, settings, specs_available):
+    def fake_write_gear(out_dir, results, pools, tier, simc_meta, settings, builds_available):
         written.append(len(results))
         path = Path(out_dir) / "gear.json"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1915,7 +1915,7 @@ def test_a_spec_that_raises_costs_its_row_and_the_rest_still_sweep(monkeypatch, 
 
     written: list[int] = []
 
-    def fake_write_gear(out_dir, results, pools, tier, simc_meta, settings, specs_available):
+    def fake_write_gear(out_dir, results, pools, tier, simc_meta, settings, builds_available):
         written.append(len(results))
         path = Path(out_dir) / "gear.json"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1977,3 +1977,214 @@ def test_a_spec_that_raises_costs_its_row_and_the_rest_still_sweep(monkeypatch, 
     # behaviour a no-targets result already produces, and harmless in a shard,
     # whose output is merged rather than served.
     assert written == [1, 1, 2]
+
+
+# --------------------------------------------------------------------------------
+# Stale rows (#114): the union never retires a row, so name the ones the tier dropped
+# --------------------------------------------------------------------------------
+
+
+def _gear_document(generated_at: str, rows: list[str], available: list[str] | None) -> dict:
+    """A gear document with one trinket slot, its own coverage block, and no more."""
+    coverage: dict = {"specs": len(rows), "specsAvailable": len(available or rows)}
+    if available is not None:
+        coverage["buildsAvailable"] = sorted(available)
+    return {
+        "generatedAt": generated_at,
+        "coverage": coverage,
+        "slots": [
+            {
+                "id": "trinket",
+                "label": "Trinket",
+                "specs": [{"id": row} for row in rows],
+                "coverage": {"specs": len(rows), "specsAvailable": len(available or rows)},
+            }
+        ],
+    }
+
+
+def test_a_row_whose_build_the_tier_no_longer_ships_is_named(tmp_path):
+    """The merge unions rows and never retires one, so a build simc stops shipping
+    leaves its row behind forever. From two counts nobody can say *which* row --
+    `computed-builds.json` carried `demon_hunter_devourer_annihilator` for exactly
+    that reason -- so the ids are published and the excess is named."""
+    import json
+
+    from wowdps.dataset import merge_gear_shards
+
+    out = tmp_path / "MID2"
+    out.mkdir()
+    (out / "gear.json").write_text(
+        json.dumps(_gear_document("2026-08-15T12:00:00+00:00", ["a", "gone"], ["a", "b", "gone"])),
+        encoding="utf-8",
+    )
+
+    shard = tmp_path / "shard-0"
+    shard.mkdir()
+    # The tier has since dropped `gone`, which this run's profile discovery reports.
+    (shard / "gear.json").write_text(
+        json.dumps(_gear_document("2026-08-15T14:00:00+00:00", ["b"], ["a", "b"])),
+        encoding="utf-8",
+    )
+
+    merge_gear_shards([shard], out)
+    merged = json.loads((out / "gear.json").read_text(encoding="utf-8"))
+
+    assert merged["coverage"]["specs"] == 3
+    assert merged["coverage"]["specsAvailable"] == 2
+    assert merged["coverage"]["staleRows"] == ["gone"]
+    # Per slot too, because that is the block a reader with a slot selector shows.
+    assert merged["slots"][0]["coverage"]["staleRows"] == ["gone"]
+    # And the row itself is kept: naming it is the finding, deleting it is a
+    # decision about somebody's data that a merge does not get to make.
+    assert [spec["id"] for spec in merged["slots"][0]["specs"]] == ["a", "b", "gone"]
+
+
+def test_a_healthy_document_gains_no_stale_field(tmp_path):
+    """Absent is not equal, and a document with nothing stale must produce the bytes
+    it produced before this existed."""
+    import json
+
+    from wowdps.dataset import merge_gear_shards
+
+    out = tmp_path / "MID2"
+    out.mkdir()
+    (out / "gear.json").write_text(
+        json.dumps(_gear_document("2026-08-15T12:00:00+00:00", ["a"], ["a", "b"])),
+        encoding="utf-8",
+    )
+    shard = tmp_path / "shard-0"
+    shard.mkdir()
+    (shard / "gear.json").write_text(
+        json.dumps(_gear_document("2026-08-15T14:00:00+00:00", ["b"], ["a", "b"])),
+        encoding="utf-8",
+    )
+
+    merge_gear_shards([shard], out)
+    merged = json.loads((out / "gear.json").read_text(encoding="utf-8"))
+    assert "staleRows" not in merged["coverage"]
+    assert "staleRows" not in merged["slots"][0]["coverage"]
+    assert merged["coverage"]["buildsAvailable"] == ["a", "b"]
+
+
+def test_a_build_that_comes_back_stops_being_stale(tmp_path):
+    """A stale mark is a claim about the current rows against the current tier, so it
+    goes when the tier ships the build again -- otherwise the field outlives its own
+    evidence, which is the failure this whole file is about.
+
+    The slot this run did NOT sweep is the case that reaches it, and the first version
+    of this test could not: a swept slot's block comes from the shard, which never
+    carried the old mark, so the drop was untested and the canary stayed green. An
+    unswept slot keeps the published block verbatim -- which is what the merge is built
+    to do -- and that block is where a stale mark outlives its evidence.
+    """
+    import json
+
+    from wowdps.dataset import merge_gear_shards
+
+    out = tmp_path / "MID2"
+    out.mkdir()
+    published = _gear_document("2026-08-15T12:00:00+00:00", ["a"], ["a"])
+    published["slots"].append(
+        {
+            "id": "neck",
+            "label": "Neck",
+            "specs": [{"id": "a"}, {"id": "back"}],
+            "coverage": {"specs": 2, "specsAvailable": 1, "staleRows": ["back"]},
+        }
+    )
+    (out / "gear.json").write_text(json.dumps(published), encoding="utf-8")
+
+    # A trinket-only re-run, whose profile discovery finds `back` shipping again.
+    shard = tmp_path / "shard-0"
+    shard.mkdir()
+    document = _gear_document("2026-08-15T14:00:00+00:00", ["a"], ["a", "back"])
+    document["slots"].append({"id": "neck", "label": "Neck", "specs": []})
+    (shard / "gear.json").write_text(json.dumps(document), encoding="utf-8")
+
+    merge_gear_shards([shard], out)
+    merged = json.loads((out / "gear.json").read_text(encoding="utf-8"))
+    by_slot = {slot["id"]: slot for slot in merged["slots"]}
+    assert "staleRows" not in merged["coverage"]
+    assert "staleRows" not in by_slot["neck"]["coverage"]
+    # The neck rows are untouched -- only the claim about them moved.
+    assert [spec["id"] for spec in by_slot["neck"]["specs"]] == ["a", "back"]
+
+
+def test_a_document_that_states_no_build_ids_claims_nothing(tmp_path):
+    """Every document written before #114 carries counts alone. Unknown is not empty:
+    an empty set would make every row in the document look stale, which is the
+    loudest possible wrong answer."""
+    import json
+
+    from wowdps.dataset import merge_gear_shards
+
+    out = tmp_path / "MID2"
+    out.mkdir()
+    (out / "gear.json").write_text(
+        json.dumps(_gear_document("2026-08-15T12:00:00+00:00", ["a", "b"], None)),
+        encoding="utf-8",
+    )
+    shard = tmp_path / "shard-0"
+    shard.mkdir()
+    (shard / "gear.json").write_text(
+        json.dumps(_gear_document("2026-08-15T14:00:00+00:00", ["c"], None)),
+        encoding="utf-8",
+    )
+
+    merge_gear_shards([shard], out)
+    merged = json.loads((out / "gear.json").read_text(encoding="utf-8"))
+    assert "staleRows" not in merged["coverage"]
+    assert "buildsAvailable" not in merged["coverage"]
+
+
+def test_the_build_list_is_taken_from_the_newest_document_that_states_one(tmp_path):
+    """`merge_gear_shards` folds the published file in at its own age, so the newest
+    document is frequently one written before #114. Reading `documents[-1]` alone
+    would answer "unknown" for exactly the run after a single-slot sweep."""
+    import json
+
+    from wowdps.dataset import merge_gear_shards
+
+    out = tmp_path / "MID2"
+    out.mkdir()
+    # The published file sorts NEWEST here and states no ids.
+    (out / "gear.json").write_text(
+        json.dumps(_gear_document("2026-08-15T18:00:00+00:00", ["a", "gone"], None)),
+        encoding="utf-8",
+    )
+    shard = tmp_path / "shard-0"
+    shard.mkdir()
+    (shard / "gear.json").write_text(
+        json.dumps(_gear_document("2026-08-15T14:00:00+00:00", ["a"], ["a"])),
+        encoding="utf-8",
+    )
+
+    merge_gear_shards([shard], out)
+    merged = json.loads((out / "gear.json").read_text(encoding="utf-8"))
+    assert merged["coverage"]["staleRows"] == ["gone"]
+
+
+def test_write_gear_publishes_the_tiers_build_ids(tmp_path):
+    """`specsAvailable` is derived from the list rather than passed beside it, so the
+    two cannot disagree -- the shape of error this repo has shipped twice already."""
+    import json
+
+    from wowdps import dataset
+
+    path = dataset.write_gear(
+        tmp_path,
+        [measured_result("Sunfury", 0.1)],
+        {"trinket": POOL},
+        "MID2",
+        {"gitRevision": "abc"},
+        SimSettings(target_error=0.0, max_iterations=1000),
+        builds_available=["mage_arcane_sunfury", "mage_fire_frostfire"],
+    )
+    document = json.loads(path.read_text(encoding="utf-8"))
+    assert document["coverage"]["buildsAvailable"] == [
+        "mage_arcane_sunfury",
+        "mage_fire_frostfire",
+    ]
+    assert document["coverage"]["specsAvailable"] == 2
+    assert document["slots"][0]["coverage"]["specsAvailable"] == 2

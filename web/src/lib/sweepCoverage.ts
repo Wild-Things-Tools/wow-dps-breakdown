@@ -15,7 +15,7 @@
  * `BuffsView` said nothing at all, which is the same gap without the false
  * sentence: 24 of the tier's builds were simply absent and no one was told.
  *
- * ## Three states, because two would lie
+ * ## Four states, because fewer would lie
  *
  * A sweep that is behind and a sweep that was always partial are different
  * claims, and so is a sweep that is genuinely complete:
@@ -26,6 +26,12 @@
  *   tier. This is MID2's state today.
  * - `partial` -- it did not even cover the tier as it stood at the time, which is
  *   what an interrupted shard looks like.
+ * - `stale` -- the document holds a row for a build the tier no longer ships
+ *   (#114). The merge unions rows and never retires one, so a dropped build keeps
+ *   its row forever and `specs` can exceed `specsAvailable`. Read as counts alone,
+ *   53 rows over a 52-build tier reaches `covered >= now` and says *"Covers all 52
+ *   builds in the tier"* over a 53-row table -- a more confident sentence than the
+ *   true one, which is the shape of repair this module already refused once.
  *
  * ## What `availableAtSweep: null` means, and why it is not zero
  *
@@ -39,11 +45,21 @@
  * to callers rather than burying it in prose.
  */
 
-export type SweepState = 'complete' | 'behind' | 'partial' | 'unknown'
+export type SweepState = 'complete' | 'behind' | 'partial' | 'unknown' | 'stale'
 
 export interface SweepCoverage {
-  /** Builds this sweep has a row for. */
+  /**
+   * Builds this sweep has a row for **that the tier still ships**. Stale rows are
+   * subtracted, so this is the number every sentence below is about; before #114
+   * there were none, so it is what it always was.
+   */
   covered: number
+  /**
+   * Rows whose build the tier no longer ships (#114). Named rather than counted,
+   * because a count says a document holds more rows than the tier has builds and
+   * cannot say which one to check.
+   */
+  stale: readonly string[]
   /** Builds the tier holds right now, from the manifest. Null when unknown. */
   tierNow: number | null
   state: SweepState
@@ -60,38 +76,71 @@ function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`
 }
 
+/**
+ * Overlay the stale-row finding on a coverage claim about the live builds (#114).
+ *
+ * Two independent facts share one field: whether the sweep covers the tier, and
+ * whether the document still holds rows for builds the tier has dropped. A single
+ * state has to pick one, and `stale` wins because it is the surprising one and the
+ * one somebody has to act on -- a "complete" badge over a table with a row nobody
+ * can obtain is exactly the confident-and-wrong sentence this module exists for.
+ * The live sentence is kept verbatim and the finding is appended, so nothing that
+ * was true stops being said.
+ */
+function withStale(coverage: SweepCoverage): SweepCoverage {
+  if (coverage.stale.length === 0) return coverage
+  return {
+    ...coverage,
+    state: 'stale',
+    sentence:
+      `${coverage.sentence} ` +
+      `${plural(coverage.stale.length, 'row describes a build', 'rows describe builds')} ` +
+      `the tier no longer ships (${coverage.stale.join(', ')}).`,
+  }
+}
+
 export function sweepCoverage(
-  covered: number,
+  rows: number,
   availableAtSweep: number | null | undefined,
   tierNow: number | null | undefined,
+  staleRows?: readonly string[] | null,
 ): SweepCoverage {
   const now = typeof tierNow === 'number' && tierNow > 0 ? tierNow : null
   const atSweep =
     typeof availableAtSweep === 'number' && availableAtSweep >= 0 ? availableAtSweep : null
   const statesIntent = atSweep !== null
+  const stale = staleRows ?? []
+  // The rows the tier still ships. Without this `sweepCoverage(53, 52, 52)` reads
+  // `covered >= now` and says "Covers all 52 builds in the tier" over a 53-row
+  // table -- a MORE confident sentence than the one it replaces, which is the
+  // failure mode #95 already named once. The stale rows are still in the document
+  // and still on screen; what they are not is coverage of the current tier.
+  const covered = Math.max(0, rows - stale.length)
 
   // Without the manifest there is nothing to compare against, so the honest
   // answer is the sweep's own two numbers and no claim about the tier today.
   if (now === null) {
-    return {
+    return withStale({
       covered,
+      stale,
       tierNow: null,
       state: 'unknown',
       statesIntent,
       sentence: statesIntent
         ? `Covers ${covered} of ${plural(atSweep as number, 'build', 'builds')} the sweep found.`
         : `Holds ${plural(covered, 'build', 'builds')}.`,
-    }
+    })
   }
 
   if (covered >= now) {
-    return {
+    return withStale({
       covered,
+      stale,
       tierNow: now,
       state: 'complete',
       statesIntent,
       sentence: `Covers all ${plural(now, 'build', 'builds')} in the tier.`,
-    }
+    })
   }
 
   const missing = now - covered
@@ -103,8 +152,9 @@ export function sweepCoverage(
   // calendar for a gap that is the run's -- caught by its own test.
   const behind = statesIntent && covered >= (atSweep as number) && (atSweep as number) < now
   if (behind) {
-    return {
+    return withStale({
       covered,
+      stale,
       tierNow: now,
       state: 'behind',
       statesIntent,
@@ -112,30 +162,32 @@ export function sweepCoverage(
         `Covers ${covered} of ${plural(now, 'build', 'builds')} in the tier. ` +
         `The sweep covered every build the tier had when it ran; ` +
         `${plural(missing, 'build has', 'builds have')} been added since.`,
-    }
+    })
   }
 
   if (!statesIntent) {
-    return {
+    return withStale({
       covered,
+      stale,
       tierNow: now,
       state: 'partial',
       statesIntent,
       sentence:
         `Holds ${covered} of ${plural(now, 'build', 'builds')} in the tier. ` +
         `This file states no coverage, so whether the sweep meant to cover more is not recorded.`,
-    }
+    })
   }
 
-  return {
+  return withStale({
     covered,
+    stale,
     tierNow: now,
     state: 'partial',
     statesIntent,
     sentence:
       `Covers ${covered} of ${plural(now, 'build', 'builds')} in the tier, ` +
       `and ${plural(missing, 'build is', 'builds are')} missing.`,
-  }
+  })
 }
 
 /**
@@ -149,9 +201,16 @@ export function sweepCoverage(
  * existed carries none and falls back to the document level -- the old,
  * weaker claim, never an invented one.
  */
+interface CoverageBlock {
+  specs: number
+  specsAvailable: number
+  /** Rows whose build the tier no longer ships (#114). Absent when there are none. */
+  staleRows?: string[]
+}
+
 export function displayedCoverage(
-  slot: { coverage?: { specs: number; specsAvailable: number } } | null | undefined,
-  document: { coverage: { specs: number; specsAvailable: number } } | null | undefined,
-): { specs: number; specsAvailable: number } | null {
+  slot: { coverage?: CoverageBlock } | null | undefined,
+  document: { coverage: CoverageBlock } | null | undefined,
+): CoverageBlock | null {
   return slot?.coverage ?? document?.coverage ?? null
 }

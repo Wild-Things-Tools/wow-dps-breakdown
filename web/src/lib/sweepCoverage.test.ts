@@ -65,10 +65,63 @@ describe('sweepCoverage', () => {
 
   it('treats a sweep ahead of the manifest as complete rather than negative', () => {
     // A sweep can hold a build the manifest dropped. That must not render as
-    // "-1 builds missing".
+    // "-1 builds missing". Without `staleRows` this is all the function can say:
+    // the counts prove a row is stale and cannot name it, so "complete" stands and
+    // the `stale` describe-block below is what the ids buy.
     const c = sweepCoverage(30, 30, 28)
     expect(c.state).toBe('complete')
     expect(c.sentence).not.toContain('-')
+  })
+})
+
+describe('stale rows (#114)', () => {
+  it('does not call a 53-row document over a 52-build tier complete', () => {
+    // The exact case the decision names. Before #114 this reached `covered >= now`
+    // and said "Covers all 52 builds in the tier" over a table holding 53 -- a MORE
+    // confident sentence than the true one.
+    const c = sweepCoverage(53, 52, 52, ['demon_hunter_devourer_annihilator'])
+    expect(c.state).toBe('stale')
+    expect(c.covered).toBe(52)
+    expect(c.sentence).toContain('Covers all 52 builds in the tier.')
+    expect(c.sentence).toContain('1 row describes a build the tier no longer ships')
+    expect(c.sentence).toContain('demon_hunter_devourer_annihilator')
+  })
+
+  it('names the builds rather than counting them', () => {
+    // A count says a document holds more rows than the tier has builds. Only the
+    // ids say which row to go and check, which is the whole of #114.
+    const c = sweepCoverage(54, 52, 52, ['gone_a', 'gone_b'])
+    expect(c.sentence).toContain('gone_a, gone_b')
+    expect(c.stale).toEqual(['gone_a', 'gone_b'])
+  })
+
+  it('keeps saying the live coverage is short when it is', () => {
+    // Stale and incomplete are independent: a document can hold a dropped build's
+    // row AND be missing live ones, and the reader has to hear both.
+    const c = sweepCoverage(41, 52, 52, ['gone'])
+    expect(c.state).toBe('stale')
+    expect(c.covered).toBe(40)
+    expect(c.sentence).toContain('12 builds are missing')
+    expect(c.sentence).toContain('the tier no longer ships')
+  })
+
+  it('is exactly the old function when nothing is stale', () => {
+    // Absent, empty and "no argument" are one answer here, which under-claims
+    // rather than inventing a finding out of a pre-#114 document's silence.
+    for (const stale of [undefined, null, []] as const) {
+      const c = sweepCoverage(28, 28, 52, stale)
+      expect(c.state).toBe('behind')
+      expect(c.stale).toEqual([])
+      expect(c.sentence).not.toContain('no longer ships')
+    }
+  })
+
+  it('says the finding even when the tier size is unknown', () => {
+    // `tierNow` null means no manifest to compare against -- but a stale row is a
+    // claim about the document alone, so it survives that.
+    const c = sweepCoverage(29, 28, null, ['gone'])
+    expect(c.state).toBe('stale')
+    expect(c.sentence).toContain('the tier no longer ships')
   })
 })
 
