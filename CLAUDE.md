@@ -4937,20 +4937,44 @@ of nine cannot reach the quartiles, so the chart does not break -- it reads as a
 observation, *"at some point in every one of these kills the room was empty"*, which
 is a statement about the encounter and is false.
 
-**`coverage == 1.0` exactly is unreachable by a genuine read**, and the paragraph
-above already said so -- *"scores about 0.995 and never 1.0"* -- three lines from the
-field it describes. Nobody had turned that sentence around into a check. It is a
-one-liner over any published `fights.json` and it is the cheapest audit here:
+**A `coverage == 1.0` audit was proposed here and it does not work.** The paragraph
+above says a complete read *"scores about 0.995 and never 1.0"*, and this entry turned
+that into a recommended one-liner -- *"the cheapest audit here"*:
 
 ```python
-[p for p in pulls if p.get("coverage") == 1.0]      # a real read never lands on 1.0
+[p for p in pulls if p.get("coverage") == 1.0]      # WRONG: this flags healthy pulls
 ```
+
+**Measured against the committed `fights.json` on 2026-09-01: 15 of its 59 sampled
+pulls sit at exactly 1.0, and none of them is the defect.** Every one has a real
+multi-step curve that rises and falls -- Sszorak's `d6hn419Q3VrycMXP` runs
+`[[0.0, 0], [0.008, 1], [366.534, 0]]` over a 366.5 s kill. Running that audit today
+produces fifteen false positives and the conclusion that #97 is back on a quarter of
+the tier.
+
+The reason is in the field's own definition, two files away:
+`coverage` is `round(min(window / duration, 1.0), 4)`. The **`min` clamps to 1.0** and
+the rounding takes anything from 0.99995 up, so a genuine read reaches 1.0 routinely.
+"Never 1.0" was true of the arithmetic somebody pictured and not of the code.
+
+**The real test is the curve, and this entry already said so four lines down** --
+*"The band tests the **curve**, not `coverage`"* -- so the section contradicted itself
+across a page break. `_observed_a_target` is the check, and it is a one-liner too:
+
+```python
+[p for p in pulls if not any(count for _, count in p.get("steps") or [])]
+```
+
+That returns **zero** over the same committed document, which is what a clean tier
+looks like: #97's fix is holding, and the pull it was written for
+(The Lost Explorers at Mythic) is now excluded and counted as `unobservedKills: 1`.
 
 Fixed in #97: `window` splits the two states, `_observed_a_target` excludes a pull
 whose curve never leaves zero, and `unobservedKills` is published beside `fights` so
-a band that dropped one says so. The band tests the **curve**, not `coverage` --
-payloads already on disk record 1.0 for exactly these pulls, so a coverage test would
-read the corrupted value as healthy.
+a band that dropped one says so. The band tests the curve rather than the ratio for
+exactly the reason above, and payloads already on disk record 1.0 for the corrupted
+pulls *as well as* for healthy ones -- which is what makes the ratio useless as a
+test in both directions.
 
 Note what this does *not* explain: why that fetch read nothing. The pull is a real
 kill of a real length, and the run reported no error. Unexplained, and named rather
