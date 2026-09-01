@@ -5058,6 +5058,42 @@ group and counts as its own kill, which under-claims the dedup in the safe
 direction -- and at Heroic by a truncated pull. Read `duplicateUploads` and
 `unobservedKills` on the band and the arithmetic closes.
 
+#### One kill is drawn, and is not drawn as a band (#48)
+
+The floor for a band used to be two kills, which discards the only observation on a
+boss whose Mythic field is still filling in -- and after #130 that is most of MID2:
+the whole tier holds **13 distinct Mythic kills**, Vashnik's being **one**. So the
+floor came down to one, and the note beside it said a single kill *"renders as a line
+with no spread, which is the honest picture of one observation"*.
+
+**It is not.** A zero-width band reads as *kills agreeing perfectly*, which is exactly
+the fallacy #130 had just removed one layer up -- six uploads of one Vashnik pull
+publishing an inter-quartile range of zero. The count was published and the picture
+contradicted it, which is this project's signature defect stated in a chart instead of
+in prose.
+
+The owner's decision (2026-09-01) is **"zeichnen, aber nicht als Band"**: the curve is
+drawn, labelled as one pull. Concretely, at `fights == 1`:
+
+- the document's own `why` says *one kill was sampled, so this is that pull's own
+  target count over time -- a single observation drawn as a line, not a distribution*;
+- both readers drop the quartile area and the min/max envelope, so the only marks are
+  that pull's step function and the simulated one;
+- the tooltip prints one row rather than three (median / middle half / full range are
+  the same number written three ways, which reads as three agreeing measurements);
+- the legend says "This one pull" rather than "Median of 1 kills".
+
+**Everything is derived from `fights`, which the document already publishes, and no
+new field is added.** A boolean beside a count that implies it is a pair that can
+disagree, and only one of the two would be checkable against the band itself -- the
+same reason `bestBuild` derives its verdict from the numbers printed next to it rather
+than reading a published `beatsSimc`.
+
+Two controls, because a "draw it differently" change passes trivially against a
+component that stops drawing at all: `test_more_than_one_kill_still_says_it_is_a_distribution`
+on the pipeline side, and a spec asserting six chart series and the middle-half wording
+survive at `fights > 1` on the frontend side.
+
 
 **"First kills" is bounded by the ranking window, and that bound was invisible.**
 `select_report_fights` sorts by kill date, but only over the rows it was handed,

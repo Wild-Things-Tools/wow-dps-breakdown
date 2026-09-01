@@ -756,13 +756,22 @@ def test_a_complete_fetch_is_kept_even_when_its_coverage_is_low():
     assert fightdataset._target_band(enc)["fights"] == 3
 
 
-def test_one_kill_is_a_band_of_one_rather_than_no_band():
+def test_one_kill_is_drawn_as_one_pull_rather_than_as_a_distribution():
     """The floor was two kills, which discards the only observation on a boss whose
-    field is still filling in -- MID2's Sszorak on Mythic (#48).
+    field is still filling in -- MID2's Sszorak and Vashnik on Mythic (#48).
 
-    One kill degenerates rather than failing: every statistic is that curve, so the
-    spread is zero and it draws as a line. `fights` says it is one, which is what
-    stops a flat band reading as agreement between many pulls.
+    One kill degenerates rather than failing: every statistic IS that curve, so the
+    spread is zero. What this test used to assert alongside that was *"`fights` says
+    it is one, which is what stops a flat band reading as agreement between many
+    pulls"* -- and it does not: a zero-width band reads as kills agreeing perfectly,
+    which is the fallacy #130 removed one layer up when six uploads of one Vashnik
+    pull published an inter-quartile range of zero. The count was published and the
+    picture contradicted it.
+
+    So the owner's decision (2026-09-01) is "zeichnen, aber nicht als Band": the
+    document's own `why` says it is one pull's curve, and the view drops the quartile
+    area and the min/max envelope. Both sides are derived from `fights` rather than
+    from a second published field, so the two cannot disagree.
     """
     enc = payload_of([waved_fight("F0", 300.0, 60.0)])["encounters"][0]
     band = fightdataset._target_band(enc)
@@ -774,6 +783,20 @@ def test_one_kill_is_a_band_of_one_rather_than_no_band():
         assert point["min"] == point["median"] == point["max"]
     # And it is a real curve, not a flat line by accident: the wave has to show.
     assert max(p["median"] for p in band["band"]) > min(p["median"] for p in band["band"])
+    # The sentence must not claim a distribution it does not have.
+    assert "single observation" in band["why"]
+    assert "inter-quartile" not in band["why"]
+    assert "across every fully-read kill" not in band["why"]
+
+
+def test_more_than_one_kill_still_says_it_is_a_distribution():
+    """The control: without it the assertions above pass against a `why` that never
+    mentions a distribution for any sample size."""
+    fights = [waved_fight(f"F{i}", 300.0 + i * KILLS_APART, 60.0) for i in range(3)]
+    band = fightdataset._target_band(payload_of(fights)["encounters"][0])
+    assert band["fights"] == 3
+    assert "inter-quartile" in band["why"]
+    assert "single observation" not in band["why"]
 
 
 def test_a_band_still_needs_a_kill_that_was_read_to_the_end():

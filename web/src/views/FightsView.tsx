@@ -763,6 +763,17 @@ function TargetBandPanel({ encounter }: { encounter: FightEncounter }) {
   if (!band || rows.length === 0) return null
 
   const peak = Math.max(...band.band.map((point) => point.max), encounter.scenario.targets)
+  /**
+   * One sampled kill, so there is no distribution to draw (#48).
+   *
+   * A band over a single curve is degenerate: median, both quartiles and both
+   * extremes ARE that curve, so both areas collapse onto the line and the chart
+   * reads as *kills agreeing perfectly* -- the same false consensus six uploads of
+   * one Vashnik pull published as an inter-quartile range of zero. Derived from
+   * `fights`, which the document already publishes, so the picture and the count
+   * cannot disagree.
+   */
+  const singlePull = band.fights === 1
 
   return (
     <Panel>
@@ -774,12 +785,21 @@ function TargetBandPanel({ encounter }: { encounter: FightEncounter }) {
           </span>
         }
         subtitle={
-          <>
-            Across <strong>{band.fights} kills</strong>, read in full. The dark band is
-            where the middle half of kills sat; the faint band is the full range; the line
-            is the median. Time is shown in seconds at the median kill length (
-            {Math.round(band.medianLengthSeconds)}s).
-          </>
+          singlePull ? (
+            <>
+              <strong>One kill</strong> was sampled, read in full &mdash; so this is that
+              pull&rsquo;s own target count, drawn as a line rather than a band. There is no
+              spread to show and none is drawn. Time is shown in seconds at its own length (
+              {Math.round(band.medianLengthSeconds)}s).
+            </>
+          ) : (
+            <>
+              Across <strong>{band.fights} kills</strong>, read in full. The dark band is
+              where the middle half of kills sat; the faint band is the full range; the line
+              is the median. Time is shown in seconds at the median kill length (
+              {Math.round(band.medianLengthSeconds)}s).
+            </>
+          )
         }
       />
       <div className="px-2 py-4">
@@ -803,26 +823,32 @@ function TargetBandPanel({ encounter }: { encounter: FightEncounter }) {
               tickLine={false}
               width={28}
             />
-            {/* Full range behind, inter-quartile in front: two stacked range areas. */}
-            <Area
-              dataKey="envelope"
-              stroke="none"
-              fill={LOGGED_COLOR}
-              fillOpacity={0.12}
-              isAnimationActive={false}
-              activeDot={false}
-            />
-            <Area
-              dataKey="iqr"
-              stroke="none"
-              fill={LOGGED_COLOR}
-              fillOpacity={0.28}
-              isAnimationActive={false}
-              activeDot={false}
-            />
+            {/* Full range behind, inter-quartile in front: two stacked range areas.
+                Both are dropped for a single pull -- they would be zero-height bands
+                hugging the line, drawing "the kills agreed" out of one observation. */}
+            {!singlePull && (
+              <Area
+                dataKey="envelope"
+                stroke="none"
+                fill={LOGGED_COLOR}
+                fillOpacity={0.12}
+                isAnimationActive={false}
+                activeDot={false}
+              />
+            )}
+            {!singlePull && (
+              <Area
+                dataKey="iqr"
+                stroke="none"
+                fill={LOGGED_COLOR}
+                fillOpacity={0.28}
+                isAnimationActive={false}
+                activeDot={false}
+              />
+            )}
             <Line
               dataKey="median"
-              name="Median kill"
+              name={singlePull ? 'This pull' : 'Median kill'}
               type="stepAfter"
               stroke={LOGGED_COLOR}
               strokeWidth={2}
@@ -849,24 +875,38 @@ function TargetBandPanel({ encounter }: { encounter: FightEncounter }) {
                   <TooltipCard
                     title={`${Math.round(Number(label))}s into the fight`}
                     rows={[
-                      {
-                        id: 'median',
-                        label: 'Median kill',
-                        color: LOGGED_COLOR,
-                        value: `${row.median} up`,
-                      },
-                      {
-                        id: 'iqr',
-                        label: 'Middle half',
-                        color: LOGGED_COLOR,
-                        value: `${row.iqr[0]}–${row.iqr[1]}`,
-                      },
-                      {
-                        id: 'range',
-                        label: 'Full range',
-                        color: 'var(--text-muted)',
-                        value: `${row.envelope[0]}–${row.envelope[1]}`,
-                      },
+                      // With one kill the three rows below are the same number
+                      // written three ways, which reads as three agreeing
+                      // measurements rather than as one.
+                      ...(singlePull
+                        ? [
+                            {
+                              id: 'median',
+                              label: 'This pull',
+                              color: LOGGED_COLOR,
+                              value: `${row.median} up`,
+                            },
+                          ]
+                        : [
+                            {
+                              id: 'median',
+                              label: 'Median kill',
+                              color: LOGGED_COLOR,
+                              value: `${row.median} up`,
+                            },
+                            {
+                              id: 'iqr',
+                              label: 'Middle half',
+                              color: LOGGED_COLOR,
+                              value: `${row.iqr[0]}–${row.iqr[1]}`,
+                            },
+                            {
+                              id: 'range',
+                              label: 'Full range',
+                              color: 'var(--text-muted)',
+                              value: `${row.envelope[0]}–${row.envelope[1]}`,
+                            },
+                          ]),
                       { id: 'sim', label: 'Simulated', color: SIM_COLOR, value: `${row.sim} up` },
                     ]}
                   />
@@ -878,7 +918,11 @@ function TargetBandPanel({ encounter }: { encounter: FightEncounter }) {
       </div>
       <Legend
         items={[
-          { id: 'median', label: `Median of ${band.fights} kills`, color: LOGGED_COLOR },
+          {
+            id: 'median',
+            label: singlePull ? 'This one pull' : `Median of ${band.fights} kills`,
+            color: LOGGED_COLOR,
+          },
           { id: 'sim', label: simIsFallback ? 'Simulated (fallback)' : 'Simulated', color: SIM_COLOR },
         ]}
       />
