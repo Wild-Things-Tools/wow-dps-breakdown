@@ -219,7 +219,59 @@ def probe_encounter(
                 len(fight.adds),
                 len(fight.auras),
             )
+    for line in describe_upload_start_times(observation):
+        log.info("  %s", line)
     return observation, None
+
+
+def describe_upload_start_times(observation: fightextract.EncounterObservation) -> list[str]:
+    """Report whether two uploads of one kill state the same absolute start (#135).
+
+    The owner's decision of 2026-09-01: measure it on the next probe run that happens
+    anyway, then decide about the filter. It costs nothing -- every sampled row has
+    carried ``startedAt`` since #134 -- so this runs on every pass rather than being a
+    mode somebody has to remember.
+
+    Silent when there is nothing to compare: a sample with no duplicate group answers
+    the question with an absence rather than with a number, and a run printing
+    ``widest: None`` on every boss of a clean tier is noise that trains a reader to
+    skip the line.
+
+    It states the numbers and the gap between them and stops there. What a threshold
+    would have to be is a calibration, and a calibration is not a thing a single
+    encounter's sample gets to decide -- ``_DUPLICATE_UPLOAD_SECONDS`` took the whole
+    committed document to place.
+    """
+    reading = observation.upload_start_times()
+    if not reading["groupsWithSeveralUploads"]:
+        return []
+
+    lines = [
+        f"upload start times: {reading['groupsWithSeveralUploads']} of "
+        f"{reading['groups']} kill(s) were uploaded more than once"
+    ]
+    widest = reading["widestWithinGroup"]
+    closest = reading["closestBetweenGroups"]
+    lines.append(
+        f"  widest disagreement WITHIN one kill's uploads: "
+        f"{'unmeasured' if widest is None else f'{widest:.3f}s'}"
+    )
+    lines.append(
+        f"  closest two DIFFERENT kills state their start: "
+        f"{'unmeasured' if closest is None else f'{closest:.3f}s'}"
+    )
+    if widest is not None and closest is not None:
+        lines.append(
+            "  a start-time rule would have to sit between those two"
+            if widest < closest
+            else "  those overlap here, so a start-time rule cannot separate this sample"
+        )
+    if reading["unstamped"]:
+        # Named rather than folded in: a row with no stamp cannot be placed on
+        # either side of a threshold, and counting it as zero would make every
+        # group look infinitely wide.
+        lines.append(f"  {reading['unstamped']} sampled row(s) state no start time")
+    return lines
 
 
 def _public_first_kills(

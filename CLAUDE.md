@@ -5005,6 +5005,32 @@ circumstantial -- two guilds *can* kill a boss in the same number of seconds -- 
 the step function has to agree as well: same number of transitions, each to exactly
 the same count, each within the tolerance.
 
+**A third signal exists and nobody has measured it (#135).** If two uploads of one
+kill state the same **absolute start**, that is a *cheaper and stronger* test than
+length-and-curve: it needs no curve, so `select_report_fights` could drop the copy
+for the price of a ranking row rather than after seven event queries. Whether they
+do is unknown -- `startedAt` reached the payload only in #134, after the dedup
+shipped.
+
+The owner's decision (2026-09-01) is **measure it on the next run that happens
+anyway, then decide**. `EncounterObservation.upload_start_times` reports it on every
+probe pass at no extra cost, and the filter waits for the answer. It prints **two**
+numbers, because either alone settles nothing:
+
+```
+widest disagreement WITHIN one kill's uploads     <- a rule must tolerate at least this
+closest two DIFFERENT kills state their start     <- a rule must stay under this
+```
+
+A threshold exists only in the gap between them, which is exactly the shape
+`_DUPLICATE_UPLOAD_SECONDS` was calibrated in. The run states the numbers and stops
+there: a calibration is not a thing one encounter's sample gets to decide. Two
+refusals travel with it -- a sample with no duplicate group reports **nothing** rather
+than a spread of zero (the absence is the answer, and a `None` on every boss of a
+clean tier is noise that trains a reader to skip the line), and a row stating no
+start time is counted **apart** rather than placed at the epoch, which would make its
+group look infinitely wide and kill the measurement being taken.
+
 **A report cannot contain the same kill twice**, so two rows sharing a report code
 are two pulls however alike they look. Over the committed document that guard fires
 **zero times across 34 multi-member groups spanning 93 rows** -- which makes it an
