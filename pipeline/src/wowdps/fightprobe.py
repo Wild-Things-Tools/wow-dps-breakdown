@@ -244,6 +244,7 @@ def fold_upload_start_times(readings: list[dict]) -> dict:
     widest = [r["widestWithinGroup"] for r in readings if r["widestWithinGroup"] is not None]
     closest = [r["closestBetweenGroups"] for r in readings if r["closestBetweenGroups"] is not None]
     return {
+        "rows": sum(r.get("rows", 0) for r in readings),
         "groups": sum(r["groups"] for r in readings),
         "groupsWithSeveralUploads": sum(r["groupsWithSeveralUploads"] for r in readings),
         "unstamped": sum(r["unstamped"] for r in readings),
@@ -277,6 +278,19 @@ def describe_upload_start_times(reading: dict) -> list[str]:
     encounter's sample gets to decide -- ``_DUPLICATE_UPLOAD_SECONDS`` took the whole
     committed document to place.
     """
+    # A payload whose rows carry no `startedAt` at all cannot answer the question,
+    # and answering it with SILENCE is the failure this whole reading exists to avoid:
+    # "no kill was uploaded twice" and "this payload predates the field" are different
+    # sentences, and only the second is true of anything written before #134. Measured
+    # on the first dispatch after #139 (CI 33460021969): every stored row predated
+    # `startedAt` by hours, the reading went quiet, and a reader would have taken that
+    # for a clean tier -- over a document holding 59 duplicate uploads.
+    if reading.get("rows") and reading["unstamped"] == reading["rows"]:
+        return [
+            f"upload start times: UNMEASURED -- all {reading['unstamped']} sampled row(s) "
+            "state none, so this payload predates the field rather than holding no "
+            "duplicate. Re-read an encounter to answer it."
+        ]
     if not reading["groupsWithSeveralUploads"]:
         return []
 
