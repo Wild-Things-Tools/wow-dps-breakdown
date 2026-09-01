@@ -974,3 +974,86 @@ def tmp_path_for_both():
         encoding="utf-8",
     )
     return path
+
+
+# --------------------------------------------------------------------------------
+# #135: does a duplicate upload state the same start time?
+# --------------------------------------------------------------------------------
+
+
+def _observation_with(*starts_and_durations) -> EncounterObservation:
+    """An observation whose fights carry only what the reading looks at."""
+    from wowdps.fightextract import TargetCountTimeline
+
+    observation = EncounterObservation(3180, "Lightblinded Vanguard", 5)
+    for index, (started_at, duration) in enumerate(starts_and_durations):
+        fight = observe_fight(
+            report_code=f"r{index}",
+            fight={
+                "id": 7,
+                "kill": True,
+                "size": 20,
+                "startTime": 0,
+                "endTime": int(duration * 1000),
+                "friendlyPlayers": list(range(1, 21)),
+                "enemyNPCs": [],
+                "phaseTransitions": [],
+            },
+            damage_events=[],
+            death_events=[],
+            aura_events=[],
+            phase_metadata=[],
+            started_at=started_at,
+        )
+        assert isinstance(fight.significant_timeline, TargetCountTimeline)
+        observation.fights.append(fight)
+    return observation
+
+
+def test_the_probe_reports_what_a_start_time_rule_would_have_to_fit_between():
+    """#135. The reading is taken on every pass because it costs nothing -- every
+    row has carried `startedAt` since #134 -- and the filter waits for the answer.
+
+    Both numbers are printed, because a within-group spread with nothing to compare
+    it against cannot say whether a threshold exists.
+    """
+    base = 1_700_000_000_000.0
+    lines = fightprobe.describe_upload_start_times(
+        _observation_with((base, 300.0), (base + 300, 300.0), (base + 90_000, 240.0))
+    )
+    joined = "\n".join(lines)
+    assert "1 of 2 kill(s) were uploaded more than once" in joined
+    assert "0.300s" in joined
+    assert "89.700s" in joined
+    assert "would have to sit between those two" in joined
+
+
+def test_the_probe_says_nothing_when_no_kill_was_uploaded_twice():
+    """A run printing `widest: None` on every boss of a clean tier is noise that
+    trains a reader to skip the line -- and the absence IS the answer here."""
+    base = 1_700_000_000_000.0
+    assert (
+        fightprobe.describe_upload_start_times(
+            _observation_with((base, 300.0), (base + 5_000, 240.0))
+        )
+        == []
+    )
+
+
+def test_the_probe_names_a_sample_a_start_time_rule_could_not_separate():
+    """The finding that would kill the idea, said rather than left to arithmetic:
+    two different kills stating starts closer together than one kill's uploads do."""
+    base = 1_700_000_000_000.0
+    lines = fightprobe.describe_upload_start_times(
+        _observation_with((base, 300.0), (base + 10_000, 300.0), (base + 10_100, 240.0))
+    )
+    assert any("cannot separate this sample" in line for line in lines)
+
+
+def test_a_row_with_no_start_time_is_named_in_the_transcript():
+    """It can be placed on neither side of a threshold, so it is counted apart."""
+    base = 1_700_000_000_000.0
+    lines = fightprobe.describe_upload_start_times(
+        _observation_with((base, 300.0), (base + 200, 300.0), (0.0, 300.0), (base + 60_000, 240.0))
+    )
+    assert any("state no start time" in line for line in lines)

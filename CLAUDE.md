@@ -785,6 +785,77 @@ elsewhere in this section (28/26/26, and the `gear.json (trinket, 2026-08-21)`
 row in the sweep-coverage table above) describe the pre-fix document and are kept
 as what the defect looked like, not as the current state.
 
+### The union never retires a row, and two counts cannot say which one to retire
+
+The other half of #95's arithmetic, closed as #114. `merge_gear_shards` unions rows
+by build id and **nothing ever removes one**, which is correct -- a slot this run did
+not sweep must keep what it had -- and has a consequence nobody had stated: a build
+simc stops shipping keeps its row in every future document. `specs` can then exceed
+`specsAvailable`, and `sweepCoverage(53, 52, 52)` reaches `covered >= now` and says
+*"Covers all 52 builds in the tier"* over a table holding 53. That is the same trade
+this file already refuses one paragraph up -- **a wrong sentence replaced by a more
+confident wrong sentence is not a repair**.
+
+It is not hypothetical. `computed-builds.json` carried
+`demon_hunter_devourer_annihilator` after simc dropped the profile, which
+`projection-check` found by being unable to measure it; `gear.json` has the same
+shape with no such check in front of it.
+
+**Two counts cannot support the fix, and that is the whole design decision.** From
+`specs` and `specsAvailable` a reader learns only *that* the document holds more rows
+than the tier has builds -- never *which* row to go and look at. So `write_gear`
+publishes the tier's build **ids** (`coverage.buildsAvailable`, ~1.5 KB against a few
+hundred), `specsAvailable` is derived from that list rather than passed beside it, and
+`merge_gear_shards` names the excess as `coverage.staleRows`.
+
+Four decisions in it, each one this file's own rule applied:
+
+- **Named, not clamped, not counted.** Clamping `specs` down to the tier size hides
+  rows the document still holds; a count says a row is stale and cannot say which.
+  Naming is what `gearpool` already does for an item the journal never placed
+  (`unplaced`) and for a Legion ring a profile wears (`legacy`): report it, do not
+  quietly keep or drop it.
+- **The rows themselves are kept.** Deleting somebody's measured data is a decision a
+  merge does not get to make, and the row is still the honest record of a build that
+  was simulated.
+- **Per slot as well as per document**, because the slot block is what a reader behind
+  a slot selector shows -- and judged against **one** list, since whether the tier has
+  a build is a document-wide fact rather than a property of the neck pool. This is
+  deliberately *not* under the `changed` guard the median sits behind: a row goes stale
+  because the **tier** moved, which happens while a slot's own rows sit untouched, and
+  a set difference is exact where re-deriving a median from rounded errors is not.
+- **Unknown is not empty.** A document written before this carries no id list, so
+  nothing is claimed -- reading the absence as an empty set would mark *every* row in
+  the document stale, which is the loudest possible wrong answer. `_latest_builds_available`
+  therefore walks newest-**first** rather than reading `documents[-1]`: the merge folds
+  the published file in at its own age, so the newest document is frequently a pre-#114
+  one, and reading only it would answer "unknown" for exactly the run after a
+  single-slot sweep.
+
+A build that comes back drops its mark, so the field cannot outlive its own evidence.
+**The test for that needed the slot this run did NOT sweep**, and the first version of
+it could not reach the code at all: a swept slot's block comes from the shard, which
+never carried the old mark, so the drop was untested and its canary stayed green. An
+unswept slot keeps the published block verbatim -- which is what the merge is built to
+do -- and that is where a stale mark survives.
+
+**Both readers say it, and neither says it silently.** `sweepCoverage` gains a fifth
+state, `stale`, which wins over `complete`/`behind`/`partial` because it is the
+surprising half and the half somebody acts on; the live sentence is kept verbatim and
+the finding is appended, so nothing that was true stops being said. wtt-frontend's
+`dps-loot` appends the same clause -- its sentence ("of the N builds the tier had when
+this slot was swept") stays true either way, and a stale row makes it *incomplete*
+rather than false.
+
+**Nothing published moves until a gear run writes.** The committed `gear.json` carries
+no `buildsAvailable`, so both readers see "nothing to report" -- which is right, since
+that document cannot support the claim in either direction. MID2 has no stale row
+today, measured against the committed documents on 2026-09-01: `gear.json` holds 51
+distinct build ids across its three slots and every one of them is in `index.json`'s
+51 builds. (`specsAvailable` reads 52 there, which is the tier's profile count -- the
+52nd is the profile whose talent hash simc refuses, so it produces no row to be stale.
+That mismatch is the ordinary state, not a finding.)
+
 ## The gear anchor: what a computed build wears
 
 `gearanchor.py` + `wowdps gear-anchor`. A build this project *computes* -- from a
@@ -4934,6 +5005,32 @@ circumstantial -- two guilds *can* kill a boss in the same number of seconds -- 
 the step function has to agree as well: same number of transitions, each to exactly
 the same count, each within the tolerance.
 
+**A third signal exists and nobody has measured it (#135).** If two uploads of one
+kill state the same **absolute start**, that is a *cheaper and stronger* test than
+length-and-curve: it needs no curve, so `select_report_fights` could drop the copy
+for the price of a ranking row rather than after seven event queries. Whether they
+do is unknown -- `startedAt` reached the payload only in #134, after the dedup
+shipped.
+
+The owner's decision (2026-09-01) is **measure it on the next run that happens
+anyway, then decide**. `EncounterObservation.upload_start_times` reports it on every
+probe pass at no extra cost, and the filter waits for the answer. It prints **two**
+numbers, because either alone settles nothing:
+
+```
+widest disagreement WITHIN one kill's uploads     <- a rule must tolerate at least this
+closest two DIFFERENT kills state their start     <- a rule must stay under this
+```
+
+A threshold exists only in the gap between them, which is exactly the shape
+`_DUPLICATE_UPLOAD_SECONDS` was calibrated in. The run states the numbers and stops
+there: a calibration is not a thing one encounter's sample gets to decide. Two
+refusals travel with it -- a sample with no duplicate group reports **nothing** rather
+than a spread of zero (the absence is the answer, and a `None` on every boss of a
+clean tier is noise that trains a reader to skip the line), and a row stating no
+start time is counted **apart** rather than placed at the epoch, which would make its
+group look infinitely wide and kill the measurement being taken.
+
 **A report cannot contain the same kill twice**, so two rows sharing a report code
 are two pulls however alike they look. Over the committed document that guard fires
 **zero times across 34 multi-member groups spanning 93 rows** -- which makes it an
@@ -4986,6 +5083,42 @@ differs by the pull whose fetch read nothing -- it has no curve, so it matches n
 group and counts as its own kill, which under-claims the dedup in the safe
 direction -- and at Heroic by a truncated pull. Read `duplicateUploads` and
 `unobservedKills` on the band and the arithmetic closes.
+
+#### One kill is drawn, and is not drawn as a band (#48)
+
+The floor for a band used to be two kills, which discards the only observation on a
+boss whose Mythic field is still filling in -- and after #130 that is most of MID2:
+the whole tier holds **13 distinct Mythic kills**, Vashnik's being **one**. So the
+floor came down to one, and the note beside it said a single kill *"renders as a line
+with no spread, which is the honest picture of one observation"*.
+
+**It is not.** A zero-width band reads as *kills agreeing perfectly*, which is exactly
+the fallacy #130 had just removed one layer up -- six uploads of one Vashnik pull
+publishing an inter-quartile range of zero. The count was published and the picture
+contradicted it, which is this project's signature defect stated in a chart instead of
+in prose.
+
+The owner's decision (2026-09-01) is **"zeichnen, aber nicht als Band"**: the curve is
+drawn, labelled as one pull. Concretely, at `fights == 1`:
+
+- the document's own `why` says *one kill was sampled, so this is that pull's own
+  target count over time -- a single observation drawn as a line, not a distribution*;
+- both readers drop the quartile area and the min/max envelope, so the only marks are
+  that pull's step function and the simulated one;
+- the tooltip prints one row rather than three (median / middle half / full range are
+  the same number written three ways, which reads as three agreeing measurements);
+- the legend says "This one pull" rather than "Median of 1 kills".
+
+**Everything is derived from `fights`, which the document already publishes, and no
+new field is added.** A boolean beside a count that implies it is a pair that can
+disagree, and only one of the two would be checkable against the band itself -- the
+same reason `bestBuild` derives its verdict from the numbers printed next to it rather
+than reading a published `beatsSimc`.
+
+Two controls, because a "draw it differently" change passes trivially against a
+component that stops drawing at all: `test_more_than_one_kill_still_says_it_is_a_distribution`
+on the pipeline side, and a spec asserting six chart series and the middle-half wording
+survive at `fights > 1` on the frontend side.
 
 
 **"First kills" is bounded by the ranking window, and that bound was invisible.**

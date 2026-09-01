@@ -904,14 +904,22 @@ def _target_band(payload: dict) -> dict | None:
     length, which is meaningful precisely because the user asked for kills whose
     timings are alike -- when they are, one length fits them all.
 
-    **One kill is enough.** The floor used to be two, and on a boss whose Mythic
-    field is still filling in that discards the only observation there is -- MID2's
-    Sszorak is exactly that case, and the owner asked for it to be drawn (#48).
-    A band over a single kill is arithmetically fine and degenerate: median, both
-    quartiles and both extremes are that one curve, so it renders as a line with no
-    spread, which is the honest picture of one observation. ``kills`` is published
-    beside it, so a reader can see the band is built from one pull rather than
-    inferring it from a shape that happens to be flat.
+    **One kill is enough, and is not drawn as a distribution.** The floor used to be
+    two, and on a boss whose Mythic field is still filling in that discards the only
+    observation there is -- MID2's Sszorak and Vashnik are exactly that case, and the
+    owner asked for it to be drawn (#48).
+
+    But "renders as a line with no spread" is not the honest picture it was called
+    here: a flat band reads as *kills agreeing perfectly*, which is the fallacy #130
+    had just removed one layer up, where six uploads of one Vashnik pull published an
+    inter-quartile range of zero. So the owner's decision (2026-09-01) is *"zeichnen,
+    aber nicht als Band"*: at ``fights == 1`` the ``why`` says it is one pull's own
+    curve, and the view draws the median line alone -- no quartile area, no min/max
+    envelope, and a label that says one pull rather than "median of N kills".
+
+    Derived from ``fights``, which is already published, rather than a second field:
+    a boolean beside a count that implies it is a pair that can disagree, and only one
+    of the two would be checkable against the band itself.
 
     The floor that matters is still enforced above and is a different one: a kill
     whose event fetch was truncated is excluded whatever the count, because that
@@ -996,11 +1004,30 @@ def _target_band(payload: dict) -> dict | None:
         "buckets": _BAND_BUCKETS,
         "medianLengthSeconds": round(median_length, 1),
         "band": band,
+        # A band over ONE kill is arithmetically fine and degenerate: median, both
+        # quartiles and both extremes are that one curve, so it renders as a line
+        # with no spread -- which reads as *kills agreeing perfectly* and is a claim
+        # no run ever made. That is exactly the fallacy #130 removed one layer up,
+        # where six uploads of one Vashnik pull published an inter-quartile range of
+        # zero. So the sentence says what the numbers are: one pull, drawn.
+        #
+        # Derived from `fights`, never a second field. A published boolean beside a
+        # count that implies it is a pair that can disagree, and only one of them
+        # would be checkable against the band itself.
         "why": (
-            "The median and inter-quartile range of how many targets were up at each "
-            "point of the fight, across every fully-read kill sampled -- not one "
-            "representative pull. Time is normalised across kills and shown in seconds "
-            "at the median kill length. A wide band is a moment the kills disagreed on."
+            (
+                "One kill was sampled, so this is that pull's own target count over "
+                "time -- a single observation drawn as a line, not a distribution. "
+                "Time is shown in seconds at its own length."
+            )
+            if len(fights) == 1
+            else (
+                "The median and inter-quartile range of how many targets were up at "
+                "each point of the fight, across every fully-read kill sampled -- not "
+                "one representative pull. Time is normalised across kills and shown in "
+                "seconds at the median kill length. A wide band is a moment the kills "
+                "disagreed on."
+            )
         ),
     }
     # Published rather than silently dropped, the same rule the docstring states for

@@ -1288,6 +1288,70 @@ class EncounterObservation:
     def reports(self) -> list[str]:
         return sorted({fight.report_code for fight in self.fights})
 
+    def upload_start_times(self) -> dict:
+        """Do two uploads of one kill share an absolute start time? (#135)
+
+        The dedup rule this module ships is **length and curve** -- calibrated on an
+        order-of-magnitude break in the committed data, 65 consecutive gaps under
+        0.082 s against a next-smallest of 1.074 s. ``started_at`` is a third signal
+        that nothing uses: if two uploads of one raid's kill really do state the same
+        absolute moment, it is a *cheaper and stronger* test than a step-function
+        comparison, because it needs no curve at all.
+
+        Nobody has measured whether they do. That measurement costs nothing -- every
+        sampled row already carries ``startedAt`` (#134) -- so the probe takes it on
+        every run and reports it, and the filter is only worth building if the answer
+        comes back yes. That ordering is the owner's decision of 2026-09-01: measure
+        on the next run that happens anyway, then decide.
+
+        Two numbers, because either alone would settle nothing:
+
+        - ``widestWithinGroup`` -- how far apart the uploads of one kill state their
+          start. A rule keyed on start time has to tolerate at least this much.
+        - ``closestBetweenGroups`` -- how close two *different* kills state theirs. A
+          rule has to stay under this, or it merges kills that are not the same.
+
+        A threshold exists only if the first is comfortably below the second, which is
+        exactly the shape ``_DUPLICATE_UPLOAD_SECONDS`` was calibrated in. Both are
+        seconds, and both are ``None`` when the sample cannot produce them.
+
+        A row stating no ``started_at`` is counted as ``unstamped`` and enters neither
+        number: unknown is not zero, and folding it in as the epoch would make every
+        group look infinitely wide.
+        """
+        groups = group_uploads(
+            self.fights,
+            duration_of=lambda fight: float(fight.duration or 0.0),
+            steps_of=lambda fight: fight.significant_timeline.steps,
+            report_of=lambda fight: str(fight.report_code or ""),
+        )
+        stamped = [[f.started_at for f in group if f.started_at] for group in groups]
+        unstamped = sum(1 for fight in self.fights if not fight.started_at)
+
+        widest = None
+        multi = [stamps for stamps in stamped if len(stamps) > 1]
+        if multi:
+            widest = max((max(stamps) - min(stamps)) / 1000.0 for stamps in multi)
+
+        # The nearest pair drawn from two different groups. Bounded by construction:
+        # a probe reads tens of kills, not thousands, so the quadratic walk is cheap
+        # and states the question exactly rather than approximately.
+        closest = None
+        for index, left in enumerate(stamped):
+            for right in stamped[index + 1 :]:
+                for a in left:
+                    for b in right:
+                        gap = abs(a - b) / 1000.0
+                        closest = gap if closest is None else min(closest, gap)
+
+        return {
+            "groups": len(groups),
+            "groupsWithSeveralUploads": len(multi),
+            "unstamped": unstamped,
+            "widestWithinGroup": round(widest, 3) if widest is not None else None,
+            "closestBetweenGroups": round(closest, 3) if closest is not None else None,
+        }
+
     @property
     def killed_between(self) -> tuple[float, float] | None:
         """Earliest and latest sampled kill, epoch ms, or None when no row had a date.

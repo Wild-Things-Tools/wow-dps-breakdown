@@ -471,7 +471,7 @@ def cmd_gear(args: argparse.Namespace) -> int:
             tier,
             simc_meta,
             settings,
-            specs_available=len(all_profiles),
+            builds_available=[profile.id for profile in all_profiles],
         )
 
     for index, profile in enumerate(selected, start=1):

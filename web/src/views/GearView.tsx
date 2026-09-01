@@ -126,7 +126,7 @@ export function GearView({
   // hold the fallback.
   const shown = displayedCoverage(slot, gear)
   const coverage = useMemo(
-    () => sweepCoverage(shown?.specs ?? 0, shown?.specsAvailable, tierBuilds),
+    () => sweepCoverage(shown?.specs ?? 0, shown?.specsAvailable, tierBuilds, shown?.staleRows),
     [shown, tierBuilds],
   )
   const [levelId, setLevelId] = useState<string | null>(null)

@@ -489,7 +489,9 @@ def test_a_fight_with_no_enemy_events_says_so_instead_of_reporting_zero_targets(
 # --------------------------------------------------------------------------------
 
 
-def one_fight(code: str, size: int, duration_s: float) -> fightextract.FightObservation:
+def one_fight(
+    code: str, size: int, duration_s: float, started_at: float = 0.0
+) -> fightextract.FightObservation:
     end = FIGHT_START + int(duration_s * 1000)
     damage_events, death_events, aura_events = lightblinded_vanguard_events()
     damage_events = [event for event in damage_events if event["timestamp"] <= end]
@@ -503,6 +505,7 @@ def one_fight(code: str, size: int, duration_s: float) -> fightextract.FightObse
         phase_metadata=[],
         actor_names={10: "A", 11: "B", 12: "C"},
         ability_names={555_001: "Blinding Fervor"},
+        started_at=started_at,
     )
 
 
@@ -1278,3 +1281,69 @@ def test_a_fight_publishes_when_its_kill_happened():
         phase_metadata=[],
     )
     assert plain.to_json()["startedAt"] == 0.0
+
+
+def test_the_probe_measures_whether_uploads_share_a_start_time():
+    """#135: the third dedup signal, measured on runs that happen anyway.
+
+    The rule this module ships is length AND curve, which needs the kill to have been
+    read first -- seven event queries. If two uploads of one kill state the same
+    absolute start, `select_report_fights` could drop the copy for the price of a
+    ranking row. Nobody has checked whether they do, so the probe takes the reading
+    on every pass and the filter waits for the answer (owner, 2026-09-01).
+
+    Two numbers, because either alone settles nothing: how far apart one kill's
+    uploads state their start, and how close two DIFFERENT kills state theirs. A
+    threshold exists only in the gap between them -- the same shape
+    `_DUPLICATE_UPLOAD_SECONDS` was calibrated in.
+    """
+    base = 1_700_000_000_000.0
+    observation = EncounterObservation(3180, "Lightblinded Vanguard", 5)
+    observation.fights = [
+        # One kill, three uploads, whose stated starts differ by up to 400 ms.
+        one_fight("r1", 20, 300, started_at=base),
+        one_fight("r2", 20, 300, started_at=base + 250),
+        one_fight("r3", 20, 300, started_at=base + 400),
+        # A second, different kill, a minute later.
+        one_fight("r4", 20, 260, started_at=base + 60_000),
+    ]
+
+    reading = observation.upload_start_times()
+    assert reading["groups"] == 2
+    assert reading["groupsWithSeveralUploads"] == 1
+    assert reading["widestWithinGroup"] == 0.4
+    # The nearest cross-group pair is r3 -> r4, not r1 -> r4.
+    assert reading["closestBetweenGroups"] == 59.6
+    assert reading["unstamped"] == 0
+
+
+def test_a_row_with_no_start_time_is_counted_apart_rather_than_placed_at_zero():
+    """Unknown is not zero. Folding an unstamped row in as the epoch would make its
+    group look infinitely wide and kill the very measurement being taken."""
+    base = 1_700_000_000_000.0
+    observation = EncounterObservation(3180, "Lightblinded Vanguard", 5)
+    observation.fights = [
+        one_fight("r1", 20, 300, started_at=base),
+        one_fight("r2", 20, 300, started_at=base + 100),
+        one_fight("r3", 20, 300),  # no stamp at all
+    ]
+
+    reading = observation.upload_start_times()
+    assert reading["unstamped"] == 1
+    assert reading["widestWithinGroup"] == 0.1
+
+
+def test_a_sample_with_no_duplicate_upload_measures_nothing_rather_than_zero():
+    """The absence is the answer: there is no within-group spread to report when no
+    kill was uploaded twice, and reporting 0.0 would read as perfect agreement."""
+    base = 1_700_000_000_000.0
+    observation = EncounterObservation(3180, "Lightblinded Vanguard", 5)
+    observation.fights = [
+        one_fight("r1", 20, 300, started_at=base),
+        one_fight("r2", 20, 260, started_at=base + 5_000),
+    ]
+
+    reading = observation.upload_start_times()
+    assert reading["groupsWithSeveralUploads"] == 0
+    assert reading["widestWithinGroup"] is None
+    assert reading["closestBetweenGroups"] == 5.0

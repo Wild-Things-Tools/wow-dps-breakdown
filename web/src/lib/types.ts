@@ -582,7 +582,27 @@ export interface GearSlot {
    */
   simc?: SimcMeta;
   settings?: RunSettings;
-  coverage?: { specs: number; specsAvailable: number };
+  coverage?: SweepCoverageBlock;
+}
+
+/**
+ * A sweep's coverage claim: how many builds it has a row for, how many the tier
+ * held when it ran, and — since #114 — which of its rows the tier no longer ships.
+ *
+ * `staleRows` exists because the merge unions rows and never retires one: a build
+ * simc stops shipping keeps its row forever, so `specs` can exceed `specsAvailable`
+ * and a reader comparing the two counts alone cannot say WHICH build to check.
+ * Absent means either nothing is stale or the document predates `buildsAvailable`
+ * and cannot support the claim — `sweepCoverage` treats both as "no stale rows",
+ * which under-claims rather than inventing one.
+ */
+export interface SweepCoverageBlock {
+  specs: number;
+  specsAvailable: number;
+  /** The tier's build ids as this run's profile discovery found them (#114). */
+  buildsAvailable?: string[];
+  /** Rows whose build the tier no longer ships. Omitted when empty (#114). */
+  staleRows?: string[];
 }
 
 export interface GearDataset {
@@ -602,7 +622,7 @@ export interface GearDataset {
    * about the slot on screen (#95: the Trinket tab counted 28 over a table of
    * 26). Show `GearSlot.coverage` where a slot is selected.
    */
-  coverage: { specs: number; specsAvailable: number };
+  coverage: SweepCoverageBlock;
   slots: GearSlot[];
 }
 
