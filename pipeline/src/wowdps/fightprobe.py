@@ -219,18 +219,53 @@ def probe_encounter(
                 len(fight.adds),
                 len(fight.auras),
             )
-    for line in describe_upload_start_times(observation):
+    for line in describe_upload_start_times(observation.upload_start_times()):
         log.info("  %s", line)
     return observation, None
 
 
-def describe_upload_start_times(observation: fightextract.EncounterObservation) -> list[str]:
+def fold_upload_start_times(readings: list[dict]) -> dict:
+    """Combine per-encounter #135 readings into one, WITHOUT pooling their rows.
+
+    Reading the payload's fights as one flat list would be simpler and is wrong twice.
+    ``group_duplicate_uploads`` merges on length and curve alone, so two different
+    bosses' pulls could group together and be counted as one kill uploaded twice; and
+    ``closestBetweenGroups`` would then measure how close two *different encounters'*
+    kills sit on the clock, which is a fact about a raid night's schedule and not
+    about this question at all. Both would push the "different kills" number down,
+    which is the direction that makes a workable threshold look impossible.
+
+    So each encounter is read on its own and only the extremes are folded: the widest
+    within-group disagreement anywhere (a rule must tolerate at least that) and the
+    closest cross-group pair anywhere (a rule must stay under that). Counts add.
+    ``None`` stays ``None`` -- an encounter that cannot produce a number contributes
+    nothing rather than a zero.
+    """
+    widest = [r["widestWithinGroup"] for r in readings if r["widestWithinGroup"] is not None]
+    closest = [r["closestBetweenGroups"] for r in readings if r["closestBetweenGroups"] is not None]
+    return {
+        "groups": sum(r["groups"] for r in readings),
+        "groupsWithSeveralUploads": sum(r["groupsWithSeveralUploads"] for r in readings),
+        "unstamped": sum(r["unstamped"] for r in readings),
+        "widestWithinGroup": max(widest) if widest else None,
+        "closestBetweenGroups": min(closest) if closest else None,
+    }
+
+
+def describe_upload_start_times(reading: dict) -> list[str]:
     """Report whether two uploads of one kill state the same absolute start (#135).
 
     The owner's decision of 2026-09-01: measure it on the next probe run that happens
     anyway, then decide about the filter. It costs nothing -- every sampled row has
     carried ``startedAt`` since #134 -- so this runs on every pass rather than being a
     mode somebody has to remember.
+
+    Takes the *reading* rather than the observation, because there are two producers
+    of it and one renderer: ``EncounterObservation.upload_start_times`` for an
+    encounter this run read, and ``fightdataset.upload_start_times`` over the stored
+    payload for a pass that skipped everything. The second is what makes a
+    ``--publish --resume`` dispatch -- which sends no query and spends no points --
+    able to answer the question at all.
 
     Silent when there is nothing to compare: a sample with no duplicate group answers
     the question with an absence rather than with a number, and a run printing
@@ -242,7 +277,6 @@ def describe_upload_start_times(observation: fightextract.EncounterObservation) 
     encounter's sample gets to decide -- ``_DUPLICATE_UPLOAD_SECONDS`` took the whole
     committed document to place.
     """
-    reading = observation.upload_start_times()
     if not reading["groupsWithSeveralUploads"]:
         return []
 
@@ -1014,6 +1048,21 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         ),
         "incomplete": sorted(incomplete),
     }
+
+    # The #135 reading over EVERY encounter in the payload, not only the ones this
+    # pass read. A `--publish --resume` dispatch skips complete encounters before a
+    # query is sent and therefore spends nothing -- so without this the one pass that
+    # is free to run is the one that could not answer the question. Every row has
+    # carried `startedAt` since #134, so the answer is already on disk.
+    for line in describe_upload_start_times(
+        fold_upload_start_times(
+            [
+                fightdataset.upload_start_times(entry.get("fights") or [])
+                for entry in payload["encounters"]
+            ]
+        )
+    ):
+        transcript.append(f"  {line}")
 
     json_path.write_text(json.dumps(payload, indent=1) + "\n", encoding="utf-8")
 

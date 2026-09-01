@@ -5024,7 +5024,23 @@ closest two DIFFERENT kills state their start     <- a rule must stay under this
 
 A threshold exists only in the gap between them, which is exactly the shape
 `_DUPLICATE_UPLOAD_SECONDS` was calibrated in. The run states the numbers and stops
-there: a calibration is not a thing one encounter's sample gets to decide. Two
+there: a calibration is not a thing one encounter's sample gets to decide.
+
+**The pass that can afford to run is the pass that had to be able to answer.** The
+probe-side reading only fires for encounters a run actually reads, and a
+`--publish --resume` dispatch skips every complete one *before a query is sent* --
+which is why the 2026-08-31 republish cost **zero** points. So the reading exists a
+second time over the stored payload (`fightdataset.upload_start_times`), fed from the
+`startedAt` every row has carried since #134. One renderer, two producers, the same
+split as `group_duplicate_uploads` beside `distinct_fights`.
+
+**Per encounter, then folded -- never one flat list.** Pooling the payload's rows is
+simpler and wrong twice: `group_duplicate_uploads` merges on length and curve alone,
+so two *different bosses'* pulls of the same length group as one kill uploaded twice;
+and `closestBetweenGroups` would then measure how close two encounters' kills sit on
+the clock, which is a fact about a raid night's schedule. Both push the
+"different kills" number **down**, the direction that makes a workable threshold look
+impossible. Two
 refusals travel with it -- a sample with no duplicate group reports **nothing** rather
 than a spread of zero (the absence is the answer, and a `None` on every boss of a
 clean tier is noise that trains a reader to skip the line), and a row stating no
@@ -5349,6 +5365,16 @@ upload set is. `apart(code)` in `test_fightextract.py` gives each report code it
 own length. Note the shape: those fixtures were not wrong *before*, they were
 untested in this dimension, and the dedup is what made the claim they encode
 visible.
+
+**A canary needed three attempts, and each failure was about the test (#135).**
+Swapping the payload-wide call site back to one pooled list left the suite green
+twice over. First because the fold had unit tests and *the call site had none* --
+the shape this repo keeps producing, the same as `seen_difficulties` declared and
+never written to. Then, with an end-to-end test added, because it passed
+`--encounter 3180`: with **one** encounter, "pooled" and "per encounter" are the
+same list and no assertion over them can differ. It drives the whole tier now, and
+the canary fails by name. Two lessons, and the second is the sharper one: a fixture
+that cannot express the difference pins nothing, however end-to-end it is.
 
 **One canary did not fire, and the finding was about the canary.** Reverting
 `_values` to `self.fights` left the suite green -- because `ruff format` had
