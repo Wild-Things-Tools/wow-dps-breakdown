@@ -5064,7 +5064,34 @@ so two *different bosses'* pulls of the same length group as one kill uploaded t
 and `closestBetweenGroups` would then measure how close two encounters' kills sit on
 the clock, which is a fact about a raid night's schedule. Both push the
 "different kills" number **down**, the direction that makes a workable threshold look
-impossible. Two
+impossible.
+
+**And the first dispatch after all that answered with silence, which is the failure
+the reading exists to prevent, reproduced inside it.** CI 33460021969, 2026-09-01,
+`--publish --resume`: `startedAt` had shipped in #134 *hours earlier*, so every row in
+the stored payload predated it, `stamped` came back empty everywhere,
+`groupsWithSeveralUploads` was 0, and the "silent when there is nothing to compare"
+branch fired -- printing **nothing at all** over a document holding 59 duplicate
+uploads. A reader would have taken that for a clean tier.
+
+*"No kill was uploaded twice"* and *"this payload cannot answer"* are different
+sentences. The reading publishes `rows` now, so the second is expressible, and a
+payload where **every** row is unstamped says **UNMEASURED** -- the word this file
+already insists on for a counter that did not move, never a zero. An encounter that
+read no fights still says nothing, because it has nothing to be unmeasured about.
+
+The consequence for #135 is that the answer needs a run that actually **re-reads** an
+encounter; a resume over rows written before #134 cannot produce it, however cheap it
+is. That is now stated by the run rather than left to be worked out from an empty
+transcript.
+
+**That dispatch was also not free, and the PR that preceded it said it would be.**
+It cost **190 of 18,000 points** (1.06% of an hour): four Mythic encounters -- 53420,
+53421, 53429, 53492 -- have no kills and are not `searchExhausted`, so the resume
+re-searched them, found none again, and paid for the search. "A `--publish --resume`
+dispatch sends no query and spends no points" is true only when *nothing is
+outstanding*, which is what the 2026-08-31 republish happened to be and this one was
+not. Two
 refusals travel with it -- a sample with no duplicate group reports **nothing** rather
 than a spread of zero (the absence is the answer, and a `None` on every boss of a
 clean tier is noise that trains a reader to skip the line), and a row stating no

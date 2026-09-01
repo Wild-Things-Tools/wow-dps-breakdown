@@ -1345,6 +1345,10 @@ class EncounterObservation:
                         closest = gap if closest is None else min(closest, gap)
 
         return {
+            # The row total, so "every row is unstamped" is expressible. Without it a
+            # payload written before `startedAt` existed reads exactly like a tier
+            # with no duplicate upload -- see `describe_upload_start_times`.
+            "rows": len(self.fights),
             "groups": len(groups),
             "groupsWithSeveralUploads": len(multi),
             "unstamped": unstamped,

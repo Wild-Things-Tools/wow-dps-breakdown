@@ -1114,6 +1114,7 @@ def test_the_fold_keeps_the_extremes_a_threshold_would_have_to_fit_between():
     folded = fightprobe.fold_upload_start_times(
         [
             {
+                "rows": 4,
                 "groups": 3,
                 "groupsWithSeveralUploads": 1,
                 "unstamped": 0,
@@ -1121,6 +1122,7 @@ def test_the_fold_keeps_the_extremes_a_threshold_would_have_to_fit_between():
                 "closestBetweenGroups": 90.0,
             },
             {
+                "rows": 5,
                 "groups": 2,
                 "groupsWithSeveralUploads": 1,
                 "unstamped": 2,
@@ -1130,6 +1132,7 @@ def test_the_fold_keeps_the_extremes_a_threshold_would_have_to_fit_between():
             # An encounter that could produce neither number contributes neither,
             # rather than a zero that would collapse the max or the min.
             {
+                "rows": 1,
                 "groups": 1,
                 "groupsWithSeveralUploads": 0,
                 "unstamped": 0,
@@ -1139,6 +1142,7 @@ def test_the_fold_keeps_the_extremes_a_threshold_would_have_to_fit_between():
         ]
     )
     assert folded == {
+        "rows": 10,
         "groups": 6,
         "groupsWithSeveralUploads": 2,
         "unstamped": 2,
@@ -1204,3 +1208,61 @@ def test_the_command_reads_the_start_times_per_encounter_and_not_pooled(tmp_path
     # Once per encounter, each handed only that encounter's rows -- never one call
     # over the union, which is what would let two bosses' pulls group as one kill.
     assert captured == [len(entry.get("fights") or []) for entry in encounters]
+
+
+def test_a_payload_that_predates_the_field_says_UNMEASURED_rather_than_nothing():
+    """The failure the first dispatch after #139 actually produced (CI 33460021969).
+
+    `startedAt` shipped in #134, hours before that run. Every row in the stored payload
+    predated it, so `stamped` came back empty everywhere, `groupsWithSeveralUploads`
+    was 0, and `describe_upload_start_times` returned **nothing** -- over a document
+    holding 59 duplicate uploads. A reader would have taken the silence for a clean
+    tier, which is precisely the "an absence reads as a clean result" failure this
+    reading exists to avoid, reproduced inside it.
+
+    "No kill was uploaded twice" and "this payload cannot answer" are different
+    sentences. The second is stated, and it is stated as UNMEASURED -- the word this
+    repo already uses for a counter that did not move, never as a zero.
+    """
+    from wowdps import fightdataset
+
+    rows = [
+        {"reportCode": f"r{i}", "durationSeconds": 300.0, "steps": [[0.0, 2]]} for i in range(3)
+    ]
+    lines = fightprobe.describe_upload_start_times(fightdataset.upload_start_times(rows))
+    assert lines, "a payload that cannot answer must not answer with silence"
+    joined = "\n".join(lines)
+    assert "UNMEASURED" in joined
+    assert "3 sampled row(s) state none" in joined
+    assert "predates the field rather than holding no duplicate" in joined
+
+
+def test_a_payload_with_no_rows_at_all_still_says_nothing():
+    """An encounter that read no fights has nothing to be unmeasured ABOUT, and a
+    line on every empty boss of a young tier is the noise the silence rule is for."""
+    from wowdps import fightdataset
+
+    assert fightprobe.describe_upload_start_times(fightdataset.upload_start_times([])) == []
+
+
+def test_a_partly_stamped_payload_reports_the_numbers_rather_than_refusing():
+    """The refusal is for a payload that states NO start time anywhere. One old row
+    beside stamped ones is an ordinary sample, and it is counted apart as before."""
+    from wowdps import fightdataset
+
+    base = 1_700_000_000_000.0
+    rows = [
+        {"reportCode": "r0", "durationSeconds": 300.0, "startedAt": base, "steps": [[0.0, 2]]},
+        {
+            "reportCode": "r1",
+            "durationSeconds": 300.0,
+            "startedAt": base + 300,
+            "steps": [[0.0, 2]],
+        },
+        {"reportCode": "r2", "durationSeconds": 260.0, "steps": [[0.0, 2]]},
+    ]
+    lines = fightprobe.describe_upload_start_times(fightdataset.upload_start_times(rows))
+    joined = "\n".join(lines)
+    assert "UNMEASURED" not in joined
+    assert "0.300s" in joined
+    assert "1 sampled row(s) state no start time" in joined

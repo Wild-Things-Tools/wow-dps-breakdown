@@ -784,6 +784,9 @@ def upload_start_times(fights: list[dict]) -> dict:
                     closest = gap if closest is None else min(closest, gap)
 
     return {
+        # See the probe-side twin: the row total is what makes "every row is
+        # unstamped" distinguishable from "no kill was uploaded twice".
+        "rows": len(rows),
         "groups": len(groups),
         "groupsWithSeveralUploads": len(multi),
         "unstamped": unstamped,
