@@ -375,6 +375,61 @@ query FightEvents(
 }
 """
 
+# The same document as EVENTS_QUERY with `includeResources: true`, and it is a
+# SEPARATE document on purpose rather than a variable on the one above.
+#
+# Two reasons, and the second is the load-bearing one. The response cache is keyed on
+# `sha256(json({query, variables}))`, so adding a variable to EVENTS_QUERY would change
+# the key of every event page this project has ever cached -- a nightly that reads from
+# that cache would silently re-fetch the lot and pay for it. And the cost of resources
+# is not free: they ride on every event, so a stream fetched this way is materially
+# larger than the same stream without them. Keeping the two documents apart keeps that
+# cost visible and opt-in.
+#
+# WHY IT EXISTS AT ALL: `x` and `y` are not ordinary event fields. `RpgLogs.d.ts` types
+# them on `ResourceData` (x, y, facing, hitPoints, maxHitPoints), and the v2 API only
+# emits that block when `includeResources` is true -- its default is **false**, which is
+# the fourth time this project has been caught by an omitted argument being a default
+# rather than nothing (`hostilityType`, `includeResources`, `zoneID: 0`,
+# `includeCombatantInfo`). Without this document there are no coordinates in any
+# response, and every cache entry written before it is therefore useless for a question
+# about position -- not stale, simply silent.
+#
+# WHOSE position arrives is NOT assumed here. wtt-frontend measured that v2 sends the
+# resource fields FLAT on the event with a `resourceActor` discriminator (1 = source,
+# 2 = target) where the Scripting API nests them as sourceResources/targetResources.
+# `addspawns.describe_event_shapes` reports what actually turns up rather than reading
+# one of the two shapes and calling the other absent.
+EVENTS_WITH_RESOURCES_QUERY = """
+query FightEventsWithResources(
+  $code: String!
+  $fightId: Int!
+  $dataType: EventDataType!
+  $hostility: HostilityType!
+  $startTime: Float!
+  $endTime: Float!
+  $limit: Int!
+) {
+  reportData {
+    report(code: $code) {
+      events(
+        fightIDs: [$fightId]
+        dataType: $dataType
+        hostilityType: $hostility
+        startTime: $startTime
+        endTime: $endTime
+        limit: $limit
+        includeResources: true
+      ) {
+        data
+        nextPageTimestamp
+      }
+    }
+  }
+  rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
+}
+"""
+
 TABLE_QUERY = """
 query FightTable(
   $code: String!
@@ -532,7 +587,15 @@ class WarcraftLogsClient:
         #: Responses are cached on disk by (query, variables). Re-running a probe
         #: against the same reports then costs nothing, which is what makes it
         #: safe to iterate on the extraction without burning the hourly budget.
-        self._cache_dir = cache_dir
+        #:
+        #: **Coerced, because the annotation is not enforced and the failure is
+        #: late.** `argparse` hands `--cache` back as a `str`, which satisfies this
+        #: signature at every call site, and then raises `TypeError: unsupported
+        #: operand type(s) for /` inside `_cache_path` -- three paid queries into a
+        #: live run. Measured that way on 2026-09-06, run 34030450826. Coercing here
+        #: makes the promise real for every caller rather than for the ones that
+        #: remembered `Path(...)`.
+        self._cache_dir = Path(cache_dir) if cache_dir else None
         self.ledger = PointLedger()
 
     def __enter__(self) -> WarcraftLogsClient:
@@ -661,18 +724,27 @@ class WarcraftLogsClient:
         end_ms: float,
         limit: int = 10000,
         max_pages: int = 5,
+        include_resources: bool = False,
     ) -> tuple[list[dict], bool]:
         """Every event of one type for one fight, and whether the fetch was cut short.
 
         Returns ``(events, truncated)``. Truncation is reported rather than
         silently accepted: a target-count timeline built from the first page of a
         long fight would show adds arriving and never leaving.
+
+        ``include_resources`` selects a *different document*
+        (``EVENTS_WITH_RESOURCES_QUERY``), which is the only way to get ``x``/``y``
+        out of this API -- see that document's comment for why it is a second
+        document and not a variable on the first. Default False, so every existing
+        caller keeps its cache entries and pays nothing for a field it does not read.
         """
+        document = EVENTS_WITH_RESOURCES_QUERY if include_resources else EVENTS_QUERY
+        suffix = ":res" if include_resources else ""
         collected: list[dict] = []
         cursor = start_ms
         for page in range(max_pages):
             data = self.query(
-                EVENTS_QUERY,
+                document,
                 {
                     "code": code,
                     "fightId": fight_id,
@@ -682,7 +754,7 @@ class WarcraftLogsClient:
                     "endTime": end_ms,
                     "limit": limit,
                 },
-                label=f"events:{data_type}:{code}:{fight_id}:p{page}",
+                label=f"events{suffix}:{data_type}:{code}:{fight_id}:p{page}",
             )
             events = ((data.get("reportData") or {}).get("report") or {}).get("events") or {}
             rows = events.get("data")

@@ -758,6 +758,19 @@ def cmd_fight_zones(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_spawn_probe(args: argparse.Namespace) -> int:
+    """Where an encounter's adds appear, measured rather than assumed.
+
+    Thin on purpose: every rule lives in `addspawns`, which is pure and tested
+    without credentials. See that module's header for the three refusals this
+    output has to be read with -- above all that "first observed" is not
+    "spawned", because Warcraft Logs has no spawn event.
+    """
+    from . import addspawns
+
+    return addspawns.run(args)
+
+
 def cmd_wcl_schema(args: argparse.Namespace) -> int:
     """Introspect the Warcraft Logs schema and print what it offers.
 
@@ -3154,6 +3167,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     fightprobe.add_arguments(p_fight_probe)
     p_fight_probe.set_defaults(func=cmd_fight_probe)
+
+    p_spawn_probe = sub.add_parser(
+        "spawn-probe",
+        help="measure where an encounter's adds appear, from Warcraft Logs event "
+        "positions (needs credentials)",
+    )
+    from . import addspawns
+
+    addspawns.add_arguments(p_spawn_probe)
+    p_spawn_probe.set_defaults(func=cmd_spawn_probe)
 
     p_harvest = sub.add_parser(
         "harvest-builds",

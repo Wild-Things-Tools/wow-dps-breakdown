@@ -1,0 +1,162 @@
+# Where an encounter's adds appear, measured off Warcraft Logs event positions.
+#
+# `workflow_dispatch` only, and no schedule. This asks one narrow question about one
+# NPC of one boss; there is no nightly answer to keep fresh, and the run spends
+# Warcraft Logs points. `fight-probe.yml`'s hourly cron exists because a *pass over a
+# whole zone* does not fit in one hour's budget -- that argument does not carry here.
+#
+# It writes nothing to the repository. The run prints its findings and uploads the
+# payload plus the response cache; a person reads them and decides whether there is
+# anything worth publishing. That is deliberate for the same reason `fight-promote`
+# is a separate command: the first output of this probe is a *shape check* against a
+# service whose event payload nobody here has read with resources turned on, and a
+# schema check that quietly committed a dataset would be the wrong instrument.
+name: Spawn probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      encounter:
+        description: 'Warcraft Logs encounter id. A PTR id (a live id with a 5 in front) resolves to its live twin only when the schema gives both the same name'
+        required: true
+        default: '53421'
+      npc:
+        description: 'Game id of the NPC whose copies are being sited, e.g. 270898 for Broodling of Ithraz'
+        required: true
+        default: '270898'
+      difficulty:
+        description: '5 = Mythic, 4 = Heroic'
+        default: '5'
+      reports:
+        description: 'Distinct kills to read. One settles the payload shape; a distribution needs more, and each one costs event pages'
+        default: '1'
+      streams:
+        description: 'Space-separated event streams to ask positions from. An add is the TARGET of damage and the SOURCE of its casts, so both are worth asking'
+        default: 'DamageTaken Casts Deaths'
+      max_pages:
+        description: 'Event pages per stream per fight. Resources ride on every event, so a page here is larger than the same page without them'
+        default: '4'
+      point_ceiling:
+        description: 'Abort once this fraction of the hourly point budget is spent'
+        default: '0.5'
+      use_cache:
+        description: 'Reuse a previous run''s response cache. Cheap, but a cached run measures nothing about cost'
+        type: boolean
+        default: true
+
+concurrency:
+  group: spawn-probe
+
+# Read-only: this workflow commits nothing. Stated rather than inherited, so that
+# granting it write access is a visible decision rather than a default.
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check credentials
+        id: creds
+        env:
+          WCL_CLIENT_ID: ${{ secrets.WCL_CLIENT_ID }}
+        run: |
+          if [ -z "$WCL_CLIENT_ID" ]; then
+            echo "::notice::WCL_CLIENT_ID is not set — skipping. Add WCL_CLIENT_ID and WCL_CLIENT_SECRET as repository secrets to enable this, see https://www.warcraftlogs.com/api/clients/"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.creds.outputs.enabled == 'true'
+        with:
+          python-version: '3.12'
+
+      - name: Install pipeline
+        if: steps.creds.outputs.enabled == 'true'
+        run: pip install -e ./pipeline
+
+      # Opt-out rather than always-on. `rate_limit()` is uncached by design, so the
+      # bracketing readings are honest either way -- but a pass served from the cache
+      # really did spend nothing, and a cost figure taken from such a run says
+      # UNMEASURED for a reason nobody would guess from the transcript.
+      - name: Restore response cache
+        if: steps.creds.outputs.enabled == 'true' && inputs.use_cache
+        uses: actions/cache@v4
+        with:
+          path: spawn-probe
+          key: spawn-probe-${{ inputs.encounter }}-${{ inputs.npc }}-${{ github.run_id }}
+          restore-keys: |
+            spawn-probe-${{ inputs.encounter }}-${{ inputs.npc }}-
+
+      - name: Probe
+        if: steps.creds.outputs.enabled == 'true'
+        # Every dispatched value is bound here and referenced as a shell variable
+        # below. `${{ inputs.x }}` inside `run:` is substituted before bash parses
+        # the script, so a value carrying a quote and a semicolon becomes script --
+        # in a job that holds WCL_CLIENT_SECRET. An environment variable is data to
+        # bash however it is spelled.
+        env:
+          WCL_CLIENT_ID: ${{ secrets.WCL_CLIENT_ID }}
+          WCL_CLIENT_SECRET: ${{ secrets.WCL_CLIENT_SECRET }}
+          ENCOUNTER: ${{ inputs.encounter }}
+          NPC: ${{ inputs.npc }}
+          DIFFICULTY: ${{ inputs.difficulty || '5' }}
+          REPORTS: ${{ inputs.reports || '1' }}
+          STREAMS: ${{ inputs.streams || 'DamageTaken Casts Deaths' }}
+          MAX_PAGES: ${{ inputs.max_pages || '4' }}
+          POINT_CEILING: ${{ inputs.point_ceiling || '0.5' }}
+        run: |
+          set -o pipefail
+          mkdir -p spawn-probe
+          streams=()
+          for s in $STREAMS; do streams+=("$s"); done
+          # Exit 3 means no kill was found to read -- a real answer about the
+          # encounter (see the PTR/live twin note in CLAUDE.md), not a failure of
+          # the run, so it is a warning and the artifact still uploads.
+          set +e
+          wowdps -v spawn-probe \
+            --encounter "$ENCOUNTER" \
+            --npc "$NPC" \
+            --difficulty "$DIFFICULTY" \
+            --reports "$REPORTS" \
+            --streams "${streams[@]}" \
+            --max-pages "$MAX_PAGES" \
+            --point-ceiling "$POINT_CEILING" \
+            --cache spawn-probe/cache \
+            --out spawn-probe/spawn-probe.json 2>&1 | tee spawn-probe/spawn-probe.txt
+          status=$?
+          set -e
+          if [ "$status" = "3" ]; then
+            echo "::warning::no kill was read for encounter $ENCOUNTER at difficulty $DIFFICULTY"
+            exit 0
+          fi
+          exit "$status"
+
+      # `always()` on both of the steps below, and it is load-bearing rather than
+      # tidiness: a custom `if:` with no status function still gets `success()`
+      # ANDed in by GitHub, which is how `fight-probe.yml` used to throw away
+      # exactly the output a failed pass most needs read. `gear.yml` shipped that
+      # bug too; do not repeat it here.
+      - name: Summary
+        if: always() && steps.creds.outputs.enabled == 'true'
+        run: |
+          {
+            echo '## Spawn probe'
+            echo
+            echo '```'
+            cat spawn-probe/spawn-probe.txt || echo 'no output'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the findings
+        if: always() && steps.creds.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: spawn-probe
+          path: spawn-probe
+          if-no-files-found: ignore
+          retention-days: 14
