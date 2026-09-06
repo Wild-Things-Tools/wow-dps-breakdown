@@ -3379,6 +3379,77 @@ encouraging: a spot's sightings scatter by 75-188 units across ten kills where t
 nearest neighbouring spot is 620 away. The spawn grid survives the slack; a claim about
 *order* does not.
 
+### Pooling the kills into a map, and the four things it refuses
+
+`spawnmap.py` + `wowdps spawn-map` + `spawn-probe --publish` -> `<tier>/spawns.json`.
+`addspawns` answers for **one kill**; that is the honest unit of its measurement and
+it is not the unit a map wants. One kill of The Twin Fangs yields thirty clusters;
+ten kills yield the same thirty *places*, and only the pooling says they are the same
+thirty.
+
+The tolerance that decides "these are the same place" is **found in the data**, the
+same `find_break` the per-kill fold uses, one level up and over a different
+population -- there it groups a kill's copies into that kill's places, here it groups
+every kill's places into the encounter's places. Measured over the ten committed
+kills: the break sits at rank 1,234 of 41,041 pooled pairs, **187.5 -> 664.3, ratio
+3.54, threshold 353.0**, and the floored and unfloored answers agree, which is what a
+clean hole looks like. Sharing the code was considered and not done: a copy is one
+observation and a cluster centre is already an average of several, so one function
+would need a docstring describing two populations.
+
+Four refusals, and the first is the one that matters:
+
+- **A payload that does not state its difficulty publishes nothing.** A Heroic map
+  under a Mythic heading is the mislabelling `fights.json`'s `measuredDifficulty`
+  exists to prevent, and a publisher that assumed Mythic would make it silently --
+  every number in the block would be real. A fight stating a *different* difficulty
+  is refused too (the fetch is already scoped, so that means the scoping did not
+  hold); a fight stating **none** is allowed through, `harvest`'s three-way rule.
+- **One kill is not a map.** Its clusters are already what `spawn-probe` prints, and
+  re-publishing them as "the encounter's places" would promise a repetition nothing
+  observed.
+- **No hole in the pooled distances publishes no spots.** With no separation every
+  centroid becomes its own place and the map shows one point per kill per cluster --
+  a plausible picture of nothing.
+- **A write that would replace published spots with none is refused**, `--force` the
+  way through, and a one-boss run keeps every other boss by union merge. A spawn run
+  is one encounter and one npc by construction, so a document replacing its input
+  wholesale would delete every boss it did not read -- and the deletion would look
+  exactly like a boss nobody has probed. Heroic sits **beside** Mythic on the key
+  `(encounterId, difficulty, npc)`, never over it.
+
+**The repeat test is ONE-SIDED, and the two-sided version of it was wrong.** The
+question -- *are the four repeat positions fixed, or can some never take a second?* --
+is answered by a chi-square over "every spot repeats at its own rate", read through
+Wilson-Hilferty so an odd df is readable without a table. `|z| >= 1.96` also fires on
+a chi-square that is too **small**, which means the spots repeated *more evenly than
+chance* -- the opposite of "some spot is preferred". Measured on a fixture where ten
+places take exactly two second copies each over ten waves: chi-square **0.0**, z
+**-6.21**, and the two-sided rule reported the most uniform sample constructible as a
+detectable difference between spots. Found by a canary; do not restore `abs`.
+
+**The stored payload from 2026-09-06 cannot be published, and that is the refusal
+working.** It states no difficulty anywhere -- neither at document level nor on a
+fight -- because the probe fetched the field and threw it away. Three fields were in
+that state and all three were already in `FIGHT_STRUCTURE_QUERY`: the fight's
+`difficulty`, the npc's own name off `masterData`, and the report's `startTime`,
+which is the base `startedAt` needs (`ReportFight.startTime` counts from the
+*report's* start -- the unit error `firstkills` already paid for once). The probe
+writes all three now, so publishing needs a fresh pass rather than a doctored file.
+
+Verified against that payload with the three fields injected, which reproduces every
+figure this section's predecessor records: **30 spots in 3 areas of 10**, 497
+spot-appearances of which 214 took a second copy (43.1%), chi-square 30.98 on 29 df
+(z = 0.34, does not separate), and `maxPerPosition` `{2: 50, 3: 3}`. The document is
+**7.9 KB**.
+
+`measurement.cost` is provenance and is the easy one to miss: it is a reading of
+Warcraft Logs' hourly meter taken when the pass ran, so five of its fields differ on
+every run by construction. Left in the settle's comparison the settle can never fire
+-- which is exactly how `write_fights` restamped for weeks. It stays **in** the
+document, because what a pass costs is the open question behind every budget decision
+here and this is the only measurement of it, and **out** of the comparison.
+
 ## Why specs are missing: simc wrote the profiles and switched them off
 
 `unvalidated.py` + `wowdps unvalidated`.

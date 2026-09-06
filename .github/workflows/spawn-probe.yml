@@ -5,12 +5,18 @@
 # Warcraft Logs points. `fight-probe.yml`'s hourly cron exists because a *pass over a
 # whole zone* does not fit in one hour's budget -- that argument does not carry here.
 #
-# It writes nothing to the repository. The run prints its findings and uploads the
-# payload plus the response cache; a person reads them and decides whether there is
-# anything worth publishing. That is deliberate for the same reason `fight-promote`
-# is a separate command: the first output of this probe is a *shape check* against a
-# service whose event payload nobody here has read with resources turned on, and a
-# schema check that quietly committed a dataset would be the wrong instrument.
+# Publishing is OPT-IN. Until 2026-09-06 this workflow could not write at all, and
+# the reason was good: the first output of this probe was a *shape check* against a
+# service whose event payload nobody here had read with resources turned on, and a
+# schema check that quietly committed a dataset would have been the wrong instrument.
+# That question is settled -- ten Mythic kills of The Twin Fangs were read on
+# 2026-09-06 and the payload's shape is recorded in CLAUDE.md -- so `publish` is now
+# a dial. Off, the run prints and uploads exactly as before; on, it also writes
+# `web/public/data/<tier>/spawns.json` and commits it.
+#
+# The two are separate on purpose, and the same way `fight-promote` is separate from
+# `fight-probe`: `wowdps spawn-map` re-publishes from an uploaded payload with no
+# credentials, so the pooling can be argued with without paying for the queries twice.
 name: Spawn probe
 
 on:
@@ -43,14 +49,23 @@ on:
         description: 'Reuse a previous run''s response cache. Cheap, but a cached run measures nothing about cost'
         type: boolean
         default: true
+      publish:
+        description: 'Also write and commit <tier>/spawns.json. Off by default: a probe reads first and publishes second'
+        type: boolean
+        default: false
+      tier:
+        description: 'Which tier''s spawns.json to publish into, and where the boss''s name is looked up'
+        default: 'MID2'
 
 concurrency:
   group: spawn-probe
 
-# Read-only: this workflow commits nothing. Stated rather than inherited, so that
-# granting it write access is a visible decision rather than a default.
+# Write, because `publish` commits `<tier>/spawns.json`. Stated rather than inherited
+# so the grant stays a visible decision: with `publish` off -- the default -- this
+# workflow still writes nothing, and the commit step's own `if:` is what enforces
+# that rather than the token.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   probe:
@@ -109,6 +124,8 @@ jobs:
           STREAMS: ${{ inputs.streams || 'DamageTaken Casts Deaths' }}
           MAX_PAGES: ${{ inputs.max_pages || '4' }}
           POINT_CEILING: ${{ inputs.point_ceiling || '0.5' }}
+          TIER: ${{ inputs.tier || 'MID2' }}
+          PUBLISH: ${{ inputs.publish && 'web/public/data' || '' }}
         run: |
           set -o pipefail
           mkdir -p spawn-probe
@@ -117,6 +134,11 @@ jobs:
           # Exit 3 means no kill was found to read -- a real answer about the
           # encounter (see the PTR/live twin note in CLAUDE.md), not a failure of
           # the run, so it is a warning and the artifact still uploads.
+          # `--publish` is appended as an ARRAY entry rather than interpolated, so
+          # an empty PUBLISH adds no argument at all instead of an empty string that
+          # argparse would take as a directory named "".
+          publish=()
+          if [ -n "$PUBLISH" ]; then publish=(--publish "$PUBLISH" --tier "$TIER"); fi
           set +e
           wowdps -v spawn-probe \
             --encounter "$ENCOUNTER" \
@@ -127,6 +149,7 @@ jobs:
             --max-pages "$MAX_PAGES" \
             --point-ceiling "$POINT_CEILING" \
             --cache spawn-probe/cache \
+            "${publish[@]}" \
             --out spawn-probe/spawn-probe.json 2>&1 | tee spawn-probe/spawn-probe.txt
           status=$?
           set -e
@@ -151,6 +174,34 @@ jobs:
             cat spawn-probe/spawn-probe.txt || echo 'no output'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit the published map
+        if: steps.creds.outputs.enabled == 'true' && inputs.publish
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add web/public/data
+          if git diff --staged --quiet; then
+            echo "spawn map unchanged"
+            exit 0
+          fi
+          git commit -m "data: refresh the spawn map for ${TIER} $(date -u +%Y-%m-%d)"
+          # Rebase before pushing, for the reason `fight-probe.yml` records: these
+          # workflows commit into one branch and run concurrently with each other and
+          # with a person's own pushes, so a bare push loses the race and fails a run
+          # whose actual work succeeded. github.ref_name rather than
+          # `git rev-parse --abbrev-ref HEAD`, which resolves to "HEAD" when detached.
+          pushed=false
+          for attempt in 1 2 3; do
+            git pull --rebase --autostash origin "${{ github.ref_name }}" || true
+            if git push origin "HEAD:${{ github.ref_name }}"; then pushed=true; break; fi
+            echo "push attempt $attempt lost the race; retrying"
+            sleep $((attempt * 5))
+          done
+          # Losing three times is a real failure, not something to exit 0 on.
+          [ "$pushed" = true ]
+        env:
+          TIER: ${{ inputs.tier || 'MID2' }}
 
       - name: Upload the findings
         if: always() && steps.creds.outputs.enabled == 'true'

@@ -785,6 +785,19 @@ def add_arguments(parser) -> None:
     )
     parser.add_argument("--cache", help="directory for the response cache")
     parser.add_argument("--out", help="write the observations as JSON to this path")
+    parser.add_argument(
+        "--publish",
+        help="also build <DIR>/<tier>/spawns.json from this pass (a DIRECTORY, "
+        "usually web/public/data). Off by default: the probe's first job is to be "
+        "read, and a schema check that quietly committed a dataset would be the "
+        "wrong instrument.",
+    )
+    parser.add_argument(
+        "--tier",
+        default="MID2",
+        help="which tier's spawns.json --publish writes into, and where the boss's "
+        "name is looked up",
+    )
 
 
 def _kill_candidates(client, encounter_id: int, difficulty: int, limit: int):
@@ -904,7 +917,15 @@ def run(args) -> int:
         logging.error("%s", exc)
         return 1
 
-    out: dict[str, Any] = {"requestedEncounter": args.encounter, "npc": args.npc}
+    # `difficulty` is written at document level because a map is about ONE
+    # difficulty: a Heroic reading published under a Mythic heading is the
+    # mislabelling `fights.json`'s own `measuredDifficulty` exists to prevent,
+    # and a publisher that had to assume Mythic would make it silently.
+    out: dict[str, Any] = {
+        "requestedEncounter": args.encounter,
+        "npc": args.npc,
+        "difficulty": args.difficulty,
+    }
     with WarcraftLogsClient(
         credentials, cache_dir=Path(args.cache) if args.cache else None
     ) as client:
@@ -986,6 +1007,13 @@ def run(args) -> int:
                 for a in master
                 if isinstance(a, dict) and isinstance(a.get("gameID"), int)
             }
+            # The name of the npc being asked about, off the masterData this run
+            # already fetched to print the enemyNPCs table with. Without it a
+            # published document names a number and a reader has to go and look it
+            # up; `names` is localised and the game id is not, so the id stays the
+            # join key and the name is a label beside it.
+            if out.get("npcName") is None and names.get(args.npc):
+                out["npcName"] = names[args.npc]
             fights = report.get("fights") or []
             if wanted_fight >= 0:
                 fights = [f for f in fights if f.get("id") == wanted_fight]
@@ -1014,9 +1042,25 @@ def run(args) -> int:
             if not any(r.get("gameId") == args.npc for r in npcs):
                 print(f"    NPC {args.npc} is NOT among this fight's enemyNPCs")
 
+            # `ReportFight.startTime` counts milliseconds from the REPORT's start,
+            # not from the epoch -- the unit error this repository has already paid
+            # for once in `firstkills`. Written out absolute so a reader never has to
+            # know that, and `None` rather than a number near zero when the report
+            # states no base of its own.
+            report_start = report.get("startTime")
+            started_at = (
+                float(report_start) + start if isinstance(report_start, (int, float)) else None
+            )
             fight_row: dict[str, Any] = {
                 "reportCode": code,
                 "fightId": fight.get("id"),
+                # The difficulty the FIGHT states, beside the one the run asked for.
+                # The query is already scoped, so a disagreement means the scoping did
+                # not hold, and that is a finding rather than something to filter --
+                # the same three-way rule `harvest` uses, where a fight stating none is
+                # allowed through because unknown is not the same as wrong.
+                "difficulty": fight.get("difficulty"),
+                "startedAt": started_at,
                 "durationSeconds": round((end - start) / 1000, 3),
                 "raidSize": fight.get("size"),
                 "enemyNpcs": npcs,
@@ -1127,6 +1171,47 @@ def run(args) -> int:
     return 0
 
 
+def _publish(out: dict, args) -> None:
+    """Build `<--publish>/<tier>/spawns.json` from the pass that just ran.
+
+    The same builder `wowdps spawn-map` uses, fed the payload just written --
+    publishing straight from the pass is what a CI run needs, and the offline
+    command exists so the artifact can be re-published, and the pooling argued
+    with, without paying for the queries twice.
+    """
+    import logging
+
+    from . import fightprofile, spawnmap
+
+    profiles = fightprofile.load_profiles(args.tier)
+    # The boss is filed under the id `fight_profiles.json` carries, which on this
+    # tier is the PTR id, while the pass READ the live twin. Both are tried: a name
+    # looked up under the wrong id comes back empty, and an unnamed boss reads as an
+    # unknown one rather than as a naming miss.
+    profile = None
+    for candidate in (out.get("requestedEncounter"), out.get("usedEncounter")):
+        if isinstance(candidate, int) and profiles.get(candidate):
+            profile = profiles.get(candidate)
+            break
+
+    block = spawnmap.encounter_block(out, name=profile.name if profile else None)
+    out_dir = Path(args.publish) / args.tier
+    document = spawnmap.publish(
+        out_dir, [block], tier=args.tier, measurement=spawnmap.measurement_block(out)
+    )
+    try:
+        path = spawnmap.write_spawns(out_dir, document)
+    except spawnmap.SpotsWouldBeLost as exc:
+        logging.error("%s", exc)
+        return
+    coverage = document["coverage"]
+    print(
+        f"published {path}: {coverage['blocks']} block(s) over "
+        f"{coverage['encounters']} encounter(s); this pass -> "
+        f"{block.get('refusal') or str(len(block.get('spots') or [])) + ' spot(s)'}"
+    )
+
+
 def _finish(client, out: dict, args) -> None:
     import json
 
@@ -1142,3 +1227,5 @@ def _finish(client, out: dict, args) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(out, indent=2, sort_keys=True) + "\n")
         print(f"wrote {path}")
+    if getattr(args, "publish", None):
+        _publish(out, args)

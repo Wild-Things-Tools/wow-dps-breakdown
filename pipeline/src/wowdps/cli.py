@@ -771,6 +771,65 @@ def cmd_spawn_probe(args: argparse.Namespace) -> int:
     return addspawns.run(args)
 
 
+def cmd_spawn_map(args: argparse.Namespace) -> int:
+    """Pool spawn-probe payloads into `<tier>/spawns.json`.
+
+    Separate from `spawn-probe` on purpose, and for the reason `fight-promote
+    --from-fights` is separate: this step needs **no credentials**, so a payload
+    downloaded from a CI artifact can be re-published, re-read and argued with
+    offline, and changing how a spot is pooled costs nothing at Warcraft Logs.
+    """
+    import json as _json
+
+    from . import fightprofile, spawnmap
+
+    profiles = fightprofile.load_profiles(args.tier)
+
+    blocks = []
+    for payload_path in args.payload:
+        payload = _json.loads(Path(payload_path).read_text(encoding="utf-8"))
+        # The boss's name is filed under the id `fight_profiles.json` carries, which
+        # on this tier is the PTR id, while the payload was READ against the live
+        # twin. Both are tried rather than one, because a name looked up under the
+        # wrong id comes back empty and an unnamed boss reads as an unknown one.
+        used = payload.get("usedEncounter")
+        filed = payload.get("requestedEncounter")
+        profile = None
+        for candidate in (filed, used):
+            if isinstance(candidate, int) and profiles.get(candidate):
+                profile = profiles.get(candidate)
+                break
+        block = spawnmap.encounter_block(payload, name=profile.name if profile else None)
+        blocks.append(block)
+        spots = len(block.get("spots") or [])
+        note = (
+            block.get("refusal") or f"{spots} spot(s) over {len(block.get('areas') or [])} area(s)"
+        )
+        print(f"{payload_path}: encounter {block.get('encounterId')} -> {note}")
+
+    out_dir = Path(args.out) / args.tier
+    document = spawnmap.publish(
+        out_dir, blocks, tier=args.tier, measurement=spawnmap.measurement_block(payload)
+    )
+
+    if args.dry_run:
+        print(_json.dumps(document, indent=2, sort_keys=True))
+        return 0
+
+    try:
+        target = spawnmap.write_spawns(out_dir, document, force=args.force)
+    except spawnmap.SpotsWouldBeLost as exc:
+        logging.error("%s", exc)
+        return 1
+    coverage = document["coverage"]
+    print(
+        f"\nwrote {target}: {coverage['blocks']} block(s) over "
+        f"{coverage['encounters']} encounter(s), "
+        f"{len(coverage['withoutSpots'])} without spots"
+    )
+    return 0
+
+
 def cmd_wcl_schema(args: argparse.Namespace) -> int:
     """Introspect the Warcraft Logs schema and print what it offers.
 
@@ -3218,6 +3277,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     addspawns.add_arguments(p_spawn_probe)
     p_spawn_probe.set_defaults(func=cmd_spawn_probe)
+
+    p_spawn_map = sub.add_parser(
+        "spawn-map",
+        help="pool spawn-probe payloads into <tier>/spawns.json (no credentials)",
+    )
+    p_spawn_map.add_argument(
+        "--payload",
+        action="append",
+        required=True,
+        help="a spawn-probe --out payload; repeatable, one per encounter",
+    )
+    p_spawn_map.add_argument("--tier", default="MID2")
+    p_spawn_map.add_argument("--out", default="web/public/data")
+    p_spawn_map.add_argument(
+        "--dry-run", action="store_true", help="print the document instead of writing it"
+    )
+    p_spawn_map.add_argument(
+        "--force",
+        action="store_true",
+        help="write even when it would discard published spots",
+    )
+    p_spawn_map.set_defaults(func=cmd_spawn_map)
 
     p_harvest = sub.add_parser(
         "harvest-builds",
