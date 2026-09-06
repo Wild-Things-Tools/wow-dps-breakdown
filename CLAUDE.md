@@ -4088,6 +4088,88 @@ only ever removes attempts, and the two overstatement routes are closed.
 `medianNightsObserved` beside `medianSpanDays` is the disclosure a reader can act on --
 few nights across a wide span is a partial observation.
 
+### Double Prot Paladin on Twin Fangs: measured, and the split is not the finding
+
+`--composition` on `wowdps progress-hours` reads each **measured** guild's first-kill
+roster -- one query per guild, against a report walk that is already paid for -- and
+splits the hours by whether that roster fielded a named specialisation. Asked of The
+Twin Fangs because the owner asked whether Double Prot Paladin changes the progression
+time, and how strongly the composition is needed.
+
+**The precondition was measured first, and that is the part worth copying.** Run
+34029571672 (2026-09-06, Mythic, via the live twin 3421) cost **804 points over 58
+queries** and measured **23 of 50** guilds -- so 23 was a splittable sample and the
+machinery was worth building. Building it first and discovering the boss had no field
+would have been the expensive order.
+
+The pass itself, run 34030021630, `--guilds 150 --composition`, **1081 points over 108
+queries**:
+
+```
+with 2 Prot Paladins   n=23   median 3.58 h   IQR 2.13-5.26   range 1.33-6.14
+without                n= 9   median 3.08 h   IQR 2.34-4.00   range 1.62-7.30
+roster unread          n= 0        <- all 32 rosters read, on the first live pass
+```
+
+**The two groups do not separate.** Mann-Whitney over the hours: `z = -0.36`,
+**p = 0.72**. Over the attempts (68 against 67): **p = 0.92**.
+
+**The obvious confounder was checked rather than assumed.** If the double-prot guilds
+were simply the better ones they would have killed earlier; the first-kill medians are
+**56 minutes** apart, `p = 0.95`.
+
+**What the sample cannot say, stated as a number.** 95% bootstrap interval for the
+median difference, 20,000 resamples, seed 0: **-0.95 h to +1.58 h**. Against a median
+of 3.40 h that is roughly **+-45%** -- so "no difference measured" is "no *large*
+difference", and there is no deeper sample to take: `sampleShortOfRequest` is true at
+150, because **67 ranked guilds is the whole Mythic field** of that boss.
+
+**The finding is one line further down.** The tank pairs of all 32 measured kills:
+
+```
+23x  Paladin/Protection + Paladin/Protection      1x  Paladin/Protection + Warrior/Protection
+ 6x  DeathKnight/Blood  + Paladin/Protection      1x  Druid/Guardian     + Paladin/Protection
+                                                  1x  DemonHunter/Vengeance + Paladin/Protection
+```
+
+**32 of 32 field at least one Protection Paladin; none fields three.** So "how strongly
+is it needed" is not answered by the double-prot split at all: the *first* Paladin is
+universal in the field, the *second* is a 72% preference that this sample can see no
+return on. Both are observational -- guilds are not randomised -- and the hours are
+lower bounds, as everywhere here.
+
+Four decisions in the reader, each of which reversed produces plausible numbers rather
+than an error:
+
+- **Every role bucket is read, not just `tanks`.** Which bucket Warcraft Logs files a
+  player under is *its* classification of what they did; the question is what they are.
+  Reading only `tanks` undercounts, and an undercount looks exactly like a guild that
+  did not run the composition.
+- **The class is read beside the spec.** `Protection` names two specialisations. A key
+  built from the spec alone counts every Protection Warrior as a Paladin -- and the
+  field contains exactly that pair once, so this is not hypothetical.
+- **Three groups, never two.** An unreadable roster is `unknown` and counted apart;
+  `fields_at_least` is three-valued for the same reason, but settles `True` as soon as
+  enough *readable* players are counted, since an unreadable row cannot then change the
+  answer.
+- **The kill is addressed, never guessed.** `Attempt` and `PullTime` carry the report
+  code and fight id the kill was read from -- the fight id being a new field on a query
+  already sent. A payload written before 2026-09-06 states none, and such a guild is
+  measured with its composition left unknown rather than having another pull's roster
+  published as its own.
+
+The whole roster is published per guild rather than only the spec asked about, so the
+next question needs no second pass and the split is checkable against the rows beside
+it. `compositionSplit` is absent unless a pass actually read a roster: a split of
+zeroes on every boss would read as "nobody fields this spec".
+
+**Nothing is drawn from it.** The chart the owner named lives in nextpull and is fed by
+wtt-backend's `ProgressBossHours`, which has no roster reader at all (`grep -rn
+"playerDetails" apps/` is empty there). Whether two bars whose medians differ at
+`p = 0.72` should be drawn is a decision rather than a formality -- two bars side by
+side assert a separation -- so it is wtt-backend#297 with the numbers rather than a
+view built on the way past.
+
 ### Two fixtures were physically impossible, and both hid the bug
 
 Moving attempts onto the absolute clock (`report["startTime"] + fight["startTime"]`)
