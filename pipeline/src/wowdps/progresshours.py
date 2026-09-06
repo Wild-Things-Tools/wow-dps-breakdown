@@ -38,6 +38,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from . import harvest
+
 #: Warcraft Logs difficulty ids.
 DIFFICULTY_NORMAL = 3
 DIFFICULTY_HEROIC = 4
@@ -122,7 +124,7 @@ GUILD_PULLS_QUERY = f"""query($g:Int!,$z:Int!,$e:Int!,$d:Int!,$page:Int!){{
   reportData {{ reports(guildID:$g, zoneID:$z, limit:{REPORTS_PER_PAGE}, page:$page) {{
     has_more_pages
     data {{ code startTime fights(encounterID:$e, difficulty:$d) {{
-      startTime endTime kill encounterID difficulty
+      id startTime endTime kill encounterID difficulty
     }} }}
   }} }}
 }}"""
@@ -230,6 +232,13 @@ class Attempt:
     start_ms: float
     end_ms: float
     kill: bool
+    #: Where this pull was read from. Carried so the KILL can be re-opened -- the
+    #: roster of a guild's first kill is the only place its raid composition is
+    #: stated, and finding that pull a second time would mean walking the reports
+    #: again. Both are optional because the fight id was not asked for before
+    #: 2026-09-06 and a payload predating that must still time correctly.
+    report_code: str | None = None
+    fight_id: int | None = None
 
     @property
     def duration_ms(self) -> float:
@@ -260,6 +269,12 @@ class PullTime:
     #: First attempt to kill, in days. Published beside the hours because a guild that
     #: took three weeks over four logged hours is visibly a partial observation.
     span_days: float | None = None
+    #: The kill's own report and fight, so its roster can be read without walking the
+    #: guild's reports a second time. Only ever set on an ANSWER: a refused window has
+    #: no first kill to point at, and pointing at the kill it happened to find would
+    #: name a farm pull as a progression's end.
+    kill_report_code: str | None = None
+    kill_fight_id: int | None = None
 
 
 def ordered_attempts(
@@ -298,11 +313,20 @@ def ordered_attempts(
             start, end = fight.get("startTime"), fight.get("endTime")
             if not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
                 continue
+            fight_id = fight.get("id")
             rows.append(
                 Attempt(
                     start_ms=base + float(start),
                     end_ms=base + float(end),
                     kill=fight.get("kill") is True,
+                    report_code=report.get("code") if isinstance(report.get("code"), str) else None,
+                    # `isinstance(True, int)` is True in Python, so a boolean would
+                    # arrive here as fight 1 and re-open somebody else's pull.
+                    fight_id=(
+                        int(fight_id)
+                        if isinstance(fight_id, int) and not isinstance(fight_id, bool)
+                        else None
+                    ),
                 )
             )
     rows.sort(key=lambda a: a.start_ms)
@@ -418,6 +442,8 @@ def pull_time(
             usable_attempts=usable,
             nights=partition_nights(seen),
             span_days=round((attempt.start_ms - first) / 86_400_000.0, 3),
+            kill_report_code=attempt.report_code,
+            kill_fight_id=attempt.fight_id,
         )
     return PullTime(None, attempts, len(reports), "no-kill")
 
@@ -453,6 +479,118 @@ def quartiles(values: list[float]) -> tuple[float, float] | None:
     return (q1, q3) if q1 is not None and q3 is not None else None
 
 
+#: The specialisation the owner asked about, and how many of it makes the split.
+#: A constant rather than a literal in three places, and a `(spec, count)` pair
+#: rather than a boolean helper called `double_prot_paladin`: the question
+#: "at least N of this spec" is the general one, and the next raid asks it about a
+#: different spec.
+DOUBLE_PROT_PALADIN = ("Paladin/Protection", 2)
+
+
+@dataclass(frozen=True)
+class Composition:
+    """What one kill's roster states about the specialisations it fielded.
+
+    **Read over every role bucket, not just `tanks`.** Which bucket Warcraft Logs
+    files a player under is *its* classification of what they did in that pull, and
+    this question is about what they *are*: a Protection Paladin who spent the fight
+    doing damage is still a Protection Paladin in the raid. Reading only `tanks`
+    would make the answer depend on somebody else's role heuristic, and it would fail
+    silently -- an undercount looks exactly like a guild that did not run the spec.
+    """
+
+    #: `"Class/Spec"` per player, sorted, duplicates kept -- the count is the point.
+    specs: tuple[str, ...]
+    #: Players whose class or specialisation could not be read. Never folded into
+    #: `specs`: a row that swapped spec mid-fight, or that arrives in a shape this
+    #: reader does not know, is an unknown player and not a player of some other
+    #: spec. `fields_at_least` is what turns that into a three-valued answer.
+    unreadable: int
+    #: The role buckets the payload actually carried, so "the roster was empty" and
+    #: "the payload had no buckets at all" are distinguishable from outside.
+    buckets: tuple[str, ...]
+
+
+def raid_composition(payload: object) -> Composition | None:
+    """Every player's `Class/Spec` out of a `playerDetails` payload, or None.
+
+    `None` means the payload carried no role bucket at all -- a schema change, a
+    permission failure, or a fight id that named nothing. An empty `specs` with a
+    non-empty `buckets` is a different claim: the buckets were there and held nobody.
+
+    The reading of the payload's own shape is `harvest.player_detail_rows`, which
+    already handles the three wrappers Warcraft Logs uses for this untyped scalar,
+    and `harvest.spec_of_row`, which already refuses a player who swapped spec. Both
+    are reused rather than re-derived: a second reader of one payload is exactly what
+    drifts, and this one would drift toward the flattering answer.
+    """
+    specs: list[str] = []
+    unreadable = 0
+    # `player_detail_rows` answers "which buckets does this table carry" on every
+    # call, so it is read once rather than reassigned three times -- the second and
+    # third assignments would be identical and read like a bug.
+    buckets = tuple(harvest.player_detail_rows(payload, harvest.ROLE_BUCKETS[0])[1])
+    for bucket in harvest.ROLE_BUCKETS:
+        rows, _ = harvest.player_detail_rows(payload, bucket)
+        for row in rows:
+            wow_class = row.get("type")
+            spec = harvest.spec_of_row(row)
+            if isinstance(wow_class, str) and wow_class and spec:
+                specs.append(f"{wow_class}/{spec}")
+            else:
+                unreadable += 1
+    if not buckets:
+        return None
+    return Composition(specs=tuple(sorted(specs)), unreadable=unreadable, buckets=buckets)
+
+
+def fields_at_least(composition: Composition, spec: str, count: int) -> bool | None:
+    """Did this roster field at least `count` players of `spec`? `None` if unknowable.
+
+    The order of the two tests is the whole of it. Once `count` READABLE players of
+    the spec have been counted, an unreadable row cannot change the answer, so a
+    roster with one bad row still answers `True`. Only when the readable rows fall
+    short does an unreadable one matter -- and then the answer is `None` rather than
+    `False`, because counting an unreadable player as "not this spec" biases the
+    split in exactly one direction and nothing downstream could see it.
+    """
+    if sum(1 for one in composition.specs if one == spec) >= count:
+        return True
+    return None if composition.unreadable else False
+
+
+def composition_split(rows: list[dict], spec: str, count: int) -> dict:
+    """The measured guilds' hours, split by whether their kill fielded the spec.
+
+    Takes the published guild rows rather than a parallel structure, so the split and
+    the rows a reader can check it against are the same numbers by construction.
+
+    Three groups, never two. A guild whose roster could not be read is `unknown` and
+    is counted apart -- putting it in `without` would answer the owner's question with
+    guilds nobody established anything about, and it is the larger group whenever a
+    composition pass is partial.
+    """
+    groups: dict[str, list[float]] = {"with": [], "without": [], "unknown": []}
+    for row in rows:
+        if row.get("outcome") != "measured" or not isinstance(row.get("hours"), (int, float)):
+            continue
+        verdict = row.get("fieldsSpec")
+        key = "with" if verdict is True else "without" if verdict is False else "unknown"
+        groups[key].append(float(row["hours"]))
+
+    out: dict = {"spec": spec, "atLeast": count}
+    for name, values in groups.items():
+        hinges = quartiles(values)
+        mid = median(values)
+        out[name] = {
+            "sample": len(values),
+            "medianHours": None if mid is None else round(mid, 4),
+            "q1Hours": None if hinges is None else round(hinges[0], 4),
+            "q3Hours": None if hinges is None else round(hinges[1], 4),
+        }
+    return out
+
+
 def guild_row(
     guild_id: int,
     outcome: str,
@@ -461,6 +599,8 @@ def guild_row(
     hours: float | None = None,
     attempts: int | None = None,
     coverage: PullTime | None = None,
+    composition: Composition | None = None,
+    fields_spec: bool | None = None,
 ) -> dict:
     """One sampled guild's row: who, what happened, and over how many reports.
 
@@ -492,6 +632,19 @@ def guild_row(
             # count and the median hours are built from different populations and
             # nothing says so.
             row["usableAttempts"] = coverage.usable_attempts
+    if composition is not None:
+        # The whole roster, not just the spec being asked about. It costs a few
+        # hundred bytes a row and it is the difference between a document that
+        # answers one question and one that answers the next question too -- and
+        # between a split a reader can check and one they have to believe.
+        row["composition"] = list(composition.specs)
+        if composition.unreadable:
+            row["compositionUnreadable"] = composition.unreadable
+    # Written only when a composition was READ. Absent means no pass looked; `null`
+    # would mean one looked and could not tell, which `fields_at_least` reserves for
+    # a roster whose unreadable rows could still change the answer.
+    if composition is not None:
+        row["fieldsSpec"] = fields_spec
     return row
 
 
@@ -552,6 +705,8 @@ class BossProgress:
         hours: float | None = None,
         attempts: int | None = None,
         coverage: PullTime | None = None,
+        composition: Composition | None = None,
+        fields_spec: bool | None = None,
     ) -> None:
         """Append one sampled guild's row. **Every** guild gets one, whatever happened.
 
@@ -561,7 +716,17 @@ class BossProgress:
         from a run's log that nobody kept.
         """
         self.guilds.append(
-            guild_row(guild_id, outcome, reports_seen, duplicates, hours, attempts, coverage)
+            guild_row(
+                guild_id,
+                outcome,
+                reports_seen,
+                duplicates,
+                hours,
+                attempts,
+                coverage,
+                composition,
+                fields_spec,
+            )
         )
         self.reports_seen.append(reports_seen)
         if coverage is not None and coverage.ms is not None:
@@ -607,6 +772,14 @@ class BossProgress:
             "sampleShortOfRequest": self.sample_short_of_request,
             "refused": dict(sorted(self.refused.items())),
             "rowsWithoutGuild": self.rows_without_guild,
+            # Absent unless a composition pass ran. An empty split published on every
+            # boss of every ordinary run would read as "nobody fields this spec",
+            # which is the answer to a question nobody asked here.
+            **(
+                {"compositionSplit": composition_split(self.guilds, *DOUBLE_PROT_PALADIN)}
+                if any("fieldsSpec" in row for row in self.guilds)
+                else {}
+            ),
         }
 
 

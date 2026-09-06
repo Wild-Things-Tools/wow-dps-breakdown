@@ -2105,6 +2105,35 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
                     hours = answer.ms / progresshours.MS_PER_HOUR
                     boss.hours.append(hours)
                     boss.attempts.append(answer.attempts)
+                    # One query per MEASURED guild, and only when asked for. The kill
+                    # is the only pull whose roster is a fact about the progression:
+                    # `pull_time` refuses any logged kill more than half an hour from
+                    # the ranked one, so this is the composition of the kill the hours
+                    # were summed up to and not of a farm night beside it.
+                    #
+                    # A composition is never inferred from absence. A guild whose
+                    # roster cannot be read is `unknown` in the split rather than
+                    # "does not field the spec", which is the only direction that
+                    # cannot manufacture the finding the split is drawn to show.
+                    composition = None
+                    fields_spec = None
+                    if args.composition and answer.kill_report_code and answer.kill_fight_id:
+                        if over_ceiling():
+                            logging.warning(
+                                "point ceiling reached before the roster; stopping "
+                                "with what is measured"
+                            )
+                            return _write_progress_hours(args, bosses, client, start, limit)
+                        try:
+                            composition = progresshours.raid_composition(
+                                client.player_details(answer.kill_report_code, answer.kill_fight_id)
+                            )
+                        except WarcraftLogsError as exc:
+                            logging.warning("guild %s: roster: %s", guild_id, exc)
+                        if composition is not None:
+                            fields_spec = progresshours.fields_at_least(
+                                composition, *progresshours.DOUBLE_PROT_PALADIN
+                            )
                     boss.record(
                         guild_id,
                         "measured",
@@ -2113,6 +2142,8 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
                         hours,
                         answer.attempts,
                         answer,
+                        composition,
+                        fields_spec,
                     )
 
             logging.info(
@@ -2995,6 +3026,16 @@ def build_parser() -> argparse.ArgumentParser:
         # one. Screen 1 refunds a further 10-20% by refusing before the report walk.
         default=0.7,
         help="stop before spending this share of the hourly budget",
+    )
+    p_hours.add_argument(
+        "--composition",
+        action="store_true",
+        # Off by default, so an ordinary pass costs what it has always cost. It adds
+        # ONE query per measured guild -- 23 on the Twin Fangs Mythic pass of
+        # 2026-09-06, against 58 for the whole boss -- and it is the only way to ask
+        # whether a raid composition moves the progression time, which is a question
+        # about the guilds rather than about the boss.
+        help="read each measured guild's first-kill roster and split the hours by it",
     )
     p_hours.add_argument("--out", default="progress-hours.json", help="where to write the document")
     p_hours.set_defaults(func=cmd_progress_hours)

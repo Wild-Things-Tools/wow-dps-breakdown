@@ -4,6 +4,7 @@ Shapes follow the live schema as introspected on 2026-08-26: `Report.startTime` 
 absolute, `ReportFight.startTime`/`endTime` are relative to their own report.
 """
 
+from wowdps import progresshours
 from wowdps.progresshours import (
     Attempt,
     BossProgress,
@@ -414,3 +415,236 @@ def test_the_residue_measures_and_discloses_rather_than_being_repaired():
     assert answer.ms == 7_200_000  # two hours, where the guild really spent more
     assert answer.nights == 2
     assert answer.span_days == 2.0
+
+
+# ── The composition split: whose raid ran two Protection Paladins ──────────────
+#
+# The owner's question is whether a guild's progression time on The Twin Fangs
+# differs by whether it fielded two Protection Paladins. Every test below pins a
+# decision that, reversed, produces a full set of plausible numbers rather than an
+# error -- which is what a split by a mis-read roster looks like from outside.
+
+
+def _details(dps=(), tanks=(), healers=()):
+    """A `playerDetails` payload in the shape Warcraft Logs returns."""
+    return {
+        "data": {
+            "dps": [{"type": c, "specs": [{"spec": s}]} for c, s in dps],
+            "tanks": [{"type": c, "specs": [{"spec": s}]} for c, s in tanks],
+            "healers": [{"type": c, "specs": [{"spec": s}]} for c, s in healers],
+        }
+    }
+
+
+def test_the_class_is_read_beside_the_spec():
+    """`Protection` alone names two different specialisations.
+
+    Protection Paladin and Protection Warrior share a spec NAME, so a key built from
+    the spec alone counts every prot warrior as a paladin -- and a raid running one
+    of each would answer the owner's question with a yes it never earned.
+    """
+    composition = progresshours.raid_composition(
+        _details(tanks=(("Paladin", "Protection"), ("Warrior", "Protection")))
+    )
+    assert composition.specs == ("Paladin/Protection", "Warrior/Protection")
+    assert progresshours.fields_at_least(composition, "Paladin/Protection", 2) is False
+
+
+def test_every_role_bucket_is_read_not_just_the_tanks():
+    """Which bucket a player lands in is Warcraft Logs' classification of what they
+    DID; the question is about what they ARE.
+
+    A Protection Paladin filed under `dps` is still a Protection Paladin in the raid,
+    and reading only `tanks` would undercount in a way that looks exactly like a guild
+    that did not run the composition.
+    """
+    composition = progresshours.raid_composition(
+        _details(tanks=(("Paladin", "Protection"),), dps=(("Paladin", "Protection"),))
+    )
+    assert progresshours.fields_at_least(composition, "Paladin/Protection", 2) is True
+
+
+def test_a_payload_with_no_buckets_is_unknown_rather_than_empty():
+    """ "The roster could not be read" and "the raid fielded nobody" are different
+    findings, and only one of them may be counted into `without`."""
+    assert progresshours.raid_composition({"data": {}}) is None
+    assert progresshours.raid_composition("not json") is None
+    assert progresshours.raid_composition(_details()).specs == ()
+
+
+def test_an_unreadable_player_makes_the_answer_unknown_not_no():
+    """A row whose class or spec cannot be read is an unknown player, never a player
+    of some other spec. Counting it as "not a Protection Paladin" biases the split in
+    exactly one direction and nothing downstream could see it."""
+    composition = progresshours.raid_composition(
+        _details(tanks=(("Paladin", "Protection"),), dps=(("Mage", None),))
+    )
+    assert composition.unreadable == 1
+    assert progresshours.fields_at_least(composition, "Paladin/Protection", 2) is None
+
+
+def test_enough_readable_players_settle_it_despite_an_unreadable_one():
+    """The order of the two tests is the whole of `fields_at_least`.
+
+    Once two readable Protection Paladins are counted, a third unreadable row cannot
+    change the answer -- so refusing there would throw away a roster that does answer.
+    """
+    composition = progresshours.raid_composition(
+        _details(
+            tanks=(("Paladin", "Protection"), ("Paladin", "Protection")),
+            dps=(("Mage", None),),
+        )
+    )
+    assert composition.unreadable == 1
+    assert progresshours.fields_at_least(composition, "Paladin/Protection", 2) is True
+
+
+def test_a_player_who_swapped_spec_is_unreadable_rather_than_one_of_them():
+    """`harvest.spec_of_row` refuses a row carrying two specs, and this inherits it:
+    picking either would be a coin toss recorded as a measurement."""
+    payload = {
+        "data": {
+            "tanks": [
+                {"type": "Paladin", "specs": [{"spec": "Protection"}, {"spec": "Retribution"}]}
+            ]
+        }
+    }
+    composition = progresshours.raid_composition(payload)
+    assert composition.specs == ()
+    assert composition.unreadable == 1
+
+
+def test_the_split_counts_unknown_apart_from_without():
+    """Three groups, never two. A guild nobody could establish anything about is not
+    evidence that the composition does not help."""
+    rows = [
+        {"outcome": "measured", "hours": 1.0, "fieldsSpec": True},
+        {"outcome": "measured", "hours": 3.0, "fieldsSpec": True},
+        {"outcome": "measured", "hours": 5.0, "fieldsSpec": False},
+        {"outcome": "measured", "hours": 9.0, "fieldsSpec": None},
+        # Not measured: no hours to put in any group.
+        {"outcome": "no-reports", "reportsSeen": 0},
+    ]
+    split = progresshours.composition_split(rows, "Paladin/Protection", 2)
+    assert split["with"]["sample"] == 2
+    assert split["with"]["medianHours"] == 2.0
+    assert split["without"]["sample"] == 1
+    assert split["unknown"]["sample"] == 1
+    assert split["spec"] == "Paladin/Protection"
+    assert split["atLeast"] == 2
+
+
+def test_a_row_from_a_run_that_read_no_roster_is_unknown_not_without():
+    """A document written before `--composition` existed carries no `fieldsSpec` at
+    all. Reading its absence as False would publish the whole tier as "does not field
+    the spec" -- the loudest possible wrong answer."""
+    rows = [{"outcome": "measured", "hours": 2.0}]
+    split = progresshours.composition_split(rows, "Paladin/Protection", 2)
+    assert split["unknown"]["sample"] == 1
+    assert split["without"]["sample"] == 0
+
+
+def test_a_boss_no_roster_was_read_for_publishes_no_split():
+    """An empty split on every boss of every ordinary run reads as "nobody fields this
+    spec", which is an answer to a question that pass never asked."""
+    boss = progresshours.BossProgress(
+        encounter_id=3421, name="The Twin Fangs", order=2, difficulty=5
+    )
+    boss.record(1, "measured", 4, hours=2.0, attempts=9)
+    assert "compositionSplit" not in boss.to_json()
+
+
+def test_a_boss_a_roster_was_read_for_publishes_the_split_and_the_roster():
+    boss = progresshours.BossProgress(
+        encounter_id=3421, name="The Twin Fangs", order=2, difficulty=5
+    )
+    composition = progresshours.raid_composition(
+        _details(tanks=(("Paladin", "Protection"), ("Paladin", "Protection")))
+    )
+    boss.record(1, "measured", 4, hours=2.0, attempts=9, composition=composition, fields_spec=True)
+    document = boss.to_json()
+    assert document["compositionSplit"]["with"]["sample"] == 1
+    assert document["guilds"][0]["composition"] == ["Paladin/Protection", "Paladin/Protection"]
+    assert document["guilds"][0]["fieldsSpec"] is True
+
+
+def test_the_kill_carries_the_report_and_fight_it_was_read_from():
+    """Without this the roster cannot be fetched without walking the reports again,
+    and a second walk could land on a different kill."""
+    reports = [
+        {
+            "code": "abc",
+            "startTime": 1_000_000,
+            "fights": [
+                {
+                    "id": 7,
+                    "startTime": 0,
+                    "endTime": 60_000,
+                    "kill": False,
+                    "encounterID": 3421,
+                    "difficulty": 5,
+                },
+                {
+                    "id": 9,
+                    "startTime": 120_000,
+                    "endTime": 300_000,
+                    "kill": True,
+                    "encounterID": 3421,
+                    "difficulty": 5,
+                },
+            ],
+        }
+    ]
+    answer = progresshours.pull_time(reports, 3421, 5, kill_time_ms=1_120_000)
+    assert answer.ms is not None
+    assert (answer.kill_report_code, answer.kill_fight_id) == ("abc", 9)
+
+
+def test_a_refused_window_points_at_no_kill():
+    """A window with no kill has no first kill to re-open, and naming the pull it
+    happened to find would label a farm night as a progression's end."""
+    reports = [
+        {
+            "code": "abc",
+            "startTime": 1_000_000,
+            "fights": [
+                {
+                    "id": 7,
+                    "startTime": 0,
+                    "endTime": 60_000,
+                    "kill": False,
+                    "encounterID": 3421,
+                    "difficulty": 5,
+                }
+            ],
+        }
+    ]
+    answer = progresshours.pull_time(reports, 3421, 5)
+    assert answer.ms is None
+    assert (answer.kill_report_code, answer.kill_fight_id) == (None, None)
+
+
+def test_a_boolean_fight_id_is_refused():
+    """`isinstance(True, int)` is True in Python, so a boolean would arrive as fight 1
+    and re-open somebody else's pull."""
+    attempts, _ = progresshours.ordered_attempts(
+        [
+            {
+                "code": "abc",
+                "startTime": 0,
+                "fights": [
+                    {
+                        "id": True,
+                        "startTime": 0,
+                        "endTime": 10,
+                        "kill": True,
+                        "encounterID": 1,
+                        "difficulty": 5,
+                    }
+                ],
+            }
+        ],
+        1,
+        5,
+    )
+    assert attempts[0].fight_id is None

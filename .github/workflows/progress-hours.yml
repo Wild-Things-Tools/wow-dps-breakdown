@@ -46,6 +46,13 @@ on:
       rankings_pages:
         description: 'Progress-ranking pages per boss, 50 guilds each. Needed above 50'
         default: '3'
+      composition:
+        # One extra query per MEASURED guild -- 23 on the Twin Fangs Mythic pass of
+        # 2026-09-06, against 58 for the whole boss. Off by default so an ordinary
+        # pass costs what it has always cost.
+        description: "Read each measured guild's first-kill roster and split the hours by it"
+        type: boolean
+        default: false
       point_ceiling:
         # 0.7. There is no resume, so a ceiling stop discards the whole pass -- which
         # makes a too-low ceiling the expensive mistake here rather than the safe one.
@@ -99,8 +106,14 @@ jobs:
           MAX_PAGES: ${{ inputs.max_pages }}
           RANKINGS_PAGES: ${{ inputs.rankings_pages }}
           CEILING: ${{ inputs.point_ceiling }}
+          COMPOSITION: ${{ inputs.composition }}
         run: |
           set -euo pipefail
+          # An array rather than an interpolated flag string: the value is data to
+          # bash however it is spelled, and `${VAR:+...}` word-splitting rules are
+          # exactly the kind of subtlety that turns into a silently-dropped flag.
+          extra=()
+          [ "$COMPOSITION" = "true" ] && extra+=(--composition)
           python -m wowdps.cli progress-hours \
             --tier "$TIER" \
             --encounter "$ENCOUNTER" \
@@ -109,6 +122,7 @@ jobs:
             --max-pages "$MAX_PAGES" \
             --rankings-pages "$RANKINGS_PAGES" \
             --point-ceiling "$CEILING" \
+            "${extra[@]}" \
             --out "../progress-hours-$TIER.json" 2>&1 | tee ../progress-hours.log
 
       # Always: the run whose log somebody needs is precisely the one that stopped
@@ -157,6 +171,21 @@ jobs:
               log = "—" if not seen else f"{b.get('killsFromLog', 0)}/{seen}"
               short = " ⚠" if b.get("sampleShortOfRequest") else ""
               print(f"| {b['order']} | {b['name']} | {med} | {iqr} | {b['sample']} | {b['guildsSeen']}{short} | {nights} | {span} | {log} |")
+          for b in d["bosses"]:
+              split = b.get("compositionSplit")
+              if not split:
+                  continue
+              # Three groups, never two: a guild whose roster could not be read is
+              # counted apart, because putting it in `without` would answer the
+              # question with guilds nobody established anything about.
+              print(f"\n### {b['name']}: at least {split['atLeast']}x {split['spec']}\n")
+              print("| group | guilds | median h | IQR |")
+              print("|---|---|---|---|")
+              for key, label in (("with", "with"), ("without", "without"), ("unknown", "roster unread")):
+                  g = split[key]
+                  gmed = "—" if g["medianHours"] is None else f"{g['medianHours']:.2f}"
+                  giqr = "—" if g["q1Hours"] is None else f"{g['q1Hours']:.2f}–{g['q3Hours']:.2f}"
+                  print(f"| {label} | {g['sample']} | {gmed} | {giqr} |")
           total = d["seasonTotalHours"]
           print(f"\n**Season total:** {'refused — a boss is unmeasured' if total is None else f'{total:.2f} h'}")
           print(f"\n**Cost:** {d['cost']['pointsSpent']} points of {d['cost']['limitPerHour']}/hour")

@@ -19,18 +19,24 @@ MYTHIC = 5
 HOUR = progresshours.MS_PER_HOUR
 
 
-def fight(start, end, kill=False, encounter=None):
+def fight(start, end, kill=False, encounter=None, fight_id=None):
     # `encounter` is explicit for the twin tests: after a PTR id is read as its live
     # twin the walk asks for the TWIN's fights, and `ordered_attempts` re-checks
     # `encounterID` -- so a fight still carrying the filed id is correctly dropped and
     # the boss comes back `no-fights`. That is the code working, not the test.
-    return {
+    row = {
         "startTime": start,
         "endTime": end,
         "kill": kill,
         "encounterID": ENCOUNTER if encounter is None else encounter,
         "difficulty": MYTHIC,
     }
+    # Absent unless a test states one, which is the shape every payload had before
+    # 2026-09-06 -- so the fixtures that do not care keep exercising the guard that
+    # refuses to fetch a roster it cannot address.
+    if fight_id is not None:
+        row["id"] = fight_id
+    return row
 
 
 #: Sentinel: "work the kill time out from the pages" rather than "state none".
@@ -59,8 +65,12 @@ def _earliest_kill(pages):
 class StubClient:
     """Records every query it is asked for, and answers from canned pages."""
 
-    def __init__(self, pages, zone=ZONE, guilds=(1,), kill_time=_DERIVE, from_log=1):
+    def __init__(self, pages, zone=ZONE, guilds=(1,), kill_time=_DERIVE, from_log=1, roster=None):
         self.pages = pages
+        #: What `playerDetails` answers, and every call it was asked for. `None` is a
+        #: client nobody may ask -- the test then asserts the call was never made.
+        self.roster = roster
+        self.roster_calls = []
         self.zone = zone
         self.guilds = guilds
         self.sent = []
@@ -106,6 +116,12 @@ class StubClient:
         page = variables["page"]
         return {"reportData": {"reports": self.pages[page - 1]}}
 
+    def player_details(self, code, fight_id):
+        self.roster_calls.append((code, fight_id))
+        if self.roster is None:
+            raise AssertionError("the roster was fetched for a run that did not ask")
+        return self.roster
+
 
 def listing(reports, more):
     return {"has_more_pages": more, "data": reports}
@@ -126,6 +142,11 @@ def run(monkeypatch, tmp_path, client, **overrides):
         max_pages=3,
         rankings_pages=3,
         point_ceiling=0.5,
+        # Off by default here as on the command line: a composition pass sends one
+        # extra query per measured guild, and a helper that turned it on would make
+        # every unrelated test in this file assert against a stub that has to answer
+        # `playerDetails` too.
+        composition=False,
         out=str(out),
     )
     for key, value in overrides.items():
@@ -478,3 +499,86 @@ def test_a_filed_id_that_answers_costs_no_twin_lookup(monkeypatch, tmp_path):
 
     assert boss["medianHours"] == 1.0
     assert boss["readAs"] is None
+
+
+# ── The composition split, end to end ─────────────────────────────────────────
+#
+# The pure halves are pinned in `test_progresshours.py`. These drive the wiring,
+# because that is the half this repository keeps shipping broken: a fold with unit
+# tests and a call site with none.
+
+
+def _roster(*players):
+    return {"data": {"tanks": [{"type": c, "specs": [{"spec": s}]} for c, s in players]}}
+
+
+DOUBLE_PROT = _roster(("Paladin", "Protection"), ("Paladin", "Protection"))
+
+
+def test_the_composition_pass_fetches_one_roster_per_measured_guild(monkeypatch, tmp_path):
+    """The kill's own report and fight, once each -- not a second walk of the reports.
+
+    Two guilds, one of which never killed the boss. Only the measured one may cost a
+    roster query: a refused window has no first kill to read, and fetching one anyway
+    would pay for a pull the hours were never summed to.
+    """
+    pages = [
+        listing(
+            [
+                {
+                    "code": "abc",
+                    "startTime": 0,
+                    "fights": [fight(0, HOUR, kill=True, fight_id=11)],
+                }
+            ],
+            False,
+        )
+    ]
+    client = StubClient(pages, guilds=(1,), roster=DOUBLE_PROT)
+    boss = run(monkeypatch, tmp_path, client, composition=True)
+
+    assert client.roster_calls == [("abc", 11)]
+    row = boss["guilds"][0]
+    assert row["outcome"] == "measured"
+    assert row["composition"] == ["Paladin/Protection", "Paladin/Protection"]
+    assert row["fieldsSpec"] is True
+    assert boss["compositionSplit"]["with"]["sample"] == 1
+    assert boss["compositionSplit"]["without"]["sample"] == 0
+
+
+def test_a_run_that_did_not_ask_fetches_no_roster_and_publishes_no_split(monkeypatch, tmp_path):
+    """The default pass costs what it always cost, and a split of zeroes on every boss
+    would read as "nobody fields this spec" -- an answer to a question it never asked.
+
+    `roster=None` makes the stub raise if it is asked at all, so this fails loudly
+    rather than by an absent field.
+    """
+    pages = [
+        listing(
+            [{"code": "abc", "startTime": 0, "fights": [fight(0, HOUR, kill=True, fight_id=11)]}],
+            False,
+        )
+    ]
+    client = StubClient(pages, guilds=(1,))
+    boss = run(monkeypatch, tmp_path, client)
+    assert client.roster_calls == []
+    assert "compositionSplit" not in boss
+    assert "fieldsSpec" not in boss["guilds"][0]
+
+
+def test_a_payload_stating_no_fight_id_is_not_asked_for_a_roster(monkeypatch, tmp_path):
+    """A report written before the fight id was asked for cannot address its own kill.
+
+    Guessing one -- fight 1, say -- would read a DIFFERENT pull's roster and publish
+    it as this guild's composition, which nothing downstream could detect. The guild
+    is measured and its composition stays unknown, which is the honest pair.
+    """
+    pages = [
+        listing([{"code": "abc", "startTime": 0, "fights": [fight(0, HOUR, kill=True)]}], False)
+    ]
+    client = StubClient(pages, guilds=(1,))
+    boss = run(monkeypatch, tmp_path, client, composition=True)
+    assert client.roster_calls == []
+    assert boss["guilds"][0]["outcome"] == "measured"
+    assert "fieldsSpec" not in boss["guilds"][0]
+    assert "compositionSplit" not in boss
