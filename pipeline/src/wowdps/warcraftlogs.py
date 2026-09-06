@@ -587,7 +587,15 @@ class WarcraftLogsClient:
         #: Responses are cached on disk by (query, variables). Re-running a probe
         #: against the same reports then costs nothing, which is what makes it
         #: safe to iterate on the extraction without burning the hourly budget.
-        self._cache_dir = cache_dir
+        #:
+        #: **Coerced, because the annotation is not enforced and the failure is
+        #: late.** `argparse` hands `--cache` back as a `str`, which satisfies this
+        #: signature at every call site, and then raises `TypeError: unsupported
+        #: operand type(s) for /` inside `_cache_path` -- three paid queries into a
+        #: live run. Measured that way on 2026-09-06, run 34030450826. Coercing here
+        #: makes the promise real for every caller rather than for the ones that
+        #: remembered `Path(...)`.
+        self._cache_dir = Path(cache_dir) if cache_dir else None
         self.ledger = PointLedger()
 
     def __enter__(self) -> WarcraftLogsClient:
