@@ -601,8 +601,14 @@ def run(args) -> int:
                 out["stoppedBy"] = str(exc)
                 break
 
-            structure = client.fight_structure(code, encounter_id, args.difficulty)
-            report = ((structure.get("reportData") or {}).get("report")) or {}
+            # `fight_structure` returns the REPORT, not the envelope -- it unwraps
+            # `reportData.report` itself, exactly as `fightprobe._probe_fight` reads
+            # it. Unwrapping a second time here produced `{}`, so every fight was
+            # "not in the report's fights" while the payload plainly held it. Measured
+            # on 2026-09-06, run 34030745850: the cached response carries fights 16-22
+            # of `M98z37nZ21AYrQVK`, all encounter 3421 difficulty 5, and the run
+            # printed "no fight 22 at difficulty 5".
+            report = client.fight_structure(code, encounter_id, args.difficulty)
             master = (report.get("masterData") or {}).get("actors") or []
             actor_map = actor_game_id_map(master)
             names = {
