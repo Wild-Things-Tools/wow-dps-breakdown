@@ -3428,20 +3428,43 @@ places take exactly two second copies each over ten waves: chi-square **0.0**, z
 **-6.21**, and the two-sided rule reported the most uniform sample constructible as a
 detectable difference between spots. Found by a canary; do not restore `abs`.
 
-**The stored payload from 2026-09-06 cannot be published, and that is the refusal
-working.** It states no difficulty anywhere -- neither at document level nor on a
+**The stored payload from 2026-09-06 could not be published, and that is the refusal
+working.** It stated no difficulty anywhere -- neither at document level nor on a
 fight -- because the probe fetched the field and threw it away. Three fields were in
 that state and all three were already in `FIGHT_STRUCTURE_QUERY`: the fight's
 `difficulty`, the npc's own name off `masterData`, and the report's `startTime`,
 which is the base `startedAt` needs (`ReportFight.startTime` counts from the
 *report's* start -- the unit error `firstkills` already paid for once). The probe
-writes all three now, so publishing needs a fresh pass rather than a doctored file.
+writes all three now, so publishing needed a fresh pass rather than a doctored file.
 
-Verified against that payload with the three fields injected, which reproduces every
-figure this section's predecessor records: **30 spots in 3 areas of 10**, 497
-spot-appearances of which 214 took a second copy (43.1%), chi-square 30.98 on 29 df
-(z = 0.34, does not separate), and `maxPerPosition` `{2: 50, 3: 3}`. The document is
-**7.9 KB**.
+**It has run, and the published document is `web/public/data/MID2/spawns.json`**
+(run 34035705116, 2026-09-06, ten Mythic kills of The Twin Fangs, 7.9 KB):
+
+```
+30 spots in 3 areas of 10        45 waves    maxPerPosition {1: 1, 2: 41, 3: 3}
+405 spot-appearances, 185 with a second copy (45.7%)
+chi-square 31.81 on 29 df, z 0.44  ->  does not separate
+break 155.5 -> 661.0, ratio 4.25   killsTruncated 8 of 10   span 3.48 days
+```
+
+That reproduces the whole of what the ten-kill analysis found by hand, which is the
+control this module needed: three areas of ten, a repeat rate near the 40% a uniform
+draw of four from ten predicts, and a third copy at one place in 3 of 45 waves.
+
+### The event budget decides how much of the encounter the map is of
+
+**The first published run was a PREFIX of each kill and looked like a complete
+answer.** Dispatched at `--max-pages 4`, it published **23 spots in areas of 10, 4 and
+9** over 16 waves, with `killsTruncated` at 10 of 10. Re-dispatched at `--max-pages 12`
+against the same ten kills it published 30 in three tens. Nothing about the pooling
+changed; the second run had simply read more of each fight.
+
+This is `fight-probe`'s bounded-event-fetch failure one module across, and the reason
+it does not become a wrong answer here is that both halves are published: the run
+states `killsTruncated`, and a caveat names it in words. But a reader comparing two
+documents has to know that **an area holding four places is a page limit, not an
+encounter**. Do not read a spot count as a property of the boss without checking how
+much of each kill was read.
 
 `measurement.cost` is provenance and is the easy one to miss: it is a reading of
 Warcraft Logs' hourly meter taken when the pass ran, so five of its fields differ on
