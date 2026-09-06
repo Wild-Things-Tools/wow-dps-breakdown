@@ -115,6 +115,81 @@ def profiles_dir(tmp_path_factory):
     return root
 
 
+def _substitutions(loadout, nodes, spec, *, accept):
+    """Every hash reachable by moving ONE single-rank selection onto a node the class
+    has and this specialisation does not own. Yields `(node_id, hash)` lazily.
+
+    Shared by the two fixtures below because it is one rule -- *build simc's refusal
+    number 5 out of a build that is currently legal* -- and they differ only in which
+    substitution they want. Written twice it would drift, and a drifted copy here
+    produces a fixture that still constructs *a* hash and no longer constructs the one
+    the test names.
+
+    `accept(victim, trait)` is applied **before** the encode, which is the expensive
+    step: without that filter this walks every selection against every node of the
+    class and re-encodes each pair.
+    """
+    taken = {selection.node_id for selection in loadout.selections}
+    for victim in reversed(loadout.selections):
+        if victim.rank != 1 or victim.choice_index is not None:
+            continue
+        for node_id, entries in nodes.items():
+            trait = entries[0]
+            if (
+                node_id in taken
+                or len(entries) != 1
+                or not trait.spec_ids
+                or spec in trait.spec_ids
+                or not accept(victim, trait)
+            ):
+                continue
+            swapped = dataclasses.replace(
+                victim,
+                node_id=node_id,
+                entry_id=trait.entry_id,
+                name=trait.name,
+                spell_id=trait.spell_id,
+                row=trait.row,
+                col=trait.col,
+                node_type=trait.node_type,
+            )
+            kept = tuple(one for one in loadout.selections if one is not victim)
+            selections = tuple(sorted(kept + (swapped,), key=lambda one: one.node_id))
+            try:
+                yield (
+                    node_id,
+                    tt.encode_loadout(
+                        dataclasses.replace(
+                            loadout, selections=selections, framing=None, spare_bits=0
+                        ),
+                        nodes,
+                    ),
+                )
+            except Exception:
+                continue
+
+
+def _arms_loadout(profiles_dir):
+    """The Arms profile's hash, its spec id, its class node table and its decode."""
+    traits = tt.parse_trait_data(pathlib.Path(SIMC_DIR), ptr=True)
+    source = profiles_dir / "MID2" / "MID2_Warrior_Arms.simc"
+    text = source.read_text()
+    match = re.search(r"^talents=(\S+)", text, re.M)
+    assert match, "the Arms profile states no talent hash"
+    original = match.group(1)
+    nodes = tt.nodes_for_class(traits, tt.CLASS_IDS["Warrior"])
+    return text, original, tt.read_header(original), nodes, tt.decode_loadout(original, nodes)
+
+
+def _rewritten(profiles_dir, tmp_path_factory, name, text, original, replacement):
+    """A private copy of the profiles tree with one build's hash replaced."""
+    root = tmp_path_factory.mktemp(name) / "profiles"
+    shutil.copytree(profiles_dir, root)
+    target = root / "MID2" / "MID2_Warrior_Arms.simc"
+    target.write_text(text.replace(f"talents={original}", f"talents={replacement}"))
+    return root
+
+
 @pytest.fixture(scope="module")
 def refusable_profiles(profiles_dir, tmp_path_factory):
     """`profiles_dir`, with Arms Warrior's hash rewritten so simc would refuse it.
@@ -141,68 +216,33 @@ def refusable_profiles(profiles_dir, tmp_path_factory):
       point between trees and `talentrepair`'s soundness screen rejects the decode
       outright ("the build reads 37 points in the class tree, above the 36 in MID2
       shipped profiles"). Measured: the first candidate node tried did exactly that.
+      `unsound_profiles` below is that failure, kept on purpose.
     * **a single-entry node**, so no choice index is involved and the refusal under
       test is unambiguously the spec rule rather than a choice-bit failure.
     * **the repair must actually succeed** -- the pair is searched until
       `talentrepair.repair` returns `ok`, because a test asserting the repaired
-      build reaches the document needs a repairable one, not merely a refused one.
+      build reaches the document needs a repairable hash, not merely a refused one.
 
     Nothing here is hard-coded to a node id: the substitution is searched against
     whatever tree the checkout ships, so this survives simc renumbering its nodes.
     A checkout where no such substitution exists skips rather than passes silently.
     """
-    traits = tt.parse_trait_data(pathlib.Path(SIMC_DIR))
-    source = profiles_dir / "MID2" / "MID2_Warrior_Arms.simc"
-    text = source.read_text()
-    match = re.search(r"^talents=(\S+)", text, re.M)
-    assert match, "the Arms profile states no talent hash"
-    original = match.group(1)
-
-    spec = tt.read_header(original)
-    nodes = tt.nodes_for_class(traits, tt.CLASS_IDS["Warrior"])
-    loadout = tt.decode_loadout(original, nodes)
+    text, original, spec, nodes, loadout = _arms_loadout(profiles_dir)
     budget = talentedit.derive_point_budget([loadout], source="the Arms profile")
-    taken = {selection.node_id for selection in loadout.selections}
 
     refused = None
-    for victim in reversed(loadout.selections):
-        if victim.rank != 1 or victim.choice_index is not None:
-            continue
-        for node_id, entries in nodes.items():
-            trait = entries[0]
-            if (
-                node_id in taken
-                or len(entries) != 1
-                or not trait.spec_ids
-                or spec in trait.spec_ids
-                or trait.tree_index != victim.tree_index
-                or trait.sub_tree != victim.sub_tree
-                or trait.max_ranks != victim.max_ranks
-            ):
-                continue
-            swapped = dataclasses.replace(
-                victim,
-                node_id=node_id,
-                entry_id=trait.entry_id,
-                name=trait.name,
-                spell_id=trait.spell_id,
-                row=trait.row,
-                col=trait.col,
-                node_type=trait.node_type,
-            )
-            kept = tuple(one for one in loadout.selections if one is not victim)
-            selections = tuple(sorted(kept + (swapped,), key=lambda one: one.node_id))
-            try:
-                candidate = tt.encode_loadout(
-                    dataclasses.replace(loadout, selections=selections, framing=None, spare_bits=0),
-                    nodes,
-                )
-            except Exception:
-                continue
-            if talentrepair.repair("warrior_arms", candidate, nodes, budget, (0, 9)).ok:
-                refused = candidate
-                break
-        if refused:
+    for _, candidate in _substitutions(
+        loadout,
+        nodes,
+        spec,
+        accept=lambda victim, trait: (
+            trait.tree_index == victim.tree_index
+            and trait.sub_tree == victim.sub_tree
+            and trait.max_ranks == victim.max_ranks
+        ),
+    ):
+        if talentrepair.repair("warrior_arms", candidate, nodes, budget, (0, 9)).ok:
+            refused = candidate
             break
 
     if refused is None:
@@ -212,11 +252,90 @@ def refusable_profiles(profiles_dir, tmp_path_factory):
     # LOADABLE hash would make both tests pass for the wrong reason.
     assert tt.spec_rule_violation(tt.decode_loadout(refused, nodes), nodes)
 
-    root = tmp_path_factory.mktemp("refusable") / "profiles"
-    shutil.copytree(profiles_dir, root)
-    target = root / "MID2" / "MID2_Warrior_Arms.simc"
-    target.write_text(text.replace(f"talents={original}", f"talents={refused}"))
-    return root
+    return _rewritten(profiles_dir, tmp_path_factory, "refusable", text, original, refused)
+
+
+@pytest.fixture(scope="module")
+def unsound_profiles(profiles_dir, tmp_path_factory):
+    """`profiles_dir`, with Arms Warrior's hash rewritten so its decode is refused by
+    `talentrepair`'s soundness screen rather than repaired.
+
+    **Why constructed rather than borrowed, again.** The test below used to drive
+    `--build paladin_retribution_default`: simc shipped Retribution only as a
+    switched-off generator block whose stored hash read 37 points in the
+    specialisation tree against a budget of 34, so the screen refused it. Measured on
+    `ce0f194`, **2026-09-06**, that is no longer true -- simc ships Retribution as two
+    ordinary profiles (`..._herald_of_the_sun` and `..._templar`), both decoding
+    soundly, so `wowdps unvalidated --write` materialises nothing for it and
+    `cmd_build_search` exits 1 with *"no build of MID2 matches
+    'paladin_retribution_default'"*. That failure is on `main`, not in the change that
+    found it.
+
+    That is the **third** time a test here has gone red because simc repaired its own
+    profile -- Arms, Fury and both Havoc builds on 2026-08-28 (issue #107), and now
+    Retribution -- and `refusable_profiles` above already carries the lesson: *a test
+    of our behaviour must not go red because simc fixed its data, and must not go
+    green for that reason either.*
+
+    **The construction is the one `refusable_profiles` refuses.** Its docstring names
+    the constraint that keeps a substitution inside one tree, and the measured reason:
+    a cross-tree swap moves a point and the soundness screen rejects the whole decode.
+    So this fixture inverts exactly that one constraint and keeps every other. On
+    `ce0f194` the Arms profile spends 36/34/14 against a budget of 37/34/14, so moving
+    a class point into the specialisation tree overruns it by one and the screen says
+    so in its own words:
+
+        the build reads 35 points in the specialisation tree, above the 34 in MID2
+        shipped profiles
+
+    **Both halves are required and neither implies the other.** `prepare` reaches its
+    blocked state through the spec rule *and then* a refused repair, so a substitution
+    that merely overruns the budget would decode, break no rule simc checks, and be
+    searched normally. The loop asserts both.
+
+    **Padding the string was tried first and cannot work.** The talent hash has no
+    length field, so appending characters of zeros leaves the node stream untouched
+    and only moves `spare_bits` out of the corpus range -- which the screen does
+    reject. But `decode_loadout` still *succeeds* on such a hash and it breaks no spec
+    rule, so `prepare` never consults `talentrepair` at all and the build is searched.
+    A screen the run never reaches is not the state this test is about.
+
+    **The corpus cannot be widened by any of this.** `talentrepair.corpus_from` reads
+    the real simc checkout rather than `--profiles`, so the rewritten copy in this
+    temporary tree is screened against the shipped population and can never enter it.
+    """
+    text, original, spec, nodes, loadout = _arms_loadout(profiles_dir)
+    corpus, _ = talentrepair.corpus_from(pathlib.Path(SIMC_DIR), ("MID2",), ptr=True)
+    if not corpus:
+        pytest.skip("no shipped MID2 profile decodes in this checkout")
+    framing = talentrepair.observed_framing(corpus)
+    budget = talentedit.derive_point_budget(corpus, source="MID2 shipped profiles")
+
+    unsound = None
+    for _, candidate in _substitutions(
+        loadout,
+        nodes,
+        spec,
+        accept=lambda victim, trait: (
+            trait.tree_index != victim.tree_index and trait.max_ranks == victim.max_ranks
+        ),
+    ):
+        try:
+            decoded = tt.decode_loadout(candidate, nodes)
+        except tt.TalentDecodeError:
+            continue
+        repair = talentrepair.repair("warrior_arms", candidate, nodes, budget, framing)
+        # Assert the premise rather than trusting it, as above: a fixture whose hash
+        # was repairable, or broke no rule simc checks, would make this test pass
+        # while the run took an entirely different path through `prepare`.
+        if not repair.ok and not repair.soundness.ok and tt.spec_rule_violation(decoded, nodes):
+            unsound = candidate
+            break
+
+    if unsound is None:
+        pytest.skip("no unsound spec-rule substitution exists in this simc checkout")
+
+    return _rewritten(profiles_dir, tmp_path_factory, "unsound", text, original, unsound)
 
 
 def _args(tmp_path, profiles_dir, **kw):
@@ -399,15 +518,19 @@ def test_a_repaired_build_hands_simc_a_loadable_base_actor(
 
 
 def test_a_build_whose_decode_cannot_be_trusted_is_published_as_unsearched(
-    tmp_path, profiles_dir, stubbed
+    tmp_path, unsound_profiles, stubbed
 ):
-    """Retribution's hash reads a tree that has changed shape under it. Repairing it
-    would be a valid hash for a build nobody wrote, so nothing is searched -- and the
-    row says which of the site's absence states applies, with the reason."""
-    assert (
-        cli.cmd_build_search(_args(tmp_path, profiles_dir, build="paladin_retribution_default"))
-        == 0
-    )
+    """A hash this reader cannot follow is published as unsearched, with the reason.
+
+    Repairing a decode the soundness screen rejects would produce a valid hash for a
+    build nobody wrote, so nothing is searched. The row then says which of the site's
+    absence states applies rather than leaving a gap that reads like a bad result.
+
+    The subject is constructed -- see `unsound_profiles` for why it can no longer be
+    borrowed from simc, and for why the construction is a cross-tree substitution
+    rather than a padded string.
+    """
+    assert cli.cmd_build_search(_args(tmp_path, unsound_profiles, build="warrior_arms")) == 0
     row = json.loads((tmp_path / "MID2" / "computed-builds.json").read_text())["specs"][0]
     assert row["searched"] is False
     assert row["best"] is None
