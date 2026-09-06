@@ -279,3 +279,137 @@ def test_a_cache_directory_given_as_a_string_still_builds_a_path():
         assert WarcraftLogsClient(Credentials("id", "secret"))._cache_path("q", {}) is None
     finally:
         client.close()
+
+
+# ── The wiring, which sixteen pure tests could not see ────────────────────────
+#
+# PR #142 shipped this module with every fold tested and the call site tested by
+# nothing, and the first live run died on it: `run()` unwrapped `reportData.report`
+# from a payload `client.fight_structure` had already unwrapped, so every fight was
+# reported "not in the report's fights" while the cached response plainly held it.
+# That is this repository's signature defect, so the fix comes with the test that
+# drives the command rather than the functions under it.
+
+
+class _StubClient:
+    """Answers the five calls `run()` makes, and records what it was asked."""
+
+    def __init__(self, *, rankings_rows, report, events):
+        self.rankings_rows = rankings_rows
+        self.report = report
+        self.events = events
+        self.structure_calls = []
+        self.event_calls = []
+        # A REAL ledger, because `fightprobe.check_budget` reads it. A `None` here
+        # would make the budget guard raise instead of pass, and the test would then
+        # be about the stub rather than about the command.
+        from wowdps.warcraftlogs import PointLedger
+
+        self.ledger = PointLedger()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def rate_limit(self):
+        return {"limitPerHour": 18000.0, "pointsSpentThisHour": 0.0}
+
+    def query(self, document, variables, label=None):
+        return {"worldData": {"encounter": {"characterRankings": {"rankings": self.rankings_rows}}}}
+
+    def encounter_name(self, encounter_id):
+        return "The Twin Fangs"
+
+    def fight_structure(self, code, encounter_id, difficulty):
+        # The real client returns the REPORT. A stub that returned the envelope
+        # would make this test pass against the broken code, which is the whole
+        # point of writing it against the client's actual contract.
+        self.structure_calls.append((code, encounter_id, difficulty))
+        return self.report
+
+    def fight_events(self, code, fight_id, data_type, hostility, start, end, **kw):
+        self.event_calls.append((code, fight_id, data_type, kw.get("include_resources")))
+        return list(self.events), False
+
+
+def _args(tmp_path, **over):
+    import argparse
+
+    base = dict(
+        encounter=3421,
+        npc=NPC,
+        difficulty=5,
+        reports=1,
+        report=None,
+        streams=["DamageTaken"],
+        max_pages=2,
+        events_limit=10000,
+        point_ceiling=0.9,
+        cache=None,
+        out=str(tmp_path / "spawn.json"),
+    )
+    base.update(over)
+    return argparse.Namespace(**base)
+
+
+def _wire(monkeypatch, client):
+    from wowdps import warcraftlogs
+
+    monkeypatch.setattr(warcraftlogs.Credentials, "from_env", staticmethod(lambda: object()))
+    monkeypatch.setattr(warcraftlogs, "WarcraftLogsClient", lambda *a, **k: client)
+
+
+def test_the_command_reads_the_fight_the_ranking_named(monkeypatch, tmp_path, capsys):
+    """The regression: a fight present in the payload must not read as absent."""
+    import json as _json
+
+    client = _StubClient(
+        rankings_rows=[{"report": {"code": "abc", "fightID": 22}}],
+        report={
+            "masterData": {"actors": [{"id": 11, "gameID": NPC, "name": "Broodling"}]},
+            "fights": [
+                {
+                    "id": 22,
+                    "encounterID": 3421,
+                    "difficulty": 5,
+                    "kill": True,
+                    "size": 20,
+                    "startTime": 0,
+                    "endTime": 400_000,
+                    "enemyNPCs": [{"id": 11, "gameID": NPC, "instanceCount": 14, "groupCount": 2}],
+                }
+            ],
+        },
+        events=[
+            flat(timestamp=1000 + i, targetInstance=i, x=float(i), y=float(i)) for i in range(1, 4)
+        ],
+    )
+    _wire(monkeypatch, client)
+    assert addspawns.run(_args(tmp_path)) == 0
+
+    printed = capsys.readouterr().out
+    assert "no fight 22" not in printed
+    assert "report abc fight 22" in printed
+    assert client.event_calls == [("abc", 22, "DamageTaken", True)]
+
+    document = _json.loads((tmp_path / "spawn.json").read_text())
+    assert document["fights"][0]["fightId"] == 22
+    assert len(document["fights"][0]["sightings"]) == 3
+
+
+def test_a_fight_the_report_really_lacks_is_still_reported_as_missing(
+    monkeypatch, tmp_path, capsys
+):
+    """The guard has to keep working: a ranking that names a fight the report does not
+    hold is a real finding, and the fix must not turn it into a silent skip."""
+    client = _StubClient(
+        rankings_rows=[{"report": {"code": "abc", "fightID": 99}}],
+        report={"masterData": {"actors": []}, "fights": [{"id": 22, "startTime": 0, "endTime": 1}]},
+        events=[],
+    )
+    _wire(monkeypatch, client)
+    assert addspawns.run(_args(tmp_path)) == 0
+    assert "no fight 99" in capsys.readouterr().out
+    assert client.event_calls == []
