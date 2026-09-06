@@ -74,6 +74,41 @@ _PROVENANCE_PATHS: tuple[tuple[str, ...], ...] = (
 #: single kill would re-publish it under a word that promises more.
 MIN_KILLS_FOR_A_MAP = 2
 
+#: How much wider an area's widest empty wedge must be than its next widest gap
+#: before the places on that arc are numbered at all.
+#:
+#: **Calibrated against a null rather than fitted to this encounter.** Ten points
+#: scattered with no arc still produce a widest gap, so the question is how big a
+#: ratio chance supplies. Measured over 120,000 trials across four blob families --
+#: uniform disc, annulus, gaussian, and this encounter's own radii with the angles
+#: randomised -- taking angles about each sample's own mean, which is what the rule
+#: does: the 5%-false-positive floor at ten points is 1.766 / 1.803 / 1.818 /
+#: 1.794-1.805 and the median ratio is 1.21. MID2's three areas measure 2.394,
+#: 2.116 and 2.160, i.e. p = 0.0017 to 0.0124. The gate does not loosen as a ring
+#: thins: P(>= 1.80) is 0.007 at four points, 0.034 at eight, 0.043 at ten.
+#:
+#: ``addspawns.find_break``'s 3.0 is NOT the same number and cannot be borrowed --
+#: that one separates two populations of distances, this one compares two gaps in
+#: one ring, and applied here it would refuse all three of MID2's areas.
+MIN_WEDGE_DOMINANCE = 1.80
+
+#: How far the areas' rings may disagree, in degrees, before place N of one area
+#: stops being the same position as place N of another -- and with it, before the
+#: pooled view may add their counts together.
+#:
+#: Per place, the angle from that area's own place 1; the disagreement is the spread
+#: across the areas, averaged over the places. MID2 measures **6.2 degrees** (per
+#: place 0.0, 1.6, 10.8, 9.3, 8.7, 7.2, 4.0, 5.6, 8.5, 6.3). The null -- three areas
+#: at the observed radii with random angles, each anchored by the same wedge rule,
+#: 20,000 trials -- has a MINIMUM of 13.69 degrees and a median of 35.07. So the
+#: floor sits in a band with nothing in it: 1.6x above the observation and 1.4x
+#: below the best of twenty thousand rings that are not the same ring.
+MAX_PLACE_DISAGREEMENT_DEGREES = 10.0
+
+#: Places are read off in pairs, the way the owner reads them: (1,2) is group 1,
+#: (3,4) group 2, and so on. A property of the numbering rather than a measurement.
+PLACES_PER_GROUP = 2
+
 
 @dataclass(frozen=True)
 class Sighting:
@@ -97,6 +132,13 @@ class Spot:
 
     spot: int
     area: int
+    #: Where this spot sits on its area's arc, 1..n clockwise from the widest empty
+    #: wedge -- see ``place_ring``, including why the direction is a convention.
+    #: ``None`` where the area's ring has no dominant wedge to start from, which is
+    #: a refusal rather than a gap: unnumbered is not place zero.
+    place: int | None
+    #: The pair the place falls in, (1,2) -> 1. ``None`` whenever ``place`` is.
+    group: int | None
     x: float
     y: float
     #: Distinct kills this spot was seen in. Below the kill count is ordinary -- a
@@ -113,6 +155,8 @@ class Spot:
         return {
             "spot": self.spot,
             "area": self.area,
+            "place": self.place,
+            "group": self.group,
             "x": round(self.x, 1),
             "y": round(self.y, 1),
             "seenInKills": self.seen_in_kills,
@@ -206,15 +250,36 @@ class EncounterMap:
     spots: list[Spot] = field(default_factory=list)
     areas: list[dict] = field(default_factory=list)
     repeat: RepeatTest | None = None
+    #: What the place numbering measured: how many areas it numbered, how dominant
+    #: their wedges were, and how far the rings disagree. Empty until
+    #: ``build_encounter`` has run.
+    places: dict = field(default_factory=dict)
     per_wave: dict = field(default_factory=dict)
     tolerance: dict | None = None
     refusal: str | None = None
 
 
 def _centroid(points: Sequence[tuple[float, float]]) -> tuple[float, float]:
+    """The mean of some points, summed EXACTLY.
+
+    ``math.fsum`` rather than ``sum`` throughout this module, and it is not a
+    micro-optimisation -- it is what makes the published document the same document
+    on every interpreter. ``sum`` over floats accumulates rounding error, and CPython
+    changed how much: 3.12 sums with Neumaier compensation where 3.11 does not.
+
+    Measured on this encounter, republishing the committed payload: spot 15's x is
+    **6649.5 on Python 3.11 and 6649.6 on 3.12**, from the same six numbers. CI runs
+    3.12 (`spawn-probe.yml`) so the committed value is the 3.12 one, and a maintainer
+    republishing on 3.11 would produce a one-digit diff that reads as the encounter
+    having moved. Five of the 60 published spot coordinates sit on an exact decimal
+    tie and so could flip that way; one of them does today.
+
+    ``fsum`` is exact, so it agrees with itself on every interpreter and on neither
+    side of that split by accident.
+    """
     return (
-        sum(p[0] for p in points) / len(points),
-        sum(p[1] for p in points) / len(points),
+        math.fsum(p[0] for p in points) / len(points),
+        math.fsum(p[1] for p in points) / len(points),
     )
 
 
@@ -223,6 +288,135 @@ def _widest(points: Sequence[tuple[float, float]]) -> float:
         (math.hypot(a[0] - b[0], a[1] - b[1]) for a in points for b in points),
         default=0.0,
     )
+
+
+def place_ring(
+    members: Sequence[tuple[int, float, float]],
+    centre: tuple[float, float],
+) -> dict[int, int] | None:
+    """``{spot number -> place 1..n}`` around one area, or ``None`` when it refuses.
+
+    An area's places sit on an ARC rather than a closed ring: MID2's three areas
+    each hold ten places spanning about 230 degrees with one empty wedge of 126 to
+    132 degrees, where the next widest gap is 52 to 61. An arc has an end, and
+    numbering from that end is the whole point -- it is what makes place 3 of one
+    area the same question as place 3 of another, which a per-area spot number
+    (3, 15, 26) cannot be.
+
+    The rule is: sort the members by angle around ``centre`` and start at the first
+    one after the widest empty wedge, going CLOCKWISE. It reproduces the owner's
+    hand-written numbering for MID2's Twin Fangs **30 of 30**, all three areas, no
+    exceptions -- which is the only reason this is a derivation rather than his
+    table typed into a file.
+
+    **Clockwise is a CONVENTION and not a measurement.** Both directions are
+    equally derivable from the geometry and nothing in the data prefers one; the
+    axes' own orientation is not established either (see ``dps-spawn-map.ts``).
+    ``first_seconds`` cannot break the tie: it is a ``min`` over the area's
+    sightings, so every place in an area carries the same value -- 36.0, 191.1,
+    191.1 on MID2 -- and orders nothing. So the direction is picked to match the
+    owner's reading, and the published block says so rather than letting the
+    numbering be taken for a claim about how the encounter places its copies.
+
+    **The refusal.** An arc has an end only while one wedge dominates. Measured on
+    MID2 the widest beats the second widest by 2.39 / 2.12 / 2.16; on a ring with
+    no dominant gap that ratio approaches 1.0 and the start -- with it every number
+    in the area -- moves between runs on noise. Below ``MIN_WEDGE_DOMINANCE``
+    nothing is published for that area, because ``None`` is not ``1``.
+
+    Fewer than three members also refuses: two points have one gap either way round
+    and no wedge to be widest.
+    """
+    if len(members) < 3:
+        return None
+    by_angle = sorted(
+        (math.degrees(math.atan2(y - centre[1], x - centre[0])) % 360.0, spot)
+        for spot, x, y in members
+    )
+    count = len(by_angle)
+    gaps = [((by_angle[(i + 1) % count][0] - by_angle[i][0]) % 360.0, i) for i in range(count)]
+    dominance = wedge_dominance(members, centre)
+    if dominance is None or dominance < MIN_WEDGE_DOMINANCE:
+        return None
+    # The widest gap runs from `at` counter-clockwise to `at + 1`, so the arc's two
+    # ends are those two members. Going clockwise means starting at `at` and
+    # stepping DOWN the sorted angles.
+    _, at = max(gaps)
+    return {by_angle[(at - step) % count][1]: step + 1 for step in range(count)}
+
+
+def wedge_dominance(
+    members: Sequence[tuple[int, float, float]],
+    centre: tuple[float, float],
+) -> float | None:
+    """How much wider the widest gap in this ring is than the next widest.
+
+    The number ``place_ring`` gates on, exposed so the document can publish what it
+    measured rather than only whether it passed. ``None`` under three members, where
+    there is no second gap to compare against.
+    """
+    if len(members) < 3:
+        return None
+    by_angle = sorted(
+        math.degrees(math.atan2(y - centre[1], x - centre[0])) % 360.0 for _, x, y in members
+    )
+    count = len(by_angle)
+    gaps = sorted((by_angle[(i + 1) % count] - by_angle[i]) % 360.0 for i in range(count))
+    return None if gaps[-2] <= 0 else gaps[-1] / gaps[-2]
+
+
+def place_group(place: int) -> int:
+    """Which pair a place belongs to: (1,2) -> 1, (3,4) -> 2, and so on."""
+    return (place - 1) // PLACES_PER_GROUP + 1
+
+
+def place_disagreement(rings: Sequence[dict[int, float]]) -> float | None:
+    """Mean spread, in degrees, of where place N sits across the areas.
+
+    Each ring is ``{place -> angle about that area's own place 1}``. Place N of one
+    area is only the same position as place N of another while those angles agree,
+    and this is the number that says whether they do. ``None`` for fewer than two
+    rings -- one area cannot disagree with itself, and reporting 0.0 would read as
+    perfect agreement measured.
+
+    Only places every ring holds are compared. A place one ring lacks says nothing
+    about whether the rings line up, and pooling over a partial set would make the
+    disagreement look smaller the more incomplete the data got.
+    """
+    if len(rings) < 2:
+        return None
+    shared = set(rings[0])
+    for ring in rings[1:]:
+        shared &= set(ring)
+    if not shared:
+        return None
+    spreads = []
+    for place in shared:
+        angles = [ring[place] for ring in rings]
+        spreads.append(max(angles) - min(angles))
+    return math.fsum(spreads) / len(spreads)
+
+
+def ring_angles(
+    members: Sequence[tuple[int, float, float]],
+    centre: tuple[float, float],
+    ring: dict[int, int],
+) -> dict[int, float]:
+    """``{place -> angle in degrees}``, measured from that area's own place 1.
+
+    Signed into (-180, 180] so two areas whose place 1 points different ways in the
+    room are still comparable: the shape is what is being compared, not the bearing.
+    """
+    by_spot = {spot: (x, y) for spot, x, y in members}
+    anchor = next(spot for spot, place in ring.items() if place == 1)
+    ax, ay = by_spot[anchor]
+    base = math.atan2(ay - centre[1], ax - centre[0])
+    out: dict[int, float] = {}
+    for spot, place in ring.items():
+        x, y = by_spot[spot]
+        turn = math.degrees(math.atan2(y - centre[1], x - centre[0]) - base)
+        out[place] = (turn + 180.0) % 360.0 - 180.0
+    return out
 
 
 def read_kill(fight: dict, npc_game_id: int) -> Kill:
@@ -435,7 +629,11 @@ def repeat_test(spots: Sequence[Spot]) -> RepeatTest | None:
         # Every spot repeats, or none does. The chi-square is undefined and the
         # answer needs no test: it is in the counts.
         return RepeatTest(appearances, seconds, 0.0, len(spots) - 1, 0.0)
-    chi = sum(
+    # `fsum` for the same reason as `_centroid`: `chiSquare` and `z` are published,
+    # and 30 float terms is where the two interpreters' `sum` can disagree. Measured
+    # bit-identical on 3.11 and 3.12 for THIS data (31.805618539955724), so the fix
+    # is against the hazard rather than against an observed flip.
+    chi = math.fsum(
         (s.waves_with_second - s.waves_present * rate) ** 2 / (s.waves_present * rate * (1 - rate))
         for s in spots
         if s.waves_present > 0
@@ -603,10 +801,70 @@ def build_encounter(payload: dict) -> EncounterMap:
             flat_index += 1
 
     areas = pool_areas(result.kills, spot_of)
+
+    # The place index is a property of the AREA's ring, so it needs every member of
+    # that area and the area's own centre -- which is why it is derived here, after
+    # `pool_areas`, rather than inside the loop that builds the rows.
+    by_area_rows: dict[int, list[dict]] = {}
+    for row in provisional:
+        by_area_rows.setdefault(areas.get(row["spot"], 0), []).append(row)
+
+    numbered: dict[int, dict[int, int]] = {}
+    angles: dict[int, dict[int, float]] = {}
+    dominance: dict[int, float] = {}
+    for area, rows in sorted(by_area_rows.items()):
+        members = [(r["spot"], r["x"], r["y"]) for r in rows]
+        centre = _centroid([(r["x"], r["y"]) for r in rows])
+        ring = place_ring(members, centre)
+        if ring is None:
+            continue
+        numbered[area] = ring
+        angles[area] = ring_angles(members, centre, ring)
+        dominance[area] = wedge_dominance(members, centre) or 0.0
+
+    # **An area is numbered only while it holds as many places as the fullest ring.**
+    # A short area's own wedge still gives it an order, and numbering it 1..9 would
+    # silently shift every place after the missing one -- so place 6 of that area
+    # would be drawn beside place 6 of another and be a different position. The
+    # measured alternative is to MATCH the short ring onto the reference by a rigid
+    # fit, which leaves a hole instead of a shift and is right about 84% of the time
+    # at six of ten places; it is not built, because no area of this encounter is
+    # short and a matcher nothing exercises is a guess with the authority of code.
+    # Refusing is the honest half of it, and it is the half that cannot mislabel.
+    widest = max((len(ring) for ring in numbered.values()), default=0)
+    numbered = {area: ring for area, ring in numbered.items() if len(ring) == widest}
+
+    place_of: dict[int, int] = {}
+    for ring in numbered.values():
+        place_of.update(ring)
+    disagreement = place_disagreement([angles[area] for area in sorted(numbered)])
+    result.places = {
+        "areasNumbered": len(numbered),
+        "areasRefused": len(by_area_rows) - len(numbered),
+        "perArea": widest if numbered else 0,
+        "wedgeDominance": (
+            {
+                "min": round(min(dominance[a] for a in numbered), 2),
+                "max": round(max(dominance[a] for a in numbered), 2),
+                "floor": MIN_WEDGE_DOMINANCE,
+            }
+            if numbered
+            else None
+        ),
+        "disagreementDegrees": None if disagreement is None else round(disagreement, 2),
+        "maxDisagreementDegrees": MAX_PLACE_DISAGREEMENT_DEGREES,
+        # A boolean beside its own number, the way `RepeatTest.separates` is: what it
+        # licenses is ADDING the areas' counts together, which is the one thing a
+        # pooled view does that a per-area view does not.
+        "poolable": (disagreement is not None and disagreement <= MAX_PLACE_DISAGREEMENT_DEGREES),
+    }
+
     result.spots = [
         Spot(
             spot=row["spot"],
             area=areas.get(row["spot"], 0),
+            place=place_of.get(row["spot"]),
+            group=(place_group(place_of[row["spot"]]) if row["spot"] in place_of else None),
             x=row["x"],
             y=row["y"],
             seen_in_kills=row["kills"],
@@ -617,7 +875,14 @@ def build_encounter(payload: dict) -> EncounterMap:
         )
         for row in provisional
     ]
-    result.spots.sort(key=lambda s: (s.area, s.first_seconds, s.spot))
+    # Place order within an area, which is the order the owner reads them in and the
+    # order the table twin shows. `first_seconds` stays in the key as the fallback
+    # for an area that refused a ring -- it is what ordered these rows before places
+    # existed, and it is a `min` over the area's sightings, so inside one area it is
+    # constant and orders nothing on its own.
+    result.spots.sort(
+        key=lambda s: (s.area, 999 if s.place is None else s.place, s.first_seconds, s.spot)
+    )
 
     by_area: dict[int, list[Spot]] = {}
     for spot in result.spots:
@@ -626,8 +891,9 @@ def build_encounter(payload: dict) -> EncounterMap:
         {
             "area": area,
             "spots": [s.spot for s in members],
-            "x": round(sum(s.x for s in members) / len(members), 1),
-            "y": round(sum(s.y for s in members) / len(members), 1),
+            # `fsum`, for `_centroid`'s reason -- an area's centre is published.
+            "x": round(math.fsum(s.x for s in members) / len(members), 1),
+            "y": round(math.fsum(s.y for s in members) / len(members), 1),
         }
         for area, members in sorted(by_area.items())
     ]
@@ -658,6 +924,23 @@ def caveats(result: EncounterMap) -> list[str]:
                 f"are {closest:.0f} apart, so the places separate by a factor of "
                 f"{closest / widest:.1f}."
             )
+    numbered = [s for s in result.spots if s.place is not None]
+    if numbered:
+        areas_numbered = len({s.area for s in numbered})
+        out.append(
+            f"Places are numbered 1-{max(s.place for s in numbered)} within each of "
+            f"{areas_numbered} area(s), clockwise from the widest empty wedge in that "
+            "area's ring, so place N of one area is the same position on the arc as "
+            "place N of another. CLOCKWISE IS A CONVENTION: both directions fit the "
+            "geometry equally and nothing measured here prefers one."
+        )
+    unnumbered = {s.area for s in result.spots if s.place is None}
+    if unnumbered and result.spots:
+        out.append(
+            f"{len(unnumbered)} area(s) got no place numbers: their ring has no wedge "
+            "clearly wider than the next, so the arc has no end to count from and any "
+            "numbering would move between runs."
+        )
     truncated = [k for k in described if k.truncated]
     if truncated:
         out.append(
@@ -715,6 +998,7 @@ def to_json(result: EncounterMap, *, name: str | None = None, npc_name: str | No
         return block
     block["tolerance"] = result.tolerance
     block["areas"] = result.areas
+    block["places"] = result.places or None
     block["spots"] = [s.to_json() for s in result.spots]
     block["perWave"] = result.per_wave
     block["repeat"] = result.repeat.to_json() if result.repeat else None
