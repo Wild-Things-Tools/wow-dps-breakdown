@@ -62,7 +62,7 @@ from __future__ import annotations
 
 import math
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -259,6 +259,29 @@ def spawn_sightings(
     return sorted(best.values(), key=lambda s: (s.timestamp_ms, s.actor_id, s.instance or 0))
 
 
+def merge_sightings(*groups: Iterable[SpawnSighting]) -> list[SpawnSighting]:
+    """One list of copies out of several streams, earliest sighting per copy wins.
+
+    A copy is the target of the damage it takes and the source of the spells it
+    casts, so a fight read over three streams produces up to three sightings of the
+    same ``(actor, instance)``. Analysing a stream on its own answers a question
+    about that stream; analysing the concatenation would count one copy several
+    times and report a wave of fourteen as a wave of forty.
+
+    Earliest wins for the reason the whole module exists: a sighting is an upper
+    bound on where the copy appeared, so the earliest of several is the tightest
+    bound available. Ties break on ``(actor, instance)`` so a re-run answers the same.
+    """
+    best: dict[tuple[int, int | None], SpawnSighting] = {}
+    for group in groups:
+        for sighting in group:
+            key = (sighting.actor_id, sighting.instance)
+            current = best.get(key)
+            if current is None or sighting.timestamp_ms < current.timestamp_ms:
+                best[key] = sighting
+    return sorted(best.values(), key=lambda s: (s.timestamp_ms, s.actor_id, s.instance or 0))
+
+
 @dataclass
 class ShapeReport:
     """What one event stream turned out to contain. The diagnostic half of this module.
@@ -360,6 +383,300 @@ def describe_event_shapes(
     if ys:
         report.y_range = (min(ys), max(ys))
     return report
+
+
+# ── From sightings to a spawn pattern ─────────────────────────────────────────
+#
+# Everything below is derived from the sample's own structure. Nothing here takes
+# a threshold in world units, because nothing anywhere documents what a unit IS --
+# `describe_event_shapes` says so at length, and a distance written in a constant
+# would be the unlabelled axis that warns against.
+#
+# What replaces it is the shape of the sorted values. Measured on the first live
+# pass (run 34031008009, The Twin Fangs Mythic, 2026-09-06, 40 sightings):
+#
+#   time between consecutive sightings   0 .. 2299 ms, then 48037 and 81416
+#   distance between two sightings       26 .. 179,   then 729 and up
+#
+# Both are an order-of-magnitude hole with nothing in it, which is the same
+# calibration `_DUPLICATE_UPLOAD_SECONDS` rests on in `fightdataset`. A sample whose
+# sorted values have no such hole gets NO answer rather than a tuned one.
+
+
+@dataclass(frozen=True)
+class Break:
+    """Where a sorted list of values falls apart, and how convincingly."""
+
+    #: The value below the gap and the value above it.
+    below: float
+    above: float
+    #: How many values sit below. `above / below`, the evidence for the split.
+    count: int
+    ratio: float
+
+    @property
+    def threshold(self) -> float:
+        """Halfway across the gap, geometrically -- so the answer does not move when
+        one sighting shifts either edge by a few units."""
+        return math.sqrt(self.below * self.above) if self.below > 0 else self.above / 2
+
+
+def find_break(
+    values: Sequence[float], *, min_ratio: float = 3.0, min_support: int = 1
+) -> Break | None:
+    """The widest relative jump in a sorted list, or None when there is no hole.
+
+    `min_ratio` is what stops this inventing structure. Values that grow smoothly have
+    a largest ratio near 1, and splitting them anywhere would produce a boundary that
+    is an artifact of the search. Three is below the 3.4-5.2 measured across ten live
+    kills and above what a smooth list reaches, so it separates the two cases rather
+    than sitting between them.
+
+    **`min_support` is what stops a single outlier being read as a cluster, and it is
+    not a nicety.** Measured over those ten kills: every one of them has the same
+    distance break, 154-187 against 620-771 -- the same physical hole, found ten
+    times independently -- and one kill, `w4dtPVTfJH7jzXnL`, ALSO has a **rank-1**
+    candidate at 2 -> 10.4, ratio 5.2 against the real one's 4.2. Two sightings
+    happened to land two units apart. Taking it split 69 sightings into 68
+    "positions" and reported every wave as fourteen distinct spots, which is a
+    plausible-looking answer to the question being asked.
+
+    **The floor is calibrated against where the real break sits**, not chosen for
+    roundness. Over the ten kills the distance break's rank is 0.80-1.01 x the number
+    of sightings (52/65 to 84/83) and the time break's is 0.92-0.94 x the number of
+    gaps, so a floor at half separates both from rank 1 with a factor of two in hand.
+    Do not read that as headroom for a small sample: a single wave of fourteen copies
+    over ten positions has only four within-position pairs against a floor of seven,
+    so `describe_pattern` answers for a whole kill and refuses a lone wave. That is
+    the honest failure -- fourteen sightings cannot show that positions repeat.
+
+    The caller states the floor because only the caller knows what a value IS -- a
+    list of pairwise distances has O(n^2) entries where a list of gaps has n-1, so a
+    floor expressed in entries would mean two different things.
+
+    Zero is skipped as a denominator, never as a value: two sightings on the same
+    millisecond are real and belong to the same wave.
+    """
+    ordered = sorted(v for v in values if v is not None)
+    if len(ordered) < 3:
+        return None
+    best: Break | None = None
+    for index in range(max(1, min_support), len(ordered)):
+        below, above = ordered[index - 1], ordered[index]
+        if below <= 0:
+            continue
+        ratio = above / below
+        if ratio >= min_ratio and (best is None or ratio > best.ratio):
+            best = Break(below=below, above=above, count=index, ratio=ratio)
+    return best
+
+
+def split_waves(
+    sightings: Sequence[SpawnSighting],
+) -> tuple[list[list[SpawnSighting]], Break | None]:
+    """`(waves, the break that separated them)`, oldest first.
+
+    A wave is a run of sightings with no long silence in it. One list and no break
+    is the honest answer for a boss whose adds trickle in: it says "these did not
+    arrive in waves" rather than cutting the sample somewhere plausible.
+    """
+    ordered = sorted(sightings, key=lambda s: (s.timestamp_ms, s.actor_id, s.instance))
+    if len(ordered) < 3:
+        return ([list(ordered)] if ordered else []), None
+    gaps = [b.timestamp_ms - a.timestamp_ms for a, b in zip(ordered, ordered[1:], strict=False)]
+    # Half the gaps, because a wave is a RUN: if fewer than half of the intervals
+    # sit inside one, the sightings did not arrive in waves and there is nothing
+    # here to split.
+    found = find_break(gaps, min_support=len(gaps) // 2)
+    if found is None:
+        return [list(ordered)], None
+    waves: list[list[SpawnSighting]] = [[ordered[0]]]
+    for previous, current in zip(ordered, ordered[1:], strict=False):
+        if current.timestamp_ms - previous.timestamp_ms < found.threshold:
+            waves[-1].append(current)
+        else:
+            waves.append([current])
+    return waves, found
+
+
+def cluster_positions(
+    sightings: Sequence[SpawnSighting],
+) -> tuple[list[list[int]], Break | None, float | None]:
+    """`(clusters as index lists, the break, the closest two clusters came)`.
+
+    Single linkage, because a spawn point is a point and its sightings scatter around
+    it rather than forming a shape. The risk single linkage carries is CHAINING -- two
+    real positions joined by one sighting between them -- so the closest surviving
+    inter-cluster distance is returned rather than being assumed comfortable. On the
+    live sample it is 729 against a within-cluster spread of at most 179; if those
+    ever approach each other, the clusters are a guess and the caller must say so.
+    """
+    points = list(sightings)
+    if len(points) < 3:
+        return [[i] for i in range(len(points))], None, None
+    pairs = [
+        math.hypot(a.x - b.x, a.y - b.y) for i, a in enumerate(points) for b in points[i + 1 :]
+    ]
+    # Half the POINTS, not half the pairs. The premise of the whole analysis is
+    # that positions repeat; if fewer than n/2 pairs are within one position,
+    # they barely do and no threshold describes them. Expressed in points because
+    # `pairs` is O(n^2) and a floor in entries would mean something else.
+    found = find_break(pairs, min_support=len(points) // 2)
+    if found is None:
+        return [[i] for i in range(len(points))], None, None
+
+    label = list(range(len(points)))
+    for i in range(len(points)):
+        for j in range(i + 1, len(points)):
+            if math.hypot(points[i].x - points[j].x, points[i].y - points[j].y) < found.threshold:
+                old, new = label[j], label[i]
+                label = [new if one == old else one for one in label]
+    grouped: dict[int, list[int]] = {}
+    for index, lab in enumerate(label):
+        grouped.setdefault(lab, []).append(index)
+    clusters = sorted(grouped.values(), key=lambda g: points[g[0]].timestamp_ms)
+
+    closest = None
+    for a_index, a in enumerate(clusters):
+        for b in clusters[a_index + 1 :]:
+            for i in a:
+                for j in b:
+                    d = math.hypot(points[i].x - points[j].x, points[i].y - points[j].y)
+                    closest = d if closest is None or d < closest else closest
+    return clusters, found, closest
+
+
+def describe_pattern(sightings: Sequence[SpawnSighting]) -> dict:
+    """What the sample says about where and in what order the copies appeared.
+
+    Answers three questions and refuses a fourth. It says how many distinct positions
+    a wave used, which of them took a second copy and in what order, and the largest
+    number of copies any one position took. It does NOT say that a position "cannot"
+    take a third: an unread page and an add nobody damaged look identical from here,
+    so `maxPerPosition` is what was *seen*, and `truncated` on the stream beside it is
+    what a reader has to weigh it against.
+    """
+    ordered = sorted(sightings, key=lambda s: (s.timestamp_ms, s.actor_id, s.instance))
+    clusters, distance_break, closest = cluster_positions(ordered)
+    name_of = {index: number for number, group in enumerate(clusters, 1) for index in group}
+    position_of = {id(ordered[index]): name_of[index] for index in range(len(ordered))}
+
+    waves, time_break = split_waves(ordered)
+    wave_rows = []
+    for number, wave in enumerate(waves, 1):
+        sequence = [position_of[id(s)] for s in wave]
+        seen: set[int] = set()
+        repeats: list[int] = []
+        # Where the first REPEAT stands, not where the repeated position first
+        # appeared. `sequence.index(repeats[0])` gives the latter and reads as the
+        # former: on the live sample it answered 2 for a wave whose first ten
+        # sightings are ten different positions and whose eleventh is the repeat.
+        first_repeat_at = len(sequence)
+        for index, position in enumerate(sequence):
+            if position in seen:
+                repeats.append(position)
+                first_repeat_at = min(first_repeat_at, index)
+            else:
+                seen.add(position)
+        counts = Counter(sequence)
+        wave_rows.append(
+            {
+                "wave": number,
+                "startSeconds": round(wave[0].delay_ms / 1000, 2),
+                "sightings": len(wave),
+                "order": sequence,
+                "distinctPositions": len(seen),
+                # The order matters as much as the set: "the first N were all
+                # different, then the repeats came" is a different encounter from
+                # "they arrived interleaved", and only the sequence separates them.
+                "distinctBeforeFirstRepeat": first_repeat_at,
+                "repeated": sorted(repeats),
+                "maxPerPosition": max(counts.values()) if counts else 0,
+            }
+        )
+
+    # Waves that share a position belong to the same place. That is a connected
+    # component of the wave-to-position graph, so it needs no threshold of its own
+    # and no knowledge of the encounter -- and on the live sample it is the whole
+    # answer: a kill's thirty positions are three sets of ten, each set used by two
+    # consecutive waves, at three fixed places in the world.
+    #
+    # Union-find over the positions, then a renumber in wave order so a re-run
+    # answers the same. The wave order is the honest one to number by: a reader is
+    # looking at a fight, and area 1 should be where it started.
+    parent = {number: number for number, _ in enumerate(clusters, 1)}
+
+    def root(node: int) -> int:
+        while parent[node] != node:
+            parent[node] = parent[parent[node]]
+            node = parent[node]
+        return node
+
+    for wave in waves:
+        here = sorted({position_of[id(s)] for s in wave})
+        for position in here[1:]:
+            parent[root(position)] = root(here[0])
+
+    seen_areas: dict[int, int] = {}
+    for row, wave in zip(wave_rows, waves, strict=False):
+        component = root(position_of[id(wave[0])])
+        row["area"] = seen_areas.setdefault(component, len(seen_areas) + 1)
+    # A position no wave placed cannot happen (every position comes from a
+    # sighting and every sighting is in a wave), but read the root rather than the
+    # row so the two answers cannot drift.
+    area_of = {number: seen_areas[root(number)] for number, _ in enumerate(clusters, 1)}
+
+    return {
+        "areas": [
+            {
+                "area": label,
+                "positions": sorted(p for p, a in area_of.items() if a == label),
+                "waves": [row["wave"] for row in wave_rows if row["area"] == label],
+            }
+            for label in sorted(set(area_of.values()))
+        ],
+        "positions": [
+            {
+                "position": number,
+                "x": round(sum(ordered[i].x for i in group) / len(group), 1),
+                "y": round(sum(ordered[i].y for i in group) / len(group), 1),
+                "area": area_of.get(number),
+                "sightings": len(group),
+                "spread": round(
+                    max(
+                        (
+                            math.hypot(ordered[a].x - ordered[b].x, ordered[a].y - ordered[b].y)
+                            for a in group
+                            for b in group
+                        ),
+                        default=0.0,
+                    ),
+                    1,
+                ),
+            }
+            for number, group in enumerate(clusters, 1)
+        ],
+        "waves": wave_rows,
+        # The calibration, published rather than trusted. A reader who does not see a
+        # convincing hole in these two lists should not believe the clusters either.
+        "calibration": {
+            "timeBreakMs": None
+            if time_break is None
+            else {
+                "below": time_break.below,
+                "above": time_break.above,
+                "ratio": round(time_break.ratio, 2),
+            },
+            "distanceBreak": None
+            if distance_break is None
+            else {
+                "below": distance_break.below,
+                "above": distance_break.above,
+                "ratio": round(distance_break.ratio, 2),
+            },
+            "closestTwoClustersCame": None if closest is None else round(closest, 1),
+        },
+    }
 
 
 def enemy_npc_counts(fight: dict) -> list[dict]:
@@ -515,6 +832,59 @@ def _kill_candidates(client, encounter_id: int, difficulty: int, limit: int):
     return seen, len(rows)
 
 
+def _report_pattern(sightings: Sequence[SpawnSighting]) -> dict | None:
+    """Print one fight's spawn pattern and return it for the payload.
+
+    None when there is nothing to describe. Two sightings cannot establish a wave or
+    a cluster -- `find_break` refuses under three values for exactly that reason --
+    and printing an empty table beside a real one reads as an encounter that has no
+    pattern rather than as a sample that cannot show one.
+    """
+    if len(sightings) < 3:
+        return None
+    pattern = describe_pattern(sightings)
+    calibration = pattern["calibration"]
+    print(f"  --- pattern over {len(sightings)} copy/copies ---")
+    # The calibration is the evidence, and a reader who does not check it gets a
+    # plausible-looking table either way: with no distance hole every sighting is
+    # its own "position", so the wave rows read as fourteen spots each taking one
+    # copy. Say so here rather than leaving it to be noticed in a JSON field.
+    if calibration["distanceBreak"] is None:
+        print(
+            "    NO DISTANCE HOLE: these sightings do not fall into positions, so "
+            "every position row below is one sighting and nothing about repeats "
+            "is established."
+        )
+    if calibration["timeBreakMs"] is None:
+        print(
+            "    NO TIME HOLE: these sightings did not arrive in waves, so the one "
+            "wave row below is the whole fight rather than a wave."
+        )
+    print(
+        f"    {len(pattern['positions'])} position(s), "
+        f"{len(pattern['waves'])} wave(s); "
+        f"time break {calibration['timeBreakMs']}, distance break "
+        f"{calibration['distanceBreak']}, closest two clusters "
+        f"{calibration['closestTwoClustersCame']}"
+    )
+    for block in pattern["areas"]:
+        members = [pattern["positions"][number - 1] for number in block["positions"]]
+        print(
+            f"    area {block['area']}: {len(block['positions'])} position(s) around "
+            f"({sum(p['x'] for p in members) / len(members):.0f}, "
+            f"{sum(p['y'] for p in members) / len(members):.0f}), waves {block['waves']}"
+        )
+    for row in pattern["waves"]:
+        print(
+            f"    wave {row['wave']} (area {row['area']}) at +{row['startSeconds']:7.2f}s  "
+            f"{row['sightings']:>3} copies over {row['distinctPositions']:>3} position(s), "
+            f"{row['distinctBeforeFirstRepeat']:>3} distinct before the first repeat, "
+            f"max {row['maxPerPosition']} at one position"
+        )
+        print(f"      order {row['order']}")
+    return pattern
+
+
 def run(args) -> int:
     """Measure whether -- and how -- this API answers "where did that add appear".
 
@@ -653,6 +1023,11 @@ def run(args) -> int:
                 "streams": [],
                 "sightings": [],
             }
+            # Accumulated across the streams rather than analysed per stream: one
+            # copy is the target of its damage and the source of its casts, so the
+            # per-stream lists overlap and `merge_sightings` is what makes the count
+            # a count of copies.
+            fight_sightings: list[SpawnSighting] = []
 
             for stream in args.streams:
                 try:
@@ -739,7 +1114,9 @@ def run(args) -> int:
                     }
                     for s in sightings
                 )
+                fight_sightings = merge_sightings(fight_sightings, sightings)
 
+            fight_row["pattern"] = _report_pattern(fight_sightings)
             fights_out.append(fight_row)
             if "stoppedBy" in out:
                 break
