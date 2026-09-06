@@ -3235,6 +3235,150 @@ would be comparable: a harvested character wears its own gear, which is the prob
   answer is no: the row keys are `amount, bracketData, class, duration, faction,
   hardModeLevel, name, report, spec, startTime`. A whole query per kill is necessary.
 
+## Where an encounter's adds appear, and the three thresholds under it
+
+`addspawns.py` + `wowdps spawn-probe` + `.github/workflows/spawn-probe.yml`. Built for
+one question the owner asked about The Twin Fangs -- fourteen copies of *Broodling of
+Ithraz* (npc 270898) per wave at only ten places, so which places, in what order, and
+can one take a third? -- and the module's three refusals are in its own docstring.
+
+**Nothing here is published.** The workflow writes no file into the repository; it
+prints, uploads a payload, and a person reads it. That is the same posture
+`fight-probe` had before anything consumed it, and for the same reason: the first
+output of a probe against a payload nobody has read with `includeResources` on is a
+schema check, and a schema check that quietly committed a dataset would be the wrong
+instrument.
+
+### `includeResources` is the fourth omitted argument, and there are no coordinates without it
+
+`x`, `y` and `facing` live on `ResourceData`, and `Report.events` defaults
+`includeResources` to **false**. Fourth time for this repository's recurring trap --
+`hostilityType`, `includeCombatantInfo`, `zoneID: 0`, and now this -- so treat it as
+settled: **an omitted argument is a default, not nothing.**
+
+The two dialects then have to be read together. The Scripting API nests the block
+(`event.targetResources`); the v2 API sends the fields **flat on the event** with a
+`resourceActor` discriminator, 1 = source and 2 = target. Measured live on 2026-09-06:
+MID2's `DamageTaken` stream is flat and carries `resourceActor: 2` throughout, i.e.
+the block belongs to the **target**, which is the add. Reading the source end instead
+would put a player's feet on the map and label them a spawn point -- a plausible
+picture of the wrong thing, which is why `event_position` takes the end it is asked
+for rather than "the coordinates".
+
+### What the ten kills say, and it is not what the question assumed
+
+Ten Mythic kills of The Twin Fangs, `--streams DamageTaken Casts Deaths --max-pages 4`,
+**153.85 points over 141 queries** (0.85% of an hour). Every kill's `enemyNPCs` block
+independently confirms the owner's count: **84 instances in 6 groups** of npc 270898.
+
+**A kill uses THIRTY positions, in three sets of ten**, and the structure is exact on
+all ten kills:
+
+```
+area 1   waves 1-2   ten positions around (      0, 67,500)
+area 2   waves 3-4   ten positions around ( -5,500, 58,000)
+area 3   waves 5-6   ten positions around ( +5,400, 58,000)
+```
+
+28 of the 29 area-observations hold exactly ten positions (one reads 9 and one 8, and
+six of the ten kills had a **truncated** `DamageTaken` fetch, so those are copies
+missed rather than positions that do not exist). So the owner's "ten distinct
+positions" is a fact about **an area**, and the encounter has three of them -- which
+is the same statement, not a correction.
+
+**The thirty places are fixed in the world.** Pooling every kill's cluster centroids
+at a 300-unit tolerance gives **exactly 30 spots**, each seen in 8-10 of the ten kills,
+with a spread of 75-188 units. So a map drawn once is a map that keeps working, which
+is what makes the view in issue #50 worth building at all.
+
+`describe_pattern` reports the areas because they are **derived** -- an area is a
+connected component of the wave-to-position graph, so it needs no threshold of its own
+and no knowledge of the encounter.
+
+### The three questions, answered as far as the data reaches
+
+- **"Ten, then four repeats?"** Per wave the copies land on 7-10 distinct positions
+  (mode 10, on 30 of 53 waves) and the first repeat arrives at position 5-10 in the
+  sequence (10 on 16 waves, 9 on 13). So "all ten, then four repeats" is the commonest
+  shape and not the rule -- **and this data cannot settle it**, because the order is
+  *first damaged*, not spawned. A wave's fourteen copies are first damaged over
+  8.2-14.4 seconds (median 13.0), which is equally consistent with a staggered spawn
+  and with a raid working through a simultaneous one. `distinctBeforeFirstRepeat` is
+  published as what was seen; do not read it as spawn order.
+- **"Are the four repeat positions fixed, or can some never take a second?"**
+  **Neither.** Pooled over 53 waves and 497 spot-appearances, a spot took a second copy
+  **43.1%** of the time -- against the 40% a uniform draw of four from ten predicts --
+  and a chi-square for "every spot repeats at its own rate" is **31.0 on 29 df**
+  (Wilson-Hilferty z = 0.34). No spot is detectably preferred and none is excluded. The
+  lowest is 1 of 17, which over thirty comparisons is what chance produces.
+- **"Can a position take more than two?"** **Yes, three times in 53 waves**, tally
+  `{2: 50, 3: 3}`. This is a correction to an answer given from a single kill, where
+  the honest reading was "never more than two" -- one kill is not a distribution, and
+  it is the same error this file records for `fights` counts and for the first-entry
+  gear reading. The three are not conclusive either: each triple-taking cluster has a
+  spread of 141-169 against a population median of 86 and a maximum of 187, so a third
+  copy sits at the edge of "two adjacent spawn points the clustering merged" rather
+  than clear of it. What argues for them being genuine is that the nearest two
+  surviving clusters are 620-771 apart, a factor of 3.3 above the widest cluster.
+
+### Two thresholds, both found in a hole rather than typed
+
+`find_break` takes the widest **relative** jump in a sorted list and refuses under
+`min_ratio` (3.0), which is what stops it inventing structure in values that grow
+smoothly. Over the ten kills:
+
+```
+time between consecutive sightings   within a wave  10 .. 3,616 ms   then ~48,000
+distance between two sightings       within a spot  0 .. 187        then 620 .. 771
+```
+
+Both are order-of-magnitude holes with nothing in them -- the same calibration
+`_DUPLICATE_UPLOAD_SECONDS` rests on in `fightdataset`.
+
+**`min_support` is the load-bearing half and it is calibrated, not chosen.** The real
+distance break sits at rank 0.80-1.01 x the number of sightings and the real time break
+at 0.92-0.94 x the number of gaps, so a floor at half separates both from rank 1 with a
+factor of two in hand. It exists because one kill, `w4dtPVTfJH7jzXnL`, opens its sorted
+distances `2 -> 10.4` at ratio **5.2** -- beating the real hole's 4.2 -- purely because
+two sightings landed two units apart. Taken, it split 69 sightings into 68 "positions"
+and reported every wave as fourteen distinct spots: **a full set of plausible numbers
+answering the question being asked.** Two more kills carry the same artefact on the
+time axis (ratios 11.0 and 3.5) where the real break won anyway.
+
+The price is stated rather than hidden: fourteen copies over ten positions supply four
+within-position pairs against a floor of seven, so **`describe_pattern` answers for a
+whole kill and refuses a lone wave**, and the refusal is printed in words rather than
+left in a null field. Fourteen sightings genuinely cannot show that positions repeat.
+
+### Two defects the first three live runs produced, and neither was in a fold
+
+Both are the shape this file keeps recording -- the folds were tested and the call site
+was not:
+
+- **`WarcraftLogsClient(cache_dir=...)` took the string argparse hands it** and died on
+  `TypeError: unsupported operand type(s) for /: 'str' and 'str'` inside `_cache_path`,
+  after three paid queries. Every call site satisfied `cache_dir: Path | None` with a
+  string, so the annotation was decorative until the first cache write -- which is deep
+  inside a live run. Absent must stay absent there: coercing a falsy value gives
+  `Path('.')` and starts caching into the working directory.
+- **`run()` unwrapped `reportData.report` from a payload `client.fight_structure` had
+  already unwrapped**, so every kill reported "no fight N at difficulty 5" while the
+  cached response plainly held it. Sixteen pure tests could not see it; the two that
+  drive `run()` with a stubbed client can, and the stub returns what the **client**
+  returns rather than what the service does, because a stub built from the envelope
+  would have passed against the broken code.
+
+### What a sighting is, and the gap that cannot be closed
+
+`first_seen` is *first damaged*. `CLAUDE.md` already records that for add waves and it
+is true one level down for position: an add that walks before anything touches it is
+observed somewhere other than where it appeared, and no amount of event reading
+recovers the difference. What the module does instead is make the gap measurable --
+`delay_ms` per sighting and `spread` per position -- and the live answer is
+encouraging: a spot's sightings scatter by 75-188 units across ten kills where the
+nearest neighbouring spot is 620 away. The spawn grid survives the slack; a claim about
+*order* does not.
+
 ## Why specs are missing: simc wrote the profiles and switched them off
 
 `unvalidated.py` + `wowdps unvalidated`.
