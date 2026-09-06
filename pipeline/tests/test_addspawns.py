@@ -255,3 +255,27 @@ def test_sightings_are_ordered_reproducibly():
     first = addspawns.spawn_sightings(events, ACTORS, NPC, fight_start_ms=0)
     second = addspawns.spawn_sightings(list(reversed(events)), ACTORS, NPC, fight_start_ms=0)
     assert [(s.actor_id, s.instance) for s in first] == [(s.actor_id, s.instance) for s in second]
+
+
+def test_a_cache_directory_given_as_a_string_still_builds_a_path():
+    """`argparse` hands `--cache` back as a `str`, and the annotation does not stop it.
+
+    Measured on 2026-09-06 (run 34030450826): the spawn probe sent three paid queries
+    and then died on `TypeError: unsupported operand type(s) for /: 'str' and 'str'`
+    inside `_cache_path`. Every call site satisfies `cache_dir: Path | None` with a
+    string, so the promise was decorative until the first cache write -- which is deep
+    inside a live run rather than at construction.
+    """
+    from wowdps.warcraftlogs import Credentials, WarcraftLogsClient
+
+    client = WarcraftLogsClient(Credentials("id", "secret"), cache_dir="some/dir")
+    try:
+        path = client._cache_path("query {}", {"a": 1})
+        assert path is not None
+        assert path.parent.as_posix() == "some/dir"
+        assert path.suffix == ".json"
+        # Absent stays absent: a falsy directory must not become `Path('.')`, which
+        # would silently start caching into the working directory.
+        assert WarcraftLogsClient(Credentials("id", "secret"))._cache_path("q", {}) is None
+    finally:
+        client.close()

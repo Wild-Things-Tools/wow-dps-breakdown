@@ -64,6 +64,7 @@ import math
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 #: The v2 discriminator, measured by wtt-frontend against live responses: a flat
@@ -534,7 +535,9 @@ def run(args) -> int:
         return 1
 
     out: dict[str, Any] = {"requestedEncounter": args.encounter, "npc": args.npc}
-    with WarcraftLogsClient(credentials, cache_dir=args.cache) as client:
+    with WarcraftLogsClient(
+        credentials, cache_dir=Path(args.cache) if args.cache else None
+    ) as client:
         client.rate_limit()
 
         encounter_id = int(args.encounter)
