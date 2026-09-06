@@ -3379,6 +3379,100 @@ encouraging: a spot's sightings scatter by 75-188 units across ten kills where t
 nearest neighbouring spot is 620 away. The spawn grid survives the slack; a claim about
 *order* does not.
 
+### Pooling the kills into a map, and the four things it refuses
+
+`spawnmap.py` + `wowdps spawn-map` + `spawn-probe --publish` -> `<tier>/spawns.json`.
+`addspawns` answers for **one kill**; that is the honest unit of its measurement and
+it is not the unit a map wants. One kill of The Twin Fangs yields thirty clusters;
+ten kills yield the same thirty *places*, and only the pooling says they are the same
+thirty.
+
+The tolerance that decides "these are the same place" is **found in the data**, the
+same `find_break` the per-kill fold uses, one level up and over a different
+population -- there it groups a kill's copies into that kill's places, here it groups
+every kill's places into the encounter's places. Measured over the ten committed
+kills: the break sits at rank 1,234 of 41,041 pooled pairs, **187.5 -> 664.3, ratio
+3.54, threshold 353.0**, and the floored and unfloored answers agree, which is what a
+clean hole looks like. Sharing the code was considered and not done: a copy is one
+observation and a cluster centre is already an average of several, so one function
+would need a docstring describing two populations.
+
+Four refusals, and the first is the one that matters:
+
+- **A payload that does not state its difficulty publishes nothing.** A Heroic map
+  under a Mythic heading is the mislabelling `fights.json`'s `measuredDifficulty`
+  exists to prevent, and a publisher that assumed Mythic would make it silently --
+  every number in the block would be real. A fight stating a *different* difficulty
+  is refused too (the fetch is already scoped, so that means the scoping did not
+  hold); a fight stating **none** is allowed through, `harvest`'s three-way rule.
+- **One kill is not a map.** Its clusters are already what `spawn-probe` prints, and
+  re-publishing them as "the encounter's places" would promise a repetition nothing
+  observed.
+- **No hole in the pooled distances publishes no spots.** With no separation every
+  centroid becomes its own place and the map shows one point per kill per cluster --
+  a plausible picture of nothing.
+- **A write that would replace published spots with none is refused**, `--force` the
+  way through, and a one-boss run keeps every other boss by union merge. A spawn run
+  is one encounter and one npc by construction, so a document replacing its input
+  wholesale would delete every boss it did not read -- and the deletion would look
+  exactly like a boss nobody has probed. Heroic sits **beside** Mythic on the key
+  `(encounterId, difficulty, npc)`, never over it.
+
+**The repeat test is ONE-SIDED, and the two-sided version of it was wrong.** The
+question -- *are the four repeat positions fixed, or can some never take a second?* --
+is answered by a chi-square over "every spot repeats at its own rate", read through
+Wilson-Hilferty so an odd df is readable without a table. `|z| >= 1.96` also fires on
+a chi-square that is too **small**, which means the spots repeated *more evenly than
+chance* -- the opposite of "some spot is preferred". Measured on a fixture where ten
+places take exactly two second copies each over ten waves: chi-square **0.0**, z
+**-6.21**, and the two-sided rule reported the most uniform sample constructible as a
+detectable difference between spots. Found by a canary; do not restore `abs`.
+
+**The stored payload from 2026-09-06 could not be published, and that is the refusal
+working.** It stated no difficulty anywhere -- neither at document level nor on a
+fight -- because the probe fetched the field and threw it away. Three fields were in
+that state and all three were already in `FIGHT_STRUCTURE_QUERY`: the fight's
+`difficulty`, the npc's own name off `masterData`, and the report's `startTime`,
+which is the base `startedAt` needs (`ReportFight.startTime` counts from the
+*report's* start -- the unit error `firstkills` already paid for once). The probe
+writes all three now, so publishing needed a fresh pass rather than a doctored file.
+
+**It has run, and the published document is `web/public/data/MID2/spawns.json`**
+(run 34035705116, 2026-09-06, ten Mythic kills of The Twin Fangs, 7.9 KB):
+
+```
+30 spots in 3 areas of 10        45 waves    maxPerPosition {1: 1, 2: 41, 3: 3}
+405 spot-appearances, 185 with a second copy (45.7%)
+chi-square 31.81 on 29 df, z 0.44  ->  does not separate
+break 155.5 -> 661.0, ratio 4.25   killsTruncated 8 of 10   span 3.48 days
+```
+
+That reproduces the whole of what the ten-kill analysis found by hand, which is the
+control this module needed: three areas of ten, a repeat rate near the 40% a uniform
+draw of four from ten predicts, and a third copy at one place in 3 of 45 waves.
+
+### The event budget decides how much of the encounter the map is of
+
+**The first published run was a PREFIX of each kill and looked like a complete
+answer.** Dispatched at `--max-pages 4`, it published **23 spots in areas of 10, 4 and
+9** over 16 waves, with `killsTruncated` at 10 of 10. Re-dispatched at `--max-pages 12`
+against the same ten kills it published 30 in three tens. Nothing about the pooling
+changed; the second run had simply read more of each fight.
+
+This is `fight-probe`'s bounded-event-fetch failure one module across, and the reason
+it does not become a wrong answer here is that both halves are published: the run
+states `killsTruncated`, and a caveat names it in words. But a reader comparing two
+documents has to know that **an area holding four places is a page limit, not an
+encounter**. Do not read a spot count as a property of the boss without checking how
+much of each kill was read.
+
+`measurement.cost` is provenance and is the easy one to miss: it is a reading of
+Warcraft Logs' hourly meter taken when the pass ran, so five of its fields differ on
+every run by construction. Left in the settle's comparison the settle can never fire
+-- which is exactly how `write_fights` restamped for weeks. It stays **in** the
+document, because what a pass costs is the open question behind every budget decision
+here and this is the only measurement of it, and **out** of the comparison.
+
 ## Why specs are missing: simc wrote the profiles and switched them off
 
 `unvalidated.py` + `wowdps unvalidated`.
@@ -4163,12 +4257,54 @@ next question needs no second pass and the split is checkable against the rows b
 it. `compositionSplit` is absent unless a pass actually read a roster: a split of
 zeroes on every boss would read as "nobody fields this spec".
 
-**Nothing is drawn from it.** The chart the owner named lives in nextpull and is fed by
-wtt-backend's `ProgressBossHours`, which has no roster reader at all (`grep -rn
-"playerDetails" apps/` is empty there). Whether two bars whose medians differ at
-`p = 0.72` should be drawn is a decision rather than a formality -- two bars side by
-side assert a separation -- so it is wtt-backend#297 with the numbers rather than a
-view built on the way past.
+**It is drawn now, and this paragraph used to say it was not.** What stood here read
+*"Nothing is drawn from it"*, and it was true when written: the chart the owner named
+lives in nextpull, fed by wtt-backend's `ProgressBossHours`, which has no roster reader
+at all (`grep -rn "playerDetails" apps/` is empty there). Two bars whose medians differ
+at `p = 0.7253` should not be drawn uncritically -- two bars side by side ASSERT a
+separation -- so the decision was deferred as wtt-backend#297 rather than taken on the
+way past.
+
+**On 2026-09-06 the owner took it**, for the Fights tab rather than for Raid Progress:
+*"im fights tab ergibt diese Ansicht für mich sinn, da man einen spezifischen Fight
+anschaut."* So the route is this repository's own, not wtt-backend's:
+
+```
+wowdps progress-hours --publish web/public/data --tier MID2
+    -> web/public/data/MID2/progress-hours.json
+    -> nextpull's DPS Fights tab (wtt-frontend#237)
+```
+
+**`--publish` is a second output beside `--out`, never instead of it.** The artifact
+still carries every guild's whole roster; the published document carries the split, the
+test and the interval and no guild names -- the same rule as `spawns.json`, whose
+payload is a CI artifact and whose document is 7.9 KB.
+
+**The document folds rather than replaces**, union on `(encounterId, difficulty)` with
+the published document joining as the OLDEST -- `merge_gear_shards`' rule, because a run
+measures one difficulty and frequently one boss. Heroic sits BESIDE Mythic, never over
+it. The refusal is the same one too: a write that would discard published measurements
+needs `--force`.
+
+**And the deferral was right about what the drawing had to carry.** The published block
+travels with `separation` (Mann-Whitney U with tie and continuity corrections) and
+`difference` (a seeded 20,000-resample bootstrap interval), so the view derives its
+verdict from the numbers it prints rather than from a published boolean. Measured on
+The Twin Fangs at Mythic, run 34038299599, and reproducing the ad-hoc analysis above to
+four decimals:
+
+```
+with 2 Prot Paladins   n=25   median 3.577  h   IQR 2.1319-4.9492
+without                n= 9   median 3.0824 h   IQR 2.3392-4.0031
+unknown                n= 0
+separation   U 103.0   z -0.3513   p 0.7253
+difference   median +0.4946 h   95% CI -0.9251 .. +1.5815 h   seed 0
+```
+
+The document files the row under **53421**, the id `fight_profiles.json` uses, while the
+spawn map's block carries the id it READ (3421) with `filedAs` beside it. Two documents,
+two conventions, and each view joins on the id its own document states -- inventing an
+id transformation in a reader would be a guess.
 
 ### Two fixtures were physically impossible, and both hid the bug
 

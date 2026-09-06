@@ -36,7 +36,13 @@ clothes, so it is refused and counted instead.
 
 from __future__ import annotations
 
+import json
+import math
+import random
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
 
 from . import harvest
 
@@ -479,6 +485,17 @@ def quartiles(values: list[float]) -> tuple[float, float] | None:
     return (q1, q3) if q1 is not None and q3 is not None else None
 
 
+#: Below this in EITHER group there is no test, and no interval.
+#:
+#: Five is not a convention, it is where the normal approximation to U stops being
+#: the right instrument -- and publishing a p from three observations would give a
+#: thin sample the authority of a test, which is the failure this project's tie rule
+#: exists to prevent one measurement across.
+MIN_SEPARATION_SAMPLE = 5
+
+#: Enough that the interval's own endpoints are stable to the published decimal.
+BOOTSTRAP_RESAMPLES = 20_000
+
 #: The specialisation the owner asked about, and how many of it makes the split.
 #: A constant rather than a literal in three places, and a `(spec, count)` pair
 #: rather than a boolean helper called `double_prot_paladin`: the question
@@ -559,6 +576,108 @@ def fields_at_least(composition: Composition, spec: str, count: int) -> bool | N
     return None if composition.unreadable else False
 
 
+def _normal_tail(z: float) -> float:
+    """Two-sided p for a standard normal, via the error function.
+
+    `math.erfc` rather than a table or a dependency: this is the whole of what the
+    normal approximation needs, and scipy is not a dependency of this pipeline.
+    """
+    return math.erfc(abs(z) / math.sqrt(2.0))
+
+
+def mann_whitney(a: Sequence[float], b: Sequence[float]) -> dict | None:
+    """Whether two samples of hours separate, as U, z and a two-sided p.
+
+    **Rank-based rather than a t-test, and that is not a preference.** Progression
+    hours are bounded below, long-tailed, and this project publishes their MEDIAN
+    everywhere for exactly that reason; a test about means would be answering a
+    different question from the number beside it.
+
+    Ties are corrected in the variance -- without it the z is inflated, and hours
+    rounded to four decimals tie more often than raw times would. `None` below
+    `MIN_SEPARATION_SAMPLE` in either group: the normal approximation is not the
+    right instrument for three observations, and publishing a p from one would give a
+    thin sample the authority of a test.
+    """
+    if len(a) < MIN_SEPARATION_SAMPLE or len(b) < MIN_SEPARATION_SAMPLE:
+        return None
+    pooled = sorted([(v, 0) for v in a] + [(v, 1) for v in b])
+    ranks: list[float] = [0.0] * len(pooled)
+    tie_correction = 0.0
+    index = 0
+    while index < len(pooled):
+        stop = index
+        while stop + 1 < len(pooled) and pooled[stop + 1][0] == pooled[index][0]:
+            stop += 1
+        width = stop - index + 1
+        shared = (index + stop) / 2.0 + 1.0
+        for position in range(index, stop + 1):
+            ranks[position] = shared
+        tie_correction += width**3 - width
+        index = stop + 1
+
+    rank_sum_a = sum(rank for rank, (_, side) in zip(ranks, pooled, strict=True) if side == 0)
+    n_a, n_b, n = len(a), len(b), len(pooled)
+    u_a = rank_sum_a - n_a * (n_a + 1) / 2.0
+    u = min(u_a, n_a * n_b - u_a)
+    mean = n_a * n_b / 2.0
+    variance = (n_a * n_b / 12.0) * ((n + 1) - tie_correction / (n * (n - 1)))
+    if variance <= 0:
+        return None
+    # The continuity correction, which matters at these sample sizes: without it a
+    # borderline p reads as more decisive than the data supports.
+    z = (u - mean + 0.5) / math.sqrt(variance)
+    return {
+        "u": round(u, 4),
+        "z": round(z, 4),
+        "p": round(_normal_tail(z), 4),
+        "method": "Mann-Whitney U, normal approximation with tie and continuity corrections",
+    }
+
+
+def bootstrap_median_difference(
+    a: Sequence[float],
+    b: Sequence[float],
+    *,
+    resamples: int = BOOTSTRAP_RESAMPLES,
+    seed: int = 0,
+) -> dict | None:
+    """A 95% interval for `median(a) - median(b)`, and how it was produced.
+
+    **"No difference measured" is not "no difference", and this is what says which.**
+    A p above 0.05 over a sample of thirty is compatible with a real effect the
+    sample is too small to see; the interval states how large that effect could be,
+    in the units the bars are drawn in.
+
+    Seeded, and the seed is published: a resampled interval that moves between two
+    runs of the same data would be a number nobody could check.
+    """
+    if len(a) < MIN_SEPARATION_SAMPLE or len(b) < MIN_SEPARATION_SAMPLE:
+        return None
+    rng = random.Random(seed)
+    draws: list[float] = []
+    for _ in range(resamples):
+        left = median([a[rng.randrange(len(a))] for _ in range(len(a))])
+        right = median([b[rng.randrange(len(b))] for _ in range(len(b))])
+        if left is not None and right is not None:
+            draws.append(left - right)
+    if not draws:
+        return None
+    draws.sort()
+    low = draws[int(0.025 * (len(draws) - 1))]
+    high = draws[int(0.975 * (len(draws) - 1))]
+    observed = median(list(a)), median(list(b))
+    return {
+        "medianHours": None
+        if observed[0] is None or observed[1] is None
+        else round(observed[0] - observed[1], 4),
+        "ci95LowHours": round(low, 4),
+        "ci95HighHours": round(high, 4),
+        "resamples": resamples,
+        "seed": seed,
+    }
+
+
 def composition_split(rows: list[dict], spec: str, count: int) -> dict:
     """The measured guilds' hours, split by whether their kill fielded the spec.
 
@@ -588,6 +707,13 @@ def composition_split(rows: list[dict], spec: str, count: int) -> dict:
             "q1Hours": None if hinges is None else round(hinges[0], 4),
             "q3Hours": None if hinges is None else round(hinges[1], 4),
         }
+    # Two medians side by side ASSERT a separation, and on the sample this was built
+    # for they do not have one (p = 0.72 over 23 against 9). So the test and the
+    # interval travel with the groups rather than being left for a reader to run:
+    # a chart drawn from `with` and `without` alone cannot say that the difference it
+    # draws is inside the noise, and nothing else in the document can either.
+    out["separation"] = mann_whitney(groups["with"], groups["without"])
+    out["difference"] = bootstrap_median_difference(groups["with"], groups["without"])
     return out
 
 
@@ -795,3 +921,149 @@ def stacked_total(bosses: list[BossProgress]) -> float | None:
     if not values or any(v is None for v in values):
         return None
     return round(sum(values), 3)
+
+
+# --------------------------------------------------------------------------------
+# Publishing: the site reads one document per tier, a run measures one difficulty
+# --------------------------------------------------------------------------------
+
+#: Bumped when a reader would have to change.
+PROGRESS_SCHEMA_VERSION = 1
+
+#: Stamps that describe *when the file was written* rather than what is in it.
+#: `cost` is here for the reason `spawnmap` records: it is a reading of Warcraft
+#: Logs' hourly meter taken when the pass ran, so it differs on every run by
+#: construction, and left in the comparison the settle can never fire.
+_PROVENANCE_PATHS: tuple[tuple[str, ...], ...] = (
+    ("generatedAt",),
+    ("cost",),
+)
+
+
+def merge_documents(documents: Sequence[dict]) -> dict:
+    """Fold progress-hours documents oldest-first, unioning on (encounter, difficulty).
+
+    A run measures **one difficulty**, and frequently one boss (`--encounter`), so a
+    document that replaced its input wholesale would delete every other boss and the
+    other difficulty -- and the deletion would look exactly like a season nobody has
+    measured. Union semantics, published document oldest, the rule
+    `merge_gear_shards` and `spawnmap.merge_documents` already carry.
+
+    Difficulty is part of the key rather than something to pick between: Heroic and
+    Mythic progression are two populations, and `fights.json`'s `measurements[]`
+    makes the same split for the same reason.
+    """
+    merged: dict[tuple[Any, Any], dict] = {}
+    for document in documents:
+        difficulty = document.get("difficulty")
+        for boss in document.get("bosses") or []:
+            merged[(boss.get("encounterId"), boss.get("difficulty", difficulty))] = {
+                **boss,
+                # Stamped onto the row, because after a merge the document-level
+                # difficulty describes only the newest run and a reader of one row
+                # would otherwise have no way to tell which population it is from.
+                "difficulty": boss.get("difficulty", difficulty),
+            }
+    bosses = sorted(
+        merged.values(),
+        key=lambda b: (b.get("encounterId") or 0, b.get("difficulty") or 0),
+    )
+    return {"bosses": bosses}
+
+
+def publish_document(out_dir: Path, document: dict) -> dict:
+    """This run's document folded over whatever `<out_dir>/progress-hours.json` holds.
+
+    Reading the published file HERE rather than in the writer is what lets the settle
+    fire: the merge has to be inside the document the comparison sees.
+    """
+    published: list[dict] = []
+    path = out_dir / "progress-hours.json"
+    try:
+        published.append(json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        pass
+    merged = merge_documents([*published, document])
+    out = {**document, **merged}
+    out["schemaVersion"] = PROGRESS_SCHEMA_VERSION
+    out["coverage"] = {
+        "bosses": len({b.get("encounterId") for b in merged["bosses"]}),
+        "rows": len(merged["bosses"]),
+        "difficulties": sorted(
+            {b.get("difficulty") for b in merged["bosses"] if b.get("difficulty")}
+        ),
+        # Named rather than counted: a count says some boss carries no split and
+        # cannot say which one to go and look at.
+        "withoutSplit": [
+            {"encounterId": b.get("encounterId"), "difficulty": b.get("difficulty")}
+            for b in merged["bosses"]
+            if not b.get("compositionSplit")
+        ],
+    }
+    return out
+
+
+class MeasurementsWouldBeLost(RuntimeError):
+    """Refusal: this write would replace measured bosses with none."""
+
+
+def write_progress_hours(out_dir: Path, document: dict, *, force: bool = False) -> Path:
+    """Write `<out_dir>/progress-hours.json`: refuse a loss, then settle.
+
+    Read the published file, refuse a write that discards every measurement, settle
+    last -- `write_fights`'s order, because getting it wrong there restamped a
+    manifest nightly for months.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "progress-hours.json"
+
+    try:
+        published = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        published = None
+
+    def measured(one: dict | None) -> int:
+        return sum(1 for b in (one or {}).get("bosses") or [] if (b.get("sample") or 0) > 0)
+
+    if published is not None and not force:
+        had, has = measured(published), measured(document)
+        if had and not has:
+            raise MeasurementsWouldBeLost(
+                f"{path} carries measurements for {had} boss(es) and this document "
+                "has none, so writing it would discard them. Re-run the pass, or "
+                "--force if dropping them is what you mean."
+            )
+
+    settled = document
+    if published is not None and _without_stamps(published) == _without_stamps(document):
+        settled = _carry_stamps(document, published)
+
+    path.write_text(json.dumps(settled, separators=(",", ":")) + "\n", encoding="utf-8")
+    return path
+
+
+def _without_stamps(document: dict) -> dict:
+    stripped = json.loads(json.dumps(document))
+    for path in _PROVENANCE_PATHS:
+        node = stripped
+        for key in path[:-1]:
+            node = node.get(key) if isinstance(node, dict) else None
+            if node is None:
+                break
+        if isinstance(node, dict):
+            node.pop(path[-1], None)
+    return stripped
+
+
+def _carry_stamps(document: dict, published: dict) -> dict:
+    settled = json.loads(json.dumps(document))
+    for path in _PROVENANCE_PATHS:
+        source, target = published, settled
+        for key in path[:-1]:
+            source = source.get(key) if isinstance(source, dict) else None
+            target = target.get(key) if isinstance(target, dict) else None
+            if source is None or target is None:
+                break
+        if isinstance(source, dict) and isinstance(target, dict) and path[-1] in source:
+            target[path[-1]] = source[path[-1]]
+    return settled
