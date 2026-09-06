@@ -4,6 +4,8 @@ Shapes follow the live schema as introspected on 2026-08-26: `Report.startTime` 
 absolute, `ReportFight.startTime`/`endTime` are relative to their own report.
 """
 
+import pytest
+
 from wowdps import progresshours
 from wowdps.progresshours import (
     Attempt,
@@ -648,3 +650,191 @@ def test_a_boolean_fight_id_is_refused():
         5,
     )
     assert attempts[0].fight_id is None
+
+
+# --------------------------------------------------------------- the separation test
+
+
+def test_two_medians_side_by_side_travel_with_a_test_and_an_interval():
+    """Two bars ASSERT a separation, so the document has to be able to deny one.
+
+    On the sample this was built for -- Twin Fangs, 23 guilds fielding two Protection
+    Paladins against 9 that did not -- the medians differ by half an hour and the
+    difference is inside the noise. A chart drawn from `with` and `without` alone
+    cannot say that, and nothing else in the document could either.
+    """
+    # `fieldsSpec` reaches the row only when a roster was actually READ, so a
+    # `composition=None` fixture puts every guild in `unknown` and the split has
+    # nothing to test. Found by this test failing; the fixture was wrong, not the code.
+    two = progresshours.Composition(
+        specs=("Paladin/Protection", "Paladin/Protection"), unreadable=0, buckets=("tanks",)
+    )
+    one = progresshours.Composition(
+        specs=("Paladin/Protection", "Warrior/Protection"), unreadable=0, buckets=("tanks",)
+    )
+    rows = [
+        progresshours.guild_row(i, "measured", 3, hours=h, composition=two, fields_spec=True)
+        for i, h in enumerate([2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0])
+    ] + [
+        progresshours.guild_row(i, "measured", 3, hours=h, composition=one, fields_spec=False)
+        for i, h in enumerate([2.2, 2.7, 3.2, 3.7, 4.2, 4.7], start=100)
+    ]
+    split = progresshours.composition_split(rows, "Paladin/Protection", 2)
+    assert split["separation"] is not None
+    assert 0.0 <= split["separation"]["p"] <= 1.0
+    assert split["difference"] is not None
+    assert split["difference"]["ci95LowHours"] <= split["difference"]["ci95HighHours"]
+
+
+def test_the_test_fires_on_two_samples_that_plainly_do_separate():
+    """The control. Without it the test above passes against a function returning p=1."""
+    separated = progresshours.mann_whitney(
+        [1.0, 1.1, 1.2, 1.3, 1.4, 1.5], [9.0, 9.1, 9.2, 9.3, 9.4, 9.5]
+    )
+    assert separated is not None
+    assert separated["p"] < 0.05
+
+
+def test_a_thin_group_gets_no_p_and_no_interval():
+    """Publishing a p from three observations gives a thin sample a test's authority.
+
+    `None` rather than a number, the same refusal `quartiles` makes below four values.
+    """
+    assert progresshours.mann_whitney([1.0, 2.0, 3.0], [4.0, 5.0, 6.0, 7.0, 8.0]) is None
+    assert (
+        progresshours.bootstrap_median_difference([1.0, 2.0, 3.0], [4.0, 5.0, 6.0, 7.0, 8.0])
+        is None
+    )
+
+
+def test_ties_are_corrected_rather_than_inflating_the_z():
+    """Hours are rounded to four decimals, so they tie more often than raw times.
+
+    Uncorrected, the variance is too large... which is the wrong direction to
+    remember: the correction SHRINKS the variance, so an uncorrected z is too SMALL
+    and a real separation reads as weaker than it is. Either way it is not the number
+    the method claims to be, and a sample that is entirely ties has no variance at all
+    -- which must come back as no test rather than as a division by zero.
+    """
+    assert progresshours.mann_whitney([2.0] * 6, [2.0] * 6) is None
+
+
+def test_the_interval_is_the_same_interval_on_a_second_run():
+    """A resampled interval that moved between two runs of one dataset is a number
+    nobody could check, which is why the seed is fixed and published."""
+    # Twenty distinct values per group, not six. With six the reachable medians are
+    # so few that two UNSEEDED runs land on the same percentiles anyway -- measured,
+    # by this canary refusing to fire on the first version of this fixture. A test
+    # whose data cannot express the difference pins nothing.
+    a = [round(1.0 + i * 0.37, 4) for i in range(20)]
+    b = [round(1.3 + i * 0.41, 4) for i in range(20)]
+    first = progresshours.bootstrap_median_difference(a, b)
+    second = progresshours.bootstrap_median_difference(a, b)
+    assert first == second
+    assert first["seed"] == 0
+    # ...and a DIFFERENT seed must move it, or "seeded" is a word rather than a fact.
+    assert progresshours.bootstrap_median_difference(a, b, seed=7) != first
+
+
+def test_the_interval_brackets_the_observed_difference():
+    a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+    b = [3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
+    found = progresshours.bootstrap_median_difference(a, b)
+    assert found["ci95LowHours"] <= found["medianHours"] <= found["ci95HighHours"]
+
+
+# ------------------------------------------------------------------ the published doc
+
+
+def boss_row(encounter: int, difficulty: int = 5, sample: int = 4, **over) -> dict:
+    row = {
+        "encounterId": encounter,
+        "name": f"Boss {encounter}",
+        "difficulty": difficulty,
+        "sample": sample,
+        "medianHours": 3.0,
+    }
+    row.update(over)
+    return row
+
+
+def test_a_one_boss_run_keeps_every_other_boss_the_document_already_had():
+    """A run measures one difficulty and frequently one boss.
+
+    A document that replaced its input wholesale would delete every boss it did not
+    read, and the deletion would look exactly like a season nobody has measured --
+    the union rule `merge_gear_shards` arrived at the hard way.
+    """
+    published = {"difficulty": 5, "bosses": [boss_row(1), boss_row(2), boss_row(3)]}
+    fresh = {"difficulty": 5, "bosses": [boss_row(2, medianHours=9.0)]}
+    merged = progresshours.merge_documents([published, fresh])
+    assert [b["encounterId"] for b in merged["bosses"]] == [1, 2, 3]
+    by_id = {b["encounterId"]: b for b in merged["bosses"]}
+    assert by_id[2]["medianHours"] == 9.0
+    assert by_id[1]["medianHours"] == 3.0
+
+
+def test_heroic_sits_beside_mythic_rather_than_over_it():
+    """Two difficulties are two populations, and `fights.json` splits them for the
+    same reason. A Heroic pass must not replace the Mythic row for one boss."""
+    mythic = {"difficulty": 5, "bosses": [boss_row(1, 5)]}
+    heroic = {"difficulty": 4, "bosses": [boss_row(1, 4)]}
+    merged = progresshours.merge_documents([mythic, heroic])
+    assert sorted(b["difficulty"] for b in merged["bosses"]) == [4, 5]
+
+
+def test_a_row_written_before_rows_carried_a_difficulty_takes_the_documents():
+    """An older document states the difficulty once, at the top. Reading the absence
+    as "no difficulty" would put every such row under one key and merge two seasons'
+    populations into one row."""
+    old = {"difficulty": 4, "bosses": [{"encounterId": 7, "sample": 3}]}
+    merged = progresshours.merge_documents([old])
+    assert merged["bosses"][0]["difficulty"] == 4
+
+
+def test_a_boss_without_a_split_is_named_rather_than_counted(tmp_path):
+    document = {"difficulty": 5, "tier": "MID2", "bosses": [boss_row(1), boss_row(2)]}
+    document["bosses"][0]["compositionSplit"] = {"spec": "Paladin/Protection"}
+    out = progresshours.publish_document(tmp_path / "MID2", document)
+    assert out["coverage"]["withoutSplit"] == [{"encounterId": 2, "difficulty": 5}]
+
+
+def test_a_quiet_rerun_leaves_the_published_file_byte_identical(tmp_path):
+    """`cost` is a reading of Warcraft Logs' hourly meter, so it differs on every run
+    by construction; left in the comparison the settle can never fire."""
+    out = tmp_path / "MID2"
+    base = {"difficulty": 5, "tier": "MID2", "bosses": [boss_row(1)]}
+
+    first = progresshours.publish_document(out, {**base, "generatedAt": "A", "cost": {"points": 1}})
+    progresshours.write_progress_hours(out, first)
+    was = (out / "progress-hours.json").read_bytes()
+
+    second = progresshours.publish_document(
+        out, {**base, "generatedAt": "B", "cost": {"points": 999}}
+    )
+    progresshours.write_progress_hours(out, second)
+    assert (out / "progress-hours.json").read_bytes() == was
+
+
+def test_a_real_change_still_writes(tmp_path):
+    """The control: without it the settle test passes against a writer that never
+    writes."""
+    out = tmp_path / "MID2"
+    base = {"difficulty": 5, "tier": "MID2", "bosses": [boss_row(1)]}
+    progresshours.write_progress_hours(out, progresshours.publish_document(out, base))
+    was = (out / "progress-hours.json").read_bytes()
+
+    moved = {**base, "bosses": [boss_row(1, medianHours=7.5)]}
+    progresshours.write_progress_hours(out, progresshours.publish_document(out, moved))
+    assert (out / "progress-hours.json").read_bytes() != was
+
+
+def test_a_write_that_would_discard_every_measurement_is_refused(tmp_path):
+    out = tmp_path / "MID2"
+    base = {"difficulty": 5, "tier": "MID2", "bosses": [boss_row(1)]}
+    progresshours.write_progress_hours(out, progresshours.publish_document(out, base))
+
+    empty = {"difficulty": 5, "tier": "MID2", "bosses": [boss_row(1, sample=0)]}
+    with pytest.raises(progresshours.MeasurementsWouldBeLost):
+        progresshours.write_progress_hours(out, empty)
+    progresshours.write_progress_hours(out, empty, force=True)

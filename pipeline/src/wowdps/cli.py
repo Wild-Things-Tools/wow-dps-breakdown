@@ -2311,6 +2311,28 @@ def _write_progress_hours(args, bosses, client, start: float, limit: float) -> i
     out.write_text(_json.dumps(document, indent=1) + "\n", encoding="utf-8")
     print(f"wrote {out}")
     print(f"points: {cost['pointsSpent']}")
+
+    if getattr(args, "publish", None):
+        # A run measures ONE difficulty and frequently one boss, so the published
+        # document folds over what is already there rather than replacing it -- the
+        # same union `merge_gear_shards` and `spawnmap` use, and for the same reason:
+        # a replacement would delete every boss this run did not read and the deletion
+        # would look exactly like a season nobody has measured.
+        out_dir = Path(args.publish) / args.tier
+        published = progresshours.publish_document(out_dir, document)
+        try:
+            path = progresshours.write_progress_hours(
+                out_dir, published, force=getattr(args, "force", False)
+            )
+        except progresshours.MeasurementsWouldBeLost as exc:
+            logging.error("%s", exc)
+            return 1
+        coverage = published["coverage"]
+        print(
+            f"published {path}: {coverage['rows']} row(s) over {coverage['bosses']} boss(es), "
+            f"difficulties {coverage['difficulties']}, "
+            f"{len(coverage['withoutSplit'])} without a composition split"
+        )
     return 0
 
 
@@ -3110,6 +3132,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="read each measured guild's first-kill roster and split the hours by it",
     )
     p_hours.add_argument("--out", default="progress-hours.json", help="where to write the document")
+    p_hours.add_argument(
+        "--publish",
+        help="also write <DIR>/<tier>/progress-hours.json for the site (a DIRECTORY, "
+        "usually web/public/data). The artifact at --out keeps every guild's roster; "
+        "the published document is the same rows folded over what is already there.",
+    )
+    p_hours.add_argument(
+        "--force",
+        action="store_true",
+        help="publish even when it would discard measured bosses",
+    )
     p_hours.set_defaults(func=cmd_progress_hours)
 
     p_fights = sub.add_parser(

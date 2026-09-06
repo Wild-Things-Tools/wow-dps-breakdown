@@ -46,6 +46,10 @@ on:
       rankings_pages:
         description: 'Progress-ranking pages per boss, 50 guilds each. Needed above 50'
         default: '3'
+      publish:
+        description: 'Also write and commit <tier>/progress-hours.json for the site. Off by default: a pass measures first and publishes second'
+        type: boolean
+        default: false
       composition:
         # One extra query per MEASURED guild -- 23 on the Twin Fangs Mythic pass of
         # 2026-09-06, against 58 for the whole boss. Off by default so an ordinary
@@ -63,8 +67,12 @@ concurrency:
   group: progress-hours
   cancel-in-progress: false
 
+# Write, because `publish` commits `<tier>/progress-hours.json`. Stated rather than
+# inherited so the grant stays a visible decision: with `publish` off -- the default
+# -- this workflow still writes nothing into the repository, and the commit step's
+# own `if:` is what enforces that rather than the token.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   measure:
@@ -107,6 +115,7 @@ jobs:
           RANKINGS_PAGES: ${{ inputs.rankings_pages }}
           CEILING: ${{ inputs.point_ceiling }}
           COMPOSITION: ${{ inputs.composition }}
+          PUBLISH: ${{ inputs.publish && '../web/public/data' || '' }}
         run: |
           set -euo pipefail
           # An array rather than an interpolated flag string: the value is data to
@@ -114,6 +123,9 @@ jobs:
           # exactly the kind of subtlety that turns into a silently-dropped flag.
           extra=()
           [ "$COMPOSITION" = "true" ] && extra+=(--composition)
+          # Appended as ARRAY entries, so an empty PUBLISH adds no argument at all
+          # rather than an empty string argparse would take as a directory named "".
+          [ -n "$PUBLISH" ] && extra+=(--publish "$PUBLISH")
           python -m wowdps.cli progress-hours \
             --tier "$TIER" \
             --encounter "$ENCOUNTER" \
@@ -137,6 +149,33 @@ jobs:
             progress-hours-*.json
             progress-hours.log
           if-no-files-found: ignore
+
+      - name: Commit the published document
+        if: inputs.publish
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add web/public/data
+          if git diff --staged --quiet; then
+            echo "progress hours unchanged"
+            exit 0
+          fi
+          git commit -m "data: refresh progress hours for ${TIER} $(date -u +%Y-%m-%d)"
+          # Rebase before pushing, for the reason `fight-probe.yml` records: these
+          # workflows commit into one branch and run concurrently with each other and
+          # with a person's own pushes, so a bare push loses the race and fails a run
+          # whose actual work succeeded.
+          pushed=false
+          for attempt in 1 2 3; do
+            git pull --rebase --autostash origin "${{ github.ref_name }}" || true
+            if git push origin "HEAD:${{ github.ref_name }}"; then pushed=true; break; fi
+            echo "push attempt $attempt lost the race; retrying"
+            sleep $((attempt * 5))
+          done
+          # Losing three times is a real failure, not something to exit 0 on.
+          [ "$pushed" = true ]
+        env:
+          TIER: ${{ inputs.tier }}
 
       - name: Summary
         if: always()
