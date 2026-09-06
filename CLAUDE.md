@@ -4257,12 +4257,54 @@ next question needs no second pass and the split is checkable against the rows b
 it. `compositionSplit` is absent unless a pass actually read a roster: a split of
 zeroes on every boss would read as "nobody fields this spec".
 
-**Nothing is drawn from it.** The chart the owner named lives in nextpull and is fed by
-wtt-backend's `ProgressBossHours`, which has no roster reader at all (`grep -rn
-"playerDetails" apps/` is empty there). Whether two bars whose medians differ at
-`p = 0.72` should be drawn is a decision rather than a formality -- two bars side by
-side assert a separation -- so it is wtt-backend#297 with the numbers rather than a
-view built on the way past.
+**It is drawn now, and this paragraph used to say it was not.** What stood here read
+*"Nothing is drawn from it"*, and it was true when written: the chart the owner named
+lives in nextpull, fed by wtt-backend's `ProgressBossHours`, which has no roster reader
+at all (`grep -rn "playerDetails" apps/` is empty there). Two bars whose medians differ
+at `p = 0.7253` should not be drawn uncritically -- two bars side by side ASSERT a
+separation -- so the decision was deferred as wtt-backend#297 rather than taken on the
+way past.
+
+**On 2026-09-06 the owner took it**, for the Fights tab rather than for Raid Progress:
+*"im fights tab ergibt diese Ansicht für mich sinn, da man einen spezifischen Fight
+anschaut."* So the route is this repository's own, not wtt-backend's:
+
+```
+wowdps progress-hours --publish web/public/data --tier MID2
+    -> web/public/data/MID2/progress-hours.json
+    -> nextpull's DPS Fights tab (wtt-frontend#237)
+```
+
+**`--publish` is a second output beside `--out`, never instead of it.** The artifact
+still carries every guild's whole roster; the published document carries the split, the
+test and the interval and no guild names -- the same rule as `spawns.json`, whose
+payload is a CI artifact and whose document is 7.9 KB.
+
+**The document folds rather than replaces**, union on `(encounterId, difficulty)` with
+the published document joining as the OLDEST -- `merge_gear_shards`' rule, because a run
+measures one difficulty and frequently one boss. Heroic sits BESIDE Mythic, never over
+it. The refusal is the same one too: a write that would discard published measurements
+needs `--force`.
+
+**And the deferral was right about what the drawing had to carry.** The published block
+travels with `separation` (Mann-Whitney U with tie and continuity corrections) and
+`difference` (a seeded 20,000-resample bootstrap interval), so the view derives its
+verdict from the numbers it prints rather than from a published boolean. Measured on
+The Twin Fangs at Mythic, run 34038299599, and reproducing the ad-hoc analysis above to
+four decimals:
+
+```
+with 2 Prot Paladins   n=25   median 3.577  h   IQR 2.1319-4.9492
+without                n= 9   median 3.0824 h   IQR 2.3392-4.0031
+unknown                n= 0
+separation   U 103.0   z -0.3513   p 0.7253
+difference   median +0.4946 h   95% CI -0.9251 .. +1.5815 h   seed 0
+```
+
+The document files the row under **53421**, the id `fight_profiles.json` uses, while the
+spawn map's block carries the id it READ (3421) with `filedAs` beside it. Two documents,
+two conventions, and each view joins on the id its own document states -- inventing an
+id transformation in a reader would be a guess.
 
 ### Two fixtures were physically impossible, and both hid the bug
 
