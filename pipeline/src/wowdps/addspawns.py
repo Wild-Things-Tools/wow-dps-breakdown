@@ -638,8 +638,12 @@ def describe_pattern(sightings: Sequence[SpawnSighting]) -> dict:
         "positions": [
             {
                 "position": number,
-                "x": round(sum(ordered[i].x for i in group) / len(group), 1),
-                "y": round(sum(ordered[i].y for i in group) / len(group), 1),
+                # `math.fsum`, not `sum`: these coordinates are pooled by
+                # `spawnmap` and published. See `spawnmap._centroid` for the
+                # measurement -- CPython 3.12 sums floats differently from 3.11 and
+                # one of this encounter's spots lands on the boundary.
+                "x": round(math.fsum(ordered[i].x for i in group) / len(group), 1),
+                "y": round(math.fsum(ordered[i].y for i in group) / len(group), 1),
                 "area": area_of.get(number),
                 "sightings": len(group),
                 "spread": round(

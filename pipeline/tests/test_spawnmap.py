@@ -10,6 +10,7 @@ support, so a test built on one pins whatever the code happens to do.
 from __future__ import annotations
 
 import json
+import math
 
 import pytest
 
@@ -25,12 +26,60 @@ GRID = {
     3: [(1000 * i, 20_000 + 500 * (i % 3)) for i in range(1, 11)],
 }
 
+#: The same ten places on an ARC, which is the shape the live sample really has and
+#: the only shape ``place_ring`` will number. ``GRID`` above is a straight line, so
+#: its ring has two 124-degree gaps and no widest one -- a useful fixture for the
+#: refusal and useless for the numbering. Here the ten sit on a 230-degree arc of
+#: radius 3000, place p at 125 - (p-1) * 230/9 degrees, so the empty wedge is 130 and
+#: every other gap 25.6: dominance 5.1, comfortably over ``MIN_WEDGE_DOMINANCE``.
+#: The list is indexed by place-1 BY CONSTRUCTION, which is what lets a test assert
+#: the derived numbering without repeating the derivation.
+ARC = {
+    area: [
+        (
+            round(3000 * math.cos(math.radians(125 - step * 230 / 9)), 3),
+            round(20_000 * area + 3000 * math.sin(math.radians(125 - step * 230 / 9)), 3),
+        )
+        for step in range(10)
+    ]
+    for area in (1, 2, 3)
+}
+
+#: An arc of the same ten places SPACED DIFFERENTLY -- the gaps grow along the arc
+#: rather than being equal -- so its ring is a different shape from ``ARC``'s while
+#: still having one dominant wedge. That is what a pair of areas that must NOT be
+#: pooled looks like: each is numberable on its own and place 5 of one is not place
+#: 5 of the other.
+ARC_UNEVEN = {
+    area: [
+        (
+            round(3000 * math.cos(math.radians(125 - 230 * (step / 9) ** 2)), 3),
+            round(20_000 * area + 3000 * math.sin(math.radians(125 - 230 * (step / 9) ** 2)), 3),
+        )
+        for step in range(10)
+    ]
+    for area in (1, 2, 3)
+}
+
 #: One wave: all ten places, then four of them a second time. The commonest shape in
 #: the live sample and not the only one, which is why nothing here asserts it is a rule.
 FULL = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 2, 4, 6, 8]
 
+#: The same wave with place 2 never used, for the short-ring refusal.
+#:
+#: Which place is dropped is load-bearing twice over, and the first fixture written
+#: here got both wrong. Dropping a MIDDLE place (5, 6) widens the gap either side of
+#: it enough that the ring's own wedge dominance falls to 1.52 and ``place_ring``
+#: refuses it before the equal-count rule is ever reached -- so the canary for that
+#: rule passed with the rule deleted. And dropping an END place (1, 10) leaves a
+#: dense 1..9 numbering that is CORRECT for the survivors, so a canary built on one
+#: cannot tell the two rules apart. Place 2 is near enough the end to keep the wedge
+#: dominant (2.28) and far enough in that renumbering densely shifts every place
+#: after it.
+MISSING_SECOND = [1, 3, 4, 5, 6, 7, 8, 9, 10, 3, 5, 7, 9, 10]
 
-def sightings_for(waves, *, area=1, jitter=4.0, at=20_000, every=120_000, seed=0):
+
+def sightings_for(waves, *, area=1, jitter=4.0, at=20_000, every=120_000, seed=0, grid=None):
     """Rows as the payload carries them, for `waves` lists of place numbers.
 
     The scatter follows the copy's place in the KILL, not in its wave: two waves of
@@ -42,7 +91,7 @@ def sightings_for(waves, *, area=1, jitter=4.0, at=20_000, every=120_000, seed=0
     for number, order in enumerate(waves):
         for index, place in enumerate(order):
             n = len(rows) + seed
-            x, y = GRID[area][place - 1]
+            x, y = (grid or GRID)[area][place - 1]
             rows.append(
                 {
                     "actorId": 11,
@@ -70,6 +119,7 @@ def fight(
     started_at=1_756_000_000_000,
     truncated=False,
     seed=0,
+    grid=None,
 ):
     return {
         "reportCode": code,
@@ -80,7 +130,7 @@ def fight(
         "raidSize": 20,
         "enemyNpcs": [{"actorId": 11, "gameId": NPC, "instanceCount": 42, "groupCount": 3}],
         "streams": [{"dataType": "DamageTaken", "truncated": truncated}],
-        "sightings": sightings_for(waves, area=area, seed=seed),
+        "sightings": sightings_for(waves, area=area, seed=seed, grid=grid),
     }
 
 
@@ -416,3 +466,180 @@ def test_every_caveat_is_computed_from_a_number_the_document_publishes():
         payload([fight(truncated=True), fight(code="BBB", seed=7, truncated=True)])
     )
     assert any("page limit" in c for c in spawnmap.caveats(short))
+
+
+# ------------------------------------------------------------------- place numbering
+
+
+def test_places_are_numbered_clockwise_from_the_widest_wedge():
+    """The numbering the owner reads the map by, derived rather than typed.
+
+    ``ARC`` puts place p at a known angle, so this asserts the derivation against a
+    construction rather than against itself. It is the canary for the DIRECTION too:
+    counter-clockwise would return 1, 10, 9, 8 ... for the same points.
+    """
+    result = spawnmap.build_encounter(
+        payload([fight(grid=ARC), fight(code="BBB", seed=7, grid=ARC)])
+    )
+    assert result.refusal is None
+    numbered = {spot.place: spot for spot in result.spots}
+    assert sorted(numbered) == list(range(1, 11))
+    # ARC is indexed by place-1, so place p must land on ARC[1][p-1].
+    for place, spot in numbered.items():
+        want_x, want_y = ARC[1][place - 1]
+        assert abs(spot.x - want_x) < 20, (place, spot.x, want_x)
+        assert abs(spot.y - want_y) < 20, (place, spot.y, want_y)
+
+
+def test_places_read_off_in_pairs():
+    """(1,2) is group 1, (3,4) is group 2 -- the grouping the owner asked for."""
+    result = spawnmap.build_encounter(
+        payload([fight(grid=ARC), fight(code="BBB", seed=7, grid=ARC)])
+    )
+    pairs = sorted((spot.place, spot.group) for spot in result.spots)
+    assert pairs == [
+        (1, 1),
+        (2, 1),
+        (3, 2),
+        (4, 2),
+        (5, 3),
+        (6, 3),
+        (7, 4),
+        (8, 4),
+        (9, 5),
+        (10, 5),
+    ]
+
+
+def test_a_ring_with_no_dominant_wedge_gets_no_number_rather_than_place_zero():
+    """The refusal, and it is the reason ``place`` is nullable.
+
+    ``GRID`` is a straight line: its members sit at two angles, so the ring has two
+    124-degree gaps and dominance 1.0. There is no end to count from, and any
+    numbering would rotate between runs on noise. Unnumbered is not place zero, so
+    the field is ``None`` and the document carries the word for it.
+    """
+    result = spawnmap.build_encounter(payload())
+    assert result.refusal is None
+    assert result.spots
+    assert all(spot.place is None for spot in result.spots)
+    assert all(spot.group is None for spot in result.spots)
+    assert all(row["place"] is None for row in [s.to_json() for s in result.spots])
+
+
+def test_the_numbering_says_that_clockwise_is_a_convention():
+    """Nothing measured here prefers a direction, so the document may not imply one.
+
+    ``first_seconds`` is a ``min`` over the area's sightings and so is identical for
+    every place in an area -- it cannot break the tie, which is why the caveat says
+    convention rather than pointing at a measurement.
+    """
+    result = spawnmap.build_encounter(
+        payload([fight(grid=ARC), fight(code="BBB", seed=7, grid=ARC)])
+    )
+    said = " ".join(spawnmap.caveats(result))
+    assert "CLOCKWISE IS A CONVENTION" in said
+    assert len({spot.first_seconds for spot in result.spots}) == 1
+
+
+def test_an_unnumbered_area_is_named_rather_than_left_silent():
+    result = spawnmap.build_encounter(payload())
+    said = " ".join(spawnmap.caveats(result))
+    assert "no place numbers" in said
+
+
+def test_place_ring_refuses_a_ring_it_cannot_start_from():
+    """Two points have one gap either way round, so there is no widest wedge."""
+    assert spawnmap.place_ring([(1, 0.0, 0.0), (2, 10.0, 0.0)], (5.0, 0.0)) is None
+    # Four points on a square: every gap is 90 degrees, dominance exactly 1.0.
+    square = [(1, 1.0, 1.0), (2, -1.0, 1.0), (3, -1.0, -1.0), (4, 1.0, -1.0)]
+    assert spawnmap.place_ring(square, (0.0, 0.0)) is None
+
+
+def two_areas(grid_one, grid_two, waves_one=(FULL, FULL), waves_two=(FULL, FULL)):
+    """One payload whose two kills each visit two areas, one grid per area."""
+    return payload(
+        [
+            {
+                **fight(code=code),
+                "sightings": (
+                    sightings_for(waves_one, area=1, at=20_000, seed=seed, grid=grid_one)
+                    + sightings_for(waves_two, area=2, at=300_000, seed=seed + 40, grid=grid_two)
+                ),
+            }
+            for code, seed in (("AAA", 0), ("BBB", 5))
+        ]
+    )
+
+
+def test_a_short_ring_is_refused_rather_than_renumbered_from_one():
+    """The failure this rule exists to prevent, and it is a silent one.
+
+    An area missing a place still has a widest wedge, so it can be numbered 1..9 --
+    and then everything after the gap is off by one, so its place 6 is drawn beside
+    another area's place 6 and is a DIFFERENT position. Nothing on screen would say
+    so. An area that does not hold as many places as the fullest ring is therefore
+    not numbered at all; it keeps its spot ids and stays on the map.
+    """
+    result = spawnmap.build_encounter(
+        two_areas(ARC, ARC, waves_two=(MISSING_SECOND, MISSING_SECOND))
+    )
+    assert result.refusal is None
+    full = [s for s in result.spots if s.area == 1]
+    short = [s for s in result.spots if s.area == 2]
+    assert len(full) == 10 and len(short) == 9
+    assert sorted(s.place for s in full) == list(range(1, 11))
+    assert all(s.place is None for s in short), [s.place for s in short]
+    assert result.places["areasNumbered"] == 1
+    assert result.places["areasRefused"] == 1
+    # And it is refused by THIS rule rather than by the wedge gate upstream: the
+    # short ring numbers perfectly well on its own, which is what makes a dense
+    # renumbering the plausible wrong answer rather than an impossible one.
+    rows = [(spot.spot, spot.x, spot.y) for spot in short]
+    centre = spawnmap._centroid([(x, y) for _, x, y in rows])
+    assert spawnmap.wedge_dominance(rows, centre) >= spawnmap.MIN_WEDGE_DOMINANCE
+    assert spawnmap.place_ring(rows, centre) is not None
+
+
+def test_two_rings_of_different_shape_may_not_have_their_counts_pooled():
+    """`poolable` is what licenses adding two areas' waves together.
+
+    Both rings here are numberable -- each has one dominant wedge -- and they are
+    not the same ring: the places are evenly spread along one arc and bunched along
+    the other, so place 5 of one is not place 5 of the other. The gate is what stops
+    the pooled view calling them one place.
+    """
+    result = spawnmap.build_encounter(two_areas(ARC, ARC_UNEVEN))
+    assert result.refusal is None
+    assert result.places["areasNumbered"] == 2
+    assert result.places["disagreementDegrees"] > spawnmap.MAX_PLACE_DISAGREEMENT_DEGREES
+    assert result.places["poolable"] is False
+
+
+def test_two_copies_of_one_ring_are_poolable():
+    """The control, so the gate is not simply refusing everything."""
+    result = spawnmap.build_encounter(two_areas(ARC, ARC))
+    assert result.places["areasNumbered"] == 2
+    assert result.places["disagreementDegrees"] < 1.0
+    assert result.places["poolable"] is True
+
+
+def test_one_area_cannot_agree_with_itself():
+    """No second ring, so there is no disagreement to report -- and 0.0 would read
+    as perfect agreement measured, which is the loudest possible wrong answer."""
+    result = spawnmap.build_encounter(
+        payload([fight(grid=ARC), fight(code="BBB", seed=7, grid=ARC)])
+    )
+    assert result.places["areasNumbered"] == 1
+    assert result.places["disagreementDegrees"] is None
+    assert result.places["poolable"] is False
+
+
+def test_the_document_publishes_what_the_numbering_measured():
+    result = spawnmap.build_encounter(
+        payload([fight(grid=ARC), fight(code="BBB", seed=7, grid=ARC)])
+    )
+    block = spawnmap.to_json(result)
+    assert block["places"]["wedgeDominance"]["floor"] == spawnmap.MIN_WEDGE_DOMINANCE
+    assert block["places"]["wedgeDominance"]["min"] >= spawnmap.MIN_WEDGE_DOMINANCE
+    assert block["places"]["maxDisagreementDegrees"] == spawnmap.MAX_PLACE_DISAGREEMENT_DEGREES

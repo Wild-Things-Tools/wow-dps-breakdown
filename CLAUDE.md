@@ -3451,6 +3451,82 @@ That reproduces the whole of what the ten-kill analysis found by hand, which is 
 control this module needed: three areas of ten, a repeat rate near the 40% a uniform
 draw of four from ten predicts, and a third copy at one place in 3 of 45 waves.
 
+### Numbering the places: derived, and the direction is not
+
+`spawnmap.place_ring` + `place`/`group` on every spot + the `places` block. The owner
+reads the map as *ten places*, not as thirty, and asked for each area numbered 1-10
+with the places paired (1,2) (3,4) ... He wrote the mapping out by hand for all
+thirty spots; this is the rule that reproduces it, **30 of 30, all three areas, no
+exceptions**:
+
+> Sort an area's spots by angle about the area's own centroid and start at the first
+> one after the **widest empty wedge**, going **clockwise**.
+
+The wedge is real and it is what makes the arc have an end: 125.7 / 128.8 / 132.0
+degrees against a next-widest gap of 52.5 / 60.9 / 61.1. A hand table for thirty
+spots would have gone stale the first time a probe re-read the boss; a rule that
+reproduces it exactly does not.
+
+**CLOCKWISE IS A CONVENTION AND THE DOCUMENT SAYS SO.** Both directions fit the
+geometry equally, the axes' own orientation is unestablished (see the view's refusal
+to draw a room), and the one time-ordered column cannot break the tie: `firstSeconds`
+is a `min` over the area's sightings, so it is 36.0 for all ten of area 1 and 191.1
+for all twenty of areas 2 and 3 -- constant within an area, ordering nothing.
+Measured, not assumed. So the direction is the owner's reading, stated as such in the
+caveat, and the numbering must never be read as a claim about how the encounter
+places its copies.
+
+**Three gates, each calibrated against a null rather than fitted to this boss.**
+
+| gate | value | how it was found |
+|---|---|---|
+| wedge dominance, to number an area at all | **1.80** | 120,000 trials over four blob families (disc, annulus, gaussian, and this encounter's own radii with random angles), angles about each sample's own mean: the 5%-false-positive floor at ten points is 1.766-1.818 and the median ratio is 1.21. MID2 measures 2.394 / 2.116 / 2.160, so p = 0.0017-0.0124. It does not loosen as a ring thins -- P(>= 1.80) is 0.007 at four points and 0.043 at ten. |
+| ring disagreement, to pool the areas' counts | **10 degrees** | mean per-place angular spread across the areas. MID2 measures **6.21**; the null of three areas at the observed radii with random angles, each anchored by the same rule, has a **minimum of 13.69** over 20,000 trials and a median of 35.07. The floor sits in a band with nothing in it. |
+| an area is numbered only while it holds as many places as the fullest ring | -- | not a threshold, a refusal. See below. |
+
+**`addspawns.find_break`'s 3.0 cannot be borrowed for the first of those**, and this
+is the trap: it separates two *populations* of distances where this compares two gaps
+in *one ring*, and applied here it refuses all three of MID2's areas -- the very data
+the rule reproduces the owner's table on.
+
+**A short ring is refused, never renumbered from one.** An area missing a place still
+has a widest wedge, so it can be numbered 1..9 -- and then every place after the gap
+is off by one, so its place 6 sits beside another area's place 6 and is a different
+position, with nothing on screen saying so. The measured alternative is to MATCH the
+short ring onto the reference by a rigid fit, which leaves a hole rather than a shift
+and is right about 84% of the time at six of ten places. It is **not built**: no area
+of this encounter is short, and a matcher nothing exercises is a guess with the
+authority of code. Refusing is the half that cannot mislabel.
+
+**The canary for that rule passed with the rule deleted**, twice, and both reasons are
+worth keeping. Dropping a MIDDLE place widens the gaps either side of it enough that
+the short ring's own dominance falls to 1.52 and `place_ring` refuses it upstream, so
+the equal-count rule is never reached. Dropping an END place leaves a dense 1..9
+numbering that is *correct* for the survivors, so the canary cannot tell the two rules
+apart. Place 2 is the fixture that reaches it: dominance 2.28, and renumbering densely
+shifts everything after it. **A canary that does not fire is a finding about the
+canary at least as often as about the code.**
+
+### `sum` over floats is not the same document on every interpreter
+
+Found by republishing the committed payload on this box and diffing: spot 15's `x` came
+back **6649.5** where the committed file says **6649.6**, from the same six numbers.
+Not a data change -- CPython 3.12 sums floats with Neumaier compensation and 3.11 does
+not, `spawn-probe.yml` pins 3.12, and `requires-python` allows 3.11. Five of the 60
+published spot coordinates sit on an exact decimal tie and could flip that way; one of
+them does today.
+
+`math.fsum` at all four sites that reach a published field (`_centroid`, the area
+centroid, `addspawns`' cluster centroid, `repeat_test`'s chi-square). It is exact, so
+it agrees with itself everywhere -- **and it agrees with the value CI already
+published, so no committed byte moved.** The chi-square is the one fixed against the
+hazard rather than against an observed flip: 3.11 and 3.12 give it bit-identically on
+this data today.
+
+The general form, and it is the sharper half: **a document that only reproduces on the
+interpreter that wrote it is not reproducible**, and nothing goes red -- a maintainer
+republishing it gets a one-digit diff that reads as the encounter having moved.
+
 ### The event budget decides how much of the encounter the map is of
 
 **The first published run was a PREFIX of each kill and looked like a complete
