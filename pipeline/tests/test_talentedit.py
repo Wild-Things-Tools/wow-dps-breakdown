@@ -776,6 +776,28 @@ def test_a_mutation_does_not_carry_the_donors_spare_bits():
     assert mutant.framing == build.framing, "the framing replay is deliberate and stays"
 
 
+def test_a_mutation_does_not_carry_the_donors_tree_hash():
+    """A checksum of the donor build must not travel onto a build that is not it.
+
+    Same rule as ``spare_bits`` one test up, and a sharper reason. simc skips the field
+    on parse, so a stale hash is inert everywhere this pipeline can see -- but it is the
+    field Blizzard's CLIENT validates, which is why simc zero-fills it. The one place it
+    bites is somebody pasting a computed build into the game, which is exactly what the
+    build search exists to produce.
+
+    Only one of simc's 96 shipped hashes carries a non-zero one (``MID2_Druid_Feral``,
+    2026-09-09), so without this the defect would be invisible on 95 seeds out of 96.
+    """
+    from dataclasses import replace
+
+    nodes = mutable_nodes()
+    build = replace(granted_base(nodes), tree_hash=0xDEADBEEF)
+
+    mutant = select_node(build, nodes, 10, rank=2)
+    assert mutant.tree_hash == 0, "the mutant describes itself, not the build it came from"
+    assert build.tree_hash == 0xDEADBEEF, "and the donor is untouched"
+
+
 def test_flipping_a_granted_choice_node_is_refused_rather_than_silently_dropped():
     """The single case behind the property test above, stated as an example.
 

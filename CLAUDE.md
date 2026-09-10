@@ -2425,9 +2425,31 @@ has lost sync and is describing itself. Both are below, measured on 69a46e1, 202
   anything built by hand. One MID1 hash sets the bit on a node holding all its ranks --
   refusal 9 above -- and it is one of the 13, so that record is only visible past the
   raise. Reproducing it still needs the recorded bit.
-- **The 128-bit tree hash is zeros.** simc's own exporter does `put_bit( tree_bits, 0 )`,
-  commented "0-filled to bypass validation, as GetTreeHash() is unavailable externally".
-  Zero in all 85 hashes, so writing zeros loses nothing.
+- **The 128-bit tree hash is USUALLY zeros, and the encoder replays it rather than
+  assuming.** simc's own exporter does `put_bit( tree_bits, 0 )`, commented "0-filled to
+  bypass validation, as GetTreeHash() is unavailable externally", and on 2026-08-23 that
+  was true of all 85 hashes across both tiers -- so the encoder wrote a literal zero and
+  the corpus round-tripped byte for byte.
+
+  **On simc `ba1d6a0`, 2026-09-09, it stopped being true.** `MID2_Druid_Feral` ships
+  `4330dca1f4084b8ff5e0acf316a7bc0c` in that field -- **1 of 96** hashes -- and
+  `test_every_shipped_profile_round_trips_byte_identically` went red on `main`, on a
+  header the node stream has nothing to do with. The whole diff was the first 26
+  characters; the 90 after them matched.
+
+  `Loadout.tree_hash` records it and `encode_loadout` writes it back. It rides with
+  `spare_bits` rather than with `framing`, and for a sharper reason than either: it is a
+  checksum **of the donor build**, so `talentedit._with` zeroes it on every mutation. A
+  stale one is inert in simc, which skips the field on parse -- but it is exactly the
+  field Blizzard's client validates, which is why simc zero-fills, so the one place it
+  bites is somebody pasting a computed build into the game. On 95 of 96 seeds that
+  defect would be invisible.
+
+  **The check that first looked for this was inoperative**, and it is this file's
+  signature shape: `read_header` returns an **int** (the spec id) and never reads the
+  tree hash at all, so `getattr(header, "tree_hash", None)` came back `None` on every
+  profile and the pass reported *"96 hashes, 0 with a non-zero tree hash"* -- confidently
+  refuting the hypothesis that turned out to be right. Absence read as zero, again.
 
 The corrected figures are the ones a reader gets by re-running the corpus test's own
 route (`profiles.discover` plus `decode_loadout`); the larger pair needs a decoder that

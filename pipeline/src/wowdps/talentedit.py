@@ -203,9 +203,17 @@ def _with(loadout: Loadout, selections: Iterable[Selection]) -> Loadout:
     describes where the source string's node stream ended, the mutant's stream is a
     different length, and nothing recomputes it. Carried verbatim it survived as a
     number about a string nobody wrote, negative included.
+
+    ``tree_hash`` goes with ``spare_bits``, and for the sharper version of the same
+    reason: it is a checksum **of the donor build**, so carrying it onto a mutant makes
+    the string describe two different builds at once. simc skips the field on parse and
+    would never notice -- but it is exactly the field Blizzard's client validates, which
+    is why simc zero-fills it, so the one place it bites is somebody pasting a computed
+    build into the game. Zero is what simc's own exporter writes and what 95 of the 96
+    shipped hashes carry.
     """
     ordered = tuple(sorted(selections, key=lambda s: s.node_id))
-    return replace(loadout, selections=ordered, spare_bits=None)
+    return replace(loadout, selections=ordered, spare_bits=None, tree_hash=0)
 
 
 def selected(loadout: Loadout, node_id: int) -> Selection | None:
