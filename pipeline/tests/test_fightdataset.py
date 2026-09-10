@@ -1052,6 +1052,36 @@ def test_a_difficulty_this_run_did_read_still_wins(tmp_path):
     assert entry["measuredDifficulty"] == 5, "and the headline follows the merge"
 
 
+def test_a_difficulty_re_read_to_nothing_keeps_the_kills_it_had(tmp_path):
+    """A fresh block that READ NOTHING does not displace a published one with kills.
+
+    The third state of the union, and the two tests above cannot reach it: one covers
+    a difficulty absent from the fresh document, the other one present and holding
+    more. This is the pair present in both where the FRESH side is empty -- and taking
+    the fresh block unconditionally there leaves both of them green while a boss's
+    seventeen kills become a zero.
+
+    It is belt-and-braces rather than an expected state: `fightprobe` brings an
+    untouched difficulty back through the payload, so this fires only when that failed
+    -- which is exactly what happened on 2026-09-06. Same rule as `_headline_rank` and
+    `_hardest` one layer up: a block that read a fight beats one that did not.
+    """
+    from wowdps.fightdataset import write_fights
+
+    read = {"difficulty": 5, "fightsSampled": 17, "reports": ["a"], "timeline": {}}
+    empty = {"difficulty": 5, "fightsSampled": 0, "reports": [], "timeline": None}
+
+    write_fights(tmp_path, _doc(_encounter_with_blocks(1, read)))
+    write_fights(tmp_path, _doc(_encounter_with_blocks(1, empty)))
+
+    written = json.loads((tmp_path / "fights.json").read_text())
+    entry = written["encounters"][0]
+    at = {b["difficulty"]: b for b in entry["measurements"]}
+    assert at[5]["fightsSampled"] == 17, "the run that read nothing did not erase them"
+    assert entry["measured"]["fightsSampled"] == 17, "and the headline still names them"
+    assert written["coverage"]["measured"] == 1
+
+
 def test_force_still_lets_a_measurement_go(tmp_path):
     """The override has to override this too, or --force stops meaning what it says."""
     from wowdps.fightdataset import write_fights
