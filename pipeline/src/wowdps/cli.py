@@ -630,7 +630,12 @@ def cmd_fight_zones(args: argparse.Namespace) -> int:
     inference over zone order and the ``frozen`` flag; the writes are a person's
     decision.
     """
-    from .warcraftlogs import Credentials, WarcraftLogsClient, WarcraftLogsError
+    from .warcraftlogs import (
+        Credentials,
+        WarcraftLogsClient,
+        WarcraftLogsError,
+        spend_sentence,
+    )
 
     path = Path(args.profiles_file) if args.profiles_file else fightzones._data_file()
     raw = json.loads(path.read_text(encoding="utf-8"))
@@ -749,11 +754,11 @@ def cmd_fight_zones(args: argparse.Namespace) -> int:
     elif args.seed or args.move:
         print("\nnothing written -- pass --write to apply")
 
-    cost = ledger.spent
     # A zero delta is reported as unmeasured rather than as a number: the counter
     # not moving is the absence of a measurement, and printing "0 points" invites
-    # the conclusion that the API is free. Same rule as the probe's ledger.
-    reading = "UNMEASURED (the hourly counter did not move)" if not cost else f"{cost:.1f} points"
+    # the conclusion that the API is free. A counter that went BACKWARDS is a third
+    # state and reads the same way. `spend_sentence` is the one place that decides.
+    reading = spend_sentence(ledger)
     print(f"\ncost: {reading}, {len(ledger.entries)} query/queries")
     return 0
 
@@ -786,8 +791,10 @@ def cmd_spawn_map(args: argparse.Namespace) -> int:
     profiles = fightprofile.load_profiles(args.tier)
 
     blocks = []
+    payloads = []
     for payload_path in args.payload:
         payload = _json.loads(Path(payload_path).read_text(encoding="utf-8"))
+        payloads.append(payload)
         # The boss's name is filed under the id `fight_profiles.json` carries, which
         # on this tier is the PTR id, while the payload was READ against the live
         # twin. Both are tried rather than one, because a name looked up under the
@@ -808,8 +815,11 @@ def cmd_spawn_map(args: argparse.Namespace) -> int:
         print(f"{payload_path}: encounter {block.get('encounterId')} -> {note}")
 
     out_dir = Path(args.out) / args.tier
+    # Every payload, never the loop variable. Built from `payload` this stamped the
+    # whole document with whichever file happened to be read last -- see
+    # `spawnmap.pooled_measurement`.
     document = spawnmap.publish(
-        out_dir, blocks, tier=args.tier, measurement=spawnmap.measurement_block(payload)
+        out_dir, blocks, tier=args.tier, measurement=spawnmap.pooled_measurement(payloads)
     )
 
     if args.dry_run:
@@ -845,7 +855,12 @@ def cmd_wcl_schema(args: argparse.Namespace) -> int:
     running this is looking for.
     """
     from . import wclschema
-    from .warcraftlogs import Credentials, WarcraftLogsClient, WarcraftLogsError
+    from .warcraftlogs import (
+        Credentials,
+        WarcraftLogsClient,
+        WarcraftLogsError,
+        spend_sentence,
+    )
 
     try:
         credentials = Credentials.from_env()
@@ -891,8 +906,7 @@ def cmd_wcl_schema(args: argparse.Namespace) -> int:
         print(f"\nabsent from this schema: {', '.join(missing)}")
     if errored:
         print(f"\nthe server errored on: {', '.join(errored)}")
-    cost = ledger.spent
-    reading = "UNMEASURED (the hourly counter did not move)" if not cost else f"{cost:.1f} points"
+    reading = spend_sentence(ledger)
     print(f"\ncost: {reading}, {len(ledger.entries)} query/queries")
     return 0
 
@@ -1891,7 +1905,11 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
     # the duplication this repo warns about, and the wrong copy files a season's
     # progression under the wrong boss with nothing downstream able to tell.
     from . import harvest, progresshours
-    from .warcraftlogs import Credentials, WarcraftLogsClient, WarcraftLogsError
+    from .warcraftlogs import (
+        Credentials,
+        WarcraftLogsClient,
+        WarcraftLogsError,
+    )
 
     tiers = _json.loads(
         (Path(__file__).parent / "data" / "fight_profiles.json").read_text(encoding="utf-8")

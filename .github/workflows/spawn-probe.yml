@@ -37,8 +37,8 @@ on:
         description: 'Distinct kills to read. One settles the payload shape; a distribution needs more, and each one costs event pages'
         default: '1'
       streams:
-        description: 'Space-separated event streams to ask positions from. An add is the TARGET of damage and the SOURCE of its casts, so both are worth asking'
-        default: 'DamageTaken Casts Deaths'
+        description: 'Space-separated event streams to ask positions from. An add is the TARGET of damage and the SOURCE of its casts, so both are worth asking -- but measured over ten Mythic kills of The Twin Fangs, Casts and Deaths sited ZERO copies of npc 270898 and DamageTaken sited every one. Each stream row in the payload now records what it sited, so add a stream and read the count'
+        default: 'DamageTaken'
       max_pages:
         description: 'Event pages per stream per fight. Resources ride on every event, so a page here is larger than the same page without them'
         default: '4'
@@ -121,7 +121,7 @@ jobs:
           NPC: ${{ inputs.npc }}
           DIFFICULTY: ${{ inputs.difficulty || '5' }}
           REPORTS: ${{ inputs.reports || '1' }}
-          STREAMS: ${{ inputs.streams || 'DamageTaken Casts Deaths' }}
+          STREAMS: ${{ inputs.streams || 'DamageTaken' }}
           MAX_PAGES: ${{ inputs.max_pages || '4' }}
           POINT_CEILING: ${{ inputs.point_ceiling || '0.5' }}
           TIER: ${{ inputs.tier || 'MID2' }}

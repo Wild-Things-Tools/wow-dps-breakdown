@@ -812,11 +812,32 @@ def build_encounter(payload: dict) -> EncounterMap:
     numbered: dict[int, dict[int, int]] = {}
     angles: dict[int, dict[int, float]] = {}
     dominance: dict[int, float] = {}
+    # Named, never counted. `areasRefused` was a number, and a number says an area was
+    # refused without saying WHICH -- the same trade `withoutSpots` two functions down
+    # already refuses, and `gear.json`'s `staleRows` refuses one document across. The
+    # two reasons are also different findings: a ring with no dominant wedge has no
+    # start at all, a short ring has one and would number 1..9 off by one after the
+    # gap. Collapsed into a count, a reader cannot tell them apart or go and look.
+    refused: list[dict] = []
     for area, rows in sorted(by_area_rows.items()):
         members = [(r["spot"], r["x"], r["y"]) for r in rows]
         centre = _centroid([(r["x"], r["y"]) for r in rows])
         ring = place_ring(members, centre)
         if ring is None:
+            measured = wedge_dominance(members, centre)
+            refused.append(
+                {
+                    "area": area,
+                    "places": len(rows),
+                    "why": (
+                        f"no dominant empty wedge to start from: widest gap is "
+                        f"{measured:.2f}x the next widest against a floor of "
+                        f"{MIN_WEDGE_DOMINANCE}"
+                        if measured is not None
+                        else "no dominant empty wedge to start from, and none could be measured"
+                    ),
+                }
+            )
             continue
         numbered[area] = ring
         angles[area] = ring_angles(members, centre, ring)
@@ -832,6 +853,18 @@ def build_encounter(payload: dict) -> EncounterMap:
     # short and a matcher nothing exercises is a guess with the authority of code.
     # Refusing is the honest half of it, and it is the half that cannot mislabel.
     widest = max((len(ring) for ring in numbered.values()), default=0)
+    refused.extend(
+        {
+            "area": area,
+            "places": len(ring),
+            "why": (
+                f"holds {len(ring)} place(s) where the fullest area holds {widest}, so "
+                f"numbering it would shift every place after the missing one"
+            ),
+        }
+        for area, ring in sorted(numbered.items())
+        if len(ring) != widest
+    )
     numbered = {area: ring for area, ring in numbered.items() if len(ring) == widest}
 
     place_of: dict[int, int] = {}
@@ -841,6 +874,10 @@ def build_encounter(payload: dict) -> EncounterMap:
     result.places = {
         "areasNumbered": len(numbered),
         "areasRefused": len(by_area_rows) - len(numbered),
+        # The same number as `areasRefused`, said in a way a reader can act on. Kept
+        # BESIDE the count rather than instead of it: the count is what a caption
+        # prints and the list is what somebody goes and looks at.
+        "refused": sorted(refused, key=lambda entry: entry["area"]),
         "perArea": widest if numbered else 0,
         "wedgeDominance": (
             {
@@ -1092,6 +1129,56 @@ def measurement_block(payload: dict) -> dict:
         ),
         "stoppedBy": payload.get("stoppedBy"),
         "cost": payload.get("cost"),
+    }
+
+
+def pooled_measurement(payloads: Sequence[dict]) -> dict | None:
+    """The measurement block for a publish that read one payload, or several.
+
+    **One payload is the ordinary case and produces exactly what
+    ``measurement_block`` produces**, so nothing published moves.
+
+    Several is where this exists. `cmd_spawn_map` takes `--payload` repeatedly and
+    built the block from `payload` -- the *loop variable*, i.e. whichever file was
+    read last -- so a two-boss publish stamped the whole document with one run's
+    difficulty, encounter ids, `stoppedBy` and cost. Every field would be real, and
+    all but one boss's worth of them would be about the wrong pass: the shape
+    `gear.json` shipped for weeks with one provenance block over three slots.
+
+    The honest pooled answer is to drop what belongs to a single run rather than
+    pick one. `difficulty`, `requestedEncounter` and `usedEncounter` are on each
+    ENCOUNTER block already, so nothing is lost that a reader cannot reach; `cost`
+    genuinely cannot be pooled, because two payloads are two ledgers and neither is
+    the document's. `streams` is a union, which is what was read.
+    """
+    if not payloads:
+        return None
+    if len(payloads) == 1:
+        return measurement_block(payloads[0])
+    return {
+        "generatedAt": datetime.now(UTC).isoformat(timespec="seconds"),
+        "payloads": len(payloads),
+        "difficulty": None,
+        "requestedEncounter": None,
+        "usedEncounter": None,
+        "idChoice": None,
+        "streams": sorted(
+            {
+                str(stream.get("dataType"))
+                for payload in payloads
+                for fight in payload.get("fights") or []
+                for stream in fight.get("streams") or []
+                if stream.get("dataType")
+            }
+        ),
+        "stoppedBy": None,
+        "cost": None,
+        "note": (
+            "This document pooled several payloads, so the fields that describe one "
+            "run are absent rather than taken from one of them. Each encounter block "
+            "carries its own difficulty and encounter ids; the point cost of each "
+            "pass is in that pass's own artifact."
+        ),
     }
 
 

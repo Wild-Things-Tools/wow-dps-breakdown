@@ -592,6 +592,13 @@ def test_a_short_ring_is_refused_rather_than_renumbered_from_one():
     assert all(s.place is None for s in short), [s.place for s in short]
     assert result.places["areasNumbered"] == 1
     assert result.places["areasRefused"] == 1
+    # NAMED, not counted. `areasRefused` says one area was refused and cannot say
+    # which, or why -- and the two reasons are different findings: no dominant wedge
+    # at all, against a ring that has one and is short. A reader who wants to go and
+    # look needs the area number.
+    (named,) = result.places["refused"]
+    assert named["area"] == 2 and named["places"] == 9
+    assert "9 place(s)" in named["why"] and "fullest area holds 10" in named["why"]
     # And it is refused by THIS rule rather than by the wedge gate upstream: the
     # short ring numbers perfectly well on its own, which is what makes a dense
     # renumbering the plausible wrong answer rather than an impossible one.
@@ -643,3 +650,132 @@ def test_the_document_publishes_what_the_numbering_measured():
     assert block["places"]["wedgeDominance"]["floor"] == spawnmap.MIN_WEDGE_DOMINANCE
     assert block["places"]["wedgeDominance"]["min"] >= spawnmap.MIN_WEDGE_DOMINANCE
     assert block["places"]["maxDisagreementDegrees"] == spawnmap.MAX_PLACE_DISAGREEMENT_DEGREES
+
+
+# ------------------------------------------------- the provenance of a pooled publish
+
+
+def test_a_pooled_publish_does_not_stamp_the_document_with_one_payloads_run():
+    """`cmd_spawn_map` built the block from the LOOP VARIABLE.
+
+    `--payload` is repeatable, one per encounter, and the measurement came from
+    `payload` after the loop -- whichever file was read last. So a two-boss publish
+    stamped the whole document with one pass's difficulty, encounter ids, `stoppedBy`
+    and point cost. Every field real, all but one boss's worth about the wrong run:
+    `gear.json`'s one-provenance-block-over-three-slots defect, one file across.
+    """
+    first = payload(difficulty=5, requestedEncounter=53421, usedEncounter=3421)
+    first["cost"] = {"pointsSpentThisRun": 153.85}
+    second = payload(difficulty=4, requestedEncounter=53455, usedEncounter=3455)
+    second["cost"] = {"pointsSpentThisRun": 999.0}
+
+    pooled = spawnmap.pooled_measurement([first, second])
+    assert pooled is not None
+    assert pooled["payloads"] == 2
+    # Not the last payload's, and not the first's either.
+    for field_name in ("difficulty", "requestedEncounter", "usedEncounter", "cost"):
+        assert pooled[field_name] is None, field_name
+
+
+def test_one_payload_still_produces_exactly_the_block_it_always_did():
+    """The ordinary case, and the reason no published byte moves."""
+    one = payload()
+    one["cost"] = {"pointsSpentThisRun": 153.85}
+    pooled = spawnmap.pooled_measurement([one])
+    plain = spawnmap.measurement_block(one)
+    assert {k: v for k, v in pooled.items() if k != "generatedAt"} == {
+        k: v for k, v in plain.items() if k != "generatedAt"
+    }
+    assert pooled["difficulty"] == 5 and pooled["cost"]["pointsSpentThisRun"] == 153.85
+
+
+def test_no_payload_at_all_states_no_measurement_rather_than_raising():
+    """`payload` was unbound over an empty loop, so this route was a NameError."""
+    assert spawnmap.pooled_measurement([]) is None
+
+
+def test_the_spawn_map_command_pools_two_payloads_without_borrowing_provenance(tmp_path):
+    """Drives `wowdps spawn-map` itself, because the fold had tests and the CALL SITE
+    had none -- which is where the loop variable was."""
+    from wowdps import cli
+
+    paths = []
+    for index, (difficulty, filed, used) in enumerate(
+        ((5, 53421, 3421), (4, 53455, 3455)), start=1
+    ):
+        one = payload(difficulty=difficulty, requestedEncounter=filed, usedEncounter=used)
+        for one_fight in one["fights"]:
+            one_fight["difficulty"] = difficulty
+        one["cost"] = {"pointsSpentThisRun": 100.0 * index}
+        path = tmp_path / f"payload-{index}.json"
+        path.write_text(json.dumps(one), encoding="utf-8")
+        paths.append(str(path))
+
+    out = tmp_path / "data"
+    assert (
+        cli.main(
+            [
+                "spawn-map",
+                "--payload",
+                paths[0],
+                "--payload",
+                paths[1],
+                "--tier",
+                "MID2",
+                "--out",
+                str(out),
+            ]
+        )
+        == 0
+    )
+    written = json.loads((out / "MID2" / "spawns.json").read_text(encoding="utf-8"))
+    assert written["measurement"]["payloads"] == 2
+    assert written["measurement"]["difficulty"] is None
+    assert written["measurement"]["cost"] is None
+    # The per-encounter difficulty is untouched -- that is why dropping the
+    # document-level one loses a reader nothing.
+    assert sorted(block["difficulty"] for block in written["encounters"]) == [4, 5]
+
+
+def test_republishing_an_unchanged_payload_leaves_the_file_byte_identical(tmp_path, monkeypatch):
+    """The settle, through the command rather than through `write_spawns` alone.
+
+    `spawnmap` excludes `generatedAt`, `measurement.generatedAt` and
+    `measurement.cost` from its comparison and carries the published values across,
+    and every part of that has a unit test. The CALL SITE had none -- which is the
+    layer `write_fights` restamped from for weeks while the guard beside it looked
+    present.
+
+    The clock is moved between the two runs rather than slept through: a stamp taken
+    to the second makes two calls in one test land on the same value, and the first
+    version of the manifest's own settle test passed for exactly that reason with the
+    settle DELETED.
+    """
+    from wowdps import cli, spawnmap
+
+    one = payload()
+    one["cost"] = {"pointsSpentThisRun": 153.85, "lastReading": 100.0}
+    src = tmp_path / "payload.json"
+    src.write_text(json.dumps(one), encoding="utf-8")
+    out = tmp_path / "data"
+    args = ["spawn-map", "--payload", str(src), "--tier", "MID2", "--out", str(out)]
+
+    stamps = iter(["2026-09-10T08:00:00+00:00", "2026-09-10T09:30:00+00:00"])
+
+    class _Clock:
+        @staticmethod
+        def now(_tz=None):
+            class _At:
+                @staticmethod
+                def isoformat(timespec="seconds"):
+                    return next(stamps)
+
+            return _At()
+
+    assert cli.main(args) == 0
+    written = out / "MID2" / "spawns.json"
+    first = written.read_text(encoding="utf-8")
+
+    monkeypatch.setattr(spawnmap, "datetime", _Clock)
+    assert cli.main(args) == 0
+    assert written.read_text(encoding="utf-8") == first

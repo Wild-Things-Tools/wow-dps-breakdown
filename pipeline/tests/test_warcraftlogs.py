@@ -142,9 +142,13 @@ def test_entries_without_a_report_are_skipped_rather_than_crashing():
 # --------------------------------------------------------------------------------
 
 
-def reading(spent: float) -> dict:
+def reading(spent: float, resets_in: int = 900) -> dict:
     return {
-        "rateLimitData": {"limitPerHour": 3600, "pointsSpentThisHour": spent, "pointsResetIn": 900}
+        "rateLimitData": {
+            "limitPerHour": 3600,
+            "pointsSpentThisHour": spent,
+            "pointsResetIn": resets_in,
+        }
     }
 
 
@@ -174,6 +178,98 @@ def test_cache_hits_are_counted_apart_from_paid_queries():
     ledger.record("b", reading(10.0), cached=True)
     payload = ledger.to_json()
     assert payload["queries"] == 1 and payload["cacheHits"] == 1
+
+
+def test_a_cached_response_does_not_move_the_budget_readings():
+    """Measured on run 34035705116: a cache hit pushed a PREVIOUS run's counter into
+    the ledger, and the published block read ``pointsSpentThisRun: -1524.0``.
+
+    The cached payload here carries a reading from *before* the fresh ones, which is
+    exactly the shape a restored `actions/cache` produces. Nothing about it may reach
+    `first_reading`, `last_reading`, `limitPerHour` or `pointsResetIn` -- a cached
+    response is a record of then, and every one of those asks about now.
+    """
+    ledger = PointLedger()
+    # The ORDER is the whole fixture. A cache hit in the middle is repaired by the
+    # next fresh reading, so a ledger built that way passes with the fix reverted --
+    # measured, the canary stayed green. The published defect had the hit LAST, and
+    # a run served from a restored `actions/cache` ends that way by construction.
+    ledger.record("first", reading(4005.27))
+    ledger.record("fresh", reading(4340.19))
+    ledger.record("stale", reading(2480.27, resets_in=1), cached=True)
+
+    assert (ledger.first_reading, ledger.last_reading) == (4005.27, 4340.19)
+    payload = ledger.to_json()
+    assert payload["pointsSpentThisRun"] == 334.92
+    assert payload["pointsSpentThisHour"] == 4340.19
+    assert payload["counterWentBackwards"] is False
+    # Nothing else off the cached response either: `pointsResetIn` is as much a
+    # reading of "then" as the counter is.
+    assert payload["pointsResetIn"] == 900
+    # And the hit is still counted, because how much of a run was paid for is the
+    # other question this block answers.
+    assert payload["queries"] == 2 and payload["cacheHits"] == 1
+
+
+def test_a_run_that_OPENS_on_a_cache_hit_does_not_take_its_floor_from_it():
+    """The other end of the same rule, and the one a warm `actions/cache` hits first.
+
+    A stale low reading taken as `first_reading` inflates the run's cost instead of
+    making it negative -- the flattering direction, and the one nobody checks.
+    """
+    ledger = PointLedger()
+    ledger.record("stale", reading(10.0), cached=True)
+    ledger.record("real", reading(4005.27))
+    ledger.record("real", reading(4340.19))
+
+    assert ledger.first_reading == 4005.27
+    assert ledger.to_json()["pointsSpentThisRun"] == 334.92
+
+
+def test_a_counter_that_went_backwards_is_unmeasured_rather_than_a_negative_number():
+    """The rule that survives from #151 even though its diagnosis did not.
+
+    With the cache fix above, every reading in a ledger comes from this run's own
+    responses in order, so a backwards counter means the hour rolled over between
+    two of them. That is a third state beside "no reading" and "did not move", and
+    it is never a negative number, never ``abs()`` and never clamped to zero.
+    """
+    ledger = PointLedger()
+    ledger.record("first", reading(4004.27))
+    ledger.record("last", reading(2480.27))
+
+    assert ledger.spend_state == warcraftlogs.SPEND_WENT_BACKWARDS
+    assert ledger.spent is None
+    payload = ledger.to_json()
+    assert payload["pointsSpentThisRun"] is None
+    assert payload["counterWentBackwards"] is True
+    # The raw readings stay: they are why the state is visible at all, and a reader
+    # can form the lower bound from them.
+    assert (payload["firstReading"], payload["lastReading"]) == (4004.27, 2480.27)
+
+    sentence = warcraftlogs.spend_sentence(ledger)
+    assert "UNMEASURED" in sentence and "BACKWARDS" in sentence
+    assert "-1524" not in sentence
+
+
+def test_the_three_unmeasured_states_are_told_apart_in_words():
+    """Three different findings, and a reader has to be able to act on which one."""
+    nothing = PointLedger()
+    nothing.record("q", {"reportData": {}})
+    still = PointLedger()
+    still.record("a", reading(10.0))
+    still.record("b", reading(10.0))
+    back = PointLedger()
+    back.record("a", reading(10.0))
+    back.record("b", reading(1.0))
+    moved = PointLedger()
+    moved.record("a", reading(10.0))
+    moved.record("b", reading(12.5))
+
+    said = [warcraftlogs.spend_sentence(one) for one in (nothing, still, back, moved)]
+    assert said[0] != said[1] != said[2]
+    assert len({said[0], said[1], said[2]}) == 3
+    assert said[3] == "2.5 points"
 
 
 def test_the_boss_list_comes_from_the_tier_and_a_tier_with_none_is_a_refusal(

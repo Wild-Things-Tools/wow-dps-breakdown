@@ -743,7 +743,26 @@ def actor_game_id_map(master_actors: Iterable[dict]) -> dict[int, int]:
 #: and either may be the one that carries a resource block. `Deaths` is cheap and
 #: bounds the other end of a copy's life, which is what says whether a wave died in
 #: place or was dragged.
-DEFAULT_STREAMS = ("DamageTaken", "Casts", "Deaths")
+#: Which event streams are asked for positions, and it is a MEASUREMENT rather than
+#: a preference.
+#:
+#: An add is the target of its damage and the source of its casts, so asking three
+#: streams is the shape that cannot miss a copy nobody damaged -- which is why the
+#: first passes asked all three. Over the ten Mythic kills of The Twin Fangs published
+#: on 2026-09-06, `Casts` and `Deaths` sited **zero** copies of npc 270898 between
+#: them: that add casts nothing Warcraft Logs logs, and a despawn leaves no death
+#: event, so both streams were paid for and contributed nothing. `DamageTaken` sited
+#: every sighting in the document.
+#:
+#: So the default is one stream, and the other two stay available by name. The claim
+#: is checkable on every future run rather than only in that pass's transcript: each
+#: stream row in the payload records the copies IT sited (`sightings`), so a stream
+#: that starts contributing says so in the artifact.
+#:
+#: **This is one npc of one encounter.** A boss whose adds cast something, or die
+#: rather than despawn, is a different answer -- pass `--streams` and read the
+#: per-stream counts before concluding anything about it.
+DEFAULT_STREAMS = ("DamageTaken",)
 
 
 def add_arguments(parser) -> None:
@@ -1134,6 +1153,12 @@ def run(args) -> int:
                 fight_row["streams"].append(
                     {
                         "dataType": stream,
+                        # What THIS stream sited, kept so "Casts contributed nothing"
+                        # is a field in the artifact rather than a line in a
+                        # transcript nobody kept. Merged across streams the number is
+                        # gone: one copy is the target of its damage and the source of
+                        # its casts, so the per-stream lists overlap by construction.
+                        "sightings": len(sightings),
                         "events": shape.events,
                         "positioned": shape.positioned,
                         "flat": shape.with_flat_position,
@@ -1219,10 +1244,11 @@ def _publish(out: dict, args) -> None:
 def _finish(client, out: dict, args) -> None:
     import json
 
+    from .warcraftlogs import spend_sentence
+
     ledger = client.ledger
-    spent = ledger.spent
     out["cost"] = ledger.to_json() if hasattr(ledger, "to_json") else None
-    reading = "UNMEASURED (the hourly counter did not move)" if not spent else f"{spent:.1f} points"
+    reading = spend_sentence(ledger)
     print(f"\ncost: {reading}, {len(ledger.entries)} query/queries")
     if args.out:
         import pathlib
