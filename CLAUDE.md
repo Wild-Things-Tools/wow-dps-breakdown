@@ -3460,7 +3460,7 @@ which is the base `startedAt` needs (`ReportFight.startTime` counts from the
 writes all three now, so publishing needed a fresh pass rather than a doctored file.
 
 **It has run, and the published document is `web/public/data/MID2/spawns.json`**
-(run 34035705116, 2026-09-06, ten Mythic kills of The Twin Fangs, 7.9 KB):
+(run 34035705116, 2026-09-06, ten Mythic kills of The Twin Fangs, 8.8 KB):
 
 ```
 30 spots in 3 areas of 10        45 waves    maxPerPosition {1: 1, 2: 41, 3: 3}
@@ -3472,6 +3472,12 @@ break 155.5 -> 661.0, ratio 4.25   killsTruncated 8 of 10   span 3.48 days
 That reproduces the whole of what the ten-kill analysis found by hand, which is the
 control this module needed: three areas of ten, a repeat rate near the 40% a uniform
 draw of four from ten predicts, and a third copy at one place in 3 of 45 waves.
+
+**Both of those "7.9 KB" figures were stale rather than wrong**, and the correction
+is worth having as a shape. The document really was 7,904 bytes at `d4dc929`, the
+run this paragraph is about; `130251b` added the place numbering and it is **8,989**
+today. A measured figure quoted beside a run id ages with the run, and this one aged
+in the same session that wrote it.
 
 ### Numbering the places: derived, and the direction is not
 
@@ -3528,6 +3534,116 @@ numbering that is *correct* for the survivors, so the canary cannot tell the two
 apart. Place 2 is the fixture that reaches it: dominance 2.28, and renumbering densely
 shifts everything after it. **A canary that does not fire is a finding about the
 canary at least as often as about the code.**
+
+### A cache hit is not a budget reading, and it published a negative cost
+
+`PointLedger.record` took `rateLimitData` off **every** payload it was handed,
+including one served from the response cache -- and a cached response carries the
+block that was preserved with it, i.e. a *previous run's* counter. The published spawn
+map therefore states
+
+```
+firstReading 4004.27   lastReading 2480.27   pointsSpentThisRun -1524.0
+```
+
+**Minus fifteen hundred points**, which is the `UNMEASURED, never zero` rule failing in
+its worse direction: a number that reads as a measurement, is not one, and invites the
+reading that the run gave budget back.
+
+**Issue #151 diagnosed it as Warcraft Logs resetting the hourly counter mid-run, and
+that was wrong.** Measured over the run's 148 cache files on 2026-09-06: the 74 fresh
+responses read **4005.27 -> 4340.19, rising throughout with no jump**, and the 2480.27
+came out of a **restored cache file** whose sha256 matches the artifact of a run seven
+minutes earlier. Nothing reset. Note the shape -- the issue's evidence (the two
+readings) was real and its mechanism was invented to fit, and the invented one has a
+plausible fix (`counterResetMidRun`) that would have named a state that never occurred
+while leaving the real defect running.
+
+Two consequences were worse than the negative number, and both are the kind nothing
+goes red for:
+
+- **`pointsSpentThisHour` was published as the earlier run's figure.** The real balance
+  at the end was >= 4340.19, so the document **understates the hour by ~1,860 points**.
+- **`fightprobe.check_budget` compared `--point-ceiling` against a stale balance.** That
+  guard exists to stop a pass before a 429, and it was arguing from a number minutes
+  old. It is the one that would have cost a whole run.
+
+So the fix is at `record()` and not at `spent`: a cache hit moves **nothing** --
+readings, `limitPerHour` and `pointsResetIn` alike -- and is still counted as a hit.
+`rate_limit()` has stated this rule one function down since it was written (*"a cached
+response is a record of then and this query asks about now"*); it was never applied to
+the readings that ride along with every other query.
+
+**What survives from the issue is its rule.** A backwards counter is a third state
+beside "no reading" and "did not move", `spent` is `None` there rather than negative,
+and `counterWentBackwards` names it in the published block. Never `abs()`, never a
+clamp -- both replace a wrong number with a more plausible wrong number. After this fix
+every reading in a ledger comes from the run's own responses in order, so a backwards
+counter would mean a genuine hourly reset: **still unmeasured, and now expressible.**
+
+`spend_state` classifies once, for a live ledger and for a published `cost` block, and
+`spend_sentence` renders it. Three commands printed the identical *"the counter did not
+move"* sentence behind `if not spent` -- correct for `0.0` and **never reached** for
+`-1524.0`, which is truthy and printed as a number.
+
+### The measurement block came from the loop variable
+
+`cmd_spawn_map` takes `--payload` repeatably, *"one per encounter"*, and built the
+document's provenance from `payload` **after the loop** -- whichever file was read last.
+A two-boss publish stamped the whole document with one pass's difficulty, encounter ids,
+`stoppedBy` and point cost. Every field real; all but one boss's worth about the wrong
+run. That is `gear.json`'s one-provenance-block-over-three-slots defect (#95) exactly,
+one file across, and the fix takes the same shape: a pooled publish **drops** what
+belongs to a single run rather than picking one of them. `difficulty`,
+`requestedEncounter` and `usedEncounter` are on each encounter block already, so a
+reader loses nothing reachable; `cost` genuinely cannot be pooled, because two payloads
+are two ledgers and neither is the document's.
+
+One payload produces exactly the block it always did, so **nothing published moves** --
+and an empty `--payload` list was a `NameError` rather than the `None` it now returns.
+
+**The fold had tests and the call site had none**, which is where the bug was. The test
+drives `wowdps spawn-map` over two payloads.
+
+### A restamp I went looking for and did not find
+
+The third thing on that list was a `measurement.generatedAt` restamp, and **it does not
+reproduce**. Republishing the committed payload, and re-running `wowdps spawn-map` over
+an unchanged one with the clock moved ninety minutes, both come back **byte-identical**:
+the settle fires, `_PROVENANCE_PATHS` already lists both nested stamps and `cost`.
+
+Recorded rather than dropped, because "I remembered a bug" is not evidence and neither
+is its absence until somebody runs it. What that layer genuinely lacked is a **test** --
+every part of the settle had one and the command that calls it did not, which is the
+layer `write_fights` restamped from for weeks with the guard beside it looking present.
+It has one now, with the clock monkeypatched, because a stamp taken to the second makes
+two calls in one test land on the same value and pass with the settle deleted.
+
+### `areasRefused` was a count, and a count cannot say which area
+
+`places.areasRefused` said an area was not numbered without saying **which**, or why --
+and the two reasons are different findings: a ring with no dominant empty wedge has no
+start at all, where a **short** ring has one and would number 1..9, shifting every place
+after the gap. `places.refused` names them beside the count, which is the rule
+`withoutSpots` two functions down and `gear.json`'s `staleRows` already carry.
+
+MID2 refuses no area today, so this is for the encounter that does.
+
+### Two streams were paid for and sited nothing
+
+An add is the target of its damage and the **source** of its casts, so asking
+`DamageTaken Casts Deaths` is the shape that cannot miss a copy nobody damaged -- which
+is why the first passes asked all three. Over the ten published Mythic kills,
+**`Casts` and `Deaths` sited zero copies of npc 270898 between them**: that add casts
+nothing Warcraft Logs logs, and a despawn leaves no death event, so both streams were
+fetched, paged and charged for nothing. `DamageTaken` sited every sighting in the
+document.
+
+The default is one stream now. What makes that safe rather than a guess carried forward
+is that each stream row in the payload records the copies **it** sited, so the claim is
+checkable on every future run rather than in one pass's transcript -- and a boss whose
+adds do cast something says so in the artifact. **It is one npc of one encounter**: pass
+`--streams` and read the per-stream counts before concluding anything about another.
 
 ### `sum` over floats is not the same document on every interpreter
 
@@ -4376,7 +4492,7 @@ wowdps progress-hours --publish web/public/data --tier MID2
 **`--publish` is a second output beside `--out`, never instead of it.** The artifact
 still carries every guild's whole roster; the published document carries the split, the
 test and the interval and no guild names -- the same rule as `spawns.json`, whose
-payload is a CI artifact and whose document is 7.9 KB.
+payload is a CI artifact and whose document is 8.8 KB.
 
 **The document folds rather than replaces**, union on `(encounterId, difficulty)` with
 the published document joining as the OLDEST -- `merge_gear_shards`' rule, because a run
