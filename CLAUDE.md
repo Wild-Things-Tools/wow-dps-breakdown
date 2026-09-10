@@ -3687,6 +3687,89 @@ every run by construction. Left in the settle's comparison the settle can never 
 document, because what a pass costs is the open question behind every budget decision
 here and this is the only measurement of it, and **out** of the comparison.
 
+### It converged, and it cost 2.4% of an hour to find out (#152)
+
+The paragraph above is the reason #152 existed: three clean tens at twelve pages
+*looked* like convergence and nothing had measured it. Two runs settled it, and the
+order was deliberate -- depth first on the same ten kills, then breadth.
+
+**Depth**, run 34457037197, the same ten kills at `--max-pages 40`: one kill alone
+yields the whole map -- 30 positions in three areas of ten, 83 of its 84 copies read.
+**144.0 points over 135 queries.**
+
+**Breadth**, run 34457405665, `--reports 36` at the same depth: **36 kills, zero
+truncated**, 432.3 points over 404 queries, 2.4% of the hour. Pooled against the
+published ten:
+
+| | published (10 kills) | breadth (36 kills) |
+|---|---|---|
+| `killsTruncated` | **8 of 10** | **0 of 36** |
+| places per area | 10 x 3 | 10 x 3 |
+| spots seen in EVERY kill | 10 of 30, weakest 5/10 | **24 of 30, weakest 34/36** |
+| `killedBetween.spanDays` | 3.48 | 7.13 |
+
+Those are exactly the three columns the issue named, and all three converge. The
+caveat *"8 of 10 kills had an event fetch that stopped at its page limit"* is **not
+emitted any more**, and *"20 of 30 spots were not seen in every kill (lowest 5 of 10)"*
+is now 6 of 30 at 34 of 36. **The thirty places are the encounter, not a page limit.**
+
+Two of the original three questions get much firmer answers on the way past: a place
+took a third copy in **9 of 215 waves** (against 3 of 45), and 9 waves saw no second
+copy at any place at all (against 1 of 45).
+
+**The publish also carries three of #157's fixes into the data**, which had been
+correct in code and invisible in the file: `pointsSpentThisRun` goes **-1524.0 ->
+432.26** (the cache-hit reading), `streams` goes `[Casts, DamageTaken, Deaths]` ->
+`[DamageTaken]` (the two that sited nothing), and re-running the same publish is
+**byte-identical** -- the settle confirmed against the real document rather than a
+fixture.
+
+### The 36 kills are 36 kills, and the length rule alone says otherwise
+
+Checked before believing any count over them, because #130 is what happens when this
+is skipped. Applying `fightdataset`'s length half alone (0.5 s, distinct report) to
+these 36 rows groups **eight sets of "duplicate uploads"** -- and `startedAt` refutes
+every one: the widest disagreement *within* one of those groups is **6.8 days**, while
+the closest two rows overall state their start **2.5 minutes** apart. All 36 stamps are
+distinct.
+
+So there is no gap to put a threshold in, because there is nothing to separate: these
+are different guilds whose pulls happened to run the same number of seconds. On a
+~410 s fight with 36 samples that is ordinary. It is the measurement #135 asked for,
+arriving with the opposite sign to `fights.json`'s -- where six uploads sat inside
+37 ms -- and it is why **length alone is circumstantial** in that entry's own words.
+`spawnmap` does not dedup and, on this sample, has nothing to dedup.
+
+### The repeat test crossed its threshold, and what that does and does not say
+
+`repeat.separates` was **false** on the published ten kills and is **true** on the
+thirty-six: chi-square **47.93 on 29 df, z +2.17** against the one-sided 1.96. The
+Fights panel's wording follows it, so the site now reads *"some place is preferred"*
+where it read *"no place preferred and none excluded"*. That is a published claim
+reversing on sample size, so it is worth the decomposition rather than the headline.
+
+- **It is not between the areas.** Their rates are 0.4404 / 0.4422 / 0.4042, chi-square
+  **2.40 on 2 df** (z +0.52). The three rings repeat alike.
+- **It is not tied to the place NUMBER**, which is the structure the numbering would
+  give it. Pooled per place across the areas: chi-square **15.27 on 9 df, z +1.38** --
+  *weaker* than the 30-spot test, where a real ring-position effect would be stronger
+  and concentrated. The areas disagree per place: place 3 runs 0.59 / 0.43 / 0.39,
+  place 7 runs 0.28 / 0.54 / 0.35.
+- **It is roughly additive in n**, which is what a real effect looks like and noise does
+  not. Excess over df: all 36 = 18.93; odd 18 = 9.55, even 18 = 12.60 (sum 22.2);
+  early 18 = 1.61, late 18 = 14.12 (sum 15.7). No half clears the threshold on its own
+  (z +1.22 / +1.55 / +0.29 / +1.70) -- **and that is arithmetic, not a refutation**:
+  halving n roughly halves the excess, so z falls by design. Reading four sub-threshold
+  halves as evidence *against* was the first conclusion drawn here and it was wrong.
+
+So the honest reading is a **small real effect on individual world positions**, about a
+third of which the ring numbering explains, sitting just past a one-sided threshold.
+The panel is allowed to say it only because the panel prints z beside it -- which is
+this file's own rule, and the reason the wording is not a published boolean.
+
+Worth watching: `early` carries almost none of it and `late` carries most. One week,
+one boss, one difficulty. Do not generalise the direction from this sample.
+
 ## Why specs are missing: simc wrote the profiles and switched them off
 
 `unvalidated.py` + `wowdps unvalidated`.
