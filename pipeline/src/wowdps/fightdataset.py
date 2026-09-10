@@ -1685,6 +1685,26 @@ def _keep_measurements(published: dict, document: dict) -> dict:
             # it here rather than keeping the published one is what stops the pair
             # disagreeing about what is being shown.
             "measured": {k: v for k, v in headline.items() if k != "difficulty"},
+            # `comparison` and `promotions` are DERIVED FROM the headline -- one is
+            # `_comparison(profile, measured)` and the other is what that measurement
+            # could contribute to the profile -- so they have to travel with the block
+            # they were taken from. Restoring the measurement and leaving them behind
+            # is the same defect this function exists to fix, one field over: Sszorak
+            # and The Twin Fangs came back with seventeen and ten Heroic kills under
+            # `promotions: []`, and the site's promotion panel reads that array.
+            #
+            # Only when the published document's OWN headline is the block that now
+            # wins. Otherwise its two fields describe a different difficulty, which
+            # would be a worse claim than the empty one -- plausible, and about the
+            # wrong measurement.
+            **(
+                {field: was[field] for field in ("comparison", "promotions") if field in was}
+                if was
+                and was.get("measuredDifficulty") == headline.get("difficulty")
+                and merged.get(headline.get("difficulty"))
+                is not fresh.get(headline.get("difficulty"))
+                else {}
+            ),
         }
         kept += 1
         encounters.append(entry)
