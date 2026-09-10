@@ -1082,6 +1082,71 @@ def test_a_difficulty_re_read_to_nothing_keeps_the_kills_it_had(tmp_path):
     assert written["coverage"]["measured"] == 1
 
 
+def test_the_fields_derived_from_the_headline_travel_with_it(tmp_path):
+    """`comparison` and `promotions` are computed FROM the headline block.
+
+    One is `_comparison(profile, measured)`, the other is what that measurement could
+    contribute to the profile, and both sit on the encounter rather than inside the
+    block -- so restoring a measurement while leaving them behind publishes seventeen
+    Heroic kills under `promotions: []`, which is the array the site's promotion panel
+    reads. Found on the real restore: Sszorak and The Twin Fangs came back with 17 and
+    10 kills and lost three proposals each.
+
+    The guard is that the published document's OWN headline must be the block that now
+    wins. Its two fields describe whichever difficulty it was showing, and carrying
+    them onto a different one would be the worse claim: plausible, and about the wrong
+    measurement.
+    """
+    from wowdps.fightdataset import write_fights
+
+    mythic_empty = {"difficulty": 5, "fightsSampled": 0, "reports": [], "timeline": None}
+    heroic_read = {"difficulty": 4, "fightsSampled": 17, "reports": ["a"], "timeline": {}}
+
+    published = _encounter_with_blocks(1, mythic_empty, heroic_read)
+    published["comparison"] = [{"fact": "fightLengthSeconds", "delta": 1.0}]
+    published["promotions"] = [{"field": "raidSize", "value": 20}]
+    write_fights(tmp_path, _doc(published))
+
+    fresh = _encounter_with_blocks(1, mythic_empty)
+    fresh["comparison"] = []
+    fresh["promotions"] = []
+    write_fights(tmp_path, _doc(fresh))
+
+    entry = json.loads((tmp_path / "fights.json").read_text())["encounters"][0]
+    assert entry["measuredDifficulty"] == 4 and entry["measured"]["fightsSampled"] == 17
+    assert entry["promotions"] == [{"field": "raidSize", "value": 20}], (
+        "the proposals came back with the measurement they were derived from"
+    )
+    assert entry["comparison"] == [{"fact": "fightLengthSeconds", "delta": 1.0}]
+
+
+def test_a_headline_the_published_document_was_not_showing_keeps_its_own_fields(tmp_path):
+    """The other side of the guard, and the reason it is not just "carry them".
+
+    Here the published document's headline was MYTHIC and this run reads Mythic with
+    more kills, so the fresh block wins -- and the published `comparison`/`promotions`
+    describe a measurement that is no longer on top. Carrying them would publish last
+    week's proposals against this week's numbers.
+    """
+    from wowdps.fightdataset import write_fights
+
+    old = {"difficulty": 5, "fightsSampled": 3, "reports": ["old"], "timeline": None}
+    new = {"difficulty": 5, "fightsSampled": 9, "reports": ["new"], "timeline": None}
+    heroic = {"difficulty": 4, "fightsSampled": 2, "reports": ["h"], "timeline": None}
+
+    published = _encounter_with_blocks(1, old, heroic)
+    published["promotions"] = [{"field": "raidSize", "value": 20}]
+    write_fights(tmp_path, _doc(published))
+
+    fresh = _encounter_with_blocks(1, new)
+    fresh["promotions"] = []
+    write_fights(tmp_path, _doc(fresh))
+
+    entry = json.loads((tmp_path / "fights.json").read_text())["encounters"][0]
+    assert entry["measured"]["reports"] == ["new"], "this run's block is the headline"
+    assert entry["promotions"] == [], "so this run's proposals stand, stale ones do not"
+
+
 def test_force_still_lets_a_measurement_go(tmp_path):
     """The override has to override this too, or --force stops meaning what it says."""
     from wowdps.fightdataset import write_fights
