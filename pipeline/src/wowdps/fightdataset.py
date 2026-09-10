@@ -1590,6 +1590,16 @@ def write_fights(out_dir: Path, document: dict, force: bool = False) -> Path:
         published = None
 
     if published is not None and not force:
+        # The union runs BEFORE the refusal, and the order is load-bearing in both
+        # directions. Before the settle, because the carried-forward entries have to
+        # be in the document the settle compares or a run that changed nothing else
+        # still writes a new timestamp. And before the refusal, because the refusal
+        # asks "would writing this drop a measurement" -- a question only the merged
+        # document can answer. Asked of the raw one it fires on a state the union
+        # repairs: a Mythic-only run against a tier with no Mythic kills produces
+        # `coverage.measured: 0` legitimately, and would have been refused outright.
+        document = _keep_measurements(published, document)
+
         had = int((published.get("coverage") or {}).get("measured") or 0)
         has = int((document.get("coverage") or {}).get("measured") or 0)
         if had and not has:
@@ -1600,12 +1610,6 @@ def write_fights(out_dir: Path, document: dict, force: bool = False) -> Path:
                 f"dropping it is what you mean."
             )
 
-    if published is not None and not force:
-        # After the refusal above and before the settle below: the carried-forward
-        # entries have to be in the document the settle compares, or a run that
-        # changed nothing else would still write a new timestamp.
-        document = _keep_measurements(published, document)
-
     settled = document
     if published is not None and _without_stamps(published) == _without_stamps(document):
         settled = _carry_stamps(document, published)
@@ -1615,24 +1619,36 @@ def write_fights(out_dir: Path, document: dict, force: bool = False) -> Path:
 
 
 def _keep_measurements(published: dict, document: dict) -> dict:
-    """Carry an encounter's measurements forward when this run produced none for it.
+    """Union an encounter's measurements with the published ones, PER DIFFICULTY.
 
-    The payload level already works this way -- "a run contributes what it managed;
-    everything else comes back from the previous payload untouched" -- but
-    ``--no-resume`` clears the previous payload by design, so an encounter the run
-    did not reach vanishes from it and publishes as ``measured: null``.
+    **The unit is the pair, not the encounter, and getting that wrong cost the tier
+    its Heroic half.** On 2026-09-06 a run produced a Mythic block for all eight MID2
+    bosses -- `fightsSampled: 0`, so not ``None`` -- and the encounter-level guard
+    that used to stand here ("carry forward only when the new `measured` is None")
+    was therefore False eight times over. Each encounter's `measurements` list was
+    replaced wholesale and every Heroic block went with it: 145 rows over 86 kills
+    down to 29 over 13, and two bosses whose headline WAS their Heroic block fell to
+    an empty Mythic one. The commit read `1 file changed, 1 insertion(+), 1
+    deletion(-)`, because the document is written on one line.
 
-    That is not a smaller claim, it is a *different* one. ``fightsSampled: 0`` says
-    the probe looked and read nothing; ``measured: null`` says nothing ever looked,
-    and the view says something different for each. Observed on 2026-08-21: a
-    ``--no-resume`` pass moved four of MID2's eight encounters from the first state
-    to the second, and the whole-document guard above could not see it because the
-    other four still carried measurements.
+    `fightprobe.entry_key` and `_at_difficulty` have both keyed on
+    ``(encounterId, difficulty)`` since 2026-08-26, with comments describing this
+    exact loss. This function was the one place that still keyed on the encounter.
 
     The carried block is from an earlier run, so ``measurement.generatedAt`` bounds
-    the newest measurement in the document rather than every entry in it. That is
-    the lesser of the two inaccuracies: the alternative asserts an encounter was
-    never probed when it was.
+    the newest measurement in the document rather than every entry in it. That is the
+    lesser of the two inaccuracies: the alternative asserts a difficulty was never
+    probed when it was.
+
+    Historical note on the narrower case this replaces, which it still covers:
+    ``--no-resume`` clears the previous payload by design, so an encounter the run
+    did not reach vanishes from it and publishes as ``measured: null``. That is not a
+    smaller claim, it is a *different* one -- ``fightsSampled: 0`` says the probe
+    looked and read nothing, ``null`` says nothing ever looked, and the view says
+    something different for each. Observed on 2026-08-21: a ``--no-resume`` pass moved
+    four of MID2's eight encounters from the first state to the second, and the
+    whole-document guard above could not see it because the other four still carried
+    measurements.
     """
     by_id = {
         entry.get("encounterId"): entry
@@ -1643,24 +1659,90 @@ def _keep_measurements(published: dict, document: dict) -> dict:
     encounters = []
     for entry in document.get("encounters") or []:
         was = by_id.get(entry.get("encounterId"))
-        if entry.get("measured") is None and was is not None and was.get("measured") is not None:
-            # Both fields, as a pair. `measured` is one member of `measurements`, so
-            # carrying the headline forward and leaving the list empty would publish a
-            # boss whose two blocks disagree about whether it was measured at all --
-            # and the per-difficulty list is the one a reader checks for the OTHER
-            # difficulty, which is exactly what a --no-resume pass is most likely to
-            # have dropped.
-            entry = {
-                **entry,
-                "measured": was["measured"],
-                "measuredDifficulty": was.get("measuredDifficulty"),
-                "measurements": was.get("measurements") or [],
-            }
-            kept += 1
+        fresh = _blocks_by_difficulty(entry)
+        merged = _blocks_by_difficulty(was)
+        for difficulty, block in fresh.items():
+            older = merged.get(difficulty) or {}
+            # A difficulty this run READ wins. One it looked at and found nothing
+            # does not displace a block holding kills: the payload is where an
+            # untouched difficulty is supposed to come back whole, so this only
+            # fires when that failed -- and then the older numbers are the lesser
+            # inaccuracy, exactly the trade this function has always made.
+            if block.get("fightsSampled") or not older.get("fightsSampled"):
+                merged[difficulty] = block
+        if merged == fresh:
+            encounters.append(entry)
+            continue
+        # Hardest first, so a reader meets Mythic before Heroic; `None` -- a fight
+        # stating no difficulty -- sorts last because it is the weakest row.
+        blocks = sorted(merged.values(), key=lambda block: -_difficulty_rank(block))
+        headline = max(blocks, key=_headline_rank)
+        entry = {
+            **entry,
+            "measurements": blocks,
+            "measuredDifficulty": headline.get("difficulty"),
+            # `measured` IS one of the blocks, minus the key that says which. Deriving
+            # it here rather than keeping the published one is what stops the pair
+            # disagreeing about what is being shown.
+            "measured": {k: v for k, v in headline.items() if k != "difficulty"},
+        }
+        kept += 1
         encounters.append(entry)
     if not kept:
         return document
-    return {**document, "encounters": encounters}
+    # The headline moved on `kept` encounters, so the count derived from it has to be
+    # taken again. Left alone, a document could carry restored measurements under a
+    # `coverage.measured` that was computed before they came back -- and that field is
+    # what `MeasurementWouldBeLost` reads on the NEXT run.
+    coverage = {
+        **(document.get("coverage") or {}),
+        "measured": sum(
+            1 for entry in encounters if (entry.get("measured") or {}).get("fightsSampled", 0) > 0
+        ),
+    }
+    return {**document, "encounters": encounters, "coverage": coverage}
+
+
+def _difficulty_rank(block: dict) -> int:
+    difficulty = block.get("difficulty")
+    return difficulty if isinstance(difficulty, int) else -1
+
+
+#: Which block's numbers become the encounter's headline `measured`. Same policy as
+#: `_hardest` one layer up -- a block that READ a fight beats one that did not, and
+#: only then does difficulty decide -- and deliberately NOT that function: it ranks on
+#: `fights`, a payload field these blocks do not carry, so over them it would rank
+#: every block equal and fall back to difficulty alone. That picks the empty Mythic
+#: block over a Heroic one holding seventeen kills, which is the exact misreading this
+#: repair is about. The document's own word for the same thing is `fightsSampled`.
+def _headline_rank(block: dict) -> tuple[bool, int]:
+    return (bool(block.get("fightsSampled")), _difficulty_rank(block))
+
+
+def _blocks_by_difficulty(entry: dict | None) -> dict[int | None, dict]:
+    """An encounter's per-difficulty measurement blocks, keyed by difficulty.
+
+    A document written before `measurements` existed carries only the headline pair,
+    so it is reconstructed from that -- `measured` *is* one of the blocks and
+    `measuredDifficulty` says which. Reading such a document as "holds no blocks"
+    would discard the one measurement this function exists to keep.
+    """
+    if not entry:
+        return {}
+    blocks: dict[int | None, dict] = {
+        block.get("difficulty"): block
+        for block in entry.get("measurements") or []
+        if isinstance(block, dict)
+    }
+    if blocks:
+        return blocks
+    measured = entry.get("measured")
+    if isinstance(measured, dict):
+        blocks[entry.get("measuredDifficulty")] = {
+            "difficulty": entry.get("measuredDifficulty"),
+            **measured,
+        }
+    return blocks
 
 
 def load_probe(path: Path) -> dict:

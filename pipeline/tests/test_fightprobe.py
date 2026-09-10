@@ -448,6 +448,83 @@ def test_every_setting_the_resume_checks_is_written_onto_the_encounter(tmp_path,
     assert fightprobe.is_complete(entry, 1, entry["eventBudget"], entry["order"], 5) is False
 
 
+def test_a_single_encounter_run_keeps_every_other_boss_in_the_payload(tmp_path, monkeypatch):
+    """A run contributes what it managed; everything else comes back untouched.
+
+    That sentence has stood as a comment over the payload write since the resume was
+    built, and the code under it did the opposite: it filtered the merged entries to
+    the encounters *this* run asked about. So a `--encounter N` dispatch rewrote the
+    shared payload down to one boss, and the next scheduled run rebuilt the document
+    from what was left.
+
+    It is not hypothetical. On 2026-09-06 two single-encounter dispatches ran twenty
+    minutes apart (53421 and its live twin 3421, the evidence for #143); the 11:07
+    scheduled run then published MID2 with both difficulties of six bosses gone --
+    145 sampled rows over 86 distinct kills down to 29 over 13.
+
+    Only the sort KEY ever needed the membership. This pins that it asks for it
+    without excluding anybody.
+    """
+    from wowdps import cli, warcraftlogs
+
+    path = tmp_path / f"fight-probe-{VOIDSPIRE_TIER}.json"
+    path.write_text(
+        json.dumps(
+            {
+                "encounters": [
+                    {"encounterId": 3181, "difficulty": 4, "fights": [{"id": 1}]},
+                    {"encounterId": 3181, "difficulty": 5, "fights": [{"id": 2}]},
+                    {"encounterId": 3180, "difficulty": 4, "fights": [{"id": 3}]},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    stub = StubClient(
+        structure=structure_payload(),
+        events={"DamageTaken": [damage(s, a) for a in (10, 11) for s in (0.5, 299.0)]},
+        tables={},
+    )
+    monkeypatch.setattr(
+        warcraftlogs.Credentials,
+        "from_env",
+        classmethod(lambda cls: warcraftlogs.Credentials("i", "s")),
+    )
+    monkeypatch.setattr(fightprobe, "WarcraftLogsClient", lambda *a, **k: stub)
+
+    args = cli.build_parser().parse_args(
+        [
+            "fight-probe",
+            "--tier",
+            VOIDSPIRE_TIER,
+            "--encounter",
+            "3180",
+            "--reports",
+            "1",
+            "--difficulty",
+            "5",
+            "--out",
+            str(tmp_path),
+        ]
+    )
+    assert fightprobe.cmd_fight_probe(args) == 0
+
+    written = json.loads(path.read_text(encoding="utf-8"))
+    keys = [(e["encounterId"], e.get("difficulty")) for e in written["encounters"]]
+
+    # The boss this run never mentioned is still here, at BOTH difficulties.
+    assert (3181, 4) in keys and (3181, 5) in keys
+    # So is the other difficulty of the boss it did read.
+    assert (3180, 4) in keys
+    assert (3180, 5) in keys, "and this run's own answer"
+
+    # The requested encounter still leads, hardest difficulty first, so the file does
+    # not reshuffle between runs and make a diff meaningless. The rest follows by id.
+    assert keys[:2] == [(3180, 5), (3180, 4)]
+    assert keys[2:] == [(3181, 5), (3181, 4)]
+
+
 def test_first_kills_are_taken_by_date_across_gathered_pages():
     """WCL sorts rankings by damage, so the earliest kills sit deep in the list. The
     selector reads the startTime every row carries and takes the earliest, across

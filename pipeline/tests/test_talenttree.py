@@ -572,6 +572,35 @@ def test_the_partial_bit_is_derived_from_the_rank_when_it_was_not_recorded():
     )
 
 
+def test_the_tree_hash_the_source_carried_is_read_back_and_replayed():
+    """simc's exporter zero-fills the 128-bit tree hash. One shipped profile does not.
+
+    ``put_bit( tree_bits, 0 )``, commented "0-filled to bypass validation, as
+    GetTreeHash() is unavailable externally", was measured true of all 85 hashes across
+    both tiers on 2026-08-23 -- so the encoder wrote a literal zero and the corpus
+    round-tripped byte for byte. On 2026-09-09 simc shipped ``MID2_Druid_Feral`` with
+    ``4330dca1f4084b8ff5e0acf316a7bc0c`` in that field, **1 of 96**, and the corpus test
+    went red on a header the node stream had nothing to do with.
+
+    So the field joins ``framing`` and the four other wire facts the encoder cannot
+    derive: it is recorded and replayed rather than asserted. This is the hermetic
+    version -- the corpus test needs a simc checkout and CI is the only place it runs.
+    """
+    nodes = {10: [trait(10, 100, max_ranks=2)]}
+    stamped = header_bits(62)
+    # A tree hash with bits set at both ends of the 128, so a reader that truncates or
+    # reverses it cannot pass by accident.
+    stamped[24] = stamped[24 + 127] = 1
+    original = encode(stamped + [1, 1, 0, 0])
+
+    loadout = decode_loadout(original, nodes)
+    assert loadout.tree_hash == 1 | (1 << 127), "read as an integer, LSB first"
+    assert encode_loadout(loadout, nodes) == original, "and written back where it was"
+
+    zeroed = decode_loadout(encode(header_bits(62) + [1, 1, 0, 0]), nodes)
+    assert zeroed.tree_hash == 0, "the ordinary case is still zero, not None"
+
+
 def test_a_recorded_partial_bit_that_disagrees_with_the_rank_is_still_reproduced():
     """One shipped MID1 profile writes the partial bit on a node that holds all its
     ranks. simc refuses that string, but the encoder is the *inverse of the decoder*,

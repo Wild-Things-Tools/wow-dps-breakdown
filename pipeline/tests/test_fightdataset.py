@@ -960,6 +960,128 @@ def test_an_encounter_this_run_did_not_reach_keeps_what_it_had(tmp_path):
     assert by_id[2]["measured"]["fightsSampled"] == 0, "the unreached one keeps its own"
 
 
+def _encounter_with_blocks(encounter_id, *blocks):
+    """A document encounter shaped the way `_encounter_document` builds one.
+
+    `measured` is one MEMBER of `measurements` -- the hardest that read a fight --
+    minus the key naming which. A fixture that carries only `measured`, as the
+    older tests here do, cannot express a boss measured at two difficulties, which
+    is why none of them could see the loss this shape exists to pin.
+    """
+    ranked = sorted(
+        blocks,
+        key=lambda b: (bool(b.get("fightsSampled")), b.get("difficulty") or -1),
+    )
+    headline = ranked[-1]
+    return {
+        "encounterId": encounter_id,
+        "name": str(encounter_id),
+        "measurements": sorted(blocks, key=lambda b: -(b.get("difficulty") or -1)),
+        "measuredDifficulty": headline["difficulty"],
+        "measured": {k: v for k, v in headline.items() if k != "difficulty"},
+    }
+
+
+def _doc(*encounters):
+    return {
+        "generatedAt": "2026-09-06T00:00:00+00:00",
+        "coverage": {
+            "measured": sum(
+                1 for e in encounters if (e["measured"] or {}).get("fightsSampled", 0) > 0
+            )
+        },
+        "encounters": list(encounters),
+    }
+
+
+def test_a_difficulty_this_run_did_not_read_keeps_its_own_measurements(tmp_path):
+    """The unit of the union is (encounter, difficulty). It used to be the encounter.
+
+    Reproduces the 2026-09-06 loss in miniature. A run produced a Mythic block for
+    every boss -- `fightsSampled: 0`, so not None -- and the encounter-level guard
+    ("carry forward only when the new `measured` is None") was False every time. Each
+    `measurements` list was replaced wholesale and the Heroic half went with it: MID2
+    fell from 145 rows over 86 kills to 29 over 13, and the two bosses whose headline
+    WAS their Heroic block dropped to an empty Mythic one.
+
+    `fightprobe.entry_key` and `_at_difficulty` have keyed on the pair since
+    2026-08-26; this was the one place that still keyed on the encounter alone.
+    """
+    from wowdps.fightdataset import write_fights
+
+    mythic_empty = {"difficulty": 5, "fightsSampled": 0, "reports": [], "timeline": None}
+    heroic_read = {"difficulty": 4, "fightsSampled": 17, "reports": ["a"], "timeline": {}}
+
+    write_fights(tmp_path, _doc(_encounter_with_blocks(1, mythic_empty, heroic_read)))
+    # A Mythic-only run: it looked at Mythic, read nothing, and never asked Heroic.
+    write_fights(tmp_path, _doc(_encounter_with_blocks(1, mythic_empty)))
+
+    written = json.loads((tmp_path / "fights.json").read_text())
+    entry = written["encounters"][0]
+    at = {b["difficulty"]: b for b in entry["measurements"]}
+    assert set(at) == {4, 5}, "the difficulty this run never asked about is still here"
+    assert at[4]["fightsSampled"] == 17, "and it still carries its kills"
+    # The headline is re-derived from the merged blocks, so it cannot end up naming a
+    # difficulty whose block says something else -- `_hardest` ranks on `fights`, a
+    # PAYLOAD field these blocks do not carry, and would have picked the empty Mythic.
+    assert entry["measuredDifficulty"] == 4
+    assert entry["measured"]["fightsSampled"] == 17
+    assert "difficulty" not in entry["measured"], "`measured` is the block minus its key"
+    assert written["coverage"]["measured"] == 1, "recounted from the restored headline"
+
+
+def test_a_difficulty_this_run_did_read_still_wins(tmp_path):
+    """The control: carrying forward must not freeze a difficulty at its old numbers.
+
+    Without this the first test passes against a function that never takes the fresh
+    block at all -- which would publish last week's Mythic band forever.
+    """
+    from wowdps.fightdataset import write_fights
+
+    old = {"difficulty": 5, "fightsSampled": 3, "reports": ["old"], "timeline": None}
+    new = {"difficulty": 5, "fightsSampled": 9, "reports": ["new"], "timeline": None}
+    heroic = {"difficulty": 4, "fightsSampled": 2, "reports": ["h"], "timeline": None}
+
+    write_fights(tmp_path, _doc(_encounter_with_blocks(1, old, heroic)))
+    write_fights(tmp_path, _doc(_encounter_with_blocks(1, new)))
+
+    entry = json.loads((tmp_path / "fights.json").read_text())["encounters"][0]
+    at = {b["difficulty"]: b for b in entry["measurements"]}
+    assert at[5]["reports"] == ["new"], "the difficulty this run read is this run's"
+    assert at[4]["fightsSampled"] == 2, "the one it did not read is still the old one"
+    assert entry["measuredDifficulty"] == 5, "and the headline follows the merge"
+
+
+def test_a_difficulty_re_read_to_nothing_keeps_the_kills_it_had(tmp_path):
+    """A fresh block that READ NOTHING does not displace a published one with kills.
+
+    The third state of the union, and the two tests above cannot reach it: one covers
+    a difficulty absent from the fresh document, the other one present and holding
+    more. This is the pair present in both where the FRESH side is empty -- and taking
+    the fresh block unconditionally there leaves both of them green while a boss's
+    seventeen kills become a zero.
+
+    It is belt-and-braces rather than an expected state: `fightprobe` brings an
+    untouched difficulty back through the payload, so this fires only when that failed
+    -- which is exactly what happened on 2026-09-06. Same rule as `_headline_rank` and
+    `_hardest` one layer up: a block that read a fight beats one that did not.
+    """
+    from wowdps.fightdataset import write_fights
+
+    read = {"difficulty": 5, "fightsSampled": 17, "reports": ["a"], "timeline": {}}
+    empty = {"difficulty": 5, "fightsSampled": 0, "reports": [], "timeline": None}
+
+    write_fights(tmp_path, _doc(_encounter_with_blocks(1, read)))
+    write_fights(tmp_path, _doc(_encounter_with_blocks(1, empty)))
+
+    written = json.loads((tmp_path / "fights.json").read_text())
+    entry = written["encounters"][0]
+    at = {b["difficulty"]: b for b in entry["measurements"]}
+    assert at[5]["fightsSampled"] == 17, "the run that read nothing did not erase them"
+    assert entry["measured"]["fightsSampled"] == 17, "and the headline still names them"
+    assert written["coverage"]["measured"] == 1
+
+
 def test_force_still_lets_a_measurement_go(tmp_path):
     """The override has to override this too, or --force stops meaning what it says."""
     from wowdps.fightdataset import write_fights

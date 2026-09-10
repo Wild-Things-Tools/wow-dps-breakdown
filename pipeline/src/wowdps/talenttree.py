@@ -440,6 +440,24 @@ class Loadout:
     #: a loadout assembled in code, which then encodes to its own shortest form.
     framing: Framing | None = None
 
+    #: The 128-bit tree hash the source string carried, replayed by the encoder.
+    #:
+    #: **It is usually zeros and it is not always zeros.** simc's own exporter writes
+    #: ``put_bit( tree_bits, 0 )``, commented "0-filled to bypass validation, as
+    #: GetTreeHash() is unavailable externally" -- and on 2026-08-23 that was measured
+    #: true of all 85 hashes across both tiers, so the encoder wrote a literal zero and
+    #: nothing lost anything. On 2026-09-09 simc shipped ``MID2_Druid_Feral`` carrying
+    #: ``4330dca1f4084b8ff5e0acf316a7bc0c``: **1 of 96**, and the byte-identity test
+    #: went red on a header that the node stream had nothing to do with.
+    #:
+    #: It rides with ``spare_bits`` rather than with ``framing``: it describes the
+    #: *source build*, so a mutation must not carry it (``talentedit._with`` zeroes it).
+    #: A stale tree hash is inert in simc, which skips the field on parse -- but it is
+    #: exactly the field Blizzard's client validates, which is why simc zero-fills, so
+    #: pasting a mutant carrying somebody else's hash into the game is the one place it
+    #: could bite.
+    tree_hash: int = 0
+
     @property
     def sub_tree(self) -> int | None:
         """The hero tree, from the SELECTION node -- the authoritative answer.
@@ -586,7 +604,7 @@ def _read(
             f"loadout serialization version {version}, expected {LOADOUT_VERSION}"
         )
     spec_id = reader.read(SPEC_BITS)
-    reader.read(TREE_BITS)  # tree hash; simc skips it too
+    tree_hash = reader.read(TREE_BITS)  # simc skips this; we replay it, see Loadout
 
     selections: list[Selection] = []
     overflows: list[ChoiceOverflow] = []
@@ -657,6 +675,7 @@ def _read(
             selections=tuple(selections),
             spare_bits=spare,
             framing=Framing(length=len(loadout), tail=tail),
+            tree_hash=tree_hash,
         ),
         tuple(overflows),
     )
@@ -741,7 +760,7 @@ def encode_loadout(
     writer = _BitWriter()
     writer.write(loadout.version, VERSION_BITS)
     writer.write(loadout.spec_id, SPEC_BITS)
-    writer.write(0, TREE_BITS)
+    writer.write(loadout.tree_hash, TREE_BITS)
 
     chosen: dict[int, Selection] = {}
     for selection in loadout.selections:

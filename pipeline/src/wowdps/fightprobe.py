@@ -983,11 +983,23 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
     # reader meets Mythic before Heroic. Sorted rather than arrival-ordered so the file
     # does not reshuffle between runs and make a diff meaningless -- and `None` sorts
     # last because "stated no difficulty" is the weakest row, not the hardest.
+    # An encounter this run did not ask about is sorted AFTER, never dropped. The
+    # filter that used to stand here is the whole of the 2026-09-06 loss: two
+    # single-encounter dispatches that morning each rewrote the shared payload down
+    # to their own boss, and the next scheduled run rebuilt the document from what
+    # was left -- 145 rows over 86 kills down to 29 over 13, both difficulties of
+    # six bosses gone. The comment above has promised the opposite since the resume
+    # was written; only the sort KEY ever needed the membership, and it can ask for
+    # it without excluding anybody.
+    requested = {encounter_id: at for at, encounter_id in enumerate(encounter_ids)}
     merged = [
         by_id[key]
         for key in sorted(
-            (k for k in by_id if k[0] in set(encounter_ids)),
-            key=lambda k: (encounter_ids.index(k[0]), -(k[1] if k[1] is not None else -1)),
+            by_id,
+            key=lambda k: (
+                (0, requested[k[0]]) if k[0] in requested else (1, k[0]),
+                -(k[1] if k[1] is not None else -1),
+            ),
         )
     ]
     # Outstanding is asked per difficulty: this run wanted `settings.difficulty`, and
