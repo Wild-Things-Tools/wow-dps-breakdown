@@ -1906,14 +1906,25 @@ def describe_cost(ledger: dict, plan: QueryPlan, kills: int) -> list[str]:
     extrapolation wherever they appear, because that is what they are: one
     measurement divided by a count and multiplied by a different count.
     """
+    from .warcraftlogs import SPEND_NO_READING, SPEND_WENT_BACKWARDS, spend_state_of
+
     lines = [f"queries sent: {plan.total} ({plan.to_json()['note'].split('.')[0].lower()})"]
     spent = ledger.get("pointsSpentThisRun")
     limit = ledger.get("limitPerHour")
+    state = spend_state_of(ledger)
 
-    if spent is None:
+    if state == SPEND_NO_READING:
         lines.append("cost: no rate-limit reading came back, so this pass is unmeasured")
         return lines
-    if spent <= 0:
+    if state == SPEND_WENT_BACKWARDS:
+        lines.append(
+            f"cost: UNMEASURED -- the hourly counter went BACKWARDS (readings "
+            f"{ledger.get('firstReading')} -> {ledger.get('lastReading')} of {limit}), so "
+            f"the two readings are not from the same hour and their difference is not a "
+            f"cost."
+        )
+        return lines
+    if spent is None or spent <= 0:
         lines.append(
             f"cost: UNMEASURED -- the hourly counter did not move (readings "
             f"{ledger.get('firstReading')} -> {ledger.get('lastReading')} of {limit}). "

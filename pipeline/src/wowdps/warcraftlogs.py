@@ -474,6 +474,36 @@ class Credentials:
         return cls(client_id=client_id, client_secret=client_secret)
 
 
+#: The four things two bracketing readings of the hourly counter can say. A run's
+#: cost is only a *measurement* in the last of them, and the other three are three
+#: different findings rather than three ways of writing zero.
+SPEND_NO_READING = "no-reading"
+SPEND_WENT_BACKWARDS = "went-backwards"
+SPEND_DID_NOT_MOVE = "did-not-move"
+SPEND_MEASURED = "measured"
+
+
+def spend_state(first: float | None, last: float | None) -> str:
+    """Classify a pair of readings, in one place for every reader of them.
+
+    Both a live ``PointLedger`` and a published ``cost`` block have to answer this,
+    and a second implementation of the rule is the thing that drifts -- the split
+    ``fightextract.group_uploads`` already carries for the same reason.
+    """
+    if first is None or last is None:
+        return SPEND_NO_READING
+    if last < first:
+        return SPEND_WENT_BACKWARDS
+    if last == first:
+        return SPEND_DID_NOT_MOVE
+    return SPEND_MEASURED
+
+
+def spend_state_of(ledger: dict) -> str:
+    """The same classification over a published ``cost`` block."""
+    return spend_state(ledger.get("firstReading"), ledger.get("lastReading"))
+
+
 @dataclass
 class PointLedger:
     """What the API actually charged, read back from ``rateLimitData``.
@@ -533,9 +563,31 @@ class PointLedger:
                 self.request_headers[str(key).lower()] = str(value)
 
     def record(self, label: str, payload: dict, cached: bool = False) -> None:
+        """Count the query, and take its budget reading only if it is this run's.
+
+        **A cache hit must not move the readings**, and that is measured rather
+        than tidy. A cached response carries the ``rateLimitData`` block that was
+        preserved with it, so serving one pushes a *previous run's* counter into
+        this ledger. Run 34035705116 (spawn-probe, 2026-09-06) published
+        ``pointsSpentThisRun: -1524.0`` for exactly that reason: its 74 fresh
+        responses read 4005.27 -> 4340.19, rising throughout, and the final
+        "reading" of 2480.27 came out of a restored cache file whose sha256
+        matches the artifact of a run seven minutes earlier.
+
+        Two consequences were worse than the negative number. ``pointsSpentThisHour``
+        was published as the earlier run's figure, understating the hour by ~1,860
+        points; and ``fightprobe.check_budget`` compared ``--point-ceiling``
+        against a stale balance, so the guard that exists to stop short of a 429
+        was arguing from a number that was minutes old.
+
+        This is the rule ``rate_limit`` already states one function down -- *a
+        cached response is a record of then and this query asks about now* -- and
+        it was never applied to the readings that ride along with every other
+        query. The entry is still appended, so ``cacheHits`` counts it.
+        """
         data = payload.get("rateLimitData") or {}
         spent = data.get("pointsSpentThisHour")
-        if isinstance(spent, (int, float)):
+        if isinstance(spent, (int, float)) and not cached:
             if self.first_reading is None:
                 self.first_reading = float(spent)
             self.last_reading = float(spent)
@@ -546,10 +598,27 @@ class PointLedger:
         )
 
     @property
+    def spend_state(self) -> str:
+        """Which of the four things the two bracketing readings can say."""
+        return spend_state(self.first_reading, self.last_reading)
+
+    @property
     def spent(self) -> float | None:
-        """Points this run cost, or ``None`` when nothing reported a reading."""
-        if self.first_reading is None or self.last_reading is None:
+        """Points this run cost, or ``None`` when the readings cannot say.
+
+        ``None`` covers two states and they are different findings, which is why
+        ``spend_state`` exists beside this: nothing reported a reading at all, or
+        the counter went *backwards* between the two. Never a negative number and
+        never ``abs()`` -- a negative reads as a measurement, is not one, and
+        clamping it would replace a wrong number with a more plausible wrong
+        number, which this repository refuses by name.
+        """
+        if spend_state(self.first_reading, self.last_reading) in (
+            SPEND_NO_READING,
+            SPEND_WENT_BACKWARDS,
+        ):
             return None
+        assert self.first_reading is not None and self.last_reading is not None
         return round(self.last_reading - self.first_reading, 4)
 
     def to_json(self) -> dict:
@@ -562,6 +631,12 @@ class PointLedger:
             "firstReading": self.first_reading,
             "lastReading": self.last_reading,
             "pointsResetIn": self.resets_in,
+            # Named, so a reader of the document does not have to re-derive it from
+            # the two readings beside it. Always emitted rather than only when true:
+            # this block is rebuilt on every run and sits outside every settle
+            # comparison, so an absent key means "written before this existed"
+            # rather than "false".
+            "counterWentBackwards": self.spend_state == SPEND_WENT_BACKWARDS,
             "queries": len([entry for entry in self.entries if not entry[2]]),
             "cacheHits": len([entry for entry in self.entries if entry[2]]),
             "note": (
@@ -571,6 +646,32 @@ class PointLedger:
                 "response."
             ),
         }
+
+
+def spend_sentence(ledger: PointLedger) -> str:
+    """One line saying what a run cost, or which kind of unmeasured it is.
+
+    Three commands printed the identical sentence with the identical branch, and
+    all three said "the hourly counter did not move" for **any** falsy value --
+    which is right for ``0.0`` and was never reached for a negative one, because
+    ``-1524.0`` is truthy and printed as ``-1524.0 points``. That is the shape this
+    repository refuses everywhere else: a number that reads as a measurement and is
+    the absence of one.
+    """
+    state = ledger.spend_state
+    readings = f"readings {ledger.first_reading} -> {ledger.last_reading}"
+    if state == SPEND_NO_READING:
+        return "UNMEASURED (no rate-limit reading came back)"
+    if state == SPEND_WENT_BACKWARDS:
+        return (
+            f"UNMEASURED (the hourly counter went BACKWARDS, {readings}) -- the two "
+            "readings are not from the same hour, so their difference is not a cost"
+        )
+    if state == SPEND_DID_NOT_MOVE:
+        return f"UNMEASURED (the hourly counter did not move, {readings})"
+    spent = ledger.spent
+    assert spent is not None
+    return f"{spent:.1f} points"
 
 
 class WarcraftLogsClient:

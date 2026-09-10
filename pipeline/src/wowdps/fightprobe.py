@@ -1139,13 +1139,34 @@ def _report_cost(ledger: dict, encounters: int) -> None:
     rides on, or the hour had just reset. Both mean *unmeasured*, and the raw
     readings are printed so the next run can tell which.
     """
+    from .warcraftlogs import (
+        SPEND_DID_NOT_MOVE,
+        SPEND_NO_READING,
+        SPEND_WENT_BACKWARDS,
+        spend_state_of,
+    )
+
     spent = ledger.get("pointsSpentThisRun")
     limit = ledger.get("limitPerHour")
-    if spent is None:
+    state = spend_state_of(ledger)
+    if state == SPEND_NO_READING:
         log.info("cost: no rate-limit reading came back, so this pass is unmeasured")
         return
 
-    if spent <= 0:
+    if state == SPEND_WENT_BACKWARDS:
+        # A third state, and it is not "did not move". The readings are from two
+        # different hours, so their difference is not a cost in either direction.
+        log.info(
+            "cost: UNMEASURED -- the hourly counter went BACKWARDS (readings %s -> %s "
+            "of %s), so the two readings are not from the same hour and their "
+            "difference is not a cost.",
+            ledger.get("firstReading"),
+            ledger.get("lastReading"),
+            limit,
+        )
+        return
+
+    if state == SPEND_DID_NOT_MOVE or spent is None or spent <= 0:
         log.info(
             "cost: UNMEASURED -- the hourly counter did not move (readings %s -> %s of %s). "
             "That is not the same as free; treat the cost of a full pass as unknown "
