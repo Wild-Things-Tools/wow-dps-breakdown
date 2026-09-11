@@ -623,11 +623,89 @@ def test_a_429_marks_stopped_on_budget_writes_and_exits_zero(tmp_path):
     assert entry["cursorGuildId"] == 1, "the interrupted guild is not passed"
 
 
+def test_a_429_on_the_zone_query_is_a_budget_stop_not_a_crash(tmp_path):
+    """The contract's 429 clause holds on every query, the zone listing included:
+    zone 44's rows are written, the run stops, exit 0 -- never a traceback with no
+    summary file behind it."""
+    client = StubClient(
+        zones={ZONE: zone_payload(), 46: RateLimited("429 on zone")},
+        rankings={(ENC, MYTHIC): [row(1)]},
+    )
+    report = sweep(client, tmp_path, zones=(ZONE, 46))
+    assert report.exit_code == 0
+    assert report.stopped and "zone 46" in report.stopped
+    assert [r["guildId"] for r in rows_of(tmp_path)] == [1]
+    assert report.zones_skipped == []
+
+
+def test_a_failed_first_budget_reading_is_a_red_run_that_wrote_nothing(tmp_path):
+    """A rotated secret or a dead route on the FIRST reading: no walk has begun and
+    nothing is paid for, so this is a run that could not start. Exit 1, not a green
+    run with `attempted: 0` -- which is the #219 shape once the cron is on."""
+    client = StubClient(
+        rankings={(ENC, MYTHIC): [row(1)]},
+        readings=[WarcraftLogsError("token request failed (401): bad client")],
+    )
+    report = sweep(client, tmp_path)
+    assert report.exit_code == 1
+    assert report.stopped is None
+    assert report.failed and "401" in report.failed
+    assert report.attempted == 0 and client.queries == []
+    assert not (tmp_path / "z44-d5.state.json").exists()
+    assert report.to_json()["failed"] == report.failed
+
+
+def test_a_deadline_or_a_429_on_the_first_reading_is_still_a_budget_stop(tmp_path):
+    client = StubClient(rankings={(ENC, MYTHIC): [row(1)]}, readings=[RateLimited("429")])
+    report = sweep(client, tmp_path)
+    assert report.exit_code == 0 and report.failed is None
+    assert report.stopped and "before the first walk" in report.stopped
+
+
+def test_a_reading_without_the_limit_is_unreadable_not_under_the_ceiling(tmp_path):
+    """A renamed `rateLimitData` field must not switch the ceiling off: fail-open
+    would walk the shared hourly counter down to a 429 with the guard gone."""
+    ok = {"limitPerHour": 18000.0, "pointsSpentThisHour": 100.0, "pointsResetIn": 900}
+    renamed = {"pointsResetIn": 900, "spent": 100.0}
+    client = StubClient(rankings={(ENC, MYTHIC): [row(1), row(2)]}, readings=[ok, ok, ok, renamed])
+    report = sweep(client, tmp_path)
+    assert report.exit_code == 0
+    assert report.stopped and "budget reading failed" in report.stopped
+    assert "limitPerHour" in report.stopped
+    assert [r["guildId"] for r in rows_of(tmp_path)] == [1]
+    assert state_of(tmp_path)["stoppedOnBudget"] is True
+    # On the FIRST reading the same defect is a run that could not start.
+    client = StubClient(rankings={(ENC, MYTHIC): [row(1)]}, readings=[renamed])
+    assert sweep(client, tmp_path / "second").exit_code == 1
+
+
 def test_the_budget_is_read_before_every_walk(tmp_path):
     client = StubClient(rankings={(ENC, MYTHIC): [row(1), row(2), row(3)]})
     sweep(client, tmp_path)
     # one before the first walk, one before the ranking walk, one per guild
     assert client.rate_limit_calls == 1 + 1 + 3
+
+
+def test_swept_at_is_the_encounter_s_own_time_not_the_run_s(tmp_path):
+    """On a five-hour run the last boss would otherwise carry a stamp five hours
+    stale, and `--refresh-after-live 6` would re-walk it early."""
+    client = StubClient(
+        zones={ZONE: zone_payload(encounters=((ENC, "A"), (ENC2, "B")))},
+        rankings={(ENC, MYTHIC): [row(1)], (ENC2, MYTHIC): [row(2)]},
+    )
+    ticks = iter(range(100))
+    run_sweep(
+        client,
+        options(),
+        tmp_path,
+        sleep=lambda _s: None,
+        clock=lambda: 0.0,
+        now=lambda: NOW + timedelta(minutes=next(ticks)),
+        run_id="t",
+    )
+    first, second = state_of(tmp_path, encounter=ENC), state_of(tmp_path, encounter=ENC2)
+    assert first["sweptAt"] < second["sweptAt"]
+    assert rows_of(tmp_path)[0]["measuredAt"] == rows_of(tmp_path)[1]["measuredAt"]
 
 
 # ── the per-guild walk ──────────────────────────────────────────────────────────
@@ -816,6 +894,91 @@ def test_a_guild_whose_fetch_fails_is_an_error_row_and_the_run_continues(tmp_pat
     assert state_of(tmp_path)["cursorGuildId"] == 2
 
 
+def test_a_transport_failure_is_retried_once_after_a_backoff(tmp_path):
+    """DECISIONS: timeout 90 s + 1 retry. The first attempt fails, the second is
+    measured, and exactly one backoff was slept."""
+
+    class FlakyOnce(StubClient):
+        def __init__(self, **kw):
+            super().__init__(**kw)
+            self.failed_once = False
+
+        def query(self, document, variables, label=None, cache=True):
+            if document is progresshours.GUILD_PULLS_QUERY and not self.failed_once:
+                self.failed_once = True
+                self.queries.append((label, dict(variables), cache))
+                raise WarcraftLogsError("request failed: ReadTimeout")
+            return super().query(document, variables, label, cache)
+
+    client = FlakyOnce(rankings={(ENC, MYTHIC): [row(1)]})
+    slept = []
+    report = run_sweep(
+        client,
+        options(),
+        tmp_path,
+        sleep=slept.append,
+        clock=lambda: 0.0,
+        now=lambda: NOW,
+        run_id="t",
+    )
+    assert report.stopped is None
+    assert [r["guildId"] for r in rows_of(tmp_path)] == [1]
+    assert refused_of(tmp_path) == []
+    assert slept == [progresssweep.RETRY_BACKOFF_SECONDS]
+    assert len([q for q in client.queries if q[0].startswith("pulls:")]) == 2
+
+
+def test_a_second_failure_is_the_error_outcome_and_the_log_names_no_guild(tmp_path, caplog):
+    client = StubClient(
+        rankings={(ENC, MYTHIC): [row(987654)]},
+        pulls={(987654, ENC, MYTHIC): WarcraftLogsError("request failed: ReadTimeout")},
+    )
+    slept = []
+    with caplog.at_level("INFO", logger="wowdps.progresssweep"):
+        run_sweep(
+            client,
+            options(),
+            tmp_path,
+            sleep=slept.append,
+            clock=lambda: 0.0,
+            now=lambda: NOW,
+            run_id="t",
+        )
+    assert [r["outcome"] for r in refused_of(tmp_path)] == ["error"]
+    assert slept == [progresssweep.RETRY_BACKOFF_SECONDS], "one retry, never a loop"
+    assert len([q for q in client.queries if q[0].startswith("pulls:")]) == 2
+    # The log is a public artifact; the guild is named in refused.jsonl, privately.
+    assert "ReadTimeout" in caplog.text and "987654" not in caplog.text
+
+
+def test_a_crash_inside_the_guild_loop_writes_what_was_paid_for_then_re_raises(
+    tmp_path, monkeypatch
+):
+    """A payload shape nobody has seen must not discard the verdicts already paid for
+    on the encounter -- the guard-beside-the-call shape this project keeps
+    producing. Guild 1 is written, the cursor stands on it, the encounter is marked
+    so the skip matrix never skips it, and the exception still goes up."""
+    real = progresssweep.attempts_to_kill
+
+    def explode_on_guild_2(reports, encounter_id, difficulty):
+        if any(
+            f.get("kill") and r["startTime"] + f["startTime"] == kill_at(2)
+            for r in reports
+            for f in r["fights"]
+        ):
+            raise TypeError("int() argument must be a string, not 'NoneType'")
+        return real(reports, encounter_id, difficulty)
+
+    monkeypatch.setattr(progresssweep, "attempts_to_kill", explode_on_guild_2)
+    client = StubClient(rankings={(ENC, MYTHIC): [row(1), row(2), row(3)]})
+    with pytest.raises(TypeError):
+        sweep(client, tmp_path)
+    assert [r["guildId"] for r in rows_of(tmp_path)] == [1]
+    entry = state_of(tmp_path)
+    assert entry["stoppedOnBudget"] is True and entry["cursorGuildId"] == 1
+    assert entry["attempted"] == 1
+
+
 def test_retry_errors_re_attempts_exactly_the_error_guilds(tmp_path):
     client = StubClient(
         rankings={(ENC, MYTHIC): [row(1), row(2, fromlog=0), row(3)]},
@@ -829,6 +992,29 @@ def test_retry_errors_re_attempts_exactly_the_error_guilds(tmp_path):
     pulls = [q[1]["g"] for q in client.queries[before:] if q[0].startswith("pulls:")]
     assert pulls == [1]
     assert [r["guildId"] for r in rows_of(tmp_path)] == [3, 1]
+
+
+def test_a_retry_keeps_the_full_walk_s_tallies_and_moves_the_guild_out_of_error(tmp_path):
+    """`named`/`shape`/`guildsSeen` are the first hand run's evidence; a retry walk
+    that admits only the error guilds must not overwrite them with its own partial
+    numbers, and the retried guild leaves the `error` count for its new outcome."""
+    client = StubClient(
+        rankings={(ENC, MYTHIC): [row(1), row(2, fromlog=0), row(3)]},
+        pulls={(1, ENC, MYTHIC): WarcraftLogsError("boom")},
+    )
+    sweep(client, tmp_path)
+    before = state_of(tmp_path)
+    assert before["outcomes"] == {"error": 1, "measured": 1, "unlogged-kill": 1}
+    assert before["guildsSeen"] == 3 and before["named"] == 3
+    client.pulls.clear()
+    client.rankings[(ENC, MYTHIC)].append(row(4, name=None))
+    sweep(client, tmp_path, retry_errors=True)
+    after_ = state_of(tmp_path)
+    assert after_["outcomes"] == {"measured": 2, "unlogged-kill": 1}
+    assert after_["guildsSeen"] == 3 and after_["named"] == 3
+    assert after_["shape"] == before["shape"] and after_["withoutGuild"] == 0
+    assert after_["attempted"] == 1
+    assert after_["cursorGuildId"] == before["cursorGuildId"]
 
 
 def test_an_httpx_timeout_inside_the_real_client_becomes_an_error_row(tmp_path):
@@ -974,6 +1160,15 @@ def test_validate_refuses_a_missing_manifest(tmp_path):
     assert progresssweep.validate(tmp_path) == ["manifest.json is missing"]
 
 
+def test_validate_refuses_a_stray_temp_file(tmp_path):
+    """The workflow's `git add` takes the whole directory; a write that died between
+    `write_text` and `os.replace` must not be committed as data."""
+    _committed_sweep(tmp_path)
+    (tmp_path / "z44-d5.rows.jsonl.tmp").write_text("{}\n")
+    problems = progresssweep.validate(tmp_path)
+    assert any("z44-d5.rows.jsonl.tmp" in p and "temp file" in p for p in problems), problems
+
+
 # ── the command line ────────────────────────────────────────────────────────────
 
 
@@ -984,6 +1179,14 @@ def test_the_parser_refuses_zone_zero_and_non_ints(capsys):
     with pytest.raises(SystemExit):
         cli.main(["progress-sweep", "--zones", "53,abc", "--out", "x"])
     assert "whole numbers" in capsys.readouterr().err
+
+
+def test_the_parser_refuses_a_difficulty_the_import_would_refuse(capsys):
+    """Normal (3) is a Warcraft Logs difficulty and not a cohort one: a `z<zone>-d3`
+    file set would be refused row by row on the private side and fail its job."""
+    with pytest.raises(SystemExit):
+        cli.main(["progress-sweep", "--difficulties", "5,3", "--out", "x"])
+    assert "takes 4, 5, not 3" in capsys.readouterr().err
 
 
 def test_the_parser_keeps_the_zones_in_the_order_given():
@@ -1021,7 +1224,10 @@ def test_seed_only_prints_the_pairs_and_sends_no_query(tmp_path, monkeypatch, ca
     out = capsys.readouterr().out
     assert code == 0
     assert "z44-d5: 1 row(s), 0 refusal(s), 1 encounter state(s)" in out
-    assert f"cursor {kill_at(1)}/1" in out and "walled False" in out
+    assert f"cursor {kill_at(1)}," in out and "walled False" in out
+    # The cursor's guild id stays in state.json: this output is tailed into a public
+    # step summary.
+    assert f"{kill_at(1)}/" not in out
 
 
 def test_more_than_one_worker_is_refused_with_a_reason(tmp_path, caplog):

@@ -2393,8 +2393,9 @@ def cmd_progress_sweep(args: argparse.Namespace) -> int:
     """Walk whole progress rankings into the cohort file set. See ``progresssweep``.
 
     Exit codes: 0 done or stopped on budget (what is measured is written), 1 a
-    ``--validate`` violation or a usage error, 2 a zone Warcraft Logs would not
-    list, 3 a schema alarm on some pair.
+    ``--validate`` violation, a usage error, or a first budget reading that failed
+    for a reason that is not the budget (nothing swept, so the job must go red), 2 a
+    zone Warcraft Logs would not list, 3 a schema alarm on some pair.
     """
     import json as _json
 
@@ -3282,9 +3283,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_sweep.add_argument(
         "--difficulties",
-        type=_int_list("--difficulties", allow=(3, 4, 5)),
+        # 4 and 5 only, the import's own rule: a `z<zone>-d3` file set would be refused
+        # row by row on the private side, trip its "100 % of a file refused" wrong-
+        # database alarm and fail the daily job over a sweep nobody asked for.
+        type=_int_list("--difficulties", allow=(4, 5)),
         default=progresssweep.DEFAULT_DIFFICULTIES,
-        help="comma-separated, swept in this order on one budget. Default 5,4",
+        help="comma-separated, swept in this order on one budget (5 Mythic, 4 Heroic; "
+        "nothing else, the import refuses it). Default 5,4",
     )
     p_sweep.add_argument(
         "--guilds",

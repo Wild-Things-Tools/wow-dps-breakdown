@@ -98,6 +98,10 @@ SWEEP_TIMEOUT_SECONDS = 90.0
 
 #: Seconds added to ``pointsResetIn`` before re-reading the counter after a ceiling.
 RESET_SLACK_SECONDS = 30
+#: Between the two attempts on one guild after a transport failure. One retry, not a
+#: loop: a guild whose second attempt also times out is the `error` outcome and
+#: `--retry-errors` is the way back to it.
+RETRY_BACKOFF_SECONDS = 5.0
 #: What to wait when the service states no ``pointsResetIn`` at all: a whole window.
 #: Guessing shorter would re-read a counter that has not moved.
 FALLBACK_RESET_SECONDS = 3600
@@ -114,6 +118,11 @@ OUTCOME_NO_KILL_TIME = "no-kill-time"
 
 EXIT_OK = 0
 EXIT_VALIDATION = 1
+#: A run that could not start: the first budget reading failed for a reason that is
+#: not the budget -- a rotated secret, a dead route. Nothing was paid for, nothing is
+#: written, and the job goes RED, because a green run that swept nothing is the #219
+#: shape: four scheduled runs, all "successful", zero new rows.
+EXIT_FAILED = 1
 EXIT_ZONE_SKIPPED = 2
 EXIT_SCHEMA_ALARM = 3
 
@@ -509,13 +518,15 @@ def attempt_guild(
     max_pages: int,
     measured_at: str,
     run_id: str,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> Verdict:
     """One guild, start to verdict. Everything that spends a point on it is in here.
 
     Raises :class:`RateLimited` (a 429) upward: that is a run-level stop, not a
     guild-level finding. Every other :class:`WarcraftLogsError` -- timeouts included,
-    after the client's httpx mapping -- is the ``error`` outcome: the guild is named
-    in ``refused.jsonl`` and ``--retry-errors`` reaches it again.
+    after the client's httpx mapping -- is retried ONCE after
+    :data:`RETRY_BACKOFF_SECONDS`; failing again, it is the ``error`` outcome: the
+    guild is named in ``refused.jsonl`` and ``--retry-errors`` reaches it again.
     """
     # Screen 1, before any report query. `fromlog == 0` means Warcraft Logs holds no
     # log behind the first kill, so a report walk CANNOT find it and would find a
@@ -528,15 +539,25 @@ def attempt_guild(
         # Never handed to `pull_time` as None: that disables screen 2 silently.
         return Verdict(row.guild_id, OUTCOME_NO_KILL_TIME)
 
-    try:
-        reports, truncated = walk_reports(
-            client, row.guild_id, zone_id, encounter_id, difficulty, max_pages
-        )
-    except RateLimited:
-        raise
-    except WarcraftLogsError as exc:
+    failure: WarcraftLogsError | None = None
+    for attempt in (1, 2):
+        try:
+            reports, truncated = walk_reports(
+                client, row.guild_id, zone_id, encounter_id, difficulty, max_pages
+            )
+            break
+        except RateLimited:
+            raise
+        except WarcraftLogsError as exc:
+            failure = exc
+            if attempt == 1:
+                sleep(RETRY_BACKOFF_SECONDS)
+    else:
         return Verdict(
-            row.guild_id, RETRYABLE_OUTCOME, kill_time_ms=row.kill_time_ms, detail=str(exc)[:200]
+            row.guild_id,
+            RETRYABLE_OUTCOME,
+            kill_time_ms=row.kill_time_ms,
+            detail=f"twice: {str(failure)[:200]}",
         )
     if truncated:
         # The guild's FIRST kill may be older than anything fetched, so the window
@@ -901,9 +922,17 @@ class Budget:
                 raise DeadlineReached("deadline reached")
             reading = self.client.rate_limit()
             self.readings += 1
-            limit = float(reading.get("limitPerHour") or 0)
-            spent = float(reading.get("pointsSpentThisHour") or 0)
-            if not limit or spent < limit * self.ceiling:
+            limit_raw = reading.get("limitPerHour")
+            spent_raw = reading.get("pointsSpentThisHour")
+            if not isinstance(limit_raw, (int, float)) or not isinstance(spent_raw, (int, float)):
+                # A renamed field must not read as "under the ceiling": that walks
+                # the shared hourly counter down to a 429 with the guard switched off.
+                raise WarcraftLogsError(
+                    "rate limit reading carries no limitPerHour/pointsSpentThisHour: "
+                    f"{sorted(reading)}"
+                )
+            limit, spent = float(limit_raw), float(spent_raw)
+            if spent < limit * self.ceiling:
                 return
             reset = reading.get("pointsResetIn")
             wait = (
@@ -951,6 +980,7 @@ class SweepReport:
     zones_skipped: list[int] = field(default_factory=list)
     alarmed_pairs: list[str] = field(default_factory=list)
     stopped: str | None = None
+    failed: str | None = None
     ranking_errors: int = 0
     sleeps: int = 0
     slept_seconds: float = 0.0
@@ -974,6 +1004,7 @@ class SweepReport:
             "zonesSkipped": self.zones_skipped,
             "alarmedPairs": self.alarmed_pairs,
             "stopped": self.stopped,
+            "failed": self.failed,
             "rankingErrors": self.ranking_errors,
             "sleeps": self.sleeps,
             "sleptSeconds": self.slept_seconds,
@@ -1047,7 +1078,11 @@ def run_sweep(
 
     Returns the report; its ``exit_code`` is 3 when any pair alarmed, 2 when any zone
     could not be listed, 0 otherwise -- a budget or deadline stop is 0, because what
-    was measured is written and the next run continues from the cursor.
+    was measured is written and the next run continues from the cursor. The one
+    exception is 1: the FIRST budget reading failed for a reason that is not the
+    budget (a 401 from the token endpoint, a transport failure). No walk has begun and
+    nothing is paid for, so that is a run that could not start, and it must not be a
+    green run that swept nothing.
     """
     now = now or (lambda: datetime.now(UTC))
     run_id = run_id or os.environ.get("GITHUB_RUN_ID") or "local"
@@ -1072,10 +1107,19 @@ def run_sweep(
     try:
         try:
             budget.check()
-        except (DeadlineReached, WarcraftLogsError) as exc:
+        except (DeadlineReached, RateLimited) as exc:
             raise _StopRun(f"before the first walk: {exc}") from None
+        except WarcraftLogsError as exc:
+            report.failed = f"the first budget reading failed: {exc}"
+            log.error("%s; nothing swept", report.failed)
+            note_points()
+            report.exit_code = EXIT_FAILED
+            return report
         for zone_id in options.zones:
-            zone, why = _zone_encounters(client, zone_id)
+            try:
+                zone, why = _zone_encounters(client, zone_id)
+            except RateLimited as exc:
+                raise _StopRun(f"rate limited listing zone {zone_id}: {exc}") from None
             if zone is None:
                 log.warning("%s; skipping the zone", why)
                 report.zones_skipped.append(zone_id)
@@ -1191,46 +1235,62 @@ def _sweep_encounter(
     new_refused: list[str] = []
     cursor: tuple[float, int] | None = None
     stopped: str | None = None
-    for row in walk.fresh:
-        try:
-            budget.check()
-            verdict = attempt_guild(
-                client,
-                zone_id=pair.zone_id,
-                encounter_id=encounter_id,
-                difficulty=pair.difficulty,
-                row=row,
-                max_pages=options.max_pages,
-                measured_at=measured_at,
-                run_id=run_id,
-            )
-        except DeadlineReached as exc:
-            stopped = str(exc)
-            break
-        except RateLimited as exc:
-            stopped = f"rate limited: {exc}"
-            break
-        except WarcraftLogsError as exc:
-            # Only `budget.check()` can raise this here: `attempt_guild` turns its
-            # own into the `error` verdict. A counter that cannot be read is a
-            # budget that cannot be honoured, so it stops the run like the ceiling.
-            stopped = f"budget reading failed: {exc}"
-            break
-        outcomes[verdict.outcome] = outcomes.get(verdict.outcome, 0) + 1
-        report.attempted += 1
-        if verdict.row is not None:
-            new_rows.append(dumps_line(verdict.row))
-            pair.rows[(encounter_id, verdict.guild_id)] = verdict.row
-        else:
-            new_refused.append(_refusal_line(verdict, encounter_id, measured_at, run_id))
-            pair.refused[(encounter_id, verdict.guild_id)] = {"outcome": verdict.outcome}
-            if verdict.detail:
-                log.warning("%s %s guild %s: %s", stem, name, verdict.guild_id, verdict.detail)
-        # Only now: a row the budget interrupted was paid for and not answered, so
-        # advancing over it would lose the guild -- and a row stating no killTime
-        # cannot be a boundary at all.
-        if row.kill_time_ms is not None:
-            cursor = (row.kill_time_ms, verdict.guild_id)
+    crashed: BaseException | None = None
+    try:
+        for row in walk.fresh:
+            try:
+                budget.check()
+                verdict = attempt_guild(
+                    client,
+                    zone_id=pair.zone_id,
+                    encounter_id=encounter_id,
+                    difficulty=pair.difficulty,
+                    row=row,
+                    max_pages=options.max_pages,
+                    measured_at=measured_at,
+                    run_id=run_id,
+                    sleep=budget.sleep,
+                )
+            except DeadlineReached as exc:
+                stopped = str(exc)
+                break
+            except RateLimited as exc:
+                stopped = f"rate limited: {exc}"
+                break
+            except WarcraftLogsError as exc:
+                # Only `budget.check()` can raise this here: `attempt_guild` turns
+                # its own into the `error` verdict. A counter that cannot be read is
+                # a budget that cannot be honoured, so it stops the run like the
+                # ceiling.
+                stopped = f"budget reading failed: {exc}"
+                break
+            outcomes[verdict.outcome] = outcomes.get(verdict.outcome, 0) + 1
+            report.attempted += 1
+            if verdict.row is not None:
+                new_rows.append(dumps_line(verdict.row))
+                pair.rows[(encounter_id, verdict.guild_id)] = verdict.row
+            else:
+                new_refused.append(_refusal_line(verdict, encounter_id, measured_at, run_id))
+                pair.refused[(encounter_id, verdict.guild_id)] = {"outcome": verdict.outcome}
+                if verdict.detail:
+                    # No guild id: this log is uploaded as a public artifact and
+                    # tailed into the step summary. `refused.jsonl` names the guild,
+                    # privately.
+                    log.warning("%s %s: a guild's fetch failed, %s", stem, name, verdict.detail)
+            # Only now: a row the budget interrupted was paid for and not answered,
+            # so advancing over it would lose the guild -- and a row stating no
+            # killTime cannot be a boundary at all.
+            if row.kill_time_ms is not None:
+                cursor = (row.kill_time_ms, verdict.guild_id)
+    except Exception as exc:  # noqa: BLE001 -- written below, then re-raised
+        # A bug in the loop -- a payload shape nobody has seen -- must not discard
+        # the verdicts already paid for on this encounter. This is the fourth-time
+        # shape CLAUDE.md records for `PointBudgetExhausted`: a call sitting beside
+        # a guard rather than inside it. Everything measured is written, the
+        # encounter is marked so the skip matrix never skips it, and the exception
+        # goes on up unchanged.
+        crashed = exc
+        stopped = f"crashed: {exc!r}"
 
     previous = pair.cursor(encounter_id)
     if only is not None:
@@ -1242,13 +1302,29 @@ def _sweep_encounter(
         # every guild between, which costs re-attempts and never a guild.
         cursor = None
     attempted = sum(outcomes.values())
-    if only is not None:
+    if only is not None and entry:
         # A retry walks the pages for its own guilds only, so what it saw of the
-        # ranking's END is not a finding about the ranking; the last full walk's is.
-        exhausted = bool(entry and entry.get("rankingExhausted"))
-        walled = bool(entry and entry.get("walled"))
+        # ranking -- its end, its size, the guild block's shape -- is not a finding
+        # about the ranking; the last full walk's is, and it is kept. What the retry
+        # changes is the verdicts: each guild it re-attempted leaves the `error`
+        # count and lands under its new outcome.
+        exhausted = bool(entry.get("rankingExhausted"))
+        walled = bool(entry.get("walled"))
+        seen, without_guild = entry.get("guildsSeen", 0), entry.get("withoutGuild", 0)
+        named, shape, out_of_order = (
+            entry.get("named", 0),
+            entry.get("shape", ""),
+            entry.get("outOfOrder", 0),
+        )
+        merged = dict(entry.get("outcomes") or {})
+        merged[RETRYABLE_OUTCOME] = merged.get(RETRYABLE_OUTCOME, 0) - attempted
+        for outcome, count in outcomes.items():
+            merged[outcome] = merged.get(outcome, 0) + count
+        outcomes = {k: v for k, v in merged.items() if v > 0}
     else:
         exhausted, walled = walk.exhausted, walk.walled
+        seen, without_guild = walk.seen, walk.without_guild
+        named, shape, out_of_order = walk.named, walk.shape, walk.out_of_order
     entry = {
         "name": name,
         "cursorKillTimeMs": int(cursor[0]) if cursor else (int(previous[0]) if previous else None),
@@ -1256,19 +1332,23 @@ def _sweep_encounter(
         "rankingExhausted": exhausted,
         "walled": walled,
         "stoppedOnBudget": stopped is not None,
-        "sweptAt": measured_at,
-        "guildsSeen": walk.seen,
-        "withoutGuild": walk.without_guild,
+        # The encounter's own time, not the run's: on a five-hour run the last boss
+        # would otherwise carry a stamp five hours stale and be re-walked early.
+        "sweptAt": now().isoformat(timespec="seconds"),
+        "guildsSeen": seen,
+        "withoutGuild": without_guild,
         "attempted": attempted,
-        "named": walk.named,
-        "shape": walk.shape,
-        "outOfOrder": walk.out_of_order,
+        "named": named,
+        "shape": shape,
+        "outOfOrder": out_of_order,
         "outcomes": dict(sorted(outcomes.items())),
     }
     pair.state.setdefault("encounters", {})[str(encounter_id)] = entry
     write_pair(pair, out_dir, new_rows, new_refused)
     report.new_rows += len(new_rows)
     report.new_refused += len(new_refused)
+    if crashed is not None:
+        raise crashed
     log.info(
         "%s %s: %d attempted, %d measured, seen %d, %s%s",
         stem,
@@ -1299,9 +1379,11 @@ def describe_pairs(out_dir: Path, zones: Iterable[int], difficulties: Iterable[i
                 + (f", {pair.duplicate_rows} duplicate row(s)" if pair.duplicate_rows else "")
             )
             for encounter_id, entry in sorted((pair.state.get("encounters") or {}).items()):
+                # The cursor's kill time only: the guild id beside it is a guild's,
+                # and this output is tailed into a public step summary.
                 lines.append(
                     f"  {encounter_id} {entry.get('name')}: cursor "
-                    f"{entry.get('cursorKillTimeMs')}/{entry.get('cursorGuildId')}, "
+                    f"{entry.get('cursorKillTimeMs')}, "
                     f"exhausted {entry.get('rankingExhausted')}, walled {entry.get('walled')}, "
                     f"stoppedOnBudget {entry.get('stoppedOnBudget')}, "
                     f"attempted {entry.get('attempted')}, swept {entry.get('sweptAt')}"
@@ -1334,10 +1416,12 @@ def _git_head_line_count(directory: Path, path: Path) -> int | None:
 def validate(out_dir: Path) -> list[str]:
     """Every violation, as a sentence. Empty means the directory may be committed.
 
-    Three claims, each refused rather than repaired: every line of every jsonl file
-    is JSON, the manifest's counts equal the files' line counts, and no tracked
+    Four claims, each refused rather than repaired: every line of every jsonl file
+    is JSON, the manifest's counts equal the files' line counts, no tracked
     rows/refused file is SHORTER than it is at HEAD -- append-only is the promise the
-    private import's per-file digest rests on.
+    private import's per-file digest rests on -- and no ``.tmp`` file is lying about,
+    since the workflow's ``git add`` takes the whole directory and a write that died
+    between ``write_text`` and ``os.replace`` would otherwise be committed.
     """
     out_dir = Path(out_dir)
     problems: list[str] = []
@@ -1350,6 +1434,8 @@ def validate(out_dir: Path) -> list[str]:
         return [f"{manifest_path.name} is not JSON: {exc}"]
     listed = {entry.get("path"): entry for entry in manifest.get("files") or []}
 
+    for path in sorted(out_dir.glob("*.tmp")):
+        problems.append(f"{path.name}: a temp file from an interrupted write; not committable")
     for path in sorted(out_dir.glob("z*-d*.jsonl")):
         text = path.read_text(encoding="utf-8")
         if text and not text.endswith("\n"):
