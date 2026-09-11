@@ -5947,6 +5947,62 @@ whole point of that branch -- MID2 stalled for two days before it existed.
 So "get a bigger Mythic sample" is not a dial on a young tier. What IS available is
 the other difficulty, and `measurements[]` already holds it.
 
+### The four empty bosses were the wrong address (#143, 2026-09-11)
+
+`fightprobe` took the filed encounter id straight to `characterRankings` and
+`encounter_zone`, and had none of the PTR/live twin resolution that `harvest`,
+`progress-hours` and `spawn-probe` all route through `harvest.choose_encounter_id`.
+The harvest section above records the substitution recovering *nothing* for
+`characterRankings` and the progress-hours section records it recovering
+something for `fightRankings`; nobody had asked the question for the report
+search, which is what the probe runs.
+
+Measured live, with the id as the only difference:
+
+| date | run | id | result |
+|---|---|---|---|
+| 2026-09-06 | 34026036151 | `53421` as filed | `500 report(s) over 5 page(s), 0 kill(s)` |
+| 2026-09-06 | 34026171478 | `3421`, the live twin | one Mythic kill read, 20 players, 446 s |
+| 2026-09-10 | 34457405665 | `53421 -> 3421`, spawn map | **36 Mythic kills, none truncated**, 432.3 points |
+
+And `web/public/data/MID2/fights.json` at `d7c7918` showed The Twin Fangs at
+`(0, -)` on Mythic, i.e. *"probed and read nothing"*, over a boss with a full
+sample one id away. The four PTR ids without ranked parses -- 53420, 53421,
+53429, 53492 -- are exactly the four with an empty Mythic block.
+
+`probe_encounter` selects kills for the filed id first and, only when that
+yields nothing -- no ranked parse and, under `--order public`, no kill in the
+report search either -- asks `choose_encounter_id` and selects again under the
+twin. Four decisions in it:
+
+- **Reused, never re-derived.** The rule and its refusals live in `harvest`; a
+  second copy is two answers to one question, and the strict name check travels
+  with it. `_twin_choice` only keeps the verified name beside the reason.
+- **Named on the entry**, as `spawn-probe` names it: `usedEncounter` and
+  `idChoice` (`requested`, `used`, `substituted`, `reason`, `verifiedName`). A
+  refusal is written too, because *"no twin was read"* and *"no twin was tried"*
+  are different answers on a boss that reads nothing. A substitution that is not
+  named files a full set of real measurements under the wrong boss -- the one
+  failure worse than reading nothing.
+- **The FILED id stays the id.** `encounterId`, the payload key
+  `(encounterId, difficulty)`, `is_complete` and the block `fights.json` publishes
+  all keep 53421 -- it is what `fight_profiles.json` names and what wtt-frontend
+  joins on -- and the choice rides beside the block as `usedEncounter`/`idChoice`
+  with a caveat sentence. `_probe_fight` and `_phase_metadata` are asked with the
+  **used** id, because a live kill's fights carry the live id; a phase read under
+  the filed id would come back as `Phase 1`, which is how the test tells the two
+  apart.
+- **The twin's selection runs under exactly the filed one's bounds** -- the same
+  `--rankings-pages`, `--report-pages` and point ceiling, through the one
+  `_select_kills` -- so there is no second search with its own budget. And bytes
+  move only where a decision was made: an encounter whose filed id answered
+  carries none of the new keys.
+
+**Nothing published moves until the next hourly run writes.** The committed
+`fights.json` still shows the four at `(0, -)`; the payload in the actions cache
+re-opens them (see below) and the next continuation reads them through their
+twins.
+
 ### What Vashnik's adds look like, and why Mythic cannot show it
 
 Read out of the committed `fights.json`, no new run.

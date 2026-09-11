@@ -954,6 +954,24 @@ export interface TargetBand {
   duplicateUploads?: number;
 }
 
+/**
+ * Which encounter id a block's kills were actually read under, and why —
+ * `harvest.choose_encounter_id`'s verdict, carried verbatim. Present only when
+ * the probe had to decide: the filed id yielded nothing, so its PTR/live twin was
+ * tried and taken only when Warcraft Logs names both ids the same boss. A refusal
+ * is present too, because "no twin was read" and "no twin was tried" are
+ * different answers on a boss that reads nothing. Absent means read as filed.
+ */
+export interface FightIdChoice {
+  requested: number;
+  /** The id read, or null when the twin was refused — then nothing was read. */
+  used: number | null;
+  substituted: boolean;
+  reason: string;
+  /** The name the twin was verified against; null unless substituted. */
+  verifiedName?: string | null;
+}
+
 export interface MeasuredFight {
   /** Sampled pull rows — how many fights the probe read, not how many kills. */
   fightsSampled: number;
@@ -966,6 +984,14 @@ export interface MeasuredFight {
    */
   distinctKills?: number;
   reports: string[];
+  /**
+   * The id the kills were read under. The block is filed under the encounter's
+   * own id — what the fight profile names and every join uses — so this is the
+   * only place a reader learns the sample came from its live twin. Absent means
+   * read as filed; see `idChoice` for why.
+   */
+  usedEncounter?: number;
+  idChoice?: FightIdChoice;
   durationSeconds?: FightSpread | null;
   raidSize?: FightSpread | null;
   playersListed?: FightSpread | null;
