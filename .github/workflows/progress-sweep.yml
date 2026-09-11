@@ -62,6 +62,10 @@ permissions:
 
 jobs:
   sweep:
+    # A fork inherits the workflow file and none of the secrets; the credential
+    # check below would fail it, but a scheduled run on a fork should not even reach
+    # a checkout that names the private data repository.
+    if: github.repository == 'Wild-Things-Tools/wow-dps-breakdown'
     runs-on: ubuntu-latest
     # GitHub's job limit is 6 h; the sweep's own deadline is 300 min, and install,
     # validate and the push fit in the rest.
@@ -121,7 +125,11 @@ jobs:
           [ "$SEED_ONLY" = "true" ] && extra+=(--seed-only)
           # Exit 2 (a zone the service would not list) and 3 (a schema alarm on some
           # pair) are findings, and what the OTHER pairs measured is written and
-          # worth committing; anything else is a real failure.
+          # worth committing; anything else is a real failure. The runner's default
+          # shell is `bash -eo pipefail`, so without `set +e` a non-zero exit ends
+          # the step AT the pipeline and the branches below never run -- exactly as
+          # fight-probe.yml does it.
+          set +e
           python -m wowdps.cli progress-sweep \
             --zones "$ZONES" \
             --difficulties "$DIFFICULTIES" \
@@ -132,6 +140,7 @@ jobs:
             --out data/progress-cohort \
             --summary sweep-summary.json 2>&1 | tee sweep.log
           status=$?
+          set -e
           if [ "$status" = "2" ]; then
             echo "::warning::a zone could not be listed; the others were swept"
           elif [ "$status" = "3" ]; then
@@ -174,15 +183,33 @@ jobs:
           # Rebase before pushing, for the reason `fight-probe.yml` records: the
           # data repository is written by this workflow alone today, but a person's
           # own push (the seed, a hand fix) must not fail a run whose work succeeded.
+          #
+          # NOT `git pull --rebase || true`, which fight-probe.yml carries: a rebase
+          # that CONFLICTS leaves the clone mid-rebase with HEAD on origin/main, the
+          # push then says "Everything up-to-date" and succeeds, and the run's
+          # commit -- rows, refusals, the advanced cursors -- never reaches the data
+          # repository while the step exits 0. Measured against a bare remote with a
+          # conflicting hand push. A conflicting rebase is aborted and the attempt
+          # is retried; and after the loop the commit at HEAD is asserted to be the
+          # sweep's and to be on origin/main, so "pushed" is a fact rather than a
+          # flag.
           pushed=false
           for attempt in 1 2 3; do
-            git pull --rebase --autostash origin main || true
+            if ! git pull --rebase --autostash origin main; then
+              git rebase --abort || true
+              echo "rebase attempt $attempt conflicted; retrying"
+              sleep $((attempt * 5))
+              continue
+            fi
             if git push origin HEAD:main; then pushed=true; break; fi
             echo "push attempt $attempt lost the race; retrying"
             sleep $((attempt * 5))
           done
           # Losing three times is a real failure, not something to exit 0 on.
           [ "$pushed" = true ]
+          git fetch origin main
+          [ "$(git log -1 --format=%s HEAD)" = "$message" ]
+          git merge-base --is-ancestor HEAD origin/main
 
       # Always: the run whose log somebody needs is precisely the one that stopped
       # early.
