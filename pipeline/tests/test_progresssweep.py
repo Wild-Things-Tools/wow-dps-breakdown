@@ -456,7 +456,7 @@ def test_a_second_identical_run_produces_byte_identical_files(tmp_path):
     assert _snapshot(tmp_path) == settled
 
 
-def test_a_run_that_measures_nothing_leaves_rows_jsonl_byte_identical(tmp_path):
+def test_a_run_that_measures_nothing_leaves_rows_jsonl_byte_identical(tmp_path, monkeypatch):
     client = StubClient(rankings={(ENC, MYTHIC): [row(1), row(2)]})
     sweep(client, tmp_path)
     rows_path = tmp_path / "z44-d5.rows.jsonl"
@@ -465,10 +465,39 @@ def test_a_run_that_measures_nothing_leaves_rows_jsonl_byte_identical(tmp_path):
     state = json.loads((tmp_path / "z44-d5.state.json").read_text())
     state["encounters"][str(ENC)]["stoppedOnBudget"] = True
     (tmp_path / "z44-d5.state.json").write_text(json.dumps(state))
+    written = []
+    real = progresssweep.atomic_write
+
+    def spy(path, text):
+        written.append(Path(path).name)
+        real(path, text)
+
+    monkeypatch.setattr(progresssweep, "atomic_write", spy)
     report = sweep(client, tmp_path)
     assert report.new_rows == 0
     assert rows_path.read_bytes() == before
+    # Not merely the same bytes: the file is not TOUCHED. Append-only is a promise
+    # about what a writer does, and a rewrite that happens to reproduce the bytes
+    # today is one normalisation away from not doing so.
+    assert "z44-d5.rows.jsonl" not in written
+    assert "z44-d5.state.json" in written
     assert state_of(tmp_path)["attempted"] == 0
+
+
+def test_a_re_walk_that_finds_nothing_new_rewrites_nothing_different(tmp_path):
+    """A live zone is re-walked every run; with the clock held, two such runs must
+    produce identical files -- which is what a manifest stamp would break."""
+    client = StubClient(
+        zones={ZONE: zone_payload(frozen=False)}, rankings={(ENC, MYTHIC): [row(1)]}
+    )
+    live = Cadence(refresh_after_live_hours=0)
+    sweep(client, tmp_path, cadence=live)
+    sweep(client, tmp_path, cadence=live)
+    settled = _snapshot(tmp_path)
+    queries = len(client.queries)
+    sweep(client, tmp_path, cadence=live)
+    assert len(client.queries) > queries, "the live zone was walked again"
+    assert _snapshot(tmp_path) == settled
 
 
 def test_writes_are_atomic_and_leave_no_temp_file(tmp_path):
