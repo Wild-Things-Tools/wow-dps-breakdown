@@ -181,6 +181,7 @@ def probe_encounter(
             outcome is not None and not outcome.truncated and outcome.aborted is None
         ),
         difficulties_seen=outcome.difficulties_seen if outcome is not None else {},
+        search_budget=_search_budget(outcome, settings),
         id_choice=id_choice,
     )
     if not pairs:
@@ -301,6 +302,21 @@ def _twin_choice(
     choice = harvest.choose_encounter_id(encounter_id, requested_name, False, lookup)
     verified = names.get(choice.used) if choice.substituted and choice.used else None
     return choice, verified
+
+
+def _search_budget(outcome: firstkills.SearchOutcome | None, settings: ProbeSettings) -> int | None:
+    """Reports the search was willing to read, when THAT is what ended it.
+
+    ``None`` for a search that ran out of reports (``search_exhausted`` says so),
+    for one the point ceiling stopped, and for an order that runs no search. The
+    ceiling case is the one that matters: such a search did not run its budget, and
+    recording the budget anyway would let ``is_complete`` call the encounter done on
+    the next hour over a search that never ran its course -- which is the resume's
+    whole purpose inverted.
+    """
+    if outcome is None or outcome.aborted is not None or not outcome.truncated:
+        return None
+    return settings.report_pages * settings.report_limit
 
 
 def fold_upload_start_times(readings: list[dict]) -> dict:
@@ -839,6 +855,7 @@ def is_complete(
     event_budget: int | None = None,
     order: str | None = None,
     difficulty: int | None = None,
+    search_budget: int | None = None,
 ) -> bool:
     """Has this encounter already got the sample the settings ask for?
 
@@ -858,6 +875,22 @@ def is_complete(
       at `sampled: null` while the raid was open. So a search that ran to completion
       records `searchExhausted`, and that counts as done however few kills it found.
       A *truncated* or *aborted* search does not, because then more may exist.
+    - **...except a page-limited search that found NOTHING, until its budget is
+      raised.** A page limit is not exhaustion and is not recorded as one, so the
+      rule above re-opened every boss with zero kills forever: four MID2 encounters
+      (53420, 53421, 53429, 53492) searched 500 reports over 5 pages on every hourly
+      run, found 0, and were re-opened by the next run -- measured on run
+      34610565576, 2026-09-11: 29.1 points for the four, ``4 of 8 encounter(s)
+      still short of 30 fights``, dataset unchanged, twelve consecutive green runs.
+      Re-running the same search with the same budget cannot find what it did not
+      find, so `searchBudget` (`report_pages x report_limit`) is recorded when the
+      walk ended on its page limit, and an entry with **zero** fights and a budget
+      at or above the one now asked for counts as done -- re-opened only when
+      `--report-pages` or `--report-limit` is raised, exactly the `eventBudget`
+      rule for `--max-pages`. Zero on purpose: a short sample under a page limit
+      keeps re-opening, because its window is anchored and that re-run is a cache
+      hit, where the zero-kill search runs to `now` and pays its pages every time.
+      An entry with no recorded budget re-opens as before (unknown is not zero).
     - **A smaller event budget than `--max-pages` now asks for.** This one is not
       cosmetic. The number of kills is only half of what the target-count band needs;
       the other half is reading each kill to the *end*, and a bounded event fetch
@@ -884,8 +917,20 @@ def is_complete(
     zone on the next run for everybody. Use ``--no-resume`` once to rebuild such a
     payload; from then on the budget travels with it.
     """
-    if int(entry.get("fightsSampled") or 0) < wanted and not entry.get("searchExhausted"):
-        return False
+    sampled = int(entry.get("fightsSampled") or 0)
+    if sampled < wanted and not entry.get("searchExhausted"):
+        # The one way a short entry counts as done without exhaustion: the search
+        # found nothing at all and already ran under at least this budget. A
+        # ceiling-stopped search records no budget (`_search_budget`), so it lands
+        # here and is re-opened, which is the resume working.
+        recorded = entry.get("searchBudget")
+        if not (
+            sampled == 0
+            and search_budget is not None
+            and isinstance(recorded, int)
+            and recorded >= search_budget
+        ):
+            return False
     if event_budget is not None:
         recorded = entry.get("eventBudget")
         if isinstance(recorded, int) and recorded < event_budget:
@@ -976,10 +1021,22 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
     # later run can tell "already collected" from "already collected, but with a
     # smaller budget than you are now asking for".
     event_budget = settings.max_pages * settings.events_limit
+    # And how much of the zone's report list the search was willing to read, for
+    # the same reason: a zero-kill search that ran under this budget is done until
+    # somebody raises it. Only `--order public` runs that search; the other orders
+    # ask with None and the record, if any, is inert.
+    search_budget = (
+        settings.report_pages * settings.report_limit if settings.order == "public" else None
+    )
 
     def complete(entry: dict) -> bool:
         return is_complete(
-            entry, settings.reports, event_budget, settings.order, settings.difficulty
+            entry,
+            settings.reports,
+            event_budget,
+            settings.order,
+            settings.difficulty,
+            search_budget,
         )
 
     previous = {} if args.no_resume else load_previous(resume_path)

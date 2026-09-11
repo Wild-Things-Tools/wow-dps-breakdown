@@ -6003,6 +6003,75 @@ twin. Four decisions in it:
 re-opens them (see below) and the next continuation reads them through their
 twins.
 
+### The search that found nothing never closed (2026-09-11)
+
+Those four encounters had zero Mythic kills under their filed id, and every
+hourly run searched **500 reports over 5 pages**, found 0, and -- because the
+walk ended on the PAGE LIMIT rather than by running out of reports --
+`searchExhausted` stayed false and the resume re-opened all four, forever.
+Tracked in no issue; found by reading the runs. Run 34610565576 (2026-09-11
+14:31):
+
+```
+public-log search: 500 report(s) over 5 page(s), 0 kill(s); no ranked kill to
+  compare against, so the whole zone was searched              (x4)
+cost: 29.1 points for 4 encounter(s) = 7.3 each
+4 of 8 encounter(s) still short of 30 fights: 53420, 53421, 53429, 53492
+fight dataset unchanged                                          exit 3
+```
+
+Runs 351 through 362 are twelve consecutive greens of 85-97 s each (the Probe
+step itself is 5 s; the rest is a 233 MB artifact), five or six a day, so
+roughly 150-175 points a day for a payload that did not change once. An earlier
+reading put it at ~21 points a run; the run above says 29.1, and either way it
+is a cost with no yield.
+
+**Why it is exactly the zero-kill searches that pay.** With no ranked kill there
+is nothing to anchor on, `search_window(0, ...)` runs to `now`, and a window
+whose end moves every run misses the response cache on every page. A search
+with an anchor has a fixed window and re-runs for free. So an encounter
+re-opened *with* kills costs nothing beyond its cached pages; one re-opened with
+none pays its report pages every hour.
+
+Closed the way `eventBudget` already handles the analogous case for
+`--max-pages`. A report search that stopped on its page limit records
+**`searchBudget`** (`report_pages x report_limit`, the reports it was willing to
+read), and `is_complete` treats an entry with **zero** fights and a recorded
+budget at or above the one now asked for as complete-for-now -- re-opened only
+when `--report-pages` or `--report-limit` is raised, never silently forever.
+Three refusals in it:
+
+- **A page limit is not exhaustion.** `searchExhausted` keeps meaning *the walk
+  ran out of reports*; overloading it would make a boss nobody has killed read
+  as a boss with no more kills to find, which is a different sentence.
+- **The ceiling records nothing.** A search the point ceiling stopped did not
+  run its budget, and recording one would let the next hour skip a search that
+  never ran its course -- the resume's whole purpose inverted. Same for an order
+  that runs no search: it asks with `None` and the record is inert.
+- **Unknown is not zero.** An entry from before the field re-opens as before, so
+  the payload in the actions cache re-reads the four once -- through their twins
+  now -- and then closes.
+
+**The rule is for NOTHING found, on purpose.** A short page-limited sample keeps
+re-opening: its window is anchored, so that re-run is a cache hit and costs its
+ranking pages. Whether it should close too is a separate decision. What stays
+open with it: a twin that itself reads short and page-limited re-opens hourly,
+and each of those runs still pays the filed id's five unanchored pages before
+reaching the twin -- the same ~7 points per boss as before, buying kills now
+instead of nothing.
+
+**One canary of the eleven stayed green once, and it is recorded as measured
+rather than explained.** The runner breaks and restores the same source file
+eleven times inside a few seconds; on its first pass the "twin consulted even
+when the filed id answers" breakage left its test green, and on the same
+breakage applied by hand, alone, after its neighbour, and on two further full
+passes it went red by name every time (five of five). The mechanism was not
+established -- a bytecode cache keyed on mtime and size is the usual suspect
+for a miss with that shape, and it is a suspect, not a finding. What it does
+say is the rule this file already carries: a canary that does not fire is a
+finding about the canary at least as often as about the code, and one green is
+not a verdict until it reproduces.
+
 ### What Vashnik's adds look like, and why Mythic cannot show it
 
 Read out of the committed `fights.json`, no new run.

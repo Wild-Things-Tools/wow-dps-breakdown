@@ -1563,3 +1563,177 @@ def test_a_twin_naming_another_boss_is_refused_and_the_refusal_is_in_the_payload
     assert "different boss" in entry["idChoice"]["reason"]
     assert f"rankings:{TWIN_FANGS_LIVE}:page1" not in stub.calls
     assert not any(c.startswith("structure:") for c in stub.calls)
+
+
+# --------------------------------------------------------------------------------
+# A page-limited search that found nothing is done until its budget is raised
+# --------------------------------------------------------------------------------
+
+
+class SearchStub(TwinStub):
+    """Adds the report search, again as the CLIENT answers it: `encounter_zone` the
+    zone dict, `reports_in_window` the raw pagination payload, `report_kills` the
+    (report start, fights) pair."""
+
+    def __init__(self, pages, kills=None, **kw):
+        super().__init__(**kw)
+        self._pages = pages
+        self._kills = kills or {}
+        self.search_pages: list[int] = []
+
+    def encounter_zone(self, encounter_id):
+        return {"id": 54, "name": "The Venomous Abyss", "frozen": False}
+
+    def reports_in_window(self, zone_id, start_ms, end_ms, page=1, limit=100):
+        self.search_pages.append(page)
+        rows = self._pages[page - 1] if page <= len(self._pages) else []
+        return {"data": rows}
+
+    def report_kills(self, code):
+        return 1_700_000_000_000.0, self._kills.get(code, [])
+
+
+def _full_pages(count: int, limit: int = 2) -> list[list[dict]]:
+    return [[{"code": f"R{page}x{row}"} for row in range(limit)] for page in range(count)]
+
+
+def _search_args(tmp_path, *extra):
+    from wowdps import cli
+
+    return cli.build_parser().parse_args(
+        [
+            "fight-probe",
+            "--tier",
+            VOIDSPIRE_TIER,
+            "--encounter",
+            "3180",
+            "--reports",
+            "1",
+            "--order",
+            "public",
+            "--rankings-pages",
+            "1",
+            "--report-limit",
+            "2",
+            "--report-pages",
+            "5",
+            "--out",
+            str(tmp_path),
+            *extra,
+        ]
+    )
+
+
+def _search_stub(pages, **kw):
+    return SearchStub(
+        pages=pages,
+        names={3180: "Lightblinded Vanguard"},
+        rankings_for=set(),
+        structure=structure_payload(),
+        events={},
+        tables={},
+        **kw,
+    )
+
+
+def test_a_search_that_hit_its_page_limit_with_no_kill_is_done_until_its_budget_is_raised(
+    tmp_path, monkeypatch
+):
+    """The loop this closes: four MID2 encounters with zero Mythic kills searched 500
+    reports over 5 pages on every hourly run, found 0, and -- the walk having ended
+    on its page limit rather than by running out of reports -- were re-opened by the
+    next run, forever. Run 34610565576 (2026-09-11): 29.1 points for the four, `4 of
+    8 encounter(s) still short of 30 fights`, dataset unchanged, twelve consecutive
+    green runs.
+    """
+    stub = _search_stub(_full_pages(8))
+    _install(monkeypatch, stub)
+
+    # Done for now: exit 0 rather than EXIT_INCOMPLETE, and nothing outstanding.
+    assert fightprobe.cmd_fight_probe(_search_args(tmp_path)) == 0
+    payload = json.loads((tmp_path / f"fight-probe-{VOIDSPIRE_TIER}.json").read_text())
+    entry = payload["encounters"][0]
+    assert entry["fightsSampled"] == 0
+    # A page limit is NOT exhaustion, and is not recorded as one.
+    assert entry["searchExhausted"] is False
+    assert entry["searchBudget"] == 5 * 2
+    assert payload["incomplete"] == []
+    assert stub.search_pages == [1, 2, 3, 4, 5]
+
+    # The same budget again: skipped before a query is sent.
+    assert fightprobe.cmd_fight_probe(_search_args(tmp_path)) == 0
+    assert stub.search_pages == [1, 2, 3, 4, 5]
+
+    # A raised budget re-opens it, and it closes again under the new one.
+    assert fightprobe.cmd_fight_probe(_search_args(tmp_path, "--report-pages", "8")) == 0
+    assert stub.search_pages == [1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 6, 7, 8]
+    entry = json.loads((tmp_path / f"fight-probe-{VOIDSPIRE_TIER}.json").read_text())["encounters"][
+        0
+    ]
+    assert entry["searchBudget"] == 8 * 2
+
+
+def test_a_search_that_ran_out_of_reports_is_exhausted_and_records_no_budget(tmp_path, monkeypatch):
+    """The two ways a zero-kill search ends are two fields, never one."""
+    stub = _search_stub([[{"code": "ONLY"}]])
+    _install(monkeypatch, stub)
+    assert fightprobe.cmd_fight_probe(_search_args(tmp_path)) == 0
+
+    entry = json.loads((tmp_path / f"fight-probe-{VOIDSPIRE_TIER}.json").read_text())["encounters"][
+        0
+    ]
+    assert entry["searchExhausted"] is True
+    assert "searchBudget" not in entry
+
+
+def test_a_search_the_ceiling_stopped_records_no_budget_so_the_next_hour_re_opens_it():
+    """A ceiling-stopped search did not run its budget. Recording it anyway would let
+    `is_complete` call the encounter done over a search that never ran its course
+    -- the resume's whole purpose inverted."""
+
+    class Ceiling(SearchStub):
+        def reports_in_window(self, zone_id, start_ms, end_ms, page=1, limit=100):
+            payload = super().reports_in_window(zone_id, start_ms, end_ms, page, limit)
+            if page == 2:
+                self.ledger.record(
+                    "x", {"rateLimitData": {"limitPerHour": 3600, "pointsSpentThisHour": 3500}}
+                )
+            return payload
+
+    stub = Ceiling(
+        pages=_full_pages(8),
+        names={3180: "Lightblinded Vanguard"},
+        rankings_for=set(),
+        structure=structure_payload(),
+        events={},
+        tables={},
+    )
+    observation, _ = fightprobe.probe_encounter(
+        stub, 3180, settings(order="public", report_limit=2, report_pages=5)
+    )
+
+    assert stub.search_pages == [1, 2]
+    assert observation.search_exhausted is False
+    assert observation.search_budget is None
+    entry = observation.to_json()
+    assert "searchBudget" not in entry
+    assert fightprobe.is_complete(entry, 1, None, "public", 5, 10) is False
+
+
+def test_a_page_limited_search_that_found_nothing_is_done_until_its_budget_is_raised():
+    """`is_complete`'s side of the rule, and its three refusals."""
+    from wowdps.fightprobe import is_complete
+
+    empty = {"fightsSampled": 0, "eventBudget": 200_000, "order": "public", "searchBudget": 500}
+    assert is_complete(empty, 30, 200_000, "public", 5, 500) is True
+    # A smaller ask is covered by the larger search that already found nothing.
+    assert is_complete(empty, 30, 200_000, "public", 5, 300) is True
+    # A raised one re-opens it.
+    assert is_complete(empty, 30, 200_000, "public", 5, 800) is False
+    # Unknown is not zero: an entry from before the field re-opens as before.
+    unrecorded = {"fightsSampled": 0, "eventBudget": 200_000, "order": "public"}
+    assert is_complete(unrecorded, 30, 200_000, "public", 5, 500) is False
+    # The rule is for NOTHING found: a short sample under a page limit still re-opens.
+    assert is_complete({**empty, "fightsSampled": 3}, 30, 200_000, "public", 5, 500) is False
+    # A run that runs no search asks with None, and the record is inert.
+    assert is_complete(empty, 30, 200_000, "public", 5, None) is False

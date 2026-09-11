@@ -1245,6 +1245,14 @@ class EncounterObservation:
     #: ``fights.json`` files the block under, so a substitution that was not named
     #: here would be a full set of real measurements under the wrong boss.
     id_choice: dict | None = None
+    #: How many reports the report search was willing to read, recorded ONLY when
+    #: it stopped on that bound with the whole of it spent. ``None`` when it ran out
+    #: of reports (that is ``search_exhausted``), when the point ceiling stopped it
+    #: (the budget was not what ended the search, and recording it would let the
+    #: resume skip a search that never ran its course), and when no search ran. It
+    #: is what lets a search that found nothing count as done until somebody raises
+    #: ``--report-pages``, the way ``eventBudget`` does for ``--max-pages``.
+    search_budget: int | None = None
 
     @property
     def used_encounter_id(self) -> int:
@@ -1675,9 +1683,10 @@ class EncounterObservation:
             "activeTimeFraction": _json(self.uptime),
             "eventCoverage": _json(self.event_coverage),
             "searchExhausted": self.search_exhausted,
-            # Only when there is something to say, for the reason `difficultiesSeen`
-            # below gives: an encounter the filed id answered for publishes the bytes
-            # it did before this existed.
+            # Both only when there is something to say, for the reason
+            # `difficultiesSeen` below gives: an encounter the filed id answered for
+            # publishes the bytes it did before either existed.
+            **({"searchBudget": self.search_budget} if self.search_budget is not None else {}),
             **(
                 {"usedEncounter": self.used_encounter_id, "idChoice": self.id_choice}
                 if self.id_choice is not None
