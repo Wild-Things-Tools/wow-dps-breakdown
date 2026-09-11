@@ -16,6 +16,7 @@ from . import (
     fightzones,
     gearsweep,
     profiles,
+    progresssweep,
     scenarios,
     simc_runner,
 )
@@ -2354,6 +2355,110 @@ def _write_progress_hours(args, bosses, client, start: float, limit: float) -> i
     return 0
 
 
+def _int_list(name: str, *, allow: tuple[int, ...] | None = None):
+    """A comma-separated list of positive ints, in the order given. Refuses 0.
+
+    Zero is the trap `progresshours` documents at length: Warcraft Logs accepts
+    `zoneID: 0` and answers with everything, so a typo that reaches the query as a
+    zero produces a full set of plausible numbers scoped to the wrong thing.
+    """
+
+    def parse(value: str) -> tuple[int, ...]:
+        items: list[int] = []
+        for part in value.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                number = int(part)
+            except ValueError:
+                raise argparse.ArgumentTypeError(
+                    f"{name} takes comma-separated whole numbers, not {part!r}"
+                ) from None
+            if number <= 0:
+                raise argparse.ArgumentTypeError(f"{name} refuses {number}: ids start at 1")
+            if allow is not None and number not in allow:
+                raise argparse.ArgumentTypeError(
+                    f"{name} takes {', '.join(str(a) for a in allow)}, not {number}"
+                )
+            items.append(number)
+        if not items:
+            raise argparse.ArgumentTypeError(f"{name} needs at least one id")
+        return tuple(items)
+
+    return parse
+
+
+def cmd_progress_sweep(args: argparse.Namespace) -> int:
+    """Walk whole progress rankings into the cohort file set. See ``progresssweep``.
+
+    Exit codes: 0 done or stopped on budget (what is measured is written), 1 a
+    ``--validate`` violation or a usage error, 2 a zone Warcraft Logs would not
+    list, 3 a schema alarm on some pair.
+    """
+    import json as _json
+
+    from . import progresssweep
+    from .warcraftlogs import Credentials, WarcraftLogsClient, WarcraftLogsError
+
+    if args.validate:
+        problems = progresssweep.validate(Path(args.validate))
+        for problem in problems:
+            print(f"INVALID {problem}")
+        print(f"{args.validate}: {len(problems)} problem(s)")
+        return progresssweep.EXIT_VALIDATION if problems else progresssweep.EXIT_OK
+    if not args.out:
+        logging.error("--out is required unless --validate is given")
+        return 1
+    if args.workers != 1:
+        # The per-guild walk (`progresssweep.attempt_guild`) is the unit a pool would
+        # call; the ledger lock and the low-water cursor it needs are specified in
+        # docs/progress-cohort.md and not built. Refused rather than silently run
+        # sequentially, so a dispatch asking for parallelism is told it got none.
+        logging.error(
+            "--workers %d: only 1 is implemented (a pool needs a ledger lock and a "
+            "low-water cursor, neither of which exists yet)",
+            args.workers,
+        )
+        return 1
+    if args.seed_only:
+        for line in progresssweep.describe_pairs(Path(args.out), args.zones, args.difficulties):
+            print(line)
+        return 0
+
+    try:
+        credentials = Credentials.from_env()
+    except WarcraftLogsError as exc:
+        logging.error("%s", exc)
+        return 1
+
+    options = progresssweep.SweepOptions(
+        zones=tuple(args.zones),
+        difficulties=tuple(args.difficulties),
+        guilds=args.guilds,
+        max_pages=args.max_pages,
+        rankings_pages=args.rankings_pages,
+        point_ceiling=args.point_ceiling,
+        deadline_minutes=args.deadline_minutes,
+        cadence=progresssweep.Cadence(
+            refresh_after_hours=args.refresh_after,
+            refresh_after_live_hours=args.refresh_after_live,
+            live_wall_refresh_after_hours=args.live_wall_refresh_after,
+        ),
+        retry_errors=args.retry_errors,
+        workers=args.workers,
+    )
+    # No cache_dir: the sweep asks every query about NOW and passes cache=False
+    # besides, so this is belt and braces rather than the guard itself.
+    with WarcraftLogsClient(credentials, timeout=progresssweep.SWEEP_TIMEOUT_SECONDS) as client:
+        report = progresssweep.run_sweep(client, options, Path(args.out))
+    summary = report.to_json()
+    print(f"summary: {_json.dumps(summary)}")
+    if args.summary:
+        Path(args.summary).write_text(_json.dumps(summary, indent=1) + "\n", encoding="utf-8")
+    return report.exit_code
+
+
 def cmd_fight_probe(args: argparse.Namespace) -> int:
     from . import fightprobe
 
@@ -3162,6 +3267,101 @@ def build_parser() -> argparse.ArgumentParser:
         help="publish even when it would discard measured bosses",
     )
     p_hours.set_defaults(func=cmd_progress_hours)
+
+    p_sweep = sub.add_parser(
+        "progress-sweep",
+        help="walk whole progress rankings into the cohort file set (docs/progress-cohort.md)",
+    )
+    # Every default here is the workflow's default, and the two MUST stay equal: a
+    # scheduled run gets no inputs, so what is written here is what it runs with.
+    p_sweep.add_argument(
+        "--zones",
+        type=_int_list("--zones"),
+        default=progresssweep.DEFAULT_ZONES,
+        help="Warcraft Logs zone ids in PRIORITY order, comma-separated. Never 0",
+    )
+    p_sweep.add_argument(
+        "--difficulties",
+        type=_int_list("--difficulties", allow=(3, 4, 5)),
+        default=progresssweep.DEFAULT_DIFFICULTIES,
+        help="comma-separated, swept in this order on one budget. Default 5,4",
+    )
+    p_sweep.add_argument(
+        "--guilds",
+        type=int,
+        default=progresssweep.DEFAULT_GUILDS,
+        help="guilds ATTEMPTED per boss per run (0 = unlimited). Counts attempts, not rows",
+    )
+    p_sweep.add_argument(
+        "--max-pages",
+        type=int,
+        default=progresssweep.DEFAULT_MAX_PAGES,
+        help="report pages per guild before the window is refused as truncated",
+    )
+    p_sweep.add_argument(
+        "--rankings-pages",
+        type=int,
+        default=progresssweep.DEFAULT_RANKINGS_PAGES,
+        help="ranking pages per boss, 50 rows each; the API stops at 20",
+    )
+    p_sweep.add_argument(
+        "--point-ceiling",
+        type=float,
+        default=progresssweep.DEFAULT_POINT_CEILING,
+        help="share of the hourly budget, against the ABSOLUTE counter; at it the run "
+        "sleeps until the counter resets",
+    )
+    p_sweep.add_argument(
+        "--deadline-minutes",
+        type=float,
+        default=progresssweep.DEFAULT_DEADLINE_MINUTES,
+        help="wall-clock budget; reached, the run writes and exits 0",
+    )
+    p_sweep.add_argument(
+        "--refresh-after",
+        type=float,
+        default=progresssweep.DEFAULT_REFRESH_AFTER_HOURS,
+        help="hours before a frozen zone's exhausted or walled boss is re-walked",
+    )
+    p_sweep.add_argument(
+        "--refresh-after-live",
+        type=float,
+        default=progresssweep.DEFAULT_REFRESH_AFTER_LIVE_HOURS,
+        help="hours before a live zone's boss that yielded nothing is re-walked",
+    )
+    p_sweep.add_argument(
+        "--live-wall-refresh-after",
+        type=float,
+        default=progresssweep.DEFAULT_LIVE_WALL_REFRESH_AFTER_HOURS,
+        help="hours before a live zone's WALLED boss is re-walked",
+    )
+    p_sweep.add_argument(
+        "--retry-errors",
+        action="store_true",
+        help="re-attempt exactly the guilds refused as `error`, and nothing else",
+    )
+    p_sweep.add_argument(
+        "--seed-only",
+        action="store_true",
+        help="print rows/refusals/cursor per pair from --out and send no query",
+    )
+    p_sweep.add_argument(
+        "--validate",
+        metavar="DIR",
+        help="check a file set instead of sweeping: JSON per line, manifest counts, "
+        "and that no tracked file is shorter than at HEAD. Exit 1 on any violation",
+    )
+    p_sweep.add_argument("--out", metavar="DIR", help="the file set (required unless --validate)")
+    p_sweep.add_argument(
+        "--summary", metavar="FILE", help="also write the run's summary as JSON here"
+    )
+    p_sweep.add_argument(
+        "--workers",
+        type=int,
+        default=progresssweep.DEFAULT_WORKERS,
+        help="parallel guild walks. Only 1 is implemented; anything else is refused",
+    )
+    p_sweep.set_defaults(func=cmd_progress_sweep)
 
     p_fights = sub.add_parser(
         "fights",
