@@ -87,8 +87,12 @@ truncated by the import to the model's `max_length` (120/64/16).
 ```
 
 Outcomes: `unlogged-kill | kill-too-late | kill-too-early | no-reports | no-fights |
-no-kill | no-report-time | unusable | truncated | no-kill-time | error`. `error` rows
-are what `--retry-errors` re-attempts. `refused.jsonl` carries **no names**.
+no-kill | no-report-time | unusable | truncated | no-kill-time | error`. An `error`
+is a transport failure that survived **one in-run retry** (timeout 90 s, then
+`RETRY_BACKOFF_SECONDS`, then once more); `error` rows are what `--retry-errors`
+re-attempts. `refused.jsonl` carries **no names**, and the sweep's log names no guild
+either -- it is uploaded as a public artifact -- so a failed guild is findable only
+in `refused.jsonl`.
 
 ## `state.json`
 
@@ -96,7 +100,7 @@ are what `--retry-errors` re-attempts. `refused.jsonl` carries **no names**.
 {"v":1,"zoneId":44,"zoneName":"Manaforge Omega","frozen":true,"difficulty":5,
  "encounters":{"3129":{"name":"Plexus Sentinel","cursorKillTimeMs":1723456789000|null,
    "cursorGuildId":123456|null,"rankingExhausted":false,"walled":true,
-   "stoppedOnBudget":false,"sweptAt":ISO|null,
+   "stoppedOnBudget":false,"sweptAt":ISO|null,                 # the ENCOUNTER's own time, not the run's
    "guildsSeen":1000,"withoutGuild":38,"attempted":186,"named":962,"shape":"",
    "outOfOrder":0,"outcomes":{"measured":40,"kill-too-late":65,"unlogged-kill":40,
    "no-reports":41}}}}
@@ -140,7 +144,10 @@ ranking_exhausted` from `ProgressHoursSweep`, and the encounter entry is marked
 ## Budget and cadence (public sweep)
 
 - The point ceiling is against the **absolute** hourly counter
-  (`rateLimitData.pointsSpentThisHour`), refreshed before every walk. At the ceiling
+  (`rateLimitData.pointsSpentThisHour`), refreshed before every walk. A reading that
+  carries no `limitPerHour`/`pointsSpentThisHour` is unreadable, never "under the
+  ceiling": mid-run it stops the run like the ceiling does, on the first reading it is
+  a run that could not start (exit 1). At the ceiling
   the run **sleeps** until `pointsResetIn` + 30 s and continues (free on a public
   runner) -- it never exits on the ceiling -- until `--deadline-minutes` (default 300)
   is reached; then it writes and exits 0. A 429 stops the run the same way.
@@ -198,14 +205,30 @@ wowdps progress-sweep --validate data/progress-cohort              # the commit 
 wowdps progress-sweep --retry-errors --out data/progress-cohort    # exactly the `error` guilds
 ```
 
-Exit codes: 0 done or stopped on budget (what is measured is written), 1 a
-`--validate` violation or a usage error, 2 a zone Warcraft Logs would not list, 3 a
-schema alarm on some pair.
+Exit codes: 0 done or stopped on budget (what is measured is written; a 429 on any
+query, the zone listing included, is such a stop), 1 a `--validate` violation, a usage
+error, **or a first budget reading that failed for a reason that is not the budget**
+(a 401 from the token endpoint, a transport failure -- no walk has begun, nothing is
+written, and the job goes red rather than reporting a green run that swept nothing),
+2 a zone Warcraft Logs would not list, 3 a schema alarm on some pair.
 
-The validator checks three things and refuses on any of them: every line of every
-`.jsonl` is JSON, the manifest's counts equal the files' line counts, and no tracked
+`--difficulties` takes 4 and 5 only, the import's own rule: a `z<zone>-d3` file set
+would be refused row by row on the private side and trip its wrong-database alarm.
+
+The validator checks four things and refuses on any of them: every line of every
+`.jsonl` is JSON, the manifest's counts equal the files' line counts, no tracked
 rows/refused file is shorter than it is at `HEAD` -- the append-only promise the
-import's per-file digest rests on.
+import's per-file digest rests on -- and no `.tmp` file is lying in the directory,
+since the workflow's `git add` takes all of it and a write that died between
+`write_text` and `os.replace` would otherwise be committed as data.
+
+Two more things the runner does that the contract does not spell out: a crash inside
+the per-guild loop (a payload shape nobody has seen) writes the verdicts already paid
+for on that encounter, marks it `stoppedOnBudget` so the skip matrix never skips it,
+and only then re-raises; and a `--retry-errors` run keeps the last full walk's
+`guildsSeen`/`named`/`shape`/`outOfOrder` in `state.json` and moves each retried
+guild out of the `error` count into its new outcome, rather than replacing the
+tallies with the retry walk's own partial numbers.
 
 Two things about the pair-level alarm worth knowing from the implementation side:
 it fires on the **ranking walk**, before any guild of that encounter is attempted, so

@@ -4787,9 +4787,61 @@ the ranking, attempts nothing and records the exhaustion, and only the run after
 skips. A skip too many costs latency, never a guild.
 
 **`--validate` is the commit gate**, run inside `data/` before `git add`: every
-`.jsonl` line is JSON, the manifest's counts equal the files' line counts, and no
-tracked rows/refused file is shorter than at `HEAD` (`git show HEAD:path`). Any
+`.jsonl` line is JSON, the manifest's counts equal the files' line counts, no
+tracked rows/refused file is shorter than at `HEAD` (`git show HEAD:path`), and no
+`.tmp` file from an interrupted write is lying about for `git add` to take. Any
 violation exits 1 and nothing is committed.
+
+**Four things the review of the first version found, each measured rather than
+read, and each the shape this file already names somewhere else.**
+
+- **The Sweep step's exit-code branches were dead.** The runner's default shell is
+  `bash -eo pipefail`, so `set -uo pipefail` leaves errexit ON and a non-zero sweep
+  exit ends the step AT the `| tee` pipeline, before `status=$?`. Reproduced by
+  running the block verbatim under `bash --noprofile --norc -eo pipefail` with an
+  exit-3 stand-in: the step died with 3 and the annotation never printed. So every
+  exit-2 run (a zone the service would not list) was a red job and every exit-3 one
+  never said which pair alarmed. `set +e` before the pipeline and `set -e` after
+  `status=$?`, exactly as `fight-probe.yml` does it.
+- **The push loop exited 0 with the run's commit lost.** `git pull --rebase
+  --autostash origin main || true` -- inherited from `fight-probe.yml` -- leaves the
+  clone mid-rebase on a conflict with HEAD on `origin/main`; `git push origin
+  HEAD:main` then says "Everything up-to-date", succeeds, and the sweep commit (rows,
+  refusals, the advanced cursors) never reaches the data repository. Reproduced
+  against a bare remote with a conflicting hand push: exit 0, remote holding only
+  `hand` and `seed`, the runner clone "interactive rebase in progress". The loop now
+  aborts a conflicted rebase and retries, and after it the commit at HEAD is asserted
+  to be the sweep's (`git log -1 --format=%s` equals the message) and to be an
+  ancestor of `origin/main` -- a real conflict three times over is then an honest
+  red step with the commit intact in the clone, and a non-conflicting hand push
+  rebases and lands. `fight-probe.yml` still carries the `|| true` and is not touched
+  here; that is a finding for its own PR.
+- **A credential failure was a green run.** Any `WarcraftLogsError` on the first
+  budget reading -- a 401 from the token endpoint, a dead route -- became a budget
+  stop: exit 0, `attempted: 0`, nothing written. With the cron on, a rotated secret
+  would have produced green scheduled runs that swept nothing, indefinitely -- the
+  #219 shape. It is `EXIT_FAILED` (1) now, and ONLY there: no walk has begun and
+  nothing is paid for, so it is a run that could not start. A 429 or the deadline on
+  that same reading stays a stop, and a failed reading mid-run still stops the run
+  with what was measured written, because by then something was paid for.
+- **A 429 on the zone query escaped `run_sweep`.** `_zone_encounters` re-raised
+  `RateLimited` and the runner's outer `try` caught only `_StopRun`, so a 429 while
+  listing the second zone was a traceback, exit 1, no summary file -- and the
+  workflow's commit message would have read "+0 rows, 0 queries" over rows that were
+  written. The contract's 429 clause holds on every query now.
+
+Smaller, from the same review: the ceiling fails CLOSED on a reading that carries no
+`limitPerHour` (fail-open would have walked the shared counter down to a 429 with the
+guard switched off); `sweptAt` is the encounter's own time, not the run's (on a
+five-hour run the last boss was stamped five hours stale and re-walked early); a
+transport failure gets the one in-run retry DECISIONS.md specifies; a crash inside
+the per-guild loop writes what was paid for before re-raising (the fourth-time
+`PointBudgetExhausted` shape, pre-empted rather than repeated); a `--retry-errors`
+run keeps the full walk's `named`/`shape` tallies; guild ids no longer reach the log
+or the `--seed-only` output, both of which land in a public artifact and the step
+summary; `--difficulties` refuses 3, which the import would refuse row by row; and
+the validator refuses a stray `.tmp`. Every one of those is pinned by a test whose
+canary was run.
 
 **Deliberately not implemented.** `--workers > 1` is refused with a reason rather than
 silently run sequentially: a pool needs a lock around `PointLedger.record` and a
