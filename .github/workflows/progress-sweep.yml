@@ -1,0 +1,215 @@
+name: Progress sweep
+
+# The cohort sweep: every guild's progress hours per boss, walked off Warcraft Logs'
+# progress rankings and committed into the PRIVATE data repository
+# `Wild-Things-Tools/wtt-progress-data`. The contract is docs/progress-cohort.md.
+#
+# It lives here rather than in wtt-backend because the runner minutes are free on a
+# public repository and the Warcraft Logs credentials already are here. Nothing
+# about guilds is written into THIS repository: the rows go into `data/`, which is
+# the private repository's checkout, and are pushed there with a fine-grained PAT
+# that can reach that one repository and nothing else. That is why `permissions`
+# below is `contents: read` -- this workflow never commits to itself.
+#
+# `workflow_dispatch` only, for now. The schedule is written down and switched off:
+# it goes live in a later PR, after the seed export has landed in the data
+# repository and the first hand runs have been read. Why four slots a day rather
+# than hourly: measured on this repository, the hourly `fight-probe` cron fired only
+# 2-8 times a day since 2026-08-27, with delays of up to 60 minutes -- so few LONG
+# runs are what a public schedule can actually deliver, and the sweep is built for
+# that (it sleeps through the point ceiling until the counter resets, up to
+# `--deadline-minutes`). The minute is off the hour, where GitHub drops and delays
+# the most, and away from fight-probe's :25.
+on:
+  # schedule:
+  #   - cron: '17 0,6,12,18 * * *'
+  workflow_dispatch:
+    inputs:
+      # Every default here MUST equal the CLI's (`wowdps progress-sweep --help`).
+      # A scheduled run gets no inputs, so what is written here is what it runs
+      # with; `fight-probe` shipped a form default that did not match a real pass
+      # and every continuation went silently inert.
+      zones:
+        description: 'Warcraft Logs zone ids in PRIORITY order, comma-separated. Never 0'
+        default: '53,46,44,42,38'
+      difficulties:
+        description: 'Comma-separated, swept in this order on one budget (5 Mythic, 4 Heroic)'
+        default: '5,4'
+      guilds:
+        description: 'Guilds ATTEMPTED per boss per run. 0 = unlimited'
+        default: '200'
+      deadline_minutes:
+        description: 'Wall-clock budget. Reached, the run writes what it has and exits 0'
+        default: '300'
+      point_ceiling:
+        description: 'Share of the hourly point budget, against the ABSOLUTE counter. At it the run sleeps until the counter resets'
+        default: '0.6'
+      retry_errors:
+        description: 'Re-attempt exactly the guilds refused as `error`, and nothing else'
+        type: boolean
+        default: false
+      seed_only:
+        description: 'Print rows/refusals/cursor per pair from the checkout and send no query'
+        type: boolean
+        default: false
+
+concurrency:
+  group: progress-sweep
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    # GitHub's job limit is 6 h; the sweep's own deadline is 300 min, and install,
+    # validate and the push fit in the rest.
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      # The private data repository, at ./data. `persist-credentials` (the default)
+      # keeps the PAT in that checkout's git config, which is what the push at the
+      # end uses. A fine-grained PAT with Contents read/write on that repository
+      # ONLY; if it is missing the checkout fails here, before a point is spent.
+      - name: Check out the data repository
+        uses: actions/checkout@v4
+        with:
+          repository: Wild-Things-Tools/wtt-progress-data
+          token: ${{ secrets.PROGRESS_DATA_PAT }}
+          path: data
+          fetch-depth: 1
+
+      - name: Check credentials
+        id: creds
+        env:
+          WCL_CLIENT_ID: ${{ secrets.WCL_CLIENT_ID }}
+          WCL_CLIENT_SECRET: ${{ secrets.WCL_CLIENT_SECRET }}
+        run: |
+          if [ -z "$WCL_CLIENT_ID" ] || [ -z "$WCL_CLIENT_SECRET" ]; then
+            echo "::error::WCL_CLIENT_ID / WCL_CLIENT_SECRET are not set."
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install
+        working-directory: pipeline
+        run: pip install -e '.[dev]'
+
+      # Inputs are bound in `env:`, never interpolated into `run:`. A dispatched
+      # value carrying a quote and a semicolon would otherwise become script, in a
+      # job holding the Warcraft Logs secret and a PAT.
+      - name: Sweep
+        env:
+          WCL_CLIENT_ID: ${{ secrets.WCL_CLIENT_ID }}
+          WCL_CLIENT_SECRET: ${{ secrets.WCL_CLIENT_SECRET }}
+          ZONES: ${{ inputs.zones || '53,46,44,42,38' }}
+          DIFFICULTIES: ${{ inputs.difficulties || '5,4' }}
+          GUILDS: ${{ inputs.guilds || '200' }}
+          DEADLINE_MINUTES: ${{ inputs.deadline_minutes || '300' }}
+          POINT_CEILING: ${{ inputs.point_ceiling || '0.6' }}
+          RETRY_ERRORS: ${{ inputs.retry_errors }}
+          SEED_ONLY: ${{ inputs.seed_only }}
+        run: |
+          set -uo pipefail
+          extra=()
+          [ "$RETRY_ERRORS" = "true" ] && extra+=(--retry-errors)
+          [ "$SEED_ONLY" = "true" ] && extra+=(--seed-only)
+          # Exit 2 (a zone the service would not list) and 3 (a schema alarm on some
+          # pair) are findings, and what the OTHER pairs measured is written and
+          # worth committing; anything else is a real failure.
+          python -m wowdps.cli progress-sweep \
+            --zones "$ZONES" \
+            --difficulties "$DIFFICULTIES" \
+            --guilds "$GUILDS" \
+            --deadline-minutes "$DEADLINE_MINUTES" \
+            --point-ceiling "$POINT_CEILING" \
+            "${extra[@]}" \
+            --out data/progress-cohort \
+            --summary sweep-summary.json 2>&1 | tee sweep.log
+          status=$?
+          if [ "$status" = "2" ]; then
+            echo "::warning::a zone could not be listed; the others were swept"
+          elif [ "$status" = "3" ]; then
+            echo "::error::a ranking row carried no fromlog on some pair; that pair wrote nothing"
+          elif [ "$status" != "0" ]; then
+            exit "$status"
+          fi
+
+      # `always()`: the sweep writes after every encounter, so a run that failed on
+      # its last boss still holds paid-for rows on every boss before it. The
+      # validator is what stands between that and a bad commit.
+      - name: Validate and commit into the data repository
+        if: always()
+        working-directory: data
+        env:
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python -m wowdps.cli progress-sweep --validate progress-cohort
+          git add progress-cohort
+          if git diff --staged --quiet; then
+            echo "progress cohort unchanged"
+            exit 0
+          fi
+          message=$(python - <<'PY'
+          import json, os, pathlib
+          summary = pathlib.Path("../sweep-summary.json")
+          d = json.loads(summary.read_text()) if summary.is_file() else {}
+          points = d.get("points")
+          points = "UNMEASURED" if points is None else f"{points:.0f}"
+          print(
+              f"sweep: +{d.get('newRows', 0)} rows, +{d.get('newRefused', 0)} refusals, "
+              f"{points} points, {d.get('queries', 0)} queries (run {os.environ['RUN_ID']})"
+          )
+          PY
+          )
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git commit -m "$message"
+          # Rebase before pushing, for the reason `fight-probe.yml` records: the
+          # data repository is written by this workflow alone today, but a person's
+          # own push (the seed, a hand fix) must not fail a run whose work succeeded.
+          pushed=false
+          for attempt in 1 2 3; do
+            git pull --rebase --autostash origin main || true
+            if git push origin HEAD:main; then pushed=true; break; fi
+            echo "push attempt $attempt lost the race; retrying"
+            sleep $((attempt * 5))
+          done
+          # Losing three times is a real failure, not something to exit 0 on.
+          [ "$pushed" = true ]
+
+      # Always: the run whose log somebody needs is precisely the one that stopped
+      # early.
+      - name: Upload the log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: progress-sweep
+          path: |
+            sweep.log
+            sweep-summary.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo '## Progress sweep'
+            echo
+            echo '```'
+            cat sweep-summary.json 2>/dev/null || echo 'no summary written'
+            echo '```'
+            echo
+            echo 'Last lines of the log:'
+            echo
+            echo '```'
+            tail -n 40 sweep.log 2>/dev/null || echo 'no log'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
