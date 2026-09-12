@@ -11,9 +11,14 @@ name: Progress sweep
 # that can reach that one repository and nothing else. That is why `permissions`
 # below is `contents: read` -- this workflow never commits to itself.
 #
-# `workflow_dispatch` only, for now. The schedule is written down and switched off:
-# it goes live in a later PR, after the seed export has landed in the data
-# repository and the first hand runs have been read. Why four slots a day rather
+# The schedule is LIVE since 2026-09-12, and the condition it was written down
+# under is met: the seed export landed (`923fc30`, 30,586 rows) and a hand run
+# has been read end to end. The chain was measured rather than assumed --
+# run 34714891236 committed `bf4f0a9` (+32 rows, +6 refusals, 124 queries) and
+# wtt-backend's `wtt-progress-import` then read that exact commit back into
+# production (30,618 rows, `newest sweptAt ... 0.1 h ago`). Until that pair of
+# measurements existed the cron stayed off on purpose: a cadence for something
+# that has never delivered is four silent failures a day. Why four slots a day
 # than hourly: measured on this repository, the hourly `fight-probe` cron fired only
 # 2-8 times a day since 2026-08-27, with delays of up to 60 minutes -- so few LONG
 # runs are what a public schedule can actually deliver, and the sweep is built for
@@ -21,8 +26,8 @@ name: Progress sweep
 # `--deadline-minutes`). The minute is off the hour, where GitHub drops and delays
 # the most, and away from fight-probe's :25.
 on:
-  # schedule:
-  #   - cron: '17 0,6,12,18 * * *'
+  schedule:
+    - cron: '17 0,6,12,18 * * *'
   workflow_dispatch:
     inputs:
       # Every default here MUST equal the CLI's (`wowdps progress-sweep --help`).
