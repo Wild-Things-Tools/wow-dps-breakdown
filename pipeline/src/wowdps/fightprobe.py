@@ -1232,7 +1232,18 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         # offline command exists so the artifact can be re-published, and the
         # extraction argued with, without paying for the queries twice.
         document = fightdataset.build_document(args.tier, profiles, payload)
-        published = fightdataset.write_fights(Path(args.publish) / args.tier, document)
+        try:
+            published = fightdataset.write_fights(Path(args.publish) / args.tier, document)
+        except fightdataset.MeasurementWouldBeLost as exc:
+            # A refusal, so the run stops and the exit code says a person has to
+            # read it -- the same status as the one-difficulty refusal, and the
+            # workflow fails the step on it so nothing is committed. The payload is
+            # already on disk above, and the published document is untouched; the
+            # way through is the offline command, `wowdps fights --probe ... --force`,
+            # never a flag on a scheduled run.
+            log.error("%s", exc)
+            _report_cost(ledger, len(observations))
+            return 1
         log.info(
             "published %s (%d encounters, %d measured)",
             published,

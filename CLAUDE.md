@@ -76,6 +76,47 @@ Against the published dataset, where each build wears its own gear, Sunfury lead
 `prioritydps` equals `dps` exactly, and the base build's talents-only number reproduced
 its shipped number to 0.3% (across different iteration counts, so different seeds).
 
+### `talents.json` said which iteration count it ran at, and nothing else (2026-09-12)
+
+Read off the committed document rather than assumed: `settings` held `iterations`
+and `deterministic`, and that was the whole of its provenance -- **no `simc` block,
+no measured precision, no `coverage`**. The gear document has carried all three since
+#95/#114, and the two are read by the same people for the same reason: after a tuning
+pass, *which game data is this comparison of* is the first question, and this
+document could not answer it. Nor could a reader say how many of the tier's builds
+the rows held, or whether a row belonged to a build simc had since stopped shipping.
+
+`write_talents` writes the three now, on `gear.json`'s pattern. Two things about the
+shape that are decisions rather than copying:
+
+- **The blocks are this run's and describe every row.** `talents.yml` is one job
+  with no shard merge, so every row in the document comes out of the invocation that
+  writes it -- there is no older run's provenance to fold in and no per-slot block to
+  fall back to. That is the simpler half of the gear document's arrangement, and it
+  is why `medianDpsError` is taken over the rows once rather than recounted by a
+  merge. The `simc` block is read off a real report by the same throwaway probe
+  `wowdps gear` takes (`run_profilesets` returns the parsed table, not the report),
+  from a profile that just ran so a refused hash cannot be the one asked.
+- **`coverage` follows #114's rule as written for `gear.json`**: the tier's build
+  *ids* are published (`buildsAvailable`, from the unfiltered discovery, never from
+  the `--spec` selection), `specsAvailable` is derived from that list rather than
+  passed beside it, `specs` is counted from the rows, and a row whose build the tier
+  no longer ships is named in `staleRows` -- kept, never clamped or dropped. One
+  ordinary state to know: a spec with a single build is never compared, so `specs`
+  below `specsAvailable` is what a healthy document looks like, not a gap.
+
+The settle is `dataset.settle_provenance`, the manifest's own, rather than the
+timestamp-only comparison that stood here -- because a `simc` block that moves with
+every nightly simc build would otherwise restamp a document whose numbers never
+moved, which is the defect the settle exists to prevent. Same order as
+`publish_manifest`: read the published file first, build the whole document, settle
+last; and the test moves the clock a day per call, since two calls in one second
+reproduce the file whether the settle fires or not.
+
+**Nothing published moves until `talents.yml` runs.** The committed document still
+carries the two-key `settings`; the next dispatch writes the blocks, and the web
+type carries them as optional so a reader of the old file is not lied to.
+
 ### The finding: on four specs of eleven, the two rankings disagree
 
 The whole tier at five targets, 1000 deterministic iterations, gear held at each
@@ -5508,6 +5549,26 @@ that are easy to get wrong a second time:
   after promoting the facts those measurements produced. `write_fights` now
   refuses when the published file has measurements and the new document has none;
   `--force` is the way through.
+- **That refusal was all-or-nothing, and the 2026-09-06 loss was neither
+  (2026-09-12).** Measured on the committed history, `056302b -> 34c1166`, the
+  hourly `fight-probe --publish --resume` that wrote the loss: `coverage.measured`
+  went **6 -> 4**, so `has` was true and the guard could not fire, while the fold
+  -- then keyed on the encounter, see `_keep_measurements` -- replaced every
+  `measurements` list wholesale and **six Heroic blocks holding 17, 10, 27, 30, 25
+  and 7 sampled kills were dropped**, with two headlines falling from those Heroic
+  kills to an empty Mythic block. 595,744 bytes became 235,234 and the run reported
+  success; #155 repaired the fold and #156 restored the document from `056302b`.
+  `write_fights` asks the question **per (encounter, difficulty)** now, of the
+  *folded* document: a published block with kills that would end smaller, or with
+  no block at all, is refused with the ids and the before/after counts printed,
+  and `--force` is the way through exactly as above. Asked of the raw document it
+  would refuse every single-difficulty run there is, which is why the order --
+  fold, then guard -- is pinned by a test of its own. A block with nothing sampled
+  has nothing to lose, so the four PTR ids read through their live twins (#160)
+  grow from zero without a refusal; and the fight-probe call site catches the
+  refusal and exits 1 (the status the workflow fails the step on), the payload
+  already on disk and the published document untouched. The way through is the
+  offline `wowdps fights --probe ... --force`, never a flag on a scheduled run.
 - **The scenario can be run alone** `wowdps build
   --scenario bosses` expands to every boss whose profile has a `hand` or `logs` fact;
   `--scenario boss_<encounterId>` picks one. The default scenario set is untouched, so

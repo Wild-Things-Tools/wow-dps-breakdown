@@ -39,11 +39,15 @@ nobody has generated; the hero builds are the axis simc hands us for free.
 
 from __future__ import annotations
 
+import json
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import simc_runner
+from .dataset import median_error, settle_provenance
 from .profiles import SpecProfile
 from .scenarios import PATCHWERK, SimSettings
 
@@ -223,27 +227,80 @@ def sweep_spec(
 
 
 def write_talents(
-    out_dir: Path, tier: str, results: list[SweepResult], settings: SimSettings
+    out_dir: Path,
+    tier: str,
+    results: list[SweepResult],
+    settings: SimSettings,
+    *,
+    simc_meta: dict,
+    builds_available: Sequence[str],
 ) -> Path:
     """Publish a sweep beside the tier's other optional datasets.
 
-    ``generatedAt`` is settled the way the manifest's is: if nothing but the
-    timestamp changed, the published one is kept, so a re-run that found the same
-    answer leaves nothing to commit. The sims are deterministic, so that is the
-    normal outcome and a diff means something moved.
-    """
-    import json
-    from datetime import UTC, datetime
+    Three blocks travel with the rows, the ones ``gear.json`` carries, and each is
+    **this run's**. There is no shard merge here -- ``talents.yml`` is one job and
+    every row in the document comes out of the one invocation that writes it -- so,
+    unlike the gear document, nothing has to fold an older run's provenance in and
+    the blocks describe every row beneath them:
 
+    * ``simc`` -- which binary and which game data produced the numbers, read off a
+      real report. Without it a reader cannot say whether a tuning pass is in the
+      comparison, which is the one question the document is for.
+    * ``settings.medianDpsError`` -- the precision actually *measured* over the rows,
+      because in deterministic mode nothing is requested and the requested figure
+      would read as "no error at all".
+    * ``coverage`` -- how many builds the rows hold against which builds the tier
+      has, as **ids** (``buildsAvailable``, #114's rule): from two counts a reader
+      learns only *that* a row is stale, never which. ``specsAvailable`` is derived
+      from the list so the two cannot disagree, and a build the tier no longer ships
+      is named in ``staleRows`` rather than clamped away or left to be noticed.
+
+    Provenance is settled the way the manifest's is (``dataset.settle_provenance``):
+    when nothing but the stamps changed -- ``generatedAt`` and the ``simc`` block,
+    which moves with every nightly simc build -- the published ones are kept, so a
+    re-run that found the same answer leaves nothing to commit. The order is the
+    same one ``publish_manifest`` exists to hold: read the published file first,
+    build the whole document including its blocks, settle last.
+    """
     path = out_dir / "talents.json"
+    published: dict | None = None
+    if path.is_file():
+        try:
+            published = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            published = None
+
+    available = sorted(set(builds_available))
+    measured = sorted({build.key for result in results for build in result.builds})
+    coverage: dict = {
+        "specs": len(measured),
+        "specsAvailable": len(available),
+        "buildsAvailable": available,
+    }
+    stale = sorted(set(measured) - set(available))
+    if stale:
+        # Emitted only when non-empty, the same rule as `merge_gear_shards`: a
+        # healthy document says nothing, and an absent field never reads as a claim.
+        coverage["staleRows"] = stale
+
     document = {
         "schemaVersion": 1,
         "generatedAt": datetime.now(UTC).isoformat(timespec="seconds"),
         "tier": tier,
+        "simc": simc_meta,
         "settings": {
             "iterations": settings.max_iterations,
             "deterministic": settings.target_error <= 0,
+            "medianDpsError": median_error(
+                [
+                    build.dps_error
+                    for result in results
+                    for build in result.builds
+                    if build.dps_error > 0
+                ]
+            ),
         },
+        "coverage": coverage,
         "note": (
             "Every build of a spec on one character's gear and action list, so the "
             "difference is the talents. Ranked twice out of one run: by total damage "
@@ -254,15 +311,6 @@ def write_talents(
         "specs": [result.to_json() for result in results],
     }
 
-    if path.is_file():
-        try:
-            published = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            published = None
-        if published is not None:
-            settled = dict(document, generatedAt=published.get("generatedAt"))
-            if settled == published:
-                document = published
-
+    document = settle_provenance(document, published)
     path.write_text(json.dumps(document, indent=1) + "\n", encoding="utf-8")
     return path

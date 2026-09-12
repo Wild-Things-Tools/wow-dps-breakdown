@@ -384,7 +384,25 @@ export interface TalentDataset {
   schemaVersion: number;
   generatedAt: string;
   tier: string;
-  settings: { iterations: number; deterministic: boolean };
+  /**
+   * Which binary and which game data produced the rows. Optional because the
+   * committed document predates the block; the next talent run writes it. There
+   * is no shard merge for this document, so the block describes every row.
+   */
+  simc?: SimcMeta;
+  settings: {
+    iterations: number;
+    deterministic: boolean;
+    /** Median error actually measured over the rows, in percent. Absent on a
+     * document written before it was published; never read `0` for that. */
+    medianDpsError?: number | null;
+  };
+  /**
+   * How many builds the rows hold against the tier's build ids (#114's rule, the
+   * same block `gear.json` carries). A spec with one build is never compared, so
+   * `specs < specsAvailable` is the ordinary state rather than a gap.
+   */
+  coverage?: SweepCoverageBlock;
   note: string;
   specs: TalentSpec[];
 }

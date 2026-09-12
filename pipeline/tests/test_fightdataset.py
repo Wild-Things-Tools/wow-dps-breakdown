@@ -1583,3 +1583,134 @@ def test_a_block_read_through_a_twin_is_filed_under_the_filed_id_and_names_the_t
         3180,
     )["measured"]
     assert "usedEncounter" not in plain and "idChoice" not in plain
+
+
+# --------------------------------------------------------------------------------
+# The per-(encounter, difficulty) refusal, from the 2026-09-06 loss
+# --------------------------------------------------------------------------------
+
+
+def test_a_document_that_would_shrink_a_measured_block_is_refused_by_name(tmp_path):
+    """The whole-document guard is all-or-nothing and the 2026-09-06 loss was neither.
+
+    Measured on the committed history (056302b -> 34c1166): `coverage.measured` went
+    6 -> 4, so `has` was true and the guard could not fire, while six Heroic blocks
+    holding 7-30 sampled kills each were dropped and two headlines fell from Heroic
+    kills to an empty Mythic block. This guard asks per (encounter, difficulty), and
+    the refusal names the ids and the counts so a person can see what would go.
+    """
+    from wowdps.fightdataset import MeasurementWouldBeLost, write_fights
+
+    heroic_17 = {"difficulty": 4, "fightsSampled": 17, "reports": ["a"], "timeline": {}}
+    heroic_5 = {"difficulty": 4, "fightsSampled": 5, "reports": ["a"], "timeline": {}}
+    mythic_8 = {"difficulty": 5, "fightsSampled": 8, "reports": ["m"], "timeline": {}}
+    mythic_gone = {"difficulty": 5, "fightsSampled": 0, "reports": [], "timeline": None}
+
+    write_fights(
+        tmp_path,
+        _doc(
+            _encounter_with_blocks(53420, heroic_17),
+            _encounter_with_blocks(53445, mythic_8, heroic_17),
+        ),
+    )
+    # A stale artifact republished: fewer Heroic kills on one boss, and the other
+    # boss's Mythic block re-read to nothing. Both are losses and both are named.
+    with pytest.raises(MeasurementWouldBeLost) as refused:
+        write_fights(
+            tmp_path,
+            _doc(
+                _encounter_with_blocks(53420, heroic_5),
+                _encounter_with_blocks(53445, mythic_gone, heroic_17),
+            ),
+        )
+    message = str(refused.value)
+    assert "53420 at Heroic: 17 -> 5" in message
+    # The Mythic block re-read to nothing is one `_keep_measurements` KEEPS (a fresh
+    # block that read nothing never displaces kills), so after the fold it is not a
+    # loss and must not be named -- naming it would refuse the very state the union
+    # repairs.
+    assert "53445" not in message
+    assert "--force" in message
+
+    still = json.loads((tmp_path / "fights.json").read_text(encoding="utf-8"))
+    by_id = {e["encounterId"]: e for e in still["encounters"]}
+    assert by_id[53420]["measured"]["fightsSampled"] == 17, "nothing was written"
+
+
+def test_a_boss_that_left_the_document_with_kills_is_refused_too(tmp_path):
+    """ "No measured block" is a different claim from "fewer kills", and both are
+    losses. An encounter re-filed out of the tier takes its measurements with it,
+    and that is exactly the kind of replacement that needs a person to say so."""
+    from wowdps.fightdataset import MeasurementWouldBeLost, write_fights
+
+    mythic_8 = {"difficulty": 5, "fightsSampled": 8, "reports": ["m"], "timeline": {}}
+    write_fights(
+        tmp_path, _doc(_encounter_with_blocks(1, mythic_8), _encounter_with_blocks(2, mythic_8))
+    )
+    with pytest.raises(MeasurementWouldBeLost, match=r"2 at Mythic: 8 -> none"):
+        write_fights(tmp_path, _doc(_encounter_with_blocks(1, mythic_8)))
+
+
+def test_counts_that_grow_or_stay_are_not_a_loss(tmp_path):
+    """The ordinary hourly continuation: the same payload re-published, or more kills
+    read. Neither may be refused, or the schedule stalls on every run."""
+    from wowdps.fightdataset import write_fights
+
+    mythic_8 = {"difficulty": 5, "fightsSampled": 8, "reports": ["m"], "timeline": {}}
+    mythic_9 = {"difficulty": 5, "fightsSampled": 9, "reports": ["m", "n"], "timeline": {}}
+    heroic_17 = {"difficulty": 4, "fightsSampled": 17, "reports": ["a"], "timeline": {}}
+    empty = {"difficulty": 5, "fightsSampled": 0, "reports": [], "timeline": None}
+
+    write_fights(
+        tmp_path,
+        _doc(_encounter_with_blocks(1, mythic_8, heroic_17), _encounter_with_blocks(2, empty)),
+    )
+    # Same numbers on boss 1, and boss 2 grows from nothing -- the four PTR ids read
+    # through their live twins (#160) are exactly this shape.
+    write_fights(
+        tmp_path,
+        _doc(_encounter_with_blocks(1, mythic_8, heroic_17), _encounter_with_blocks(2, mythic_8)),
+    )
+    # And more kills than published.
+    write_fights(
+        tmp_path,
+        _doc(_encounter_with_blocks(1, mythic_9, heroic_17), _encounter_with_blocks(2, mythic_9)),
+    )
+    written = json.loads((tmp_path / "fights.json").read_text(encoding="utf-8"))
+    by_id = {e["encounterId"]: e for e in written["encounters"]}
+    assert by_id[1]["measured"]["fightsSampled"] == 9
+    assert by_id[2]["measured"]["fightsSampled"] == 9
+
+
+def test_a_block_the_fold_carried_forward_is_not_a_loss(tmp_path):
+    """The guard runs AFTER `_keep_measurements`, and the order is the whole point.
+
+    A Mythic-only run never asks Heroic, so the raw document has no Heroic block for
+    a boss whose published Heroic block holds seventeen kills. Asked of the raw
+    document the guard would refuse every single-difficulty run there is; asked of
+    the folded one it sees the seventeen kills back where they were.
+    """
+    from wowdps.fightdataset import write_fights
+
+    mythic_empty = {"difficulty": 5, "fightsSampled": 0, "reports": [], "timeline": None}
+    heroic_17 = {"difficulty": 4, "fightsSampled": 17, "reports": ["a"], "timeline": {}}
+
+    write_fights(tmp_path, _doc(_encounter_with_blocks(1, mythic_empty, heroic_17)))
+    write_fights(tmp_path, _doc(_encounter_with_blocks(1, mythic_empty)))
+
+    entry = json.loads((tmp_path / "fights.json").read_text(encoding="utf-8"))["encounters"][0]
+    at = {b["difficulty"]: b for b in entry["measurements"]}
+    assert at[4]["fightsSampled"] == 17
+
+
+def test_force_writes_a_document_that_shrinks_a_block(tmp_path):
+    """The override has to override this refusal too, or --force stops meaning it."""
+    from wowdps.fightdataset import write_fights
+
+    heroic_17 = {"difficulty": 4, "fightsSampled": 17, "reports": ["a"], "timeline": {}}
+    heroic_5 = {"difficulty": 4, "fightsSampled": 5, "reports": ["a"], "timeline": {}}
+
+    write_fights(tmp_path, _doc(_encounter_with_blocks(1, heroic_17)))
+    write_fights(tmp_path, _doc(_encounter_with_blocks(1, heroic_5)), force=True)
+    entry = json.loads((tmp_path / "fights.json").read_text(encoding="utf-8"))["encounters"][0]
+    assert entry["measured"]["fightsSampled"] == 5
