@@ -208,6 +208,22 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: spawn-probe
-          path: spawn-probe
+          # The response cache is EXCLUDED, and that costs something real: CLAUDE.md
+          # records "download it, point a local run at it with --cache, and the
+          # extraction can be iterated on offline for nothing". The price of keeping
+          # it is higher. An artifact of a PUBLIC repository is downloadable by
+          # anyone, and the cache is raw API payloads -- `report.title`,
+          # `masterData.actors[].name`, and the `name`/`guild`/`server` fields of
+          # every ranking row. None of it is read by anything here (`report.title`
+          # has zero readers across every Python file, measured), so it is published
+          # personal data bought for nothing.
+          #
+          # The `actions/cache` above still holds it, so the resume stays free --
+          # which is the other half of why this is the right cut rather than moving
+          # `--cache` out of `--out`: that would make every continuation cold and
+          # cost real points.
+          path: |
+            spawn-probe
+            !spawn-probe/cache
           if-no-files-found: ignore
           retention-days: 14

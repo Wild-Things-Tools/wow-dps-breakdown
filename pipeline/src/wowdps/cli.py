@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -2357,7 +2358,19 @@ def _write_progress_hours(args, bosses, client, start: float, limit: float) -> i
         # a replacement would delete every boss this run did not read and the deletion
         # would look exactly like a season nobody has measured.
         out_dir = Path(args.publish) / args.tier
-        published = progresshours.publish_document(out_dir, document)
+        # The salt is a secret and is never written down here: the published guild
+        # ids are a quasi-identifier in a public repository, and the key space is
+        # small enough that a committed salt would be no salt at all. Without one
+        # the identity is withheld rather than published raw -- fail closed, and
+        # the run says which of the two states the document is in.
+        salt = os.environ.get(progresshours.PSEUDONYM_SALT_ENV) or None
+        if not salt:
+            logging.warning(
+                "%s is unset: the published guild rows keep their outcomes and hours "
+                "and carry no identity at all. Set it to publish pseudonyms.",
+                progresshours.PSEUDONYM_SALT_ENV,
+            )
+        published = progresshours.publish_document(out_dir, document, salt=salt)
         try:
             path = progresshours.write_progress_hours(
                 out_dir, published, force=getattr(args, "force", False)
