@@ -4,6 +4,8 @@ Shapes follow the live schema as introspected on 2026-08-26: `Report.startTime` 
 absolute, `ReportFight.startTime`/`endTime` are relative to their own report.
 """
 
+import json
+
 import pytest
 
 from wowdps import progresshours
@@ -838,3 +840,96 @@ def test_a_write_that_would_discard_every_measurement_is_refused(tmp_path):
     with pytest.raises(progresshours.MeasurementsWouldBeLost):
         progresshours.write_progress_hours(out, empty)
     progresshours.write_progress_hours(out, empty, force=True)
+
+
+# --------------------------------------------------------------------------------
+# The published guild identity: a quasi-identifier in a public repository
+# --------------------------------------------------------------------------------
+
+
+def guilds_of(document, encounter_id=1):
+    for boss in document["bosses"]:
+        if boss["encounterId"] == encounter_id:
+            return boss["guilds"]
+    raise AssertionError(f"no boss {encounter_id}")
+
+
+def test_a_published_guild_row_never_carries_the_raw_id(tmp_path):
+    """The whole point: a guild id resolves through the API to a name and a realm,
+    and this document is committed to a public repository."""
+    out = tmp_path / "MID2"
+    rows = [{"id": 1546, "outcome": "measured", "hours": 3.5}, {"id": 99, "outcome": "no-reports"}]
+    document = {"difficulty": 5, "tier": "MID2", "bosses": [boss_row(1, guilds=rows)]}
+
+    published = progresshours.publish_document(out, document, salt="pepper")
+
+    assert published["guildIdentity"] == "pseudonym"
+    assert all("id" not in row for row in guilds_of(published))
+    assert all(isinstance(row["guild"], str) for row in guilds_of(published))
+    # Everything the rows are FOR survives; only the identity is replaced.
+    assert [row["outcome"] for row in guilds_of(published)] == ["measured", "no-reports"]
+    assert guilds_of(published)[0]["hours"] == 3.5
+
+
+def test_the_pseudonym_is_the_same_string_in_two_runs(tmp_path):
+    """Run-stable, or the rows carry a distribution and nothing else -- and the
+    settle could never fire, because every run would rewrite every pseudonym."""
+    rows = [{"id": 1546, "outcome": "measured"}]
+    document = {"difficulty": 5, "tier": "MID2", "bosses": [boss_row(1, guilds=rows)]}
+
+    first = progresshours.publish_document(tmp_path / "a", document, salt="pepper")
+    second = progresshours.publish_document(tmp_path / "b", document, salt="pepper")
+
+    assert guilds_of(first)[0]["guild"] == guilds_of(second)[0]["guild"]
+
+
+def test_a_different_salt_gives_a_different_pseudonym():
+    """The control. Without it the stability test passes against a function that
+    ignores the salt entirely, which would be an unsalted hash of an enumerable id."""
+    assert progresshours.guild_pseudonym(1546, "pepper") != progresshours.guild_pseudonym(
+        1546, "salt"
+    )
+
+
+def test_an_already_published_raw_id_is_converted_by_the_next_publish(tmp_path):
+    """A repair rather than only a stop: the published file is folded in as the
+    oldest document, so ids already committed are converted on the next write."""
+    out = tmp_path / "MID2"
+    out.mkdir(parents=True)
+    stale = {
+        "difficulty": 5,
+        "tier": "MID2",
+        "bosses": [boss_row(2, guilds=[{"id": 4242, "outcome": "measured"}])],
+    }
+    (out / "progress-hours.json").write_text(json.dumps(stale), encoding="utf-8")
+
+    fresh = {"difficulty": 5, "tier": "MID2", "bosses": [boss_row(1)]}
+    published = progresshours.publish_document(out, fresh, salt="pepper")
+
+    assert "id" not in guilds_of(published, 2)[0]
+    assert guilds_of(published, 2)[0]["guild"] == progresshours.guild_pseudonym(4242, "pepper")
+
+
+def test_a_pseudonym_is_not_hashed_a_second_time():
+    """Idempotence, and it is load-bearing: most rows arrive already converted from
+    the published file, and a hash of a hash would move on every run."""
+    rows = [{"id": 1546, "outcome": "measured"}]
+    document = {"difficulty": 5, "tier": "MID2", "bosses": [boss_row(1, guilds=rows)]}
+
+    once = progresshours.pseudonymise_guilds(document, salt="pepper")
+    twice = progresshours.pseudonymise_guilds(once, salt="pepper")
+
+    assert twice["bosses"][0]["guilds"] == once["bosses"][0]["guilds"]
+
+
+def test_no_salt_withholds_the_identity_rather_than_publishing_it_raw(tmp_path):
+    """Fail closed. A run without the secret is a local run or a misconfigured
+    workflow, and neither is a reason to put a quasi-identifier in a public file."""
+    out = tmp_path / "MID2"
+    rows = [{"id": 1546, "outcome": "measured", "hours": 3.5}]
+    document = {"difficulty": 5, "tier": "MID2", "bosses": [boss_row(1, guilds=rows)]}
+
+    published = progresshours.publish_document(out, document, salt=None)
+
+    assert published["guildIdentity"] == "withheld"
+    assert guilds_of(published) == [{"outcome": "measured", "hours": 3.5}]

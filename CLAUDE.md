@@ -4644,6 +4644,91 @@ spawn map's block carries the id it READ (3421) with `filedAs` beside it. Two do
 two conventions, and each view joins on the id its own document states -- inventing an
 id transformation in a reader would be a guess.
 
+### The published document carried 70 Warcraft Logs guild ids, in a public repository
+
+Found by the Warcraft-Logs concept pass (#170, 12.09.2026) and closed the same day.
+`web/public/data/MID2/progress-hours.json` carried **70 distinct guild ids** under
+`bosses[].guilds[].id` -- one boss block, The Twin Fangs, outcomes `measured` 34 /
+`no-reports` 31 / `no-fights` 4 / `no-kill` 1. A guild id resolves through the API
+to a name and a realm, which is exactly the quasi-identifier property this project
+names correctly for a report code and had not noticed here.
+
+**The design intent was already right and the boundary did not exist.** This file's
+own rule for the composition split says *"`--publish` is a second output beside
+`--out`, never instead of it. The artifact still carries every guild's whole roster;
+the published document carries the split, the test and the interval and no guild
+names."* `BossProgress.to_json()` emits one `guilds` list and `publish_document`
+took the document wholesale, so there was no projection between the two.
+
+**The owner's decision (12.09.2026) is pseudonymise -- neither remove nor leave.**
+The rows carry the distribution the screens' credibility rests on, so removing them
+was the worse half. Two properties, and a plain hash of the id has only the first:
+
+- **run-stable**, or a row cannot be followed across documents and the settle can
+  never fire either, because every run would rewrite every pseudonym;
+- **not invertible from the published file** -- the key space is the set of WCL
+  guild ids, a few hundred thousand small integers, so an unsalted or
+  publicly-salted hash is enumerable in seconds. Hence a secret,
+  `WCL_PSEUDONYM_SALT`, and **not** a constant in the repository.
+
+Four decisions in `pseudonymise_guilds`, each of which reversed produces something
+plausible rather than an error:
+
+- **The projection runs on the MERGED document, not on this run's.** That is what
+  makes it a repair rather than only a stop: the published file joins the merge as
+  the oldest document, so an id already committed is converted by the next publish.
+  Applied to this run's document alone, every already-published id stays exactly
+  where it is.
+- **The key is renamed `id` -> `guild`.** A reader joining on `id` across an old and
+  a new document would compare an integer with a hash and get an empty join that
+  reads as a guild having vanished.
+- **A row already carrying a pseudonym is left alone.** Most rows arrive already
+  converted; a hash of a hash would move on every run.
+- **No salt withholds the identity rather than publishing it raw.** A run without
+  the secret is a local run or a misconfigured workflow, and neither is a reason to
+  put a quasi-identifier in a public file. `guildIdentity` is `"pseudonym"` or
+  `"withheld"` at document level, because "withheld" and "these rows never had an
+  identity" are different sentences and only one is a configuration problem.
+
+**Nothing reads the field, and that is measured rather than assumed.**
+`DpsProgressBoss` in wtt-frontend's `dps-data.models.ts` does not declare `guilds` at
+all, and `web/`'s twin does not read it. So the change cannot break a consumer --
+it removes bytes nobody asked for.
+
+**The committed document is scrubbed in the same commit, and that is deliberate.**
+`progress-hours.yml` is `workflow_dispatch` only, so "nothing published moves until a
+run writes" -- this file's usual closing line -- would have left the 70 ids in a
+public repository until somebody pressed a button. They are dropped rather than
+pseudonymised, because no salt exists yet: 70 rows kept, all 34 `hours` kept, every
+outcome kept, `guildIdentity: "withheld"`, and every other field byte-identical
+(24,099 -> 23,318 bytes). **The pseudonym arrives on the first publish after
+`WCL_PSEUDONYM_SALT` is set**, which is an owner action and is named in #170.
+
+### Two leaks beside it, and only one had ever been ignored
+
+Same pass, same day. `fight-probe.yml` and `spawn-probe.yml` upload **the whole
+output directory**, and the response cache lives in it by default (`--cache`
+defaults to `<out>/cache`). An artifact of a **public** repository is downloadable by
+anyone, and that cache is raw API payloads -- `report.title`,
+`masterData.actors[].name`, and the `name`/`guild`/`server` fields of every ranking
+row. Measured: **`report.title` has zero readers across every Python file here**, so
+it is published personal data bought for nothing.
+
+The cut is `path:` with a `!<dir>/cache` exclusion rather than moving `--cache` out
+of `--out`, and the difference matters: the `actions/cache` step still holds it, so
+the continuation stays free where moving it would make every resume cold and cost
+real points. **The price is stated rather than hidden** -- this file records
+*"download it, point a local run at it with --cache, and the extraction can be
+iterated on offline for nothing"*, and that is what the exclusion costs.
+
+And `git check-ignore`, measured the same day: `fight-probe/` was ignored,
+**`spawn-probe/`, `harvest/` and `harvest-report.txt` were not**. Nothing had been
+committed from them, and that is luck rather than design -- each workflow's commit
+step is scoped to `web/public/data`, so only a local run plus one `git add -A` was
+ever needed. Same shape as the `/data/` near-miss the progress-sweep section records,
+and the leading-slash lesson there applies to none of these: they are repository-root
+directories with no namesake elsewhere.
+
 ### Two fixtures were physically impossible, and both hid the bug
 
 Moving attempts onto the absolute clock (`report["startTime"] + fight["startTime"]`)

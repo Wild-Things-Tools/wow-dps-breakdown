@@ -20,9 +20,21 @@ simc-bin/
 *.simc.out
 *.raw.json
 
-# Fight probe output and its response cache. The cache is what makes re-running
-# the extraction free, but it is raw API payloads: large, and not ours to commit.
+# Probe output and response caches. A cache is what makes re-running the
+# extraction free, and it is raw API payloads: large, and not ours to commit --
+# `report.title`, `masterData.actors[].name` and the `name`/`guild`/`server`
+# fields of every ranking row.
+#
+# `fight-probe/` was ignored and the other two were NOT, measured on 2026-09-12
+# with `git check-ignore`. Nothing has been committed from them, and that is luck
+# rather than design: the commit step of each workflow is scoped to
+# `web/public/data`, so only a LOCAL run plus one `git add -A` was ever needed.
+# Same reasoning as `/data/` below, and the same near-miss.
 fight-probe/
+spawn-probe/
+harvest/
+# Written at the repository root by `harvest-builds.yml`'s probe step.
+harvest-report.txt
 
 # Editors / OS
 .DS_Store

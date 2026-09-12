@@ -36,6 +36,7 @@ clothes, so it is refused and counted instead.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import random
@@ -971,11 +972,104 @@ def merge_documents(documents: Sequence[dict]) -> dict:
     return {"bosses": bosses}
 
 
-def publish_document(out_dir: Path, document: dict) -> dict:
+#: Environment variable naming the salt the published pseudonyms are drawn from.
+#: A COMMITTED salt would be no salt at all: the key space is the set of Warcraft
+#: Logs guild ids, a few hundred thousand small integers, so an unsalted or
+#: publicly-salted hash is invertible by enumeration in seconds. That is the whole
+#: reason this is a secret rather than a constant.
+PSEUDONYM_SALT_ENV = "WCL_PSEUDONYM_SALT"
+
+#: 48 bits. Over the ~100 guilds a tier's document holds, the chance of any
+#: collision is about 1 in 10^10; over 10,000 it is still under one in a million.
+_PSEUDONYM_HEX = 12
+
+
+def guild_pseudonym(guild_id: Any, salt: str) -> str:
+    """A run-stable, non-invertible stand-in for a Warcraft Logs guild id.
+
+    Two properties, and a plain hash of the id has only the first:
+
+    * **Run-stable** -- the same guild yields the same string in every document, so
+      a row can still be followed across bosses and seasons. Without it the rows
+      carry a distribution and nothing else, and the settle would never fire either,
+      because every run would rewrite every pseudonym.
+    * **Not invertible from the published file** -- see `PSEUDONYM_SALT_ENV`.
+    """
+    digest = hashlib.sha256(f"{salt}:{guild_id}".encode())
+    return digest.hexdigest()[:_PSEUDONYM_HEX]
+
+
+def pseudonymise_guilds(document: dict, *, salt: str | None) -> dict:
+    """Replace every published guild id with a pseudonym, or withhold it.
+
+    **The raw id is a quasi-identifier and this document is committed to a public
+    repository.** A guild id resolves through the API to a name and a realm, which
+    is exactly the property this project names correctly for a report code and had
+    not noticed here: the committed MID2 document carries 70 of them.
+
+    Three decisions in it:
+
+    * **The key is renamed `id` -> `guild`.** A reader joining on `id` across an old
+      document and a new one would otherwise compare an integer with a hash and get
+      an empty join that looks like a guild having vanished. Renaming makes the two
+      shapes impossible to confuse.
+    * **A row already carrying a pseudonym is left alone.** `publish_document` folds
+      the published file in as the oldest document, so most rows arrive already
+      converted; re-hashing them would produce a hash of a hash and break the
+      stability the pseudonym exists for.
+    * **No salt withholds the identity rather than publishing it raw.** Fail closed:
+      a run without the secret is a local run or a misconfigured workflow, and
+      neither is a reason to put a quasi-identifier into a public file. The rows
+      keep their outcome, their hours and their roster, which is what every reader
+      of this document has ever used -- measured, see below.
+
+    `guildIdentity` says which of the two states the document is in, because
+    "withheld" and "these rows never had an identity" are different sentences and
+    only one of them is a configuration problem.
+
+    Nothing reads the field either way, and that is measured rather than assumed:
+    `DpsProgressBoss` in wtt-frontend's `dps-data.models.ts` does not declare
+    `guilds` at all, and `web/`'s twin does not read it. So this cannot break a
+    consumer -- it removes bytes nobody asked for.
+    """
+    bosses = []
+    for boss in document.get("bosses") or []:
+        rows = boss.get("guilds")
+        if not isinstance(rows, list):
+            bosses.append(boss)
+            continue
+        converted = []
+        for row in rows:
+            if not isinstance(row, dict):
+                converted.append(row)
+                continue
+            if "id" not in row:
+                # Already converted, or a row that never carried one. Either way
+                # there is nothing here to hash, and hashing `guild` again would
+                # give a different answer on every pass through.
+                converted.append(row)
+                continue
+            rest = {k: v for k, v in row.items() if k != "id"}
+            converted.append({"guild": guild_pseudonym(row["id"], salt), **rest} if salt else rest)
+        bosses.append({**boss, "guilds": converted})
+    return {
+        **document,
+        "bosses": bosses,
+        "guildIdentity": "pseudonym" if salt else "withheld",
+    }
+
+
+def publish_document(out_dir: Path, document: dict, *, salt: str | None = None) -> dict:
     """This run's document folded over whatever `<out_dir>/progress-hours.json` holds.
 
     Reading the published file HERE rather than in the writer is what lets the settle
     fire: the merge has to be inside the document the comparison sees.
+
+    The pseudonym is applied to the MERGED document rather than to this run's, and
+    that is what makes it a repair rather than only a stop: a raw id sitting in the
+    published file is folded in here, so the next publish converts it. Applied to
+    this run's document alone it would leave every already-published id exactly
+    where it is.
     """
     published: list[dict] = []
     path = out_dir / "progress-hours.json"
@@ -983,7 +1077,7 @@ def publish_document(out_dir: Path, document: dict) -> dict:
         published.append(json.loads(path.read_text(encoding="utf-8")))
     except (OSError, ValueError):
         pass
-    merged = merge_documents([*published, document])
+    merged = pseudonymise_guilds(merge_documents([*published, document]), salt=salt)
     out = {**document, **merged}
     out["schemaVersion"] = PROGRESS_SCHEMA_VERSION
     out["coverage"] = {
