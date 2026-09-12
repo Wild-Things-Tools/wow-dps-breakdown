@@ -419,6 +419,36 @@ def test_a_run_that_finds_nothing_leaves_the_rows_byte_identical(tmp_path):
     assert before == after and before, "a settled run rewrote a row file"
 
 
+def test_a_settled_run_does_not_even_TOUCH_the_row_files(tmp_path, monkeypatch):
+    """The byte comparison above cannot see this, which is a finding about that test.
+
+    Rewriting a file with the content it already holds produces identical bytes, so
+    `test_a_run_that_finds_nothing_leaves_the_rows_byte_identical` passes whether or
+    not the `if new_rows:` guard exists -- its canary stayed green. It pins the
+    CLAIM the contract makes; this pins the MECHANISM, by counting the writes.
+
+    The guard is load-bearing for a case byte-identity cannot reach: it is what makes
+    `read_lines` + `"".join` round-tripping exactly a requirement only of runs that
+    append. A file the round trip ever mangled would otherwise be mangled by a run
+    that found nothing to say.
+    """
+    run(StubClient(), tmp_path)
+
+    written: list[str] = []
+    real = catalogue.atomic_write
+    monkeypatch.setattr(
+        catalogue,
+        "atomic_write",
+        lambda path, text: (written.append(Path(path).name), real(path, text))[1],
+    )
+    run(StubClient(), tmp_path)
+
+    assert not [name for name in written if name.endswith(".jsonl")], written
+    # State and manifest ARE rewritten every run: they are derived, not append-only,
+    # and both reproduce their bytes, which the test above is what checks.
+    assert "manifest.json" in written
+
+
 def test_the_manifest_carries_no_run_stamp(tmp_path):
     """A run that changes nothing must leave the manifest byte-identical.
 
