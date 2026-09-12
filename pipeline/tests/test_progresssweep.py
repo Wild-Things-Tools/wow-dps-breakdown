@@ -404,6 +404,80 @@ def test_a_skipped_encounter_sends_no_query(tmp_path):
     assert len(client.queries) == before
 
 
+def test_the_preflight_reading_reads_the_ceiling_and_never_sleeps_on_it(tmp_path):
+    """Measured on the first real sweep (run 34694347715, 12.09.2026): the run slept
+    **19 min 41 s** and then skipped 9 of 9 pairs with `attempted: 0` -- the sleep was
+    the entire runtime of the step.
+
+    A sleep is a bet that there will be work afterwards, and the pre-flight reading
+    takes that bet before the zones are even listed, so before anyone has asked the
+    skip matrix. It reads now and leaves the waiting to the per-pair check, which is
+    called only for a pair that would really have run.
+    """
+    client = StubClient(rankings={(ENC, MYTHIC): [row(1)]})
+    sweep(client, tmp_path)
+    sweep(client, tmp_path)  # attempts nothing, records the exhaustion -- see above
+
+    over = {"limitPerHour": 18000.0, "pointsSpentThisHour": 17000.0, "pointsResetIn": 1200}
+    third = StubClient(rankings={(ENC, MYTHIC): [row(1)]}, readings=[over])
+    slept = []
+    report = run_sweep(
+        third,
+        options(),
+        tmp_path,
+        sleep=slept.append,
+        clock=lambda: 0.0,
+        now=lambda: NOW,
+        run_id="t",
+    )
+
+    assert slept == []
+    assert report.attempted == 0
+    assert report.exit_code == 0
+    assert report.stopped is None
+    # One reading, and nothing else: the skip decision comes before any ranking query.
+    assert third.rate_limit_calls == 1
+    assert third.queries == []
+
+
+def test_a_run_with_real_work_still_sleeps_at_the_ceiling(tmp_path):
+    """The control, and it is the half that makes the change safe rather than merely
+    faster: the pre-flight reading may not sleep, and everything after it still must."""
+    over = {"limitPerHour": 18000.0, "pointsSpentThisHour": 17000.0, "pointsResetIn": 120}
+    under = {"limitPerHour": 18000.0, "pointsSpentThisHour": 10.0, "pointsResetIn": 3600}
+    # over on the PRE-FLIGHT reading -- which now walks straight past it -- and over
+    # again on the per-pair one, which is the check that is allowed to wait.
+    client = StubClient(
+        rankings={(ENC, MYTHIC): [row(1)]},
+        readings=[over, over, under, under],
+    )
+    slept = []
+    run_sweep(
+        client,
+        options(),
+        tmp_path,
+        sleep=slept.append,
+        clock=lambda: 0.0,
+        now=lambda: NOW,
+        run_id="t",
+    )
+
+    assert slept == [120 + progresssweep.RESET_SLACK_SECONDS]
+    assert [r["guildId"] for r in rows_of(tmp_path)] == [1]
+
+
+def test_the_preflight_reading_still_fails_a_run_it_cannot_read(tmp_path):
+    """What `may_sleep=False` must NOT weaken. The pre-flight reading exists so a
+    rotated secret is EXIT_FAILED rather than a green run that swept nothing."""
+    client = StubClient(
+        rankings={(ENC, MYTHIC): [row(1)]},
+        readings=[WarcraftLogsError("token request failed (401): bad client")],
+    )
+    report = sweep(client, tmp_path)
+    assert report.exit_code == 1
+    assert report.failed and "401" in report.failed
+
+
 # ── the two schema alarms ───────────────────────────────────────────────────────
 
 
@@ -600,8 +674,17 @@ def test_at_the_ceiling_the_run_sleeps_until_the_counter_resets_then_continues(t
 
 
 def test_a_reset_past_the_deadline_stops_instead_of_sleeping(tmp_path):
+    """The claim is unchanged; the reading it is taken at moved.
+
+    This used to hand the ceiling to the PRE-FLIGHT reading, which since #168 reads
+    without ever sleeping and therefore without ever refusing on a reset -- a run in
+    which every pair is skipped must finish in seconds rather than stop. Two `over`
+    readings put the same ceiling in front of the per-pair check, which is the one
+    allowed to wait and therefore the one that has to refuse when waiting would pass
+    the deadline.
+    """
     over = {"limitPerHour": 18000.0, "pointsSpentThisHour": 17000.0, "pointsResetIn": 3600}
-    client = StubClient(rankings={(ENC, MYTHIC): [row(1)]}, readings=[over])
+    client = StubClient(rankings={(ENC, MYTHIC): [row(1)]}, readings=[over, over])
     slept = []
     report = sweep(client, tmp_path, deadline_minutes=10)
     assert slept == []

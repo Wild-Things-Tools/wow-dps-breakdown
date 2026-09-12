@@ -916,7 +916,28 @@ class Budget:
         assert self.started is not None
         return self.deadline_seconds - (self.clock() - self.started)
 
-    def check(self) -> None:
+    def check(self, *, may_sleep: bool = True) -> None:
+        """Read the counter; at the ceiling, sleep until it resets and read again.
+
+        ``may_sleep=False`` makes it **read** without ever sleeping, and that mode
+        exists for exactly one caller: the pre-flight reading, which runs before the
+        zones are listed and before a single skip decision has been made. A sleep is
+        a bet that there will be work afterwards, and that reading takes the bet
+        before anyone has asked the skip matrix. Measured on the first real sweep
+        (run 34694347715, 12.09.2026): it slept **19 min 41 s** and then skipped 9 of
+        9 pairs with ``attempted: 0`` -- the sleep was the whole run.
+
+        What the mode must NOT weaken is why the pre-flight reading exists at all: an
+        unreadable or refused answer still raises, so a rotated secret is still
+        ``EXIT_FAILED`` rather than a green run that swept nothing (the #219 shape).
+        An already-passed deadline still raises too. Only the ceiling stops being a
+        reason to wait -- the decision moves to the per-pair check, which is called
+        only for a pair that would really have run.
+
+        Named ``may_sleep`` rather than ``sleep`` because the dataclass field of that
+        name is the injected sleep FUNCTION; two meanings on one word in one class is
+        how a flag ends up passed to the wrong one.
+        """
         while True:
             if self.remaining_seconds() <= 0:
                 raise DeadlineReached("deadline reached")
@@ -933,6 +954,10 @@ class Budget:
                 )
             limit, spent = float(limit_raw), float(spent_raw)
             if spent < limit * self.ceiling:
+                return
+            if not may_sleep:
+                # Over the ceiling, and this caller does not get to wait it out. The
+                # per-pair check decides, once something is known to need doing.
                 return
             reset = reading.get("pointsResetIn")
             wait = (
@@ -1133,7 +1158,9 @@ def run_sweep(
 
     try:
         try:
-            budget.check()
+            # Reads, never sleeps: see `Budget.check`. This runs before the zones are
+            # listed, so at this point nobody knows whether there is any work at all.
+            budget.check(may_sleep=False)
         except (DeadlineReached, RateLimited) as exc:
             raise _StopRun(f"before the first walk: {exc}") from None
         except WarcraftLogsError as exc:

@@ -5050,6 +5050,50 @@ live ids (3420/3421/3429/3445/3455/3470/3492/3497), and `named`/`shape` per boss
 `state.json` -- production counted 985-988 named of 1000 with the same reader, so a
 run that stores no names is this reader missing the block, not the payload lacking it.
 
+### The pre-flight budget reading slept through a run with nothing to do (#168)
+
+The first real sweep (run 34694347715, 12.09.2026, zone 53, Mythic) did exactly the
+right thing and **slept 19 min 41 s to find out there was nothing to do**:
+
+```
+point ceiling reached (6233 of 18000); sleeping 1181 s until the counter resets
+z53-d5 ... skipped, live zone walked 2.5 h ago, nothing attempted     (x9)
+{"exitCode": 0, "newRows": 0, "attempted": 0, "sleeps": 1, "sleptSeconds": 1181.0,
+ "points": null, "queries": 3}
+```
+
+Nine of nine pairs skipped, three queries, and the sleep was the whole runtime of the
+step.
+
+There are three `budget.check()` calls and **two of them are placed right** -- one
+after `skip_reason`, so only for a pair that would really have run, and one before
+every guild walk, which the contract requires. The third is the pre-flight reading,
+before the zones are listed and before any skip decision exists. It is not wrong to
+be there: it is the guard that turns a rotated secret into `EXIT_FAILED` rather than
+a green run that swept nothing (the #219 shape). **What is wrong is that it may
+sleep**, because a sleep is a bet that there will be work afterwards and it takes
+that bet before anyone has asked the skip matrix.
+
+`check(may_sleep=False)` is the fix, and the name matters: the dataclass field
+`sleep` is the injected sleep *function*, and two meanings on one word in one class
+is how a flag ends up passed to the wrong one. The mode still raises on an
+unreadable or refused reading and on an already-passed deadline; only the ceiling
+stops being a reason to wait.
+
+**One existing test moved rather than being deleted, and the distinction is the
+point.** `test_a_reset_past_the_deadline_stops_instead_of_sleeping` handed its
+ceiling to the pre-flight reading, which now walks past it. Its claim is unchanged
+and still has to hold -- so the fixture gives two `over` readings, putting the same
+ceiling in front of the per-pair check, which is the one allowed to wait and
+therefore the one that must refuse when waiting would pass the deadline.
+
+Why it is more than tidiness: the cron is `17 0,6,12,18 * * *` and the hourly budget
+is **shared** with `wtt-progress-hours`, `wtt-parses` and every other WCL job. In the
+measured run the counter already stood at 6233 of 18000 at start, over the 0.3
+ceiling, without this sweep having done anything. Runner minutes are free, so this is
+not a cost -- it moves the work window, makes `timeout-minutes: 350` a real bound,
+and makes a run that does nothing look in the log like one that works.
+
 ### The seed landed, and the eight ids came out live
 
 2026-09-12. `export_progress_hours --zones 53,46,44,42,38` in the Cloud Run job
