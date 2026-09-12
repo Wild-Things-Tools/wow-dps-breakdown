@@ -2114,6 +2114,25 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
                     boss.refused["unlogged-kill"] = boss.refused.get("unlogged-kill", 0) + 1
                     boss.record(guild_id, "unlogged-kill", 0)
                     continue
+                if entry_kill.kill_time_ms is None:
+                    # ── and screen 2 has to be REACHABLE, not merely written ──
+                    # `pull_time(..., kill_time_ms=None)` is the documented "no ranked
+                    # kill" mode: it finds *a* kill and calls it the first one. So one
+                    # ranking row that states `fromlog` and no `killTime` switched
+                    # screen 2 off for that guild and published a number nothing had
+                    # checked, while every figure beside it looked healthy. Measured on
+                    # a real window -- one 2-minute wipe on day 0, the only logged kill
+                    # four weeks later, ranked first kill on day 0: WITH the kill time
+                    # `pull_time` refuses `kill-too-late`; WITHOUT it, 0.067 h is
+                    # published as a measured progression.
+                    #
+                    # Refused HERE, before the report walk, for the same reason
+                    # `unlogged-kill` is: the refusal refunds the walk. The sweep
+                    # (`progresssweep.verdict_for`) and the backend (`guildmeasure`)
+                    # spell it the same way, under the same name.
+                    boss.refused["no-kill-time"] = boss.refused.get("no-kill-time", 0) + 1
+                    boss.record(guild_id, "no-kill-time", 0)
+                    continue
 
                 if over_ceiling():
                     logging.warning("point ceiling reached; stopping with what is measured")
@@ -2355,38 +2374,41 @@ def _write_progress_hours(args, bosses, client, start: float, limit: float) -> i
     return 0
 
 
-def _int_list(name: str, *, allow: tuple[int, ...] | None = None):
+def _int_list(name: str, value: str, *, allow: tuple[int, ...] | None = None) -> tuple[int, ...]:
     """A comma-separated list of positive ints, in the order given. Refuses 0.
 
     Zero is the trap `progresshours` documents at length: Warcraft Logs accepts
     `zoneID: 0` and answers with everything, so a typo that reaches the query as a
     zero produces a full set of plausible numbers scoped to the wrong thing.
+
+    Raises :class:`ValueError`, and is called from the COMMAND rather than passed
+    to argparse as a ``type=``. That is not a style choice. An
+    ``ArgumentTypeError`` becomes ``parser.error()`` and so ``SystemExit(2)``
+    before the command runs, and 2 is the sweep's documented code for "a zone
+    Warcraft Logs would not list" -- which `progress-sweep.yml` downgrades to a
+    warning and a GREEN step. So `--difficulties 3`, the one input this refusal
+    exists for and the one a person reaches for when they want Normal, printed a
+    warning about zones (a sentence that is false: no zone was listed or skipped)
+    and reported success having swept nothing. The contract types a usage error
+    as exit 1, the same as `--out` and `--workers` below.
     """
-
-    def parse(value: str) -> tuple[int, ...]:
-        items: list[int] = []
-        for part in value.split(","):
-            part = part.strip()
-            if not part:
-                continue
-            try:
-                number = int(part)
-            except ValueError:
-                raise argparse.ArgumentTypeError(
-                    f"{name} takes comma-separated whole numbers, not {part!r}"
-                ) from None
-            if number <= 0:
-                raise argparse.ArgumentTypeError(f"{name} refuses {number}: ids start at 1")
-            if allow is not None and number not in allow:
-                raise argparse.ArgumentTypeError(
-                    f"{name} takes {', '.join(str(a) for a in allow)}, not {number}"
-                )
-            items.append(number)
-        if not items:
-            raise argparse.ArgumentTypeError(f"{name} needs at least one id")
-        return tuple(items)
-
-    return parse
+    items: list[int] = []
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            number = int(part)
+        except ValueError:
+            raise ValueError(f"{name} takes comma-separated whole numbers, not {part!r}") from None
+        if number <= 0:
+            raise ValueError(f"{name} refuses {number}: ids start at 1")
+        if allow is not None and number not in allow:
+            raise ValueError(f"{name} takes {', '.join(str(a) for a in allow)}, not {number}")
+        items.append(number)
+    if not items:
+        raise ValueError(f"{name} needs at least one id")
+    return tuple(items)
 
 
 def cmd_progress_sweep(args: argparse.Namespace) -> int:
@@ -2411,6 +2433,17 @@ def cmd_progress_sweep(args: argparse.Namespace) -> int:
     if not args.out:
         logging.error("--out is required unless --validate is given")
         return 1
+    # Parsed HERE and not as an argparse `type=`, so a bad value is exit 1 (a usage
+    # error) rather than argparse's SystemExit(2) -- which the workflow reads as
+    # "a zone Warcraft Logs would not list", downgrades to a warning, and reports
+    # as a green run that swept nothing. See `_int_list`.
+    try:
+        zones = _int_list("--zones", args.zones)
+        difficulties = _int_list("--difficulties", args.difficulties, allow=(4, 5))
+    except ValueError as refusal:
+        logging.error("%s", refusal)
+        return progresssweep.EXIT_VALIDATION
+    args.zones, args.difficulties = zones, difficulties
     if args.workers != 1:
         # The per-guild walk (`progresssweep.attempt_guild`) is the unit a pool would
         # call; the ledger lock and the low-water cursor it needs are specified in
@@ -3277,8 +3310,7 @@ def build_parser() -> argparse.ArgumentParser:
     # scheduled run gets no inputs, so what is written here is what it runs with.
     p_sweep.add_argument(
         "--zones",
-        type=_int_list("--zones"),
-        default=progresssweep.DEFAULT_ZONES,
+        default=",".join(str(z) for z in progresssweep.DEFAULT_ZONES),
         help="Warcraft Logs zone ids in PRIORITY order, comma-separated. Never 0",
     )
     p_sweep.add_argument(
@@ -3286,8 +3318,7 @@ def build_parser() -> argparse.ArgumentParser:
         # 4 and 5 only, the import's own rule: a `z<zone>-d3` file set would be refused
         # row by row on the private side, trip its "100 % of a file refused" wrong-
         # database alarm and fail the daily job over a sweep nobody asked for.
-        type=_int_list("--difficulties", allow=(4, 5)),
-        default=progresssweep.DEFAULT_DIFFICULTIES,
+        default=",".join(str(d) for d in progresssweep.DEFAULT_DIFFICULTIES),
         help="comma-separated, swept in this order on one budget (5 Mythic, 4 Heroic; "
         "nothing else, the import refuses it). Default 5,4",
     )

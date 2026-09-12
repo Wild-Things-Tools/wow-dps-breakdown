@@ -1087,6 +1087,39 @@ def test_a_zone_the_service_does_not_list_is_skipped_with_exit_2(tmp_path):
     assert [r["guildId"] for r in rows_of(tmp_path, zone=46)] == [1]
 
 
+def test_a_ptr_zone_is_refused_and_the_live_zone_beside_it_still_sweeps(tmp_path):
+    """`--zones 54` must not produce a file set the import cannot tell from a live one.
+
+    `ZONE_BY_ID_QUERY` reaches a zone `worldData.zones` never lists, which is what
+    makes the PTR twin a plausible hand dispatch: zone 54 is The Venomous Abyss,
+    live-but-unlisted, carrying the `53xxx` ids. Its rows would look entirely
+    healthy -- the validator passes, the manifest lists the file, and the import's
+    zone-mismatch guard AGREES with them, because the catalogue holds
+    `ProgressEncounter[53470].zone_id == 54`. So a PTR measurement lands as a live
+    one and nothing downstream can say otherwise.
+
+    The private `export_progress_hours` refuses exactly this, under the same
+    floor. The refusal is the zone-skip shape, so the live zone beside it still
+    sweeps and the run exits 2 rather than losing the pass.
+
+    Canary: drop the `PTR_TWIN_ID_FLOOR` clause in `_zone_encounters` and the
+    exit code goes to 0 with a `z54-d5.rows.jsonl` beside the live one.
+    """
+    client = StubClient(
+        zones={
+            54: zone_payload(54, frozen=False, encounters=((53470, "Nek'zali"),)),
+            ZONE: zone_payload(),
+        },
+        rankings={(ENC, MYTHIC): [row(1)], (53470, MYTHIC): [row(2)]},
+    )
+    report = sweep(client, tmp_path, zones=(54, ZONE))
+
+    assert report.exit_code == 2
+    assert report.zones_skipped == [54]
+    assert not (tmp_path / "z54-d5.rows.jsonl").exists()
+    assert [r["guildId"] for r in rows_of(tmp_path)] == [1], "the live zone still swept"
+
+
 def test_named_and_shape_measure_the_guild_block(tmp_path):
     client = StubClient(rankings={(ENC, MYTHIC): [row(1, name=None, server=None)]})
     sweep(client, tmp_path)
@@ -1172,26 +1205,46 @@ def test_validate_refuses_a_stray_temp_file(tmp_path):
 # ── the command line ────────────────────────────────────────────────────────────
 
 
-def test_the_parser_refuses_zone_zero_and_non_ints(capsys):
-    with pytest.raises(SystemExit):
-        cli.main(["progress-sweep", "--zones", "53,0", "--out", "x"])
-    assert "refuses 0" in capsys.readouterr().err
-    with pytest.raises(SystemExit):
-        cli.main(["progress-sweep", "--zones", "53,abc", "--out", "x"])
-    assert "whole numbers" in capsys.readouterr().err
+def test_a_refused_list_value_is_exit_1_not_argparse_exit_2(caplog):
+    """A usage error must not land on the sweep's code for "unlistable zone".
+
+    `--zones`/`--difficulties` are parsed by the COMMAND, not by an argparse
+    `type=`, and the difference is the whole of this test. An
+    `ArgumentTypeError` becomes `parser.error()` -> `SystemExit(2)`, and 2 is
+    what `progress-sweep.yml` reads as "a zone Warcraft Logs would not list":
+    it prints a warning and lets the step SUCCEED. So `--difficulties 3` -- the
+    exact input the refusal exists for, and the one a person reaches for when
+    they want Normal -- reported a green run that swept nothing, under a warning
+    sentence about zones that was not even true.
+
+    Canary: hand either option back to argparse as a `type=` and the exit code
+    goes to 2.
+    """
+    for argv, expected in (
+        (["--zones", "53,0"], "refuses 0"),
+        (["--zones", "53,abc"], "whole numbers"),
+        # Normal (3) is a Warcraft Logs difficulty and not a cohort one: a
+        # `z<zone>-d3` file set would be refused row by row on the private side
+        # and trip its "100 % of a file refused" wrong-database alarm.
+        (["--difficulties", "5,3"], "takes 4, 5, not 3"),
+    ):
+        caplog.clear()
+        with caplog.at_level("ERROR"):
+            code = cli.main(["progress-sweep", *argv, "--out", "x"])
+        assert code == 1, f"{argv} exited {code}, not 1"
+        assert expected in caplog.text
 
 
-def test_the_parser_refuses_a_difficulty_the_import_would_refuse(capsys):
-    """Normal (3) is a Warcraft Logs difficulty and not a cohort one: a `z<zone>-d3`
-    file set would be refused row by row on the private side and fail its job."""
-    with pytest.raises(SystemExit):
-        cli.main(["progress-sweep", "--difficulties", "5,3", "--out", "x"])
-    assert "takes 4, 5, not 3" in capsys.readouterr().err
-
-
-def test_the_parser_keeps_the_zones_in_the_order_given():
+def test_the_command_keeps_the_zones_in_the_order_given(tmp_path, monkeypatch):
+    """The order is priority and is never re-sorted. Parsed by the command now,
+    so the assertion is on what the command received rather than on argparse."""
+    monkeypatch.setattr(cli.progresssweep, "describe_pairs", lambda *a, **k: [])
     parser = cli.build_parser()
-    args = parser.parse_args(["progress-sweep", "--zones", "44,53", "--out", "x"])
+    args = parser.parse_args(
+        ["progress-sweep", "--zones", "44,53", "--out", str(tmp_path), "--seed-only"]
+    )
+    assert args.zones == "44,53", "argparse keeps the raw string; the command parses it"
+    assert cli.cmd_progress_sweep(args) == 0
     assert args.zones == (44, 53)
     assert args.difficulties == (5, 4)
     assert args.guilds == 200 and args.max_pages == 4 and args.rankings_pages == 20
@@ -1240,3 +1293,48 @@ def test_validate_is_reachable_from_the_command_line(tmp_path):
     assert cli.main(["progress-sweep", "--validate", str(tmp_path)]) == 1
     _committed_sweep(tmp_path)
     assert cli.main(["progress-sweep", "--validate", str(tmp_path)]) == 0
+
+
+# --- the private data checkout must never be committable to this public repo ---
+
+
+def _check_ignore(repo_root, path):
+    """True when git would ignore ``path``. None when git cannot answer here."""
+    try:
+        done = subprocess.run(
+            ["git", "check-ignore", "-q", "--no-index", path],
+            cwd=repo_root,
+            capture_output=True,
+        )
+    except (OSError, subprocess.SubprocessError):  # pragma: no cover - no git
+        return None
+    if done.returncode not in (0, 1):  # 128 = not a work tree
+        return None
+    return done.returncode == 0
+
+
+def test_the_private_data_checkout_is_ignored_and_the_published_dataset_is_not():
+    """`/data/` ignores the cohort rows and NOTHING else.
+
+    The workflow checks the private `wtt-progress-data` repository out into
+    `data/`, and the documented local command writes there too. Those files are
+    guild names, realms, hours and first kills -- the rows this move exists to
+    keep out of a public history, and one `git add -A` would commit them
+    irreversibly.
+
+    The leading slash is the whole of this test. A bare `data/` matches a
+    directory of that name at ANY depth, so it would also ignore
+    `web/public/data/` -- the published dataset, which is the point of this
+    repository -- and `pipeline/src/wowdps/data/gear_pools.json`.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    if not (repo_root / ".gitignore").exists():  # pragma: no cover - sdist
+        pytest.skip("no .gitignore here")
+
+    ignored = _check_ignore(repo_root, "data/progress-cohort/z53-d5.rows.jsonl")
+    if ignored is None:  # pragma: no cover - git unavailable
+        pytest.skip("git cannot answer check-ignore here")
+
+    assert ignored, "the private cohort rows are committable to the public repo"
+    assert not _check_ignore(repo_root, "web/public/data/MID2/index.json")
+    assert not _check_ignore(repo_root, "pipeline/src/wowdps/data/gear_pools.json")

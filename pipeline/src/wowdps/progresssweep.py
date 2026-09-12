@@ -1027,6 +1027,16 @@ class _StopRun(Exception):
         self.reason = reason
 
 
+#: A Warcraft Logs LIVE encounter id is four digits (3470 Nek'zali; Antorus, the
+#: oldest ranked tier, is 2xxx). Its PTR twin is the same id with a leading 5 --
+#: 53470 -- which is how zone 54 sits beside zone 53 as The Venomous Abyss's
+#: unlisted PTR copy. The same floor and the same reason as
+#: ``export_progress_hours.PTR_TWIN_ID_FLOOR`` on the private side, and the two
+#: MUST stay equal: a zone refused there and swept here is the one shape the
+#: import cannot catch.
+PTR_TWIN_ID_FLOOR = 50_000
+
+
 def _zone_encounters(client, zone_id: int) -> tuple[dict | None, str]:
     try:
         zone = client.zone(zone_id, cache=False)
@@ -1043,6 +1053,23 @@ def _zone_encounters(client, zone_id: int) -> tuple[dict | None, str]:
     ]
     if not encounters:
         return None, f"zone {zone_id} ({zone.get('name')}): no encounters listed"
+    # `ZONE_BY_ID_QUERY` reaches a zone `worldData.zones` never lists, which is what
+    # makes `--zones 54` -- the PTR twin of 53 -- a plausible hand dispatch. Its rows
+    # would look entirely healthy: the validator passes, the manifest lists the file,
+    # and the import's zone-mismatch guard AGREES with them, because the catalogue
+    # holds `ProgressEncounter[53470].zone_id == 54`. So a PTR measurement lands as a
+    # live one and nothing downstream can tell. The private export refuses exactly
+    # this; refusing it here too is what makes that refusal symmetrical rather than
+    # one side's habit.
+    ptr = sorted(e["id"] for e in encounters if e["id"] >= PTR_TWIN_ID_FLOOR)
+    if ptr:
+        shown = ", ".join(str(i) for i in ptr[:3])
+        more = f" (+{len(ptr) - 3} more)" if len(ptr) > 3 else ""
+        return None, (
+            f"zone {zone_id} ({zone.get('name')}): PTR encounter id(s) {shown}{more} "
+            f">= {PTR_TWIN_ID_FLOOR}. The contract's ids are live ids; a PTR row is "
+            f"indistinguishable from a live one once imported"
+        )
     return {
         "name": zone.get("name"),
         "frozen": bool(zone.get("frozen")),

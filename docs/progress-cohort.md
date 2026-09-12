@@ -64,7 +64,12 @@ Encounter ids are Warcraft Logs **live** ids from `worldData.zone(id:) { encount
   `pullhours.guild_identity`; `null` means not recognised, never guessed.
 - `hours`: **unrounded**, `> 0` (`pull_time` returns `unusable` for 0).
 - `firstKillAtMs`: the **ranking's** `killTime` -- the ranking defines the first kill.
-- `killAtMs`: the log's kill fight start; informational, not imported.
+- `killAtMs`: the log's kill fight start. Not STORED in a column -- but it is one
+  of the inputs the import needs to recompute `loggingGapRatio`, so it must be
+  READ, not dropped. `guildmeasure` calls
+  `logging_gap_ratio(reports, first_attempt_at, kill_at)`; on a sweep row those are
+  `reportStartsMs`, `nightsMs[0][0]` and `killAtMs`. Null on a seed row, which is
+  why a seed carries `loggingGapRatio` precomputed instead.
 - `reportStartsMs`: RAW INPUT -- `startTime` of every report the walk read for this
   guild in this zone, ints, ascending.
 - `nightsMs`: RAW INPUT -- one `[first start, last end]` pair per raid night
@@ -74,7 +79,8 @@ Encounter ids are Warcraft Logs **live** ids from `worldData.zone(id:) { encount
 - `run`: `GITHUB_RUN_ID`, or `seed:<date>` for exported rows.
 
 Import rule: if the `loggingGapRatio`/`nightSpanHours` keys are PRESENT they are taken
-as they are (null included); else they are computed from the raw inputs; if neither is
+as they are (null included); else they are computed from the raw inputs
+(`reportStartsMs`, `nightsMs` and `killAtMs` -- all three, see above); if neither is
 possible they are null. `hours <= 0`, `attempts < 1`, difficulty not in (4, 5), or a
 missing required key is a `parse` refusal (the row is skipped and counted). Labels are
 truncated by the import to the model's `max_length` (120/64/16).
@@ -210,7 +216,24 @@ query, the zone listing included, is such a stop), 1 a `--validate` violation, a
 error, **or a first budget reading that failed for a reason that is not the budget**
 (a 401 from the token endpoint, a transport failure -- no walk has begun, nothing is
 written, and the job goes red rather than reporting a green run that swept nothing),
-2 a zone Warcraft Logs would not list, 3 a schema alarm on some pair.
+2 a zone the sweep would not walk -- one Warcraft Logs will not list, or one whose
+encounter ids are PTR twins (>= 50 000; see below) -- 3 a schema alarm on some pair.
+
+A **usage error is 1 and must not be 2**, and that is not bookkeeping: the workflow
+reads 2 as "unlistable zone", downgrades it to a warning and lets the step SUCCEED.
+Handing `--zones`/`--difficulties` to argparse as a `type=` makes a refused value
+`SystemExit(2)`, so `--difficulties 3` -- the input that refusal exists for --
+reported a green run that swept nothing under a warning sentence about zones that
+was not even true. The public side parses both inside the command for that reason.
+
+**PTR zones are refused on BOTH sides, under the same floor (50 000).** A live
+Warcraft Logs encounter id is four digits; its PTR twin is the same id with a
+leading 5, which is how zone 54 sits beside zone 53 as The Venomous Abyss's
+unlisted PTR copy. `ZONE_BY_ID_QUERY` reaches an unlisted zone by design, so
+`--zones 54` is a plausible hand dispatch -- and its rows are the ONE shape the
+import cannot catch, because the zone-mismatch guard agrees with them: the
+catalogue really does hold `ProgressEncounter[53470].zone_id == 54`. A PTR
+measurement would land as a live one with nothing downstream able to say so.
 
 `--difficulties` takes 4 and 5 only, the import's own rule: a `z<zone>-d3` file set
 would be refused row by row on the private side and trip its wrong-database alarm.

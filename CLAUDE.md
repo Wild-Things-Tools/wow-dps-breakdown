@@ -4843,6 +4843,53 @@ summary; `--difficulties` refuses 3, which the import would refuse row by row; a
 the validator refuses a stray `.tmp`. Every one of those is pinned by a test whose
 canary was run.
 
+**A cross-repo parity pass found four more, and three are the same shape as the four
+above: a guard that is present and answers wrongly.** Each was re-derived from the
+source here before it was fixed, and each is pinned by a test whose canary was run.
+
+- **A refused `--zones`/`--difficulties` value exited 2, and 2 means something else.**
+  Handed to argparse as a `type=`, an `ArgumentTypeError` becomes `parser.error()` ->
+  `SystemExit(2)` -- and the workflow reads 2 as "a zone Warcraft Logs would not list",
+  prints a warning and lets the step **succeed**. Measured: `--difficulties 3`, the
+  exact input that refusal exists for and the one a person reaches for when they want
+  Normal, reported a green run that swept nothing, under a warning sentence about zones
+  that was not even true. Both options are parsed inside `cmd_progress_sweep` now and
+  return 1, the way `--out` and `--workers` already did.
+- **The sweep could write PTR `53xxx` encounter ids; the private export refuses exactly
+  that.** `ZONE_BY_ID_QUERY` reaches a zone `worldData.zones` never lists, which is what
+  makes `--zones 54` -- The Venomous Abyss's live-but-unlisted PTR twin -- a plausible
+  hand dispatch. Its rows are the **one** shape the import cannot catch: the
+  zone-mismatch guard AGREES with them, because the catalogue really does hold
+  `ProgressEncounter[53470].zone_id == 54`. So a PTR measurement lands as a live one and
+  nothing downstream can say otherwise. `PTR_TWIN_ID_FLOOR = 50_000` is now on both
+  sides, and the two must stay equal.
+- **`data/` was not gitignored here.** The workflow checks the private data repository
+  out into it and the documented local command writes there, so one `git add -A` after a
+  local run commits ~84k rows of guild names, realms and first kills into a public
+  history, irreversibly. The entry is **`/data/`**, and the leading slash is
+  load-bearing: a bare `data/` matches a directory of that name at any depth and would
+  silently ignore `web/public/data/` (the published dataset) and
+  `pipeline/src/wowdps/data/gear_pools.json`.
+- **Screen 2 was still silently off in `wowdps progress-hours`** -- the chart producer,
+  not the sweep, and so a number on the site rather than a hypothetical. A ranking row
+  stating `fromlog` and no `killTime` reached `pull_time(..., kill_time_ms=None)`, which
+  is the documented "no ranked kill" mode that finds *a* kill and calls it the first one.
+  Measured by deleting the clause and running the fixture: a two-minute wipe on day 0 and
+  the only logged kill four weeks later are summed into ONE progression and published as
+  `medianHours 1.033` over `sample 1` -- a four-week gap read as an hour of pulls. The
+  sweep and the backend both carry this refusal; the third producer did not, which is why
+  the contract says "**both repositories** used to disable screen 2 silently in that
+  case; do not copy that" and now has a third reader to say it to.
+
+Two fixture lessons came out of the last one. The chart producer's `StubClient` derived a
+ranking row's `killTime` from the canned pages and returned `None` when they held no kill
+-- so an **empty listing** fixture, which is about paging, silently became a fixture about
+the screen and failed as `no-kill-time`. A ranking row exists *because* the guild killed
+the boss, so the derivation states a time (`_UNMATCHED_KILL_MS`) and `kill_time=None` is
+passed explicitly where a row genuinely states none. And the figure this file carries for
+that defect is **the one measured here**, not the one the parity pass quoted from a
+different window: re-measure before copying a number across a fixture.
+
 **Deliberately not implemented.** `--workers > 1` is refused with a reason rather than
 silently run sequentially: a pool needs a lock around `PointLedger.record` and a
 low-water cursor (verdicts return out of order, so the cursor may only advance past
