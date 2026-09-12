@@ -1737,3 +1737,81 @@ def test_a_page_limited_search_that_found_nothing_is_done_until_its_budget_is_ra
     assert is_complete({**empty, "fightsSampled": 3}, 30, 200_000, "public", 5, 500) is False
     # A run that runs no search asks with None, and the record is inert.
     assert is_complete(empty, 30, 200_000, "public", 5, None) is False
+
+
+def test_a_publish_that_would_shrink_a_published_block_is_refused_at_the_call_site(
+    tmp_path, monkeypatch
+):
+    """`--publish` goes through `write_fights` inside the command, and the fold had
+    tests where the call site had none -- the shape this repository keeps producing.
+    A refusal here must reach the exit code (1, the refusal status the workflow fails
+    the step on), leave the published document untouched, and still leave the payload
+    on disk, because the pass that produced it was paid for.
+    """
+    import json
+
+    from wowdps import cli, warcraftlogs
+
+    stub = StubClient(
+        structure=structure_payload(),
+        events={"DamageTaken": [damage(s, a) for a in (10, 11, 12) for s in (0.5, 299.0)]},
+        tables={},
+    )
+    monkeypatch.setattr(
+        warcraftlogs.Credentials,
+        "from_env",
+        classmethod(lambda cls: warcraftlogs.Credentials("i", "s")),
+    )
+    monkeypatch.setattr(fightprobe, "WarcraftLogsClient", lambda *a, **k: stub)
+
+    site = tmp_path / "site"
+    (site / VOIDSPIRE_TIER).mkdir(parents=True)
+    published = {
+        "generatedAt": "2026-09-06T00:00:00+00:00",
+        "coverage": {"measured": 1},
+        "encounters": [
+            {
+                "encounterId": 3180,
+                "name": "Lightblinded Vanguard",
+                "measurements": [{"difficulty": 5, "fightsSampled": 3, "reports": ["x", "y", "z"]}],
+                "measuredDifficulty": 5,
+                "measured": {"fightsSampled": 3, "reports": ["x", "y", "z"]},
+            }
+        ],
+    }
+    target = site / VOIDSPIRE_TIER / "fights.json"
+    target.write_text(json.dumps(published), encoding="utf-8")
+
+    def run():
+        return fightprobe.cmd_fight_probe(
+            cli.build_parser().parse_args(
+                [
+                    "fight-probe",
+                    "--tier",
+                    VOIDSPIRE_TIER,
+                    "--encounter",
+                    "3180",
+                    "--reports",
+                    "1",
+                    "--out",
+                    str(tmp_path / "probe"),
+                    "--publish",
+                    str(site),
+                ]
+            )
+        )
+
+    # The stub yields ONE kill where the published block holds three.
+    assert run() == 1, "a refusal is the refusal status, not a traceback and not 0"
+    assert json.loads(target.read_text(encoding="utf-8")) == published, "nothing was written"
+    assert (tmp_path / "probe" / f"fight-probe-{VOIDSPIRE_TIER}.json").is_file(), (
+        "the paid-for payload is still on disk"
+    )
+
+    # The control: with the published block no larger than the read, the same run
+    # publishes and exits clean.
+    published["encounters"][0]["measurements"][0]["fightsSampled"] = 1
+    published["encounters"][0]["measured"]["fightsSampled"] = 1
+    target.write_text(json.dumps(published), encoding="utf-8")
+    assert run() == 0
+    assert json.loads(target.read_text(encoding="utf-8")) != published, "and it wrote"

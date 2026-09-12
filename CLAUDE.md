@@ -5549,6 +5549,26 @@ that are easy to get wrong a second time:
   after promoting the facts those measurements produced. `write_fights` now
   refuses when the published file has measurements and the new document has none;
   `--force` is the way through.
+- **That refusal was all-or-nothing, and the 2026-09-06 loss was neither
+  (2026-09-12).** Measured on the committed history, `056302b -> 34c1166`, the
+  hourly `fight-probe --publish --resume` that wrote the loss: `coverage.measured`
+  went **6 -> 4**, so `has` was true and the guard could not fire, while the fold
+  -- then keyed on the encounter, see `_keep_measurements` -- replaced every
+  `measurements` list wholesale and **six Heroic blocks holding 17, 10, 27, 30, 25
+  and 7 sampled kills were dropped**, with two headlines falling from those Heroic
+  kills to an empty Mythic block. 595,744 bytes became 235,234 and the run reported
+  success; #155 repaired the fold and #156 restored the document from `056302b`.
+  `write_fights` asks the question **per (encounter, difficulty)** now, of the
+  *folded* document: a published block with kills that would end smaller, or with
+  no block at all, is refused with the ids and the before/after counts printed,
+  and `--force` is the way through exactly as above. Asked of the raw document it
+  would refuse every single-difficulty run there is, which is why the order --
+  fold, then guard -- is pinned by a test of its own. A block with nothing sampled
+  has nothing to lose, so the four PTR ids read through their live twins (#160)
+  grow from zero without a refusal; and the fight-probe call site catches the
+  refusal and exits 1 (the status the workflow fails the step on), the payload
+  already on disk and the published document untouched. The way through is the
+  offline `wowdps fights --probe ... --force`, never a flag on a scheduled run.
 - **The scenario can be run alone** `wowdps build
   --scenario bosses` expands to every boss whose profile has a `hand` or `logs` fact;
   `--scenario boss_<encounterId>` picks one. The default scenario set is untouched, so

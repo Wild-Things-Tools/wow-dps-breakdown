@@ -1243,14 +1243,13 @@ def _no_fights_caveats(payload: dict) -> list[str]:
     seen = payload.get("difficultiesSeen")
     if isinstance(seen, dict) and seen:
         wanted = payload.get("difficulty")
-        names = {"5": "Mythic", "4": "Heroic", "3": "Normal", "1": "Raid Finder"}
         parts = [
-            f"{count} at {names.get(str(key), f'difficulty {key}')}"
+            f"{count} at {_difficulty_name(key)}"
             if key != "None"
             else f"{count} with no difficulty recorded"
             for key, count in seen.items()
         ]
-        asked = names.get(str(wanted), f"difficulty {wanted}")
+        asked = _difficulty_name(wanted)
         caveats.append(
             f"The log search did find kills of this encounter -- {', '.join(parts)} -- "
             f"but this run asked for {asked}, so none of them was opened."
@@ -1654,6 +1653,25 @@ def write_fights(out_dir: Path, document: dict, force: bool = False) -> Path:
                 f"--probe payload to rebuild the measured half, or --force if "
                 f"dropping it is what you mean."
             )
+        # The guard above is all-or-nothing, and the 2026-09-06 loss was neither:
+        # `coverage.measured` went 6 -> 4, so `has` was true, while six Heroic
+        # blocks holding 7-30 sampled kills each were dropped. This one asks the
+        # question per (encounter, difficulty), AFTER the fold, so a block the
+        # union already carried forward is never refused -- only one that would
+        # still come out smaller, or gone, once everything that can be kept is.
+        lost = _sampled_kills_lost(published, document)
+        if lost:
+            raise MeasurementWouldBeLost(
+                f"{path} holds sampled kills this document would drop -- "
+                + ", ".join(
+                    f"{encounter_id} at {_difficulty_name(difficulty)}: {before} -> "
+                    f"{'none' if after is None else after}"
+                    for encounter_id, difficulty, before, after in lost
+                )
+                + ". A run that reads fewer kills than are published, or no longer "
+                "carries a boss that was measured, is replacing data rather than "
+                "adding it. Pass --force if dropping them is what you mean."
+            )
 
     settled = document
     if published is not None and _without_stamps(published) == _without_stamps(document):
@@ -1661,6 +1679,57 @@ def write_fights(out_dir: Path, document: dict, force: bool = False) -> Path:
 
     path.write_text(json.dumps(settled, separators=(",", ":")) + "\n", encoding="utf-8")
     return path
+
+
+def _sampled_kills_lost(
+    published: dict, document: dict
+) -> list[tuple[int | None, int | None, int, int | None]]:
+    """Every published (encounter, difficulty) block with kills that the document
+    would shrink or drop, as ``(encounterId, difficulty, before, after)``.
+
+    ``after`` is ``None`` for a block the document does not carry at all -- an
+    encounter that left the tier's profile list, or a difficulty the fold could not
+    bring back -- and that is a loss too: "no measured block" is a different claim
+    from "fewer kills", and both need saying. A published block with nothing sampled
+    has nothing to lose and is never listed, so the four bosses read through their
+    live twins (#160) grow from zero without a refusal.
+
+    Asked of the FOLDED document. Asked of the raw one it would fire on the
+    ordinary single-difficulty run, which `_keep_measurements` repairs.
+    """
+    fresh = {
+        entry.get("encounterId"): _blocks_by_difficulty(entry)
+        for entry in document.get("encounters") or []
+        if isinstance(entry, dict)
+    }
+    lost = []
+    for entry in published.get("encounters") or []:
+        if not isinstance(entry, dict):
+            continue
+        encounter_id = entry.get("encounterId")
+        for difficulty, block in _blocks_by_difficulty(entry).items():
+            before = block.get("fightsSampled")
+            if not isinstance(before, int) or before <= 0:
+                continue
+            new_block = fresh.get(encounter_id, {}).get(difficulty)
+            after = new_block.get("fightsSampled") if new_block is not None else None
+            if after is None or not isinstance(after, int) or after < before:
+                lost.append((encounter_id, difficulty, before, after))
+    return lost
+
+
+#: Warcraft Logs' difficulty ids, in words. One table for the refusal above and the
+#: caveat `_no_fights_caveats` writes, so the two cannot name a difficulty differently.
+_DIFFICULTY_NAMES = {5: "Mythic", 4: "Heroic", 3: "Normal", 1: "Raid Finder"}
+
+
+def _difficulty_name(difficulty: object) -> str:
+    if difficulty is None:
+        return "no recorded difficulty"
+    try:
+        return _DIFFICULTY_NAMES.get(int(str(difficulty)), f"difficulty {difficulty}")
+    except ValueError:
+        return f"difficulty {difficulty}"
 
 
 def _keep_measurements(published: dict, document: dict) -> dict:
