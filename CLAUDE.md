@@ -4741,6 +4741,54 @@ ever needed. Same shape as the `/data/` near-miss the progress-sweep section rec
 and the leading-slash lesson there applies to none of these: they are repository-root
 directories with no namesake elsewhere.
 
+### What the exclusion removed, and the 233 MB is compressed (2026-09-12)
+
+#170 listed one open measurement that costs no Warcraft Logs query: *"Ist das
+233-MB-Artefakt roh oder komprimiert? Faktor ~8 auf jeder Byte-Zahl."* Answered by
+downloading the two artifacts the cut sits between and reading their central
+directories -- no extraction of the large one -- and the two runs are fourteen hours
+apart on the same day:
+
+```
+                 run 34674041702  04:51   run 34714306254  19:29
+                 before ae22165           after
+  files                    6,399                              2
+  raw bytes        3,392,377,186  (3.39 GB)          83,812,349
+  zip bytes          233,717,769                      3,960,939
+  ratio                    14.59                          21.16
+```
+
+Three things fall out, and only the first is what the issue asked:
+
+- **The 233 MB is compressed**, and the factor is **14.59**, not the ~8 the issue
+  guessed; the raw content was **3.39 GB**. Settled by measurement rather than by
+  documentation: the zip as downloaded is byte-identical to the API's
+  `size_in_bytes` on **both** artifacts (233,717,769 and 3,960,939), so that field
+  is the zip and never the file sum.
+- **The cache was 6,397 of the 6,399 files and 99.2% of the raw bytes** --
+  3,365,823,351 B against the payload's 26,553,126 B. So what the exclusion closed
+  was 3.37 GB of raw API responses in 6,397 files, downloadable by anyone for
+  fourteen days; the two files anybody actually wanted out of that artifact are
+  `fight-probe-MID2.json` and its 709-byte transcript.
+- **The current artifact carries no `cache/` directory at all**, checked on the
+  unpacked tree rather than on the workflow file. The cut is a factor of **59 on
+  the wire and 40 on disk**.
+
+**And the payload TRIPLED between those two runs** -- 26.6 MB raw to 83.8 MB -- which
+is #160 and #164 landing in between: the four PTR bosses began resolving through
+their live twins, and the report search stopped replacing the ranked sample. Worth
+keeping because it inverts the obvious reading of the table: the artifact got 59x
+smaller in a window where the thing it exists to carry got 3x bigger.
+
+The zip-overhead check is the control: 6,399 entries' compressed sizes sum to
+232,578,815 against a 233,717,769-byte file, i.e. ~178 bytes an entry of local
+header plus central directory. A sum that did **not** close would have meant the
+central directory was being read wrong, which is the one way this method fails
+quietly.
+
+Every other open measurement in #170 needs a live query and none of them is
+answerable this way.
+
 ### Two fixtures were physically impossible, and both hid the bug
 
 Moving attempts onto the absolute clock (`report["startTime"] + fight["startTime"]`)
