@@ -144,6 +144,12 @@ def probe_encounter(
     are two fights' worth of evidence, and throwing them away to raise an exception
     would mean paying for them twice.
 
+    That holds for a stop during the SELECTION too, and there the observation is
+    EMPTY -- no kill was ever chosen. An empty one is not a measurement and the
+    caller must not publish it as one, because `fightsSampled: 0` is a finding about
+    the encounter where the truth is a fact about the run; `cmd_fight_probe` owns
+    that rule and states it where it applies.
+
     ``encounter_id`` is the id the tier FILES the boss under, and it stays the
     observation's id whatever was read. When it yields nothing -- no ranked parse
     and, under ``--order public``, no kill in the report search either -- its
@@ -158,19 +164,41 @@ def probe_encounter(
     than reading nothing. The twin's selection runs under exactly the bounds the
     filed one did: same ranking pages, same report pages, same point ceiling.
     """
-    filed, pairs, outcome = _select_kills(client, encounter_id, settings)
     used_id = encounter_id
     id_choice: dict | None = None
-    if not pairs:
-        # Reused rather than re-derived, for the reason CLAUDE.md gives everywhere
-        # a rule has two copies: two answers to one question. The name check stays
-        # strict; `_twin_choice` only keeps the verified name beside the reason.
-        choice, verified = _twin_choice(client, encounter_id, _name_of(filed, client, encounter_id))
-        log.info("  %s", choice.reason)
-        id_choice = {**choice.to_json(), "verifiedName": verified}
-        if choice.substituted and choice.used:
-            used_id = int(choice.used)
-            _, pairs, outcome = _select_kills(client, used_id, settings)
+    # The ceiling is caught HERE and not allowed out, exactly as the fight loop
+    # below already catches it. `_select_kills` walks the ranking pages with a
+    # `check_budget` per page and the twin lookup spends a query of its own, so an
+    # hour already over the line when this encounter STARTS -- after a boss that
+    # spent it, or a spawn run in the same hour -- threw from the first ranking
+    # page. Nothing between here and `cli.main` caught it, so the process died on
+    # the traceback with exit 1 instead of exit 2, and `cmd_fight_probe` never
+    # reached the line that writes the payload: every encounter this same run had
+    # already read AND PAID FOR went with it. Fifth instance of the shape CLAUDE.md
+    # records -- a call placed BESIDE a guard rather than inside it.
+    try:
+        filed, pairs, outcome = _select_kills(client, encounter_id, settings)
+        if not pairs:
+            # Reused rather than re-derived, for the reason CLAUDE.md gives everywhere
+            # a rule has two copies: two answers to one question. The name check stays
+            # strict; `_twin_choice` only keeps the verified name beside the reason.
+            choice, verified = _twin_choice(
+                client, encounter_id, _name_of(filed, client, encounter_id)
+            )
+            log.info("  %s", choice.reason)
+            id_choice = {**choice.to_json(), "verifiedName": verified}
+            if choice.substituted and choice.used:
+                used_id = int(choice.used)
+                _, pairs, outcome = _select_kills(client, used_id, settings)
+    except PointBudgetExhausted as exc:
+        # Nothing was selected, so there is nothing to describe. The observation
+        # comes back EMPTY and `search_exhausted` stays False: a selection the
+        # ceiling stopped saw a window, never the whole list, and claiming
+        # otherwise would let `is_complete` close the encounter for good over a
+        # walk that never ran. What the caller does with an empty observation from
+        # an aborted encounter is `cmd_fight_probe`'s rule, and it is not "publish
+        # it": see the contribution guard there.
+        return _unselected(encounter_id, settings), str(exc)
 
     observation = fightextract.EncounterObservation(
         encounter_id=encounter_id,
@@ -313,6 +341,28 @@ def _twin_choice(
     choice = harvest.choose_encounter_id(encounter_id, requested_name, False, lookup)
     verified = names.get(choice.used) if choice.substituted and choice.used else None
     return choice, verified
+
+
+def _unselected(encounter_id: int, settings: ProbeSettings) -> fightextract.EncounterObservation:
+    """An encounter the point ceiling stopped BEFORE its kills were chosen.
+
+    Empty on purpose, and every field that could make a claim is left at the value
+    that claims nothing: no name was read, so the id stands in for it;
+    ``search_exhausted`` is False because a stopped walk saw a window rather than
+    the whole list; ``difficulties_seen`` is empty because none was counted; and
+    ``search_budget`` is None for the reason ``_search_budget`` gives one function
+    down -- the budget was not what ended the search, so recording it would let the
+    next hour skip a walk that never ran its course.
+
+    This observation is NOT a measurement and must not be published as one. It
+    exists so the caller gets ``(observation, reason)`` in the shape the fight loop
+    already returns, rather than an exception that ends the pass.
+    """
+    return fightextract.EncounterObservation(
+        encounter_id=encounter_id,
+        encounter_name=str(encounter_id),
+        difficulty=settings.difficulty,
+    )
 
 
 def _search_budget(outcome: firstkills.SearchOutcome | None, settings: ProbeSettings) -> int | None:
@@ -1098,9 +1148,47 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         for position, encounter_id in enumerate(remaining):
             log.info("probing encounter %d (%d of %d)", encounter_id, position + 1, len(remaining))
             observation, aborted = probe_encounter(client, encounter_id, settings)
-            observations.append(observation)
-            transcript.extend(render(observation, profiles.get(encounter_id)))
-            transcript.append("")
+            # An encounter the ceiling stopped before it read a single fight
+            # contributes NOTHING -- no row, no transcript section, and no place in
+            # the per-encounter cost. `by_id = {**previous, **fresh}` is a flat
+            # replacement, so a row published here would say `fightsSampled: 0` and
+            # OVERWRITE whatever a previous run measured for the same
+            # (encounter, difficulty). Measured on this branch: a previous row of 3
+            # kills came back 0 that way, through the fight loop's own guard, so
+            # this is a defect that already ships rather than one the selection fix
+            # would have introduced.
+            #
+            # And the row would be a false sentence even with nothing to overwrite.
+            # This file's own rule: "probed and read nothing" is a finding about the
+            # ENCOUNTER -- its rankings carried no kill -- while "never probed" is a
+            # fact about the RUN, and the views say something different for each. A
+            # pass that ran out of points asked nothing, so the true answer is the
+            # second one, and the way to say it is to be absent. Same direction as
+            # `_keep_measurements`: never replace a measurement with an absence.
+            #
+            # Deliberately NOT extended to a PARTIAL read: an encounter that got 2 of
+            # 5 fights before the ceiling really did measure two kills, `is_complete`
+            # re-opens it next hour, and `write_fights` refuses to publish a document
+            # that shrinks. Only the zero case states something untrue.
+            if aborted and not observation.fights:
+                log.warning(
+                    "encounter %d: the ceiling stopped it before any fight was read, "
+                    "so it contributes no row -- absent reads as 'never probed', "
+                    "which is what happened, where 'fightsSampled: 0' would claim "
+                    "the encounter has no kills and would replace an older row.",
+                    encounter_id,
+                )
+                transcript.append(f"=== encounter {encounter_id}: not read ===")
+                transcript.append(
+                    "  the point ceiling stopped this pass before any kill of this "
+                    "encounter was chosen. Nothing was measured, so nothing is "
+                    "written for it; whatever an earlier run measured is kept."
+                )
+                transcript.append("")
+            else:
+                observations.append(observation)
+                transcript.extend(render(observation, profiles.get(encounter_id)))
+                transcript.append("")
             if aborted:
                 log.warning("%s", aborted)
                 break
