@@ -6556,6 +6556,13 @@ really did measure two kills, `is_complete` re-opens it next hour, and
 something untrue. "Keep the bigger row" is a different question with its own
 machinery downstream, and widening into it here would answer it in the wrong place.
 
+**And the withheld encounter reaches the published document as the right sentence**,
+which is the half a payload alone cannot show. Measured on the same stub run with
+`--publish`: `fights.json` carries boss 3180 at `measured.fightsSampled: 1` and boss
+3181 at `measured: null` -- *never probed*, the state the view says something
+different for -- with `coverage {encounters: 9, asserted: 9, measured: 1}` and no
+`MeasurementWouldBeLost` refusal, because nothing shrank.
+
 Also not done: `_unselected`'s observation claims nothing it did not see --
 `search_exhausted` stays False and `search_budget` None, because a stopped walk saw
 a window rather than the whole list and claiming otherwise would let `is_complete`
