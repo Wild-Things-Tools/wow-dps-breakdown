@@ -6342,11 +6342,23 @@ Three refusals in it:
 
 **The rule is for NOTHING found, on purpose.** A short page-limited sample keeps
 re-opening: its window is anchored, so that re-run is a cache hit and costs its
-ranking pages. Whether it should close too is a separate decision. What stays
-open with it: a twin that itself reads short and page-limited re-opens hourly,
-and each of those runs still pays the filed id's five unanchored pages before
-reaching the twin -- the same ~7 points per boss as before, buying kills now
-instead of nothing.
+ranking pages. **That it should NOT close too is now the owner's decision**
+(12.09.2026), and the reason is the asymmetry between the two errors: a short
+sample that stays open costs its ranking pages on a cache hit, while one that
+closes hands a boss its final sample size on whatever the page limit happened to
+reach that hour. And **nothing downstream can tell that count from a boss the zone
+really has that many kills of**: measured against the committed `fights.json` on
+12.09.2026, neither `searchExhausted` nor `searchBudget` appears in the published
+document at all -- an encounter block carries `fightsSampled` and `truncated`, and
+`truncated` is about the *event* fetch, a different question. The cheap error
+repeats; the expensive one is permanent and invisible from the file.
+
+What stays open with it: a twin that itself reads short and page-limited re-opens
+hourly, and each of those runs still pays the filed id's five unanchored pages
+before reaching the twin -- the same ~7 points per boss as before, buying kills
+now instead of nothing. That is the price, and it is stated rather than removed:
+the lever if it ever matters is `--report-pages`, which raises the budget and
+re-opens everything by the rule already above, not a second closing condition.
 
 **One canary of the eleven stayed green once, and it is recorded as measured
 rather than explained.** The runner breaks and restores the same source file
