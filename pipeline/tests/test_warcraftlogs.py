@@ -535,3 +535,238 @@ def test_rate_limit_returns_points_reset_in(tmp_path):
     client._client.post = _CountingTransport()
     reading = client.rate_limit()
     assert reading["pointsResetIn"] == 900
+
+
+# --------------------------------------------------------------------------------
+# `wowdps verify` measures what it spends, and refuses to publish what it could not
+# --------------------------------------------------------------------------------
+
+
+def test_every_query_document_asks_for_a_budget_reading():
+    """The ratchet, and it was red for two of thirteen documents until 2026-09-12.
+
+    `PointLedger`'s own docstring says *"every query in this module asks for
+    rateLimitData alongside its real payload"*. `RANKINGS_QUERY` and `ZONE_QUERY`
+    did not -- and `RANKINGS_QUERY` is the one `wowdps verify` sends 208 times a
+    week, so the only scheduled points-spending pass in the project could not read
+    its own cost at any point, however carefully it was bracketed.
+
+    A document added without one fails here by name rather than by a number nobody
+    can take.
+    """
+    documents = {
+        name: value
+        for name, value in vars(warcraftlogs).items()
+        if name.endswith("QUERY") and isinstance(value, str)
+    }
+    assert len(documents) >= 13, "the module lost query documents; re-read this test"
+    missing = sorted(name for name, text in documents.items() if "rateLimitData" not in text)
+    assert missing == [], f"these documents cannot feed the ledger: {missing}"
+
+
+class _VerifyTransport:
+    """A rankings service whose hourly counter moves, and which can start 429-ing."""
+
+    def __init__(self, fail_after: int | None = None, rows: int = 12) -> None:
+        self.posts = 0
+        self.spent = 100.0
+        self.fail_after = fail_after
+        self.rows = rows
+
+    def __call__(self, *_a, **_k):
+        self.posts += 1
+        if self.fail_after is not None and self.posts > self.fail_after:
+            return type("R", (), {"status_code": 429, "json": lambda s: {}, "headers": {}})()
+        self.spent += 0.5
+        payload = {
+            "data": {
+                "rateLimitData": {
+                    "limitPerHour": 3600,
+                    "pointsSpentThisHour": self.spent,
+                    "pointsResetIn": 900,
+                },
+                "worldData": {
+                    "encounter": {
+                        "id": 1,
+                        "name": "Some Boss",
+                        "characterRankings": {
+                            "rankings": [{"amount": 100.0 + i} for i in range(self.rows)]
+                        },
+                    }
+                },
+            }
+        }
+        return type("R", (), {"status_code": 200, "json": lambda s: payload, "headers": {}})()
+
+
+def _verify_tier(root, specs: int = 3):
+    (root / "MID9").mkdir(parents=True, exist_ok=True)
+    (root / "tiers.json").write_text(json.dumps({"current": "MID9", "tiers": []}))
+    (root / "MID9" / "index.json").write_text(
+        json.dumps(
+            {
+                "specs": [
+                    {
+                        "id": f"class{i}_spec",
+                        "displayName": f"Spec {i}",
+                        "class": f"Class{i}",
+                        "spec": "Spec",
+                        "scenarios": {"patchwerk": {"dps": {"1": 100000.0}}},
+                    }
+                    for i in range(specs)
+                ]
+            }
+        )
+    )
+
+
+def _run_verify(tmp_path, monkeypatch, transport, **overrides):
+    """Drive the real command with a stubbed transport, the way a run reaches it."""
+    import argparse
+
+    from wowdps.warcraftlogs import WarcraftLogsClient
+
+    root = tmp_path / "data"
+    _verify_tier(root)
+    monkeypatch.setenv("WCL_CLIENT_ID", "id")
+    monkeypatch.setenv("WCL_CLIENT_SECRET", "secret")
+
+    made: dict[str, WarcraftLogsClient] = {}
+    real_init = WarcraftLogsClient.__init__
+
+    def patched(self, credentials, *a, **k):
+        real_init(self, credentials, *a, **k)
+        self._token = "token"
+        self._client.post = transport
+        made["client"] = self
+
+    monkeypatch.setattr(WarcraftLogsClient, "__init__", patched)
+
+    fields = {
+        "data": str(root),
+        "tier": "MID9",
+        "encounter": [1, 2],
+        "difficulty": 5,
+        "metric": "dps",
+        "cache": None,
+        "point_ceiling": 0.8,
+    }
+    fields.update(overrides)
+    args = argparse.Namespace(**fields)
+    code = warcraftlogs.cmd_verify(args)
+    out = root / "MID9" / "logs-verification.json"
+    document = json.loads(out.read_text()) if out.is_file() else None
+    return code, document, made["client"]
+
+
+def test_a_verify_pass_publishes_what_it_cost(tmp_path, monkeypatch):
+    """Measured on 2026-09-12, before this: a whole pass ended at `firstReading
+    None`. Not merely un-bracketed -- the ranking document carried no reading at
+    all, so no ceiling could be checked and no cost stated."""
+    transport = _VerifyTransport()
+    code, document, client = _run_verify(tmp_path, monkeypatch, transport)
+
+    assert code == 0
+    cost = document["cost"]
+    # The bracket: a reading taken before any ranking was fetched and one after.
+    assert cost["firstReading"] is not None and cost["lastReading"] is not None
+    assert cost["pointsSpentThisRun"] == pytest.approx(3.5)
+    assert cost["limitPerHour"] == 3600
+    assert client.ledger.spend_state == warcraftlogs.SPEND_MEASURED
+
+
+def test_a_rate_limit_halfway_writes_nothing_instead_of_publishing_a_thin_tier(
+    tmp_path, monkeypatch
+):
+    """The defect this found, measured against the real command before the fix.
+
+    `RateLimited` subclasses `WarcraftLogsError`, so the per-spec clause caught it,
+    set the summary to None, and every remaining row was counted as
+    `withheldForSmallSample` -- exit 0, half the comparisons, and the rate limit
+    published as a statement about how many parses Warcraft Logs holds. The workflow
+    then commits that over a good file.
+    """
+    transport = _VerifyTransport(fail_after=3)
+    code, document, _ = _run_verify(tmp_path, monkeypatch, transport)
+
+    assert code == 2, "a budget stop is the ceiling's exit status"
+    assert document is None, "a partial comparison must not replace the published one"
+
+
+def test_a_failed_query_is_not_counted_as_a_thin_ranking(tmp_path, monkeypatch):
+    """Two different findings, and only one is a fact about the game.
+
+    `withheldForSmallSample` is read as "this many spec/boss pairs have too few
+    ranked parses". A query that failed says nothing about parses, and the published
+    MID2 file states 358 withheld with no way to tell whether any were failures.
+    """
+
+    class _OneSpecFails(_VerifyTransport):
+        def __call__(self, *a, **k):
+            # The bracket reading is post 1; fail the first ranking after it.
+            if self.posts == 1:
+                self.posts += 1
+                self.spent += 0.5
+                return type(
+                    "R",
+                    (),
+                    {"status_code": 500, "text": "boom", "json": lambda s: {}, "headers": {}},
+                )()
+            return super().__call__(*a, **k)
+
+    code, document, _ = _run_verify(tmp_path, monkeypatch, _OneSpecFails())
+
+    assert code == 0
+    assert document["withheldForQueryError"] == 1
+    assert document["withheldForSmallSample"] == 0
+
+
+def test_a_thin_ranking_is_still_counted_as_thin(tmp_path, monkeypatch):
+    """The control. Separating the two must not empty the count that already
+    existed -- that would trade one wrong number for another."""
+    code, document, _ = _run_verify(tmp_path, monkeypatch, _VerifyTransport(rows=MIN_SAMPLE - 1))
+
+    assert code == 0
+    assert document["comparisons"] == []
+    assert document["withheldForSmallSample"] == 6
+    assert document["withheldForQueryError"] == 0
+
+
+def test_verify_writes_no_cache_by_default(tmp_path, monkeypatch):
+    """A ranking's cache key does not vary with time, so a cache restored between
+    weekly runs would serve last week's medians under this run's date. The flag
+    exists for iterating offline; the default must not quietly create one."""
+    transport = _VerifyTransport()
+    code, _, client = _run_verify(tmp_path, monkeypatch, transport)
+
+    assert code == 0
+    assert client._cache_dir is None
+    # The control: asked for one, the client caches -- so the default is a decision
+    # rather than the flag being inert.
+    code, _, cached = _run_verify(
+        tmp_path, monkeypatch, _VerifyTransport(), cache=str(tmp_path / "wcl")
+    )
+    assert code == 0
+    assert cached._cache_dir == tmp_path / "wcl"
+    assert list((tmp_path / "wcl").glob("*.json"))
+
+
+def test_a_rankings_cache_key_does_not_vary_with_time(tmp_path):
+    """The measurement the workflow's missing actions/cache rests on."""
+    from wowdps.warcraftlogs import Credentials, WarcraftLogsClient
+
+    client = WarcraftLogsClient(Credentials("id", "secret"), cache_dir=tmp_path)
+    variables = {
+        "encounterId": 1,
+        "difficulty": 5,
+        "metric": "dps",
+        "className": "Mage",
+        "specName": "Arcane",
+        "page": 1,
+    }
+    # Nothing in a ranking query's variables is a clock, so two runs a week apart
+    # ask for the same file. A report's events are immutable and may be cached; a
+    # ranking is the thing the weekly pass exists to re-read.
+    assert client._cache_path(warcraftlogs.RANKINGS_QUERY, variables) == client._cache_path(
+        warcraftlogs.RANKINGS_QUERY, dict(variables)
+    )

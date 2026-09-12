@@ -5714,6 +5714,107 @@ Things not to redo:
   `MIN_BOSS_SAMPLE = 3` bosses before a build gets `vsField` *or* `rankMove`. Both
   publish `null` rather than a thin number.
 
+### The one scheduled pass that could not read its own cost (#170 Schritt 4)
+
+`wowdps verify` runs every Monday at 06:00 UTC and sends **208 ranking queries** --
+26 distinct (class, spec) pairs over 8 encounters, counted against the committed
+MID2 manifest -- and until 2026-09-12 it measured **nothing**: no bracket, no
+`cost` block, no cache, no ceiling. #170 asked for the first three. Building them
+found that the reason was one layer below where the issue looked, and turned up two
+defects beside it.
+
+**The reading was not merely un-bracketed; the ranking query never asked for one.**
+`PointLedger`'s docstring says, in words, that *"every query in this module asks for
+`rateLimitData` alongside its real payload"*. Measured over `vars(warcraftlogs)`:
+**two of the thirteen query documents did not**, and one of them was
+`RANKINGS_QUERY`. So a whole pass ended at
+
+```
+ledger entries 6   firstReading None   lastReading None
+spend_state no-reading  ->  UNMEASURED (no rate-limit reading came back)
+```
+
+-- and no amount of bracketing could have helped, because `check_budget` returns
+early on `last_reading is None` and `ledger.to_json()` would have published nulls.
+A docstring describing a mechanism the code does not implement, in the class whose
+whole job is to measure.
+
+**The second document is `ZONE_QUERY`, and it is the same defect one command
+across.** `cmd_fight_zones` prints `spend_sentence(ledger)` over a ledger that
+document is the only feed for, so a read-only `wowdps fight-zones` could only ever
+print UNMEASURED -- while its sibling `ZONE_BY_ID_QUERY`, the `--seed`/`--scan`
+path, has always carried a reading. The same command measured itself on one route
+and never on the other. Both documents carry the block now, and
+`test_every_query_document_asks_for_a_budget_reading` is the ratchet: a document
+added without one fails by name.
+
+Whether a resolved field costs **points** is a different question and is one of
+#170's own open measurements. It is not claimed here; what is claimed is that the
+other eleven documents already take that bet, and that a reading nobody takes
+cannot be compared with anything.
+
+### A 429 was published as "too few parses"
+
+The defect the ceiling work found, measured against the real command with a stub
+that starts refusing halfway:
+
+```
+before   exit 0   3 of 6 comparisons published   withheldForSmallSample 3
+after    exit 2   nothing written
+```
+
+`RateLimited` subclasses `WarcraftLogsError`, so the per-spec `except` clause caught
+it, set the summary to `None`, and counted the row as thin -- once per remaining
+spec. Exit 0, so the workflow committed the short file **over the good one**. The
+rate limit was published as a statement about how many ranked parses Warcraft Logs
+holds.
+
+So a budget stop is now a fact about the hour rather than about a ranking: it stops
+the pass, writes nothing, and exits 2. Nothing is published, because the document is
+all-or-nothing -- one comparison set covering the whole tier -- and a short one under
+the same name is a different measurement rather than a smaller one. That is this
+file's own rule for `write_fights` and for `progress-hours`'s floor, applied to the
+third producer that lacked it.
+
+**And a failed query is counted apart from a thin ranking.** `withheldForSmallSample`
+reads as *"this many spec/boss pairs have too few ranked parses"*; the committed MID2
+file states **358** of them and cannot say whether any were failures.
+`withheldForQueryError` is the second count, in **rows** like the first -- specs
+sharing a (class, spec) pair share one query, so a query count beside a row count is
+two units in one document and invites a subtraction that does not work.
+
+### `--cache` here is not `--cache` in the probes, and the difference is measured
+
+The flag exists, and the workflow deliberately restores **no** `actions/cache`. A
+ranking is not a report:
+
+```
+spec_rankings variables: encounterId, difficulty, metric, className, specName, page
+nothing in that is a clock  ->  the same spec hashes to the same cache file, week to week
+```
+
+A report's events are immutable, so `fight-probe`'s restored cache is as good as a
+fresh fetch. A *ranking* is the thing this pass exists to re-read, so a restored
+cache would serve last week's medians under this run's `generatedAt` and the weekly
+run would become a no-op that looks like a measurement. Within one run it saves
+nothing either -- the in-memory dict already fetches each (class, spec, encounter)
+exactly once -- so the flag's whole value is offline: pay for one pass, then iterate
+on `summarise_rankings` and the analysis over it for free. `.wclcache/` is the name
+the help text suggests and `.gitignore` covers: a ranking payload carries a
+`name`/`guild`/`server` per row, so a local run plus one `git add -A` is the same
+near-miss the `spawn-probe/` and `harvest/` entries record -- and a canary for the
+"off by default" rule produced exactly that here on 2026-09-12.
+
+`cost` is in the document and would have to be **out** of any settle comparison, for
+the reason `_PROVENANCE_PATHS` already carries: it is a reading of the hourly meter,
+so five of its fields differ on every run by construction. `cmd_verify` has no settle
+today (`generatedAt` moves every week regardless), so this is stated before the trap
+rather than after it.
+
+**Nothing published moves until the workflow runs.** The committed
+`logs-verification.json` carries neither block; the next Monday writes both, and the
+web type carries them as optional so a reader of the old file is not lied to.
+
 ## Fight patterns per boss — what Warcraft Logs can and cannot tell you
 
 The logs cross-check compares Patchwerk single target against nine different encounters,

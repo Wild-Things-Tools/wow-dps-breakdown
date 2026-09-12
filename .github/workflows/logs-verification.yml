@@ -41,12 +41,36 @@ jobs:
         if: steps.creds.outputs.enabled == 'true'
         run: pip install -e ./pipeline
 
+      # There is deliberately NO actions/cache step here, and that is a measurement
+      # rather than an omission. `spec_rankings` sends (encounterId, difficulty,
+      # metric, className, specName, page) and nothing in that varies with time, so
+      # a given spec's ranking hashes to the same cache file every week. A restored
+      # cache would therefore serve LAST week's medians under this run's
+      # `generatedAt` -- the weekly pass becomes a no-op that looks like a
+      # measurement. `fight-probe` and `spawn-probe` may restore one because a
+      # report's events are immutable; a ranking is the thing this pass re-reads.
+      #
+      # `--cache` exists on the command for iterating offline after paying for one
+      # pass. It does not belong in a schedule.
       - name: Fetch rankings
         if: steps.creds.outputs.enabled == 'true'
         env:
           WCL_CLIENT_ID: ${{ secrets.WCL_CLIENT_ID }}
           WCL_CLIENT_SECRET: ${{ secrets.WCL_CLIENT_SECRET }}
-        run: wowdps verify --data web/public/data
+        # `set +e` around the run, because the runner's default shell is
+        # `bash -eo pipefail` and errexit would end the step at the command, before
+        # $? is read -- the dead-exit-code-branch defect `progress-sweep.yml`
+        # already carries the fix for.
+        run: |
+          set +e
+          wowdps verify --data web/public/data --point-ceiling 0.8
+          status=$?
+          set -e
+          if [ "$status" = "2" ]; then
+            echo "::warning::The point ceiling stopped the pass before it covered the tier. Nothing was written; the published comparison is unchanged. Re-run when the hourly budget resets."
+            exit 0
+          fi
+          exit "$status"
 
       - name: Commit
         if: steps.creds.outputs.enabled == 'true'

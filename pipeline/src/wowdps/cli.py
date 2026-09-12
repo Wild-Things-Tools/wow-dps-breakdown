@@ -3137,6 +3137,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_verify.add_argument("--metric", default="dps", help="Warcraft Logs ranking metric")
     p_verify.add_argument("--difficulty", type=int, default=5, help="5 = Mythic, 4 = Heroic")
+    p_verify.add_argument(
+        "--cache",
+        default=None,
+        help=(
+            "directory for the response cache, e.g. .wclcache (which .gitignore "
+            "names, because a ranking payload carries a name/guild/server per row). "
+            "OFF by default, unlike the probes: a ranking's cache key does not vary "
+            "with time, so a cache restored between weekly runs serves last week's "
+            "medians under this run's date. For iterating on the extraction offline "
+            "after paying for one pass."
+        ),
+    )
+    p_verify.add_argument(
+        "--point-ceiling",
+        type=float,
+        default=0.8,
+        help=(
+            "stop before spending more than this share of the hourly point budget. "
+            "Stopping writes nothing and exits 2: a partial comparison published "
+            "under the same name is a different measurement, not a smaller one."
+        ),
+    )
     p_verify.set_defaults(func=cmd_verify)
 
     p_fight_profiles = sub.add_parser(
