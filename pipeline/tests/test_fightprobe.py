@@ -1048,6 +1048,246 @@ def test_the_point_ceiling_returns_what_was_found_instead_of_losing_the_pass():
     assert "STOPPED EARLY" in outcome.summary(anchor)
 
 
+# The ceiling over the line BEFORE the first ranking page (#159)
+#
+# The two budget tests above cannot reach this. One records its high reading inside
+# `fight_structure`, i.e. after a fight has already been read, so it exercises the
+# fight loop's own guard; the other calls `_public_first_kills` directly and raises
+# inside `report_kills`, inside that function's own try. Neither ever leaves the
+# ranking walk, which is where `check_budget` has no guard above it at all. Verified
+# by reverting the fix: both stayed green.
+
+
+def test_a_ceiling_stop_in_the_selection_returns_the_reason_instead_of_raising():
+    """The fifth instance of "a call beside a guard rather than inside it".
+
+    `_select_kills` checks the budget once per ranking page, and nothing between
+    that check and `cli.main` caught `PointBudgetExhausted`. An hour already over
+    the line when an encounter STARTS therefore killed the process on the first
+    ranking page. The contract is the fight loop's: the reason comes back, the
+    exception does not.
+    """
+    client = StubClient(structure=structure_payload(), events={}, tables={})
+    # Over the line before anything is asked -- the state a run is in after a
+    # previous encounter, or a spawn pass, spent the hour.
+    client.ledger.record(
+        "x", {"rateLimitData": {"limitPerHour": 3600, "pointsSpentThisHour": 3500}}
+    )
+
+    observation, reason = fightprobe.probe_encounter(client, 3180, settings())
+
+    assert reason is not None and "points spent this hour" in reason
+    # It stopped BEFORE the first ranking page, which is the path the older tests
+    # could not reach: not one query was sent for this encounter.
+    assert not [call for call in client.calls if call.startswith("rankings:")]
+    assert observation.fights == []
+    # And nothing about the stop is allowed to read as a finished walk: claiming
+    # exhaustion would let `is_complete` close the encounter for good over a
+    # selection that never ran.
+    assert observation.search_exhausted is False
+    assert observation.search_budget is None
+
+
+def test_a_ceiling_stop_in_the_selection_keeps_the_encounters_already_paid_for(
+    tmp_path, monkeypatch
+):
+    """The whole point of the fix, driven end to end through the command.
+
+    Before it, the first ranking page of the second encounter threw, the traceback
+    ended the process with exit 1, and `cmd_fight_probe` never reached the line
+    that writes the payload -- so the first encounter, fully read and PAID FOR in
+    the same run, was lost. Exit 1 is also the one status `fight-probe.yml` fails
+    the step on, so nothing was uploaded either.
+    """
+    from wowdps import cli, warcraftlogs
+
+    class SpendsTheHourOnTheFirstEncounter(StubClient):
+        # The last paid call of `_probe_fight`, so the first encounter is complete
+        # and the hour is over the line when the second one starts.
+        def fight_table(
+            self,
+            code,
+            fight_id,
+            data_type="DamageDone",
+            view_by="Default",
+            hostility="Friendlies",
+        ):
+            self.ledger.record(
+                "x", {"rateLimitData": {"limitPerHour": 3600, "pointsSpentThisHour": 3500}}
+            )
+            return super().fight_table(code, fight_id, data_type, view_by, hostility)
+
+    stub = SpendsTheHourOnTheFirstEncounter(
+        structure=structure_payload(),
+        events={"DamageTaken": [damage(s, a) for a in (10, 11, 12) for s in (0.5, 299.0)]},
+        tables={},
+    )
+    monkeypatch.setattr(
+        warcraftlogs.Credentials,
+        "from_env",
+        classmethod(lambda cls: warcraftlogs.Credentials("i", "s")),
+    )
+    monkeypatch.setattr(fightprobe, "WarcraftLogsClient", lambda *a, **k: stub)
+
+    args = cli.build_parser().parse_args(
+        [
+            "fight-probe",
+            "--tier",
+            VOIDSPIRE_TIER,
+            "--encounter",
+            "3180",
+            "--encounter",
+            "3181",
+            "--reports",
+            "1",
+            "--order",
+            "top",
+            "--out",
+            str(tmp_path),
+        ]
+    )
+    # No exception, and not the hard-failure status: the workflow treats 1 as a
+    # failed step and uploads nothing.
+    status = fightprobe.cmd_fight_probe(args)
+    assert status != 1
+
+    payload_path = tmp_path / f"fight-probe-{VOIDSPIRE_TIER}.json"
+    assert payload_path.exists(), "the payload was not written, so the pass was lost"
+    payload = json.loads(payload_path.read_text())
+
+    # The encounter this run read and paid for is in the file...
+    rows = {entry["encounterId"]: entry for entry in payload["encounters"]}
+    assert rows[3180]["fightsSampled"] == 1
+    # ...and the one it never got to ask about contributes nothing, rather than a
+    # `fightsSampled: 0` row claiming the boss has no kills.
+    assert 3181 not in rows
+    # It is still outstanding, so the next hour re-opens it.
+    assert 3181 in payload["incomplete"]
+    assert payload["abortedBecause"] and "points spent this hour" in payload["abortedBecause"]
+
+
+def test_an_encounter_stopped_before_any_fight_does_not_replace_an_older_measurement(
+    tmp_path, monkeypatch
+):
+    """`by_id = {**previous, **fresh}` is a flat replacement, and an empty row wins.
+
+    This is the half of #159 that had to be decided rather than merely caught, and
+    it is a defect that ALREADY SHIPS through the fight loop's own guard: measured
+    on this branch, a previous row of 3 kills came back as 0. Absent and zero are
+    different sentences -- "probed and read nothing" is a finding about the
+    encounter, "never probed" is a fact about the run -- and only the second is
+    true of a pass that ran out of points. So the row is not written and the older
+    measurement stands.
+    """
+    from wowdps import cli, warcraftlogs
+
+    # A real earlier measurement: three kills, short of the five this run asks for,
+    # so the resume re-opens the encounter instead of skipping it.
+    (tmp_path / f"fight-probe-{VOIDSPIRE_TIER}.json").write_text(
+        json.dumps(
+            {
+                "tier": VOIDSPIRE_TIER,
+                "encounters": [
+                    {
+                        "encounterId": 3180,
+                        "difficulty": 5,
+                        "fightsSampled": 3,
+                        "fights": [],
+                        "eventBudget": 30000,
+                        "order": "top",
+                    }
+                ],
+            }
+        )
+    )
+
+    class CeilingBeforeTheFirstFight(StubClient):
+        # Selection succeeds; the ceiling then stops the fight loop at fight zero,
+        # which is the path that was already guarded and still lost the row.
+        def encounter_rankings(self, encounter_id, difficulty=5, metric="dps", page=1):
+            answer = super().encounter_rankings(encounter_id, difficulty, metric, page)
+            self.ledger.record(
+                "x", {"rateLimitData": {"limitPerHour": 3600, "pointsSpentThisHour": 3500}}
+            )
+            return answer
+
+    stub = CeilingBeforeTheFirstFight(
+        structure=structure_payload(),
+        events={"DamageTaken": [damage(s, a) for a in (10, 11, 12) for s in (0.5, 299.0)]},
+        tables={},
+    )
+    monkeypatch.setattr(
+        warcraftlogs.Credentials,
+        "from_env",
+        classmethod(lambda cls: warcraftlogs.Credentials("i", "s")),
+    )
+    monkeypatch.setattr(fightprobe, "WarcraftLogsClient", lambda *a, **k: stub)
+
+    args = cli.build_parser().parse_args(
+        [
+            "fight-probe",
+            "--tier",
+            VOIDSPIRE_TIER,
+            "--encounter",
+            "3180",
+            "--reports",
+            "5",
+            "--order",
+            "top",
+            "--out",
+            str(tmp_path),
+        ]
+    )
+    assert fightprobe.cmd_fight_probe(args) != 1
+
+    payload = json.loads((tmp_path / f"fight-probe-{VOIDSPIRE_TIER}.json").read_text())
+    rows = {entry["encounterId"]: entry for entry in payload["encounters"]}
+    assert rows[3180]["fightsSampled"] == 3, "an aborted pass overwrote a real measurement"
+
+
+def test_a_partial_read_still_replaces_the_older_row_and_that_is_deliberate():
+    """The line the rule above is NOT extended past, stated as a test.
+
+    An encounter that read 2 of 5 fights before the ceiling really did measure two
+    kills. That is a measurement, `is_complete` re-opens the encounter next hour,
+    and `write_fights` refuses to publish a document that shrinks. Only the ZERO
+    case says something untrue, so only the zero case is withheld -- and this test
+    is what stops the guard quietly widening into "keep the bigger row", which is a
+    different question with its own machinery downstream.
+    """
+
+    class Exhausting(StubClient):
+        def fight_structure(self, code, encounter_id, difficulty):
+            if self.calls.count("structure:aBcD1234") >= 1:
+                self.ledger.record(
+                    "x", {"rateLimitData": {"limitPerHour": 3600, "pointsSpentThisHour": 3500}}
+                )
+            return super().fight_structure(code, encounter_id, difficulty)
+
+        def encounter_rankings(self, encounter_id, difficulty=5, metric="dps", page=1):
+            return {
+                "id": encounter_id,
+                "name": "Lightblinded Vanguard",
+                "characterRankings": {
+                    "rankings": [
+                        {"amount": 1.0, "report": {"code": "aBcD1234", "fightID": 7}},
+                        {"amount": 0.9, "report": {"code": "eFgH5678", "fightID": 7}},
+                    ]
+                },
+            }
+
+    client = Exhausting(
+        structure=structure_payload(),
+        events={"DamageTaken": [damage(s, a) for a in (10, 11, 12) for s in (0.5, 299.0)]},
+        tables={},
+    )
+    observation, reason = fightprobe.probe_encounter(client, 3180, settings(reports=2))
+
+    # Aborted, and NOT empty: this one has something to say and says it.
+    assert reason is not None
+    assert len(observation.fights) == 1
+
+
 def test_a_stopped_search_that_found_nothing_earlier_does_not_claim_there_is_nothing():
     from wowdps.firstkills import SearchOutcome
 
