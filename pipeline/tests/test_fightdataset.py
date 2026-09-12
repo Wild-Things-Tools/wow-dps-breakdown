@@ -1515,3 +1515,71 @@ def test_the_measured_block_publishes_both_counts():
     block = _measured_block({"fights": uploads_of_one_kill(["A", "B", "C"]), "reports": []}, None)
     assert block["fightsSampled"] == 3
     assert block["distinctKills"] == 1
+
+
+# --------------------------------------------------------------------------------
+# #143: a block read through the boss's live twin is filed under the filed id
+# --------------------------------------------------------------------------------
+
+
+def test_a_block_read_through_a_twin_is_filed_under_the_filed_id_and_names_the_twin():
+    """`fights.json` files the block under the id the tier's fight profile names --
+    that is what wtt-frontend joins on -- and carries the choice beside it, so a
+    reader can see the sample came from another id. Both branches of
+    `_measured_block`: a block with kills and one that read none."""
+    choice = {
+        "requested": 53421,
+        "used": 3421,
+        "substituted": True,
+        "reason": (
+            "read as 3421: encounter 53421 is a PTR id with no ranked parses, and its "
+            "live twin 3421 carries the same name 'The Twin Fangs'"
+        ),
+        "verifiedName": "The Twin Fangs",
+    }
+    read = EncounterObservation(53421, "The Twin Fangs", 5, id_choice=choice)
+    read.fights = [
+        vanguard_fight("FIXTURE1", 285.0, 20.4),
+        vanguard_fight("FIXTURE2", 288.0, 21.0),
+        vanguard_fight("FIXTURE3", 334.0, 19.8),
+    ]
+    document = fightdataset.build_document(
+        "MID2", load_profiles("MID2"), vanguard_payload(encounters=[read.to_json()])
+    )
+    block = find(document, 53421)["measured"]
+    assert block["fightsSampled"] == 3
+    assert block["usedEncounter"] == 3421
+    assert block["idChoice"] == choice
+    assert any("under encounter 3421, not 53421" in caveat for caveat in block["caveats"])
+    # No second boss appears under the twin's id.
+    assert all(entry["encounterId"] != 3421 for entry in document["encounters"])
+
+    refused = EncounterObservation(
+        53421,
+        "The Twin Fangs",
+        5,
+        id_choice={
+            **choice,
+            "used": None,
+            "substituted": False,
+            "reason": "refused: encounter 53421 has no ranked parses, and its live twin "
+            "3421 is a different boss -- 'The Twin Fangs' against 'Sszorak'",
+            "verifiedName": None,
+        },
+    )
+    document = fightdataset.build_document(
+        "MID2", load_profiles("MID2"), vanguard_payload(encounters=[refused.to_json()])
+    )
+    block = find(document, 53421)["measured"]
+    assert block["fightsSampled"] == 0
+    assert block["usedEncounter"] == 53421
+    assert any("No live twin was read" in caveat for caveat in block["caveats"])
+
+    # And a block the filed id answered for carries neither key.
+    plain = find(
+        fightdataset.build_document(
+            VOIDSPIRE_TIER, load_profiles(VOIDSPIRE_TIER), vanguard_payload()
+        ),
+        3180,
+    )["measured"]
+    assert "usedEncounter" not in plain and "idChoice" not in plain

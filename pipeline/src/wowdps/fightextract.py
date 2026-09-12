@@ -1236,6 +1236,33 @@ class EncounterObservation:
     #: has killed this boss yet" from "the kills are at a difficulty this run did
     #: not ask for", and those look identical on a view that only has a count.
     difficulties_seen: dict[int | None, int] = field(default_factory=dict)
+    #: Which encounter id the kills were read under, and why -- the
+    #: ``harvest.IdChoice.to_json()`` dict plus ``verifiedName``, the name the twin
+    #: was checked against. ``None`` when the filed id answered and nothing had to be
+    #: decided, so a quiet re-probe writes the bytes it did before this existed.
+    #: Set only by the probe. ``encounter_id`` stays the id the tier files the boss
+    #: under whatever was read: it is what the payload is keyed on and what
+    #: ``fights.json`` files the block under, so a substitution that was not named
+    #: here would be a full set of real measurements under the wrong boss.
+    id_choice: dict | None = None
+    #: How many reports the report search was willing to read, recorded ONLY when
+    #: it stopped on that bound with the whole of it spent. ``None`` when it ran out
+    #: of reports (that is ``search_exhausted``), when the point ceiling stopped it
+    #: (the budget was not what ended the search, and recording it would let the
+    #: resume skip a search that never ran its course), and when no search ran. It
+    #: is what lets a search that found nothing count as done until somebody raises
+    #: ``--report-pages``, the way ``eventBudget`` does for ``--max-pages``.
+    search_budget: int | None = None
+
+    @property
+    def used_encounter_id(self) -> int:
+        """The id the kills were actually read under: the twin on a substitution,
+        the filed id otherwise -- including on a refusal, where nothing was read."""
+        choice = self.id_choice or {}
+        used = choice.get("used")
+        if choice.get("substituted") and isinstance(used, int):
+            return used
+        return self.encounter_id
 
     def distinct_fights(self) -> list[FightObservation]:
         """The sampled pulls, one row per kill: the upload of each read furthest.
@@ -1656,6 +1683,15 @@ class EncounterObservation:
             "activeTimeFraction": _json(self.uptime),
             "eventCoverage": _json(self.event_coverage),
             "searchExhausted": self.search_exhausted,
+            # Both only when there is something to say, for the reason
+            # `difficultiesSeen` below gives: an encounter the filed id answered for
+            # publishes the bytes it did before either existed.
+            **({"searchBudget": self.search_budget} if self.search_budget is not None else {}),
+            **(
+                {"usedEncounter": self.used_encounter_id, "idChoice": self.id_choice}
+                if self.id_choice is not None
+                else {}
+            ),
             # Only when there is something to say. An encounter that was read fine
             # publishes the bytes it did before this existed, so a quiet re-probe
             # still leaves nothing to commit.

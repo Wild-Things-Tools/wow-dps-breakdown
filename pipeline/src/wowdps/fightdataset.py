@@ -1201,6 +1201,7 @@ def _caveats(payload: dict, rankings_page: int | None, order: str | None = None)
         )
     for warning in sorted({w for fight in fights for w in (fight.get("warnings") or [])}):
         notes.append(str(warning))
+    notes.extend(_id_choice_caveats(payload))
     return notes
 
 
@@ -1240,23 +1241,65 @@ def _no_fights_caveats(payload: dict) -> list[str]:
     """
     caveats = ["The probe read no fights for this encounter."]
     seen = payload.get("difficultiesSeen")
-    if not isinstance(seen, dict) or not seen:
-        return caveats
-
-    wanted = payload.get("difficulty")
-    names = {"5": "Mythic", "4": "Heroic", "3": "Normal", "1": "Raid Finder"}
-    parts = [
-        f"{count} at {names.get(str(key), f'difficulty {key}')}"
-        if key != "None"
-        else f"{count} with no difficulty recorded"
-        for key, count in seen.items()
-    ]
-    asked = names.get(str(wanted), f"difficulty {wanted}")
-    caveats.append(
-        f"The log search did find kills of this encounter -- {', '.join(parts)} -- "
-        f"but this run asked for {asked}, so none of them was opened."
-    )
+    if isinstance(seen, dict) and seen:
+        wanted = payload.get("difficulty")
+        names = {"5": "Mythic", "4": "Heroic", "3": "Normal", "1": "Raid Finder"}
+        parts = [
+            f"{count} at {names.get(str(key), f'difficulty {key}')}"
+            if key != "None"
+            else f"{count} with no difficulty recorded"
+            for key, count in seen.items()
+        ]
+        asked = names.get(str(wanted), f"difficulty {wanted}")
+        caveats.append(
+            f"The log search did find kills of this encounter -- {', '.join(parts)} -- "
+            f"but this run asked for {asked}, so none of them was opened."
+        )
+    caveats.extend(_id_choice_caveats(payload))
     return caveats
+
+
+def _read_as(payload: dict) -> dict:
+    """Which encounter id the block's kills were read under, when the probe decided.
+
+    A block is FILED under the encounter's own id -- `fight_profiles.json` names it
+    and every join runs on it -- so the only place a reader can learn that the
+    sample came from the boss's PTR/live twin is beside the block. Absent when the
+    filed id answered: `usedEncounter` and `idChoice` then say nothing a reader
+    could not take from `encounterId`, and the bytes stay what they were.
+    `harvest.choose_encounter_id`'s verdict is carried verbatim rather than reduced
+    to a boolean, so the reason and the name it was verified against travel with
+    the number they explain.
+    """
+    choice = payload.get("idChoice")
+    if not isinstance(choice, dict):
+        return {}
+    used = payload.get("usedEncounter")
+    return {
+        "usedEncounter": used if isinstance(used, int) else payload.get("encounterId"),
+        "idChoice": choice,
+    }
+
+
+def _id_choice_caveats(payload: dict) -> list[str]:
+    """The id decision as a sentence, on the block it changes the reading of.
+
+    Only when a decision was made. A substitution is the one that matters -- the
+    kills under this block are another id's -- and a refusal is stated too, because
+    "no twin was read" and "no twin was tried" are different answers on a boss that
+    reads nothing.
+    """
+    choice = payload.get("idChoice")
+    if not isinstance(choice, dict):
+        return []
+    requested, used, reason = choice.get("requested"), choice.get("used"), choice.get("reason")
+    if choice.get("substituted") and used is not None:
+        return [
+            f"The kills were read under encounter {used}, not {requested} -- {reason}. "
+            f"The block stays filed under {requested}, the id the tier's fight profile "
+            f"names."
+        ]
+    return [f"No live twin was read for it -- {reason}."]
 
 
 #: Which difficulty a boss's headline `measured` block comes from when several were
@@ -1321,6 +1364,7 @@ def _measured_block(
             # reading that was wrong.
             "distinctKills": len(distinct_kills(measured.fights)),
             "reports": list(payload.get("reports") or []),
+            **_read_as(payload),
             "durationSeconds": payload.get("durationSeconds"),
             "raidSize": payload.get("raidSize"),
             "playersListed": payload.get("playersListed"),
@@ -1353,6 +1397,7 @@ def _measured_block(
         return {
             "fightsSampled": 0,
             "reports": list(payload.get("reports") or []),
+            **_read_as(payload),
             "caveats": _no_fights_caveats(payload),
             "timeline": None,
         }

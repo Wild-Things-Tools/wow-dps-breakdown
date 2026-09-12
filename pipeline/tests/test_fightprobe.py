@@ -1343,3 +1343,397 @@ def test_a_partly_stamped_payload_reports_the_numbers_rather_than_refusing():
     assert "UNMEASURED" not in joined
     assert "0.300s" in joined
     assert "1 sampled row(s) state no start time" in joined
+
+
+# --------------------------------------------------------------------------------
+# #143: a filed id with nothing to read is read through its live twin, and says so
+# --------------------------------------------------------------------------------
+
+TWIN_FANGS_PTR, TWIN_FANGS_LIVE = 53421, 3421
+
+
+def structure_for(encounter_id: int) -> dict:
+    """The fixture report filed under another encounter id -- fights AND phase names.
+
+    Both matter: `fight_structure` is filtered by the id and `_phase_metadata` picks
+    the phase names by it, so a read that used the FILED id against a live kill
+    would name the phase "Phase 1" instead of what the report calls it.
+    """
+    payload = structure_payload()
+    for fight in payload["fights"]:
+        fight["encounterID"] = encounter_id
+    payload["phases"][0]["encounterID"] = encounter_id
+    return payload
+
+
+class TwinStub(StubClient):
+    """Rankings under some ids and none under others, with the schema's names.
+
+    Returns what the CLIENT returns: `encounter_rankings` the encounter payload with
+    its `characterRankings`, `encounter_name` a string or None, `fight_structure`
+    the report. A stub built from the service's envelope would pass against code
+    that unwrapped it twice, which is the shape `spawn-probe` shipped once.
+    """
+
+    def __init__(self, names, rankings_for, **payloads):
+        super().__init__(**payloads)
+        self.names = names
+        self.rankings_for = rankings_for
+        self.name_lookups: list[int] = []
+
+    def encounter_rankings(self, encounter_id, difficulty=5, metric="dps", page=1):
+        self.calls.append(f"rankings:{encounter_id}:page{page}")
+        rows = (
+            [{"amount": 1.0, "report": {"code": "aBcD1234", "fightID": 7}}]
+            if encounter_id in self.rankings_for
+            else []
+        )
+        return {
+            "id": encounter_id,
+            "name": self.names.get(encounter_id),
+            "characterRankings": {"rankings": rows},
+        }
+
+    def encounter_name(self, encounter_id):
+        self.name_lookups.append(encounter_id)
+        return self.names.get(encounter_id)
+
+    def fight_structure(self, code, encounter_id, difficulty):
+        self.calls.append(f"structure:{code}:{encounter_id}")
+        return self.payloads["structure"]
+
+
+def _install(monkeypatch, stub):
+    from wowdps import warcraftlogs
+
+    monkeypatch.setattr(
+        warcraftlogs.Credentials,
+        "from_env",
+        classmethod(lambda cls: warcraftlogs.Credentials("i", "s")),
+    )
+    monkeypatch.setattr(fightprobe, "WarcraftLogsClient", lambda *a, **k: stub)
+
+
+def _twin_args(tmp_path, *extra):
+    from wowdps import cli
+
+    # MID2 files The Twin Fangs under the PTR id, so the dump pairs the measurement
+    # with that profile -- which is the pairing the substitution must not break.
+    return cli.build_parser().parse_args(
+        [
+            "fight-probe",
+            "--tier",
+            "MID2",
+            "--encounter",
+            str(TWIN_FANGS_PTR),
+            "--reports",
+            "1",
+            "--rankings-pages",
+            "1",
+            "--out",
+            str(tmp_path),
+            *extra,
+        ]
+    )
+
+
+def _twin_stub(names, rankings_for, structure_id):
+    return TwinStub(
+        names=names,
+        rankings_for=rankings_for,
+        structure=structure_for(structure_id),
+        events={"DamageTaken": [damage(s, a) for a in (10, 11, 12) for s in (0.5, 299.0)]},
+        tables={},
+    )
+
+
+def test_a_filed_id_with_nothing_to_read_is_read_through_its_live_twin_and_says_so(
+    tmp_path, monkeypatch
+):
+    """The kills come from the twin; the entry is filed under the tier's id; the
+    substitution is on the entry, named.
+
+    Measured on 2026-09-10 (run 34457405665): the spawn map read The Twin Fangs as
+    53421 -> 3421 with 36 Mythic kills while `fights.json` showed its Mythic block
+    empty, because the probe took the filed id straight to the rankings.
+    """
+    stub = _twin_stub(
+        {TWIN_FANGS_PTR: "The Twin Fangs", TWIN_FANGS_LIVE: "The Twin Fangs"},
+        {TWIN_FANGS_LIVE},
+        TWIN_FANGS_LIVE,
+    )
+    _install(monkeypatch, stub)
+    assert fightprobe.cmd_fight_probe(_twin_args(tmp_path)) == 0
+
+    payload = json.loads((tmp_path / "fight-probe-MID2.json").read_text())
+    entry = payload["encounters"][0]
+    assert entry["encounterId"] == TWIN_FANGS_PTR
+    assert entry["usedEncounter"] == TWIN_FANGS_LIVE
+    assert entry["idChoice"]["requested"] == TWIN_FANGS_PTR
+    assert entry["idChoice"]["used"] == TWIN_FANGS_LIVE
+    assert entry["idChoice"]["substituted"] is True
+    assert entry["idChoice"]["verifiedName"] == "The Twin Fangs"
+    assert "read as 3421" in entry["idChoice"]["reason"]
+    assert entry["fightsSampled"] == 1
+
+    # The filed id was asked FIRST and found empty; only then the twin.
+    rankings = [c for c in stub.calls if c.startswith("rankings:")]
+    assert rankings == [f"rankings:{TWIN_FANGS_PTR}:page1", f"rankings:{TWIN_FANGS_LIVE}:page1"]
+    # The twin's name was looked up; the filed name came with its rankings payload.
+    assert stub.name_lookups == [TWIN_FANGS_LIVE]
+    # And every read went through the USED id: the report was filtered by it, and
+    # the phase name was picked by it (without the metadata it would be "Phase 1").
+    assert "structure:aBcD1234:3421" in stub.calls
+    assert entry["phases"][0]["name"] == "Vanguard"
+    # The dump pairs the measurement with the FILED id's own profile.
+    text = (tmp_path / "fight-probe-MID2.txt").read_text()
+    assert "The Twin Fangs (encounter 53421)" in text and "profile vs measurement" in text
+
+
+def test_a_twin_read_encounter_is_the_same_encounter_on_the_next_run(tmp_path, monkeypatch):
+    """The payload key and the completeness test stay on the FILED id.
+
+    Keyed on the twin, the next run would find no entry for 53421, re-read it, and
+    write a second row -- one boss twice in one payload, under two ids.
+    """
+    stub = _twin_stub(
+        {TWIN_FANGS_PTR: "The Twin Fangs", TWIN_FANGS_LIVE: "The Twin Fangs"},
+        {TWIN_FANGS_LIVE},
+        TWIN_FANGS_LIVE,
+    )
+    _install(monkeypatch, stub)
+    assert fightprobe.cmd_fight_probe(_twin_args(tmp_path)) == 0
+
+    previous = fightprobe.load_previous(tmp_path / "fight-probe-MID2.json")
+    assert (TWIN_FANGS_PTR, 5) in previous
+    assert (TWIN_FANGS_LIVE, 5) not in previous
+    entry = previous[(TWIN_FANGS_PTR, 5)]
+    assert fightprobe.is_complete(entry, 1, entry["eventBudget"], entry["order"], 5) is True
+
+    # Same settings again: skipped before a query is sent. (`rate_limit` is the one
+    # call a run always makes.)
+    asked = len(stub.calls)
+    assert fightprobe.cmd_fight_probe(_twin_args(tmp_path)) == 0
+    assert [c for c in stub.calls[asked:] if c != "ratelimit"] == []
+    assert len(json.loads((tmp_path / "fight-probe-MID2.json").read_text())["encounters"]) == 1
+
+
+def test_the_twin_is_not_consulted_while_the_filed_id_has_something_to_read(tmp_path, monkeypatch):
+    """The substitution fires only on an empty filed id, and an ordinary entry keeps
+    the bytes it had before this existed -- no `idChoice`, no `usedEncounter`."""
+    stub = _twin_stub(
+        {TWIN_FANGS_PTR: "The Twin Fangs", TWIN_FANGS_LIVE: "The Twin Fangs"},
+        {TWIN_FANGS_PTR, TWIN_FANGS_LIVE},
+        TWIN_FANGS_PTR,
+    )
+    _install(monkeypatch, stub)
+    assert fightprobe.cmd_fight_probe(_twin_args(tmp_path)) == 0
+
+    entry = json.loads((tmp_path / "fight-probe-MID2.json").read_text())["encounters"][0]
+    assert entry["fightsSampled"] == 1
+    assert "idChoice" not in entry and "usedEncounter" not in entry
+    assert stub.name_lookups == []
+    assert [c for c in stub.calls if c.startswith("rankings:")] == [
+        f"rankings:{TWIN_FANGS_PTR}:page1"
+    ]
+    assert "structure:aBcD1234:53421" in stub.calls
+
+
+def test_a_twin_naming_another_boss_is_refused_and_the_refusal_is_in_the_payload(
+    tmp_path, monkeypatch
+):
+    """The name check stays strict, a refused twin is never read, and the refusal
+    is written rather than logged -- "no twin was read" and "no twin was tried" are
+    different answers on a boss that reads nothing."""
+    stub = _twin_stub(
+        {TWIN_FANGS_PTR: "The Twin Fangs", TWIN_FANGS_LIVE: "Sszorak"},
+        {TWIN_FANGS_LIVE},
+        TWIN_FANGS_LIVE,
+    )
+    _install(monkeypatch, stub)
+    # Nothing read and nothing exhausted, so the encounter is still outstanding.
+    assert fightprobe.cmd_fight_probe(_twin_args(tmp_path)) == fightprobe.EXIT_INCOMPLETE
+
+    entry = json.loads((tmp_path / "fight-probe-MID2.json").read_text())["encounters"][0]
+    assert entry["fightsSampled"] == 0
+    assert entry["usedEncounter"] == TWIN_FANGS_PTR
+    assert entry["idChoice"]["used"] is None
+    assert entry["idChoice"]["substituted"] is False
+    assert entry["idChoice"]["verifiedName"] is None
+    assert "different boss" in entry["idChoice"]["reason"]
+    assert f"rankings:{TWIN_FANGS_LIVE}:page1" not in stub.calls
+    assert not any(c.startswith("structure:") for c in stub.calls)
+
+
+# --------------------------------------------------------------------------------
+# A page-limited search that found nothing is done until its budget is raised
+# --------------------------------------------------------------------------------
+
+
+class SearchStub(TwinStub):
+    """Adds the report search, again as the CLIENT answers it: `encounter_zone` the
+    zone dict, `reports_in_window` the raw pagination payload, `report_kills` the
+    (report start, fights) pair."""
+
+    def __init__(self, pages, kills=None, **kw):
+        super().__init__(**kw)
+        self._pages = pages
+        self._kills = kills or {}
+        self.search_pages: list[int] = []
+
+    def encounter_zone(self, encounter_id):
+        return {"id": 54, "name": "The Venomous Abyss", "frozen": False}
+
+    def reports_in_window(self, zone_id, start_ms, end_ms, page=1, limit=100):
+        self.search_pages.append(page)
+        rows = self._pages[page - 1] if page <= len(self._pages) else []
+        return {"data": rows}
+
+    def report_kills(self, code):
+        return 1_700_000_000_000.0, self._kills.get(code, [])
+
+
+def _full_pages(count: int, limit: int = 2) -> list[list[dict]]:
+    return [[{"code": f"R{page}x{row}"} for row in range(limit)] for page in range(count)]
+
+
+def _search_args(tmp_path, *extra):
+    from wowdps import cli
+
+    return cli.build_parser().parse_args(
+        [
+            "fight-probe",
+            "--tier",
+            VOIDSPIRE_TIER,
+            "--encounter",
+            "3180",
+            "--reports",
+            "1",
+            "--order",
+            "public",
+            "--rankings-pages",
+            "1",
+            "--report-limit",
+            "2",
+            "--report-pages",
+            "5",
+            "--out",
+            str(tmp_path),
+            *extra,
+        ]
+    )
+
+
+def _search_stub(pages, **kw):
+    return SearchStub(
+        pages=pages,
+        names={3180: "Lightblinded Vanguard"},
+        rankings_for=set(),
+        structure=structure_payload(),
+        events={},
+        tables={},
+        **kw,
+    )
+
+
+def test_a_search_that_hit_its_page_limit_with_no_kill_is_done_until_its_budget_is_raised(
+    tmp_path, monkeypatch
+):
+    """The loop this closes: four MID2 encounters with zero Mythic kills searched 500
+    reports over 5 pages on every hourly run, found 0, and -- the walk having ended
+    on its page limit rather than by running out of reports -- were re-opened by the
+    next run, forever. Run 34610565576 (2026-09-11): 29.1 points for the four, `4 of
+    8 encounter(s) still short of 30 fights`, dataset unchanged, twelve consecutive
+    green runs.
+    """
+    stub = _search_stub(_full_pages(8))
+    _install(monkeypatch, stub)
+
+    # Done for now: exit 0 rather than EXIT_INCOMPLETE, and nothing outstanding.
+    assert fightprobe.cmd_fight_probe(_search_args(tmp_path)) == 0
+    payload = json.loads((tmp_path / f"fight-probe-{VOIDSPIRE_TIER}.json").read_text())
+    entry = payload["encounters"][0]
+    assert entry["fightsSampled"] == 0
+    # A page limit is NOT exhaustion, and is not recorded as one.
+    assert entry["searchExhausted"] is False
+    assert entry["searchBudget"] == 5 * 2
+    assert payload["incomplete"] == []
+    assert stub.search_pages == [1, 2, 3, 4, 5]
+
+    # The same budget again: skipped before a query is sent.
+    assert fightprobe.cmd_fight_probe(_search_args(tmp_path)) == 0
+    assert stub.search_pages == [1, 2, 3, 4, 5]
+
+    # A raised budget re-opens it, and it closes again under the new one.
+    assert fightprobe.cmd_fight_probe(_search_args(tmp_path, "--report-pages", "8")) == 0
+    assert stub.search_pages == [1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 6, 7, 8]
+    entry = json.loads((tmp_path / f"fight-probe-{VOIDSPIRE_TIER}.json").read_text())["encounters"][
+        0
+    ]
+    assert entry["searchBudget"] == 8 * 2
+
+
+def test_a_search_that_ran_out_of_reports_is_exhausted_and_records_no_budget(tmp_path, monkeypatch):
+    """The two ways a zero-kill search ends are two fields, never one."""
+    stub = _search_stub([[{"code": "ONLY"}]])
+    _install(monkeypatch, stub)
+    assert fightprobe.cmd_fight_probe(_search_args(tmp_path)) == 0
+
+    entry = json.loads((tmp_path / f"fight-probe-{VOIDSPIRE_TIER}.json").read_text())["encounters"][
+        0
+    ]
+    assert entry["searchExhausted"] is True
+    assert "searchBudget" not in entry
+
+
+def test_a_search_the_ceiling_stopped_records_no_budget_so_the_next_hour_re_opens_it():
+    """A ceiling-stopped search did not run its budget. Recording it anyway would let
+    `is_complete` call the encounter done over a search that never ran its course
+    -- the resume's whole purpose inverted."""
+
+    class Ceiling(SearchStub):
+        def reports_in_window(self, zone_id, start_ms, end_ms, page=1, limit=100):
+            payload = super().reports_in_window(zone_id, start_ms, end_ms, page, limit)
+            if page == 2:
+                self.ledger.record(
+                    "x", {"rateLimitData": {"limitPerHour": 3600, "pointsSpentThisHour": 3500}}
+                )
+            return payload
+
+    stub = Ceiling(
+        pages=_full_pages(8),
+        names={3180: "Lightblinded Vanguard"},
+        rankings_for=set(),
+        structure=structure_payload(),
+        events={},
+        tables={},
+    )
+    observation, _ = fightprobe.probe_encounter(
+        stub, 3180, settings(order="public", report_limit=2, report_pages=5)
+    )
+
+    assert stub.search_pages == [1, 2]
+    assert observation.search_exhausted is False
+    assert observation.search_budget is None
+    entry = observation.to_json()
+    assert "searchBudget" not in entry
+    assert fightprobe.is_complete(entry, 1, None, "public", 5, 10) is False
+
+
+def test_a_page_limited_search_that_found_nothing_is_done_until_its_budget_is_raised():
+    """`is_complete`'s side of the rule, and its three refusals."""
+    from wowdps.fightprobe import is_complete
+
+    empty = {"fightsSampled": 0, "eventBudget": 200_000, "order": "public", "searchBudget": 500}
+    assert is_complete(empty, 30, 200_000, "public", 5, 500) is True
+    # A smaller ask is covered by the larger search that already found nothing.
+    assert is_complete(empty, 30, 200_000, "public", 5, 300) is True
+    # A raised one re-opens it.
+    assert is_complete(empty, 30, 200_000, "public", 5, 800) is False
+    # Unknown is not zero: an entry from before the field re-opens as before.
+    unrecorded = {"fightsSampled": 0, "eventBudget": 200_000, "order": "public"}
+    assert is_complete(unrecorded, 30, 200_000, "public", 5, 500) is False
+    # The rule is for NOTHING found: a short sample under a page limit still re-opens.
+    assert is_complete({**empty, "fightsSampled": 3}, 30, 200_000, "public", 5, 500) is False
+    # A run that runs no search asks with None, and the record is inert.
+    assert is_complete(empty, 30, 200_000, "public", 5, None) is False

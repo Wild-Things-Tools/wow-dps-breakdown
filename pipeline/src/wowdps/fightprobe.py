@@ -55,7 +55,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import fightdataset, fightextract, fightprofile, firstkills
+from . import fightdataset, fightextract, fightprofile, firstkills, harvest
 from .warcraftlogs import (
     Credentials,
     WarcraftLogsClient,
@@ -142,6 +142,96 @@ def probe_encounter(
     The observation comes back either way: two fights read before the budget ran out
     are two fights' worth of evidence, and throwing them away to raise an exception
     would mean paying for them twice.
+
+    ``encounter_id`` is the id the tier FILES the boss under, and it stays the
+    observation's id whatever was read. When it yields nothing -- no ranked parse
+    and, under ``--order public``, no kill in the report search either -- its
+    PTR/live twin is tried through ``harvest.choose_encounter_id``, which owns that
+    rule and its refusals: a twin is read only when Warcraft Logs gives both ids the
+    same name. Measured (#143): on 2026-09-06 two dispatches differing only in the
+    id read 0 kills over 500 reports under 53421 and a Mythic kill under 3421; on
+    2026-09-10 the spawn map read The Twin Fangs as ``53421 -> 3421`` with 36 kills,
+    none truncated, while ``fights.json`` showed its Mythic block empty. The choice
+    is written onto the observation, because a substitution that is not named files
+    a full set of real measurements under the wrong boss -- the one failure worse
+    than reading nothing. The twin's selection runs under exactly the bounds the
+    filed one did: same ranking pages, same report pages, same point ceiling.
+    """
+    filed, pairs, outcome = _select_kills(client, encounter_id, settings)
+    used_id = encounter_id
+    id_choice: dict | None = None
+    if not pairs:
+        # Reused rather than re-derived, for the reason CLAUDE.md gives everywhere
+        # a rule has two copies: two answers to one question. The name check stays
+        # strict; `_twin_choice` only keeps the verified name beside the reason.
+        choice, verified = _twin_choice(client, encounter_id, _name_of(filed, client, encounter_id))
+        log.info("  %s", choice.reason)
+        id_choice = {**choice.to_json(), "verifiedName": verified}
+        if choice.substituted and choice.used:
+            used_id = int(choice.used)
+            _, pairs, outcome = _select_kills(client, used_id, settings)
+
+    observation = fightextract.EncounterObservation(
+        encounter_id=encounter_id,
+        encounter_name=str(filed.get("name") or encounter_id),
+        difficulty=settings.difficulty,
+        # The search saw everything only if it stopped because it ran out of
+        # reports, not because a page limit or the point ceiling stopped it.
+        search_exhausted=(
+            outcome is not None and not outcome.truncated and outcome.aborted is None
+        ),
+        difficulties_seen=outcome.difficulties_seen if outcome is not None else {},
+        search_budget=_search_budget(outcome, settings),
+        id_choice=id_choice,
+    )
+    if not pairs:
+        log.warning(
+            "encounter %d: rankings carried no report codes%s",
+            encounter_id,
+            f" (read as {used_id})" if used_id != encounter_id else "",
+        )
+        return observation, None
+
+    for code, fight_id, started_at in pairs:
+        try:
+            check_budget(client, settings.point_ceiling)
+            # The USED id on every read: `fight_structure` filters the report's
+            # fights by it and `_phase_metadata` picks the phase names by it, and a
+            # live kill's fights carry the live id. Only the observation is filed.
+            fight = _probe_fight(client, code, fight_id, used_id, settings, started_at)
+        except PointBudgetExhausted as exc:
+            return observation, str(exc)
+        except WarcraftLogsError as exc:
+            log.warning("  %s fight %d: %s", code, fight_id, exc)
+            continue
+        if fight:
+            observation.fights.append(fight)
+            log.info(
+                "  %s#%d: %.0fs, %d players, %g targets peak, %d add group(s), %d aura(s)",
+                code,
+                fight_id,
+                fight.duration,
+                fight.players,
+                fight.significant_timeline.peak,
+                len(fight.adds),
+                len(fight.auras),
+            )
+    for line in describe_upload_start_times(observation.upload_start_times()):
+        log.info("  %s", line)
+    return observation, None
+
+
+def _select_kills(
+    client: WarcraftLogsClient, encounter_id: int, settings: ProbeSettings
+) -> tuple[dict, list[tuple[str, int, float]], firstkills.SearchOutcome | None]:
+    """Which kills of ONE encounter id to read, and what the selection saw.
+
+    Returns the encounter payload the rankings came with (its ``name`` is what the
+    twin check compares), the ``(report code, fight id, started at)`` triples, and
+    the report search's outcome -- ``None`` unless ``--order public`` ran one. One
+    function for the filed id and for its twin, so the second selection is bounded
+    by the same ``--rankings-pages``, ``--report-pages`` and point ceiling as the
+    first rather than by a second copy of them.
     """
     # Gather several ranking pages so the earliest kills are actually in the pool:
     # WCL sorts rankings by damage, so the first kills sit deep in the list, not on
@@ -163,65 +253,70 @@ def probe_encounter(
     ranked = select_report_fights(
         gathered, settings.reports, order="first" if settings.order == "public" else settings.order
     )
-    pairs = ranked
-    exhausted = False
-    difficulties: dict[int | None, int] = {}
-    if settings.order == "public":
-        # The rankings are used only to *anchor* the search: their earliest kill is
-        # an upper bound on the true first kill, and the report search runs from
-        # before it. What comes back can beat the anchor, which is the whole point,
-        # and a run that beats it by nothing is a real answer about this zone rather
-        # than a failure.
-        anchor = min((start for _, _, start in ranked if start), default=0.0)
-        found, outcome = _public_first_kills(client, encounter_id, anchor, settings)
-        log.info("  public-log search: %s", outcome.summary(anchor))
-        # The search saw everything only if it stopped because it ran out of
-        # reports, not because a page limit or the point ceiling stopped it. Set on
-        # the observation below, which does not exist yet at this point.
-        exhausted = not outcome.truncated and outcome.aborted is None
-        difficulties = outcome.difficulties_seen
-        if found:
-            pairs = found
-        else:
-            log.warning(
-                "  the report search found no kills; falling back to the ranked "
-                "sample so this encounter is still measured"
-            )
-    observation = fightextract.EncounterObservation(
-        encounter_id=encounter_id,
-        encounter_name=str(encounter.get("name") or encounter_id),
-        difficulty=settings.difficulty,
-        search_exhausted=exhausted,
-        difficulties_seen=difficulties,
+    if settings.order != "public":
+        return encounter, ranked, None
+    # The rankings are used only to *anchor* the search: their earliest kill is
+    # an upper bound on the true first kill, and the report search runs from
+    # before it. What comes back can beat the anchor, which is the whole point,
+    # and a run that beats it by nothing is a real answer about this zone rather
+    # than a failure.
+    anchor = min((start for _, _, start in ranked if start), default=0.0)
+    found, outcome = _public_first_kills(client, encounter_id, anchor, settings)
+    log.info("  public-log search: %s", outcome.summary(anchor))
+    if found:
+        return encounter, found, outcome
+    log.warning(
+        "  the report search found no kills; falling back to the ranked sample so "
+        "this encounter is still measured"
     )
-    if not pairs:
-        log.warning("encounter %d: rankings carried no report codes", encounter_id)
-        return observation, None
+    return encounter, ranked, outcome
 
-    for code, fight_id, started_at in pairs:
-        try:
-            check_budget(client, settings.point_ceiling)
-            fight = _probe_fight(client, code, fight_id, encounter_id, settings, started_at)
-        except PointBudgetExhausted as exc:
-            return observation, str(exc)
-        except WarcraftLogsError as exc:
-            log.warning("  %s fight %d: %s", code, fight_id, exc)
-            continue
-        if fight:
-            observation.fights.append(fight)
-            log.info(
-                "  %s#%d: %.0fs, %d players, %g targets peak, %d add group(s), %d aura(s)",
-                code,
-                fight_id,
-                fight.duration,
-                fight.players,
-                fight.significant_timeline.peak,
-                len(fight.adds),
-                len(fight.auras),
-            )
-    for line in describe_upload_start_times(observation.upload_start_times()):
-        log.info("  %s", line)
-    return observation, None
+
+def _name_of(encounter: dict, client: WarcraftLogsClient, encounter_id: int) -> str | None:
+    """The filed encounter's name, off the rankings payload already fetched.
+
+    The rankings answer carries ``name`` even for a PTR id with no parses, so the
+    ordinary case costs no query; the lookup is the fallback, not the route.
+    """
+    name = encounter.get("name")
+    if isinstance(name, str) and name.strip():
+        return name
+    return client.encounter_name(encounter_id)
+
+
+def _twin_choice(
+    client: WarcraftLogsClient, encounter_id: int, requested_name: str | None
+) -> tuple[harvest.IdChoice, str | None]:
+    """`harvest.choose_encounter_id` for a filed id that yielded nothing to read.
+
+    Returns the choice and the name the twin was verified against -- kept beside
+    the reason rather than parsed back out of it, so a reader of the payload need
+    not know how the sentence is worded. ``None`` unless a twin was taken.
+    """
+    names: dict[int, str | None] = {}
+
+    def lookup(twin_id: int) -> str | None:
+        names[twin_id] = client.encounter_name(twin_id)
+        return names[twin_id]
+
+    choice = harvest.choose_encounter_id(encounter_id, requested_name, False, lookup)
+    verified = names.get(choice.used) if choice.substituted and choice.used else None
+    return choice, verified
+
+
+def _search_budget(outcome: firstkills.SearchOutcome | None, settings: ProbeSettings) -> int | None:
+    """Reports the search was willing to read, when THAT is what ended it.
+
+    ``None`` for a search that ran out of reports (``search_exhausted`` says so),
+    for one the point ceiling stopped, and for an order that runs no search. The
+    ceiling case is the one that matters: such a search did not run its budget, and
+    recording the budget anyway would let ``is_complete`` call the encounter done on
+    the next hour over a search that never ran its course -- which is the resume's
+    whole purpose inverted.
+    """
+    if outcome is None or outcome.aborted is not None or not outcome.truncated:
+        return None
+    return settings.report_pages * settings.report_limit
 
 
 def fold_upload_start_times(readings: list[dict]) -> dict:
@@ -760,6 +855,7 @@ def is_complete(
     event_budget: int | None = None,
     order: str | None = None,
     difficulty: int | None = None,
+    search_budget: int | None = None,
 ) -> bool:
     """Has this encounter already got the sample the settings ask for?
 
@@ -779,6 +875,22 @@ def is_complete(
       at `sampled: null` while the raid was open. So a search that ran to completion
       records `searchExhausted`, and that counts as done however few kills it found.
       A *truncated* or *aborted* search does not, because then more may exist.
+    - **...except a page-limited search that found NOTHING, until its budget is
+      raised.** A page limit is not exhaustion and is not recorded as one, so the
+      rule above re-opened every boss with zero kills forever: four MID2 encounters
+      (53420, 53421, 53429, 53492) searched 500 reports over 5 pages on every hourly
+      run, found 0, and were re-opened by the next run -- measured on run
+      34610565576, 2026-09-11: 29.1 points for the four, ``4 of 8 encounter(s)
+      still short of 30 fights``, dataset unchanged, twelve consecutive green runs.
+      Re-running the same search with the same budget cannot find what it did not
+      find, so `searchBudget` (`report_pages x report_limit`) is recorded when the
+      walk ended on its page limit, and an entry with **zero** fights and a budget
+      at or above the one now asked for counts as done -- re-opened only when
+      `--report-pages` or `--report-limit` is raised, exactly the `eventBudget`
+      rule for `--max-pages`. Zero on purpose: a short sample under a page limit
+      keeps re-opening, because its window is anchored and that re-run is a cache
+      hit, where the zero-kill search runs to `now` and pays its pages every time.
+      An entry with no recorded budget re-opens as before (unknown is not zero).
     - **A smaller event budget than `--max-pages` now asks for.** This one is not
       cosmetic. The number of kills is only half of what the target-count band needs;
       the other half is reading each kill to the *end*, and a bounded event fetch
@@ -805,8 +917,20 @@ def is_complete(
     zone on the next run for everybody. Use ``--no-resume`` once to rebuild such a
     payload; from then on the budget travels with it.
     """
-    if int(entry.get("fightsSampled") or 0) < wanted and not entry.get("searchExhausted"):
-        return False
+    sampled = int(entry.get("fightsSampled") or 0)
+    if sampled < wanted and not entry.get("searchExhausted"):
+        # The one way a short entry counts as done without exhaustion: the search
+        # found nothing at all and already ran under at least this budget. A
+        # ceiling-stopped search records no budget (`_search_budget`), so it lands
+        # here and is re-opened, which is the resume working.
+        recorded = entry.get("searchBudget")
+        if not (
+            sampled == 0
+            and search_budget is not None
+            and isinstance(recorded, int)
+            and recorded >= search_budget
+        ):
+            return False
     if event_budget is not None:
         recorded = entry.get("eventBudget")
         if isinstance(recorded, int) and recorded < event_budget:
@@ -897,6 +1021,24 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
     # later run can tell "already collected" from "already collected, but with a
     # smaller budget than you are now asking for".
     event_budget = settings.max_pages * settings.events_limit
+    # And how much of the zone's report list the search was willing to read, for
+    # the same reason: a zero-kill search that ran under this budget is done until
+    # somebody raises it. Only `--order public` runs that search; the other orders
+    # ask with None and the record, if any, is inert.
+    search_budget = (
+        settings.report_pages * settings.report_limit if settings.order == "public" else None
+    )
+
+    def complete(entry: dict) -> bool:
+        return is_complete(
+            entry,
+            settings.reports,
+            event_budget,
+            settings.order,
+            settings.difficulty,
+            search_budget,
+        )
+
     previous = {} if args.no_resume else load_previous(resume_path)
     if previous:
         log.info("resuming from %s: %d encounter(s) already collected", resume_path, len(previous))
@@ -921,9 +1063,7 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
             # This run's difficulty, not "whatever was collected for this boss".
             # The other difficulty's row is a different measurement and stays put.
             done = previous.get((encounter_id, settings.difficulty))
-            if done is not None and is_complete(
-                done, settings.reports, event_budget, settings.order, settings.difficulty
-            ):
+            if done is not None and complete(done):
                 log.info(
                     "encounter %d already has %d fights; skipping",
                     encounter_id,
@@ -1009,13 +1149,7 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         eid
         for eid in encounter_ids
         if (eid, settings.difficulty) not in by_id
-        or not is_complete(
-            by_id[(eid, settings.difficulty)],
-            settings.reports,
-            event_budget,
-            settings.order,
-            settings.difficulty,
-        )
+        or not complete(by_id[(eid, settings.difficulty)])
     ]
 
     payload = {
@@ -1063,14 +1197,7 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         "encountersCollected": sum(
             1
             for eid in encounter_ids
-            if (eid, settings.difficulty) in by_id
-            and is_complete(
-                by_id[(eid, settings.difficulty)],
-                settings.reports,
-                event_budget,
-                settings.order,
-                settings.difficulty,
-            )
+            if (eid, settings.difficulty) in by_id and complete(by_id[(eid, settings.difficulty)])
         ),
         "incomplete": sorted(incomplete),
     }
