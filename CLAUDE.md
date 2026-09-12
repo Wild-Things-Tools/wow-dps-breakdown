@@ -6804,6 +6804,32 @@ the whole tier holds **13 distinct Mythic kills**, Vashnik's being **one**. So t
 floor came down to one, and the note beside it said a single kill *"renders as a line
 with no spread, which is the honest picture of one observation"*.
 
+**That 13 is a figure with a date on it, and the date has passed: the tier reads 62
+today.** Measured against the committed `fights.json` at `92f83b8` (2026-09-12,
+`generatedAt 17:17:56Z`), no query sent:
+
+```
+Sszorak              20    Entombed Sentinels        6    Ula'tek                0
+The Twin Fangs       27    Vashnik the Malignant     1    The Lost Explorers     3
+The Coiled Altar      2    Nek'zali the Soulcoiler   3        Mythic total      62
+```
+
+**The decomposition is what makes it evidence rather than news.** The four bosses that
+were never behind a PTR id read **6 / 1 / 3 / 3 -- identical to the 13 above**. All 49
+new kills sit in the three that #160's twin resolution made reachable at all, so the
+gain is the *addressing* and not a season that has since been killed more. The
+alternative explanation is ruled out by the four unchanged numbers rather than argued
+away.
+
+Two things visible in the same file. **#164's union is in the data**: The Twin Fangs
+stood at 1 Mythic kill while the report search was replacing the ranked sample, and
+reads 27. And **Ula'tek is still zero at both difficulties under both ids** -- the
+season, not the query, which is what `_hardest`'s "probed and read nothing" state is
+for.
+
+Vashnik stays at one, so the n=1 rule below is not a historical case: it is still
+drawn on this tier today.
+
 **It is not.** A zero-width band reads as *kills agreeing perfectly*, which is exactly
 the fallacy #130 had just removed one layer up -- six uploads of one Vashnik pull
 publishing an inter-quartile range of zero. The count was published and the picture
