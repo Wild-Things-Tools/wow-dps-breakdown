@@ -78,10 +78,15 @@ equal.
 ## A `reports.jsonl` line (Stufe 3)
 
 ```
-{"v":1,"zoneId":53,"code":"aBcD…","startedAtMs":1723456000000,"endedAtMs":1723470000000,
+{"v":1,"zoneId":53,"code":"aBcD…","startedAtMs":1723456000000,
  "kills":[{"e":3421,"d":5,"f":32,"sMs":1723456100000,"eMs":1723456534000}, …],
  "fightsSeen":57,"readAt":"2026-09-12T21:00:00+00:00","run":"34720902342"}
 ```
+
+**There is no report end time here, and that is the document rather than an
+omission**: `REPORT_KILLS_QUERY` selects `report { code startTime fights{…} }` and no
+`endTime`. The last kill's `eMs` is a lower bound on it; anything more would have to
+come from Stufe 2, which asks a different question.
 
 - `kills` holds **only** `kill: true` fights, re-checked in the extraction even though
   `killType: Kills` is passed -- a filter that silently stopped filtering would put a
@@ -99,18 +104,29 @@ equal.
 
 ```
 {"v":1,"zoneId":53,"encounterId":3421,"difficulty":5,"code":"aBcD…","fightId":32,
- "startedAtMs":1723456100000,"lengthMs":434752,"size":20,
+ "name":"The Twin Fangs","startedAtMs":1723456100000,"lengthMs":434752,"size":20,
  "friendlyPlayers":[…ids…],
- "enemyNPCs":[{"id":270898,"gameID":270898,"instanceCount":84,"groupCount":6}, …],
+ "enemyNPCs":[{"id":11,"gameID":270898,"instanceCount":84,"groupCount":6}, …],
  "phaseTransitions":[{"id":1,"startTime":0}, …],
  "phases":[{"id":1,"name":"…","isIntermission":false}, …],
- "actors":[{"id":11,"gameID":270898,"type":"NPC","subType":"…","petOwner":null}, …],
+ "separatesWipes":true,
+ "actors":[{"id":11,"gameID":270898,"type":"NPC","subType":"…","name":"Broodling of Ithraz","petOwner":null}, …],
+ "abilities":[{"gameID":1246385,"name":"Avenging Wrath","type":1}, …],
  "readAt":"2026-09-12T21:00:00+00:00","run":"34720902342"}
 ```
 
 Every field is what `FIGHT_STRUCTURE_QUERY` already returns; nothing is derived.
-`phases` is the report-wide block (names, `isIntermission`) and `phaseTransitions` the
-fight's own -- **neither alone is a phase list**, which is why both are here.
+
+Two shape facts that are easy to get wrong, both read off the document rather than
+assumed:
+
+- **`report.phases` is per ENCOUNTER**, `{encounterID, separatesWipes, phases:[…]}`,
+  and `_phase_metadata` picks out the entry whose `encounterID` matches. The line
+  stores that entry's nested list plus its `separatesWipes`, not the outer array: a
+  catalogue line is about one encounter, and carrying the whole array would put
+  another boss's phase names under this one's key.
+- **`phases` (report-wide names) and `phaseTransitions` (this fight's times) are
+  neither of them a phase list alone**, which is why both are here.
 
 ## The scrub: what is dropped, and what is deliberately kept
 
@@ -135,6 +151,15 @@ Kept, and each is load-bearing rather than leftover:
 - **`friendlyPlayers`** as ids only. The ids are what the player-aura filter needs;
   without them that filter is inoperative, which is a state the probe already warns
   about because it is otherwise invisible.
+- **`abilities` whole, names included.** An ability name is what makes an aura
+  readable ("Avenging Wrath", "Light Infused") and is not personal. `observe_fight`
+  takes `ability_names`; a catalogue that dropped them would answer with spell ids.
+
+**The scrub is per actor, not wholesale, and `actor_names` is why.** `_probe_fight`
+builds `{actor id: name}` over **every** actor and hands it to `observe_fight`, which
+is how "Broodling of Ithraz" gets its name; the map falls back to `str(id)` where a
+name is missing, so removing a *player's* name costs that reader nothing and removing
+an NPC's would cost it the only readable handle it has.
 
 **A player-actor name reaching the writer is a schema alarm, not a bug to log**: the
 pair writes nothing, the run continues, exit 3. A scrub that fails open is the one
