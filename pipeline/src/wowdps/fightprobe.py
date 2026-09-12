@@ -60,6 +60,7 @@ from .warcraftlogs import (
     Credentials,
     WarcraftLogsClient,
     WarcraftLogsError,
+    _ranking_entries,
     merge_kill_selections,
     select_report_fights,
 )
@@ -278,6 +279,17 @@ def _select_kills(
                 page=page,
             )
         )
+        # An exhausted list stops the walk, exactly as `harvest.gather_rankings`
+        # already does it. The page is appended FIRST, so `gathered[0]` is always
+        # there for the twin check below even when page one is the empty one.
+        #
+        # Measured on MID2: four of its eight encounters are PTR ids with no ranked
+        # parses at all, and each was paying for the full `--rankings-pages` walk to
+        # learn it -- 4 x 40 = 160 queries a pass where 4 answer the same question.
+        # An id that HAS parses is unaffected: the break needs an empty page, and a
+        # walk that ends because the rankings ran out is the same walk either way.
+        if not _ranking_entries(gathered[-1]):
+            break
     encounter = gathered[0]
     ranked = select_report_fights(
         gathered, settings.reports, order="first" if settings.order == "public" else settings.order

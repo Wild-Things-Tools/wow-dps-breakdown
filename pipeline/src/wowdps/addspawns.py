@@ -826,6 +826,13 @@ def add_arguments(parser) -> None:
 def _kill_candidates(client, encounter_id: int, difficulty: int, limit: int):
     """(report code, fight id) pairs from the character rankings, newest page first.
 
+    Returns the encounter's NAME as a third value, because the payload already
+    carries it and the caller otherwise spent a second query asking for it.
+    `RANKINGS_QUERY` selects `encounter { id name characterRankings }`, so the name
+    is on every answer -- including one with no rankings at all, which is exactly
+    the case the twin check needs it for. `fightprobe._name_of` has read it this way
+    since it was written; this is the same rule, applied where it was missing.
+
     `characterRankings` rows are measured to carry `report.code` and
     `report.fightID` -- note the capital ID, which is the sort of thing that reads
     as a typo and is not. One row per player means many rows per kill, so the pairs
@@ -865,7 +872,8 @@ def _kill_candidates(client, encounter_id: int, difficulty: int, limit: int):
                 seen.append(pair)
         if len(seen) >= limit:
             break
-    return seen, len(rows)
+    name = encounter.get("name")
+    return seen, len(rows), (name if isinstance(name, str) and name.strip() else None)
 
 
 def _report_pattern(sightings: Sequence[SpawnSighting]) -> dict | None:
@@ -962,7 +970,7 @@ def run(args) -> int:
             pairs = [(code, -1) for code in args.report]
             print(f"reading the reports named on the command line: {', '.join(args.report)}")
         else:
-            pairs, ranked_rows = _kill_candidates(
+            pairs, ranked_rows, ranked_name = _kill_candidates(
                 client, encounter_id, args.difficulty, args.reports
             )
             print(f"encounter {encounter_id}: {ranked_rows} ranking row(s), {len(pairs)} kill(s)")
@@ -974,7 +982,11 @@ def run(args) -> int:
                 # a second copy of a rule is how two answers to one question appear.
                 choice = harvest.choose_encounter_id(
                     encounter_id,
-                    client.encounter_name(encounter_id),
+                    # Off the rankings payload already fetched, not a second query.
+                    # The lookup stays as the fallback for a payload that states no
+                    # name -- absent is not empty, and guessing one here would feed
+                    # the twin check a name nobody read.
+                    ranked_name or client.encounter_name(encounter_id),
                     False,
                     client.encounter_name,
                 )
@@ -987,7 +999,7 @@ def run(args) -> int:
                 }
                 if choice.substituted and choice.used:
                     encounter_id = int(choice.used)
-                    pairs, ranked_rows = _kill_candidates(
+                    pairs, ranked_rows, ranked_name = _kill_candidates(
                         client, encounter_id, args.difficulty, args.reports
                     )
                     print(
