@@ -1245,19 +1245,45 @@ def test_an_encounter_stopped_before_any_fight_does_not_replace_an_older_measure
     assert rows[3180]["fightsSampled"] == 3, "an aborted pass overwrote a real measurement"
 
 
-def test_a_partial_read_still_replaces_the_older_row_and_that_is_deliberate():
-    """The line the rule above is NOT extended past, stated as a test.
+def test_a_partial_read_is_still_written_and_that_boundary_is_deliberate(tmp_path, monkeypatch):
+    """The line the withholding rule is NOT extended past, pinned at the COMMAND.
 
-    An encounter that read 2 of 5 fights before the ceiling really did measure two
-    kills. That is a measurement, `is_complete` re-opens the encounter next hour,
-    and `write_fights` refuses to publish a document that shrinks. Only the ZERO
-    case says something untrue, so only the zero case is withheld -- and this test
-    is what stops the guard quietly widening into "keep the bigger row", which is a
-    different question with its own machinery downstream.
+    An encounter that read 2 of 5 fights before the ceiling really did measure
+    those kills. That is a measurement: `is_complete` re-opens the encounter next
+    hour and `write_fights` refuses to publish a document that shrinks. Only the
+    ZERO case says something untrue, so only the zero case is withheld.
+
+    The first version of this test drove `probe_encounter` directly and asserted
+    the observation still carried its one fight -- which is true whatever the
+    command does with it, so widening the guard to `if aborted:` left it GREEN.
+    The fold was tested and the call site was not, which is the shape this
+    repository keeps producing. It runs the command now.
     """
+    from wowdps import cli, warcraftlogs
 
-    class Exhausting(StubClient):
+    # A real earlier measurement of three kills, so a withheld row would be
+    # visible as the 3 surviving rather than as an absence.
+    (tmp_path / f"fight-probe-{VOIDSPIRE_TIER}.json").write_text(
+        json.dumps(
+            {
+                "tier": VOIDSPIRE_TIER,
+                "encounters": [
+                    {
+                        "encounterId": 3180,
+                        "difficulty": 5,
+                        "fightsSampled": 3,
+                        "fights": [],
+                        "eventBudget": 30000,
+                        "order": "top",
+                    }
+                ],
+            }
+        )
+    )
+
+    class CeilingAfterTheFirstFight(StubClient):
         def fight_structure(self, code, encounter_id, difficulty):
+            # Fires while reading the SECOND kill, so the first one is complete.
             if self.calls.count("structure:aBcD1234") >= 1:
                 self.ledger.record(
                     "x", {"rateLimitData": {"limitPerHour": 3600, "pointsSpentThisHour": 3500}}
@@ -1265,6 +1291,7 @@ def test_a_partial_read_still_replaces_the_older_row_and_that_is_deliberate():
             return super().fight_structure(code, encounter_id, difficulty)
 
         def encounter_rankings(self, encounter_id, difficulty=5, metric="dps", page=1):
+            self.calls.append(f"rankings:{encounter_id}:page{page}")
             return {
                 "id": encounter_id,
                 "name": "Lightblinded Vanguard",
@@ -1276,16 +1303,40 @@ def test_a_partial_read_still_replaces_the_older_row_and_that_is_deliberate():
                 },
             }
 
-    client = Exhausting(
+    stub = CeilingAfterTheFirstFight(
         structure=structure_payload(),
         events={"DamageTaken": [damage(s, a) for a in (10, 11, 12) for s in (0.5, 299.0)]},
         tables={},
     )
-    observation, reason = fightprobe.probe_encounter(client, 3180, settings(reports=2))
+    monkeypatch.setattr(
+        warcraftlogs.Credentials,
+        "from_env",
+        classmethod(lambda cls: warcraftlogs.Credentials("i", "s")),
+    )
+    monkeypatch.setattr(fightprobe, "WarcraftLogsClient", lambda *a, **k: stub)
 
-    # Aborted, and NOT empty: this one has something to say and says it.
-    assert reason is not None
-    assert len(observation.fights) == 1
+    args = cli.build_parser().parse_args(
+        [
+            "fight-probe",
+            "--tier",
+            VOIDSPIRE_TIER,
+            "--encounter",
+            "3180",
+            "--reports",
+            "5",
+            "--order",
+            "top",
+            "--out",
+            str(tmp_path),
+        ]
+    )
+    assert fightprobe.cmd_fight_probe(args) != 1
+
+    payload = json.loads((tmp_path / f"fight-probe-{VOIDSPIRE_TIER}.json").read_text())
+    rows = {entry["encounterId"]: entry for entry in payload["encounters"]}
+    # The kill it DID read is written, replacing the older row -- a partial
+    # measurement is a measurement, and the row is re-opened next hour anyway.
+    assert rows[3180]["fightsSampled"] == 1
 
 
 def test_a_stopped_search_that_found_nothing_earlier_does_not_claim_there_is_nothing():
