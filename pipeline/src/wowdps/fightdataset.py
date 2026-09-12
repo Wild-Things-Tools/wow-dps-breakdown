@@ -1171,28 +1171,8 @@ def _caveats(payload: dict, rankings_page: int | None, order: str | None = None)
             "At least one event fetch stopped at its page limit, so the tail of that "
             "fight is incomplete rather than absent."
         )
-    if order == "first":
-        span = payload.get("killedBetween")
-        if isinstance(span, dict) and span.get("first"):
-            # The dates, not just the claim. "Earliest kills" is only as true as the
-            # ranking window is wide: the selector sorts by date within the pages it
-            # gathered, and those are sorted by damage, so a slow first-night kill
-            # can sit past the window entirely. A reader who can see the dates can
-            # judge that; one who is only told "the earliest kills" cannot.
-            notes.append(
-                f"Sampled from the earliest kills by kill date, {span['first'][:10]} to "
-                f"{span['last'][:10]} ({span.get('spanDays')} days) -- long kills at the "
-                f"intended tuning, whose timings are alike. Earliest here means earliest "
-                f"among the ranking pages gathered, which Warcraft Logs sorts by damage, "
-                f"so a slow early kill can fall outside the window: widen it with "
-                f"--rankings-pages."
-            )
-        else:
-            notes.append(
-                "Sampled from the earliest kills of the boss by kill date -- long kills "
-                "at the intended tuning, whose timings are alike. No kill dates were "
-                "recorded, so how early they really were cannot be checked."
-            )
+    if order in ("first", "public"):
+        notes.append(_sampling_caveat(payload, order))
     elif rankings_page == 1:
         notes.append(
             "Sampled from page 1 of the rankings: the world's best pulls, which are "
@@ -1203,6 +1183,78 @@ def _caveats(payload: dict, rankings_page: int | None, order: str | None = None)
         notes.append(str(warning))
     notes.extend(_id_choice_caveats(payload))
     return notes
+
+
+def _sampling_caveat(payload: dict, order: str) -> str:
+    """Which kills this block holds, for the two orders that sample by DATE.
+
+    `--order first` and `--order public` both sort by kill date, and they had one
+    sentence between them: `first`'s. `public` fell through to the `elif` below it
+    and published **`top`'s** sentence instead -- "Sampled from page 1 of the
+    rankings: the world's best pulls, which are shorter than a typical kill and kill
+    adds faster. Probe with --order first for the earliest kills instead."
+
+    Measured against the committed `fights.json` on 2026-09-12: `measurement.order`
+    is `public` -- the workflow's default -- and **13 of 16** measurement blocks
+    carry that sentence. (The other three sampled no fights and go through
+    `_no_fights_caveats`.) Every clause of it is wrong for a `public` run:
+
+    * **not page 1.** `_select_kills` gathers `--rankings-pages` pages for `first`
+      and `public` alike, 40 by default.
+    * **not the world's best pulls.** Those pages go through
+      `select_report_fights(..., order="first")`, i.e. sorted by kill DATE.
+    * **and the advice inverts the answer.** `public` is a strict superset of
+      `first` -- it unions the ranked sample with a search of the zone's public
+      logs (#164) -- so a reader who followed "probe with --order first instead"
+      would get a NARROWER sample than the one they were reading.
+
+    The quiet half is the one that costs more: `first` publishes its date window
+    (`killedBetween`), which is what makes "earliest" checkable at all, and `public`
+    published none of it while sampling the same way. So this is not a wording fix
+    with a sentence removed -- it is a disclosure that was never reaching the page.
+
+    The `elif` is left exactly as it was: it is correct for `--order top`, which is
+    the order it describes.
+    """
+    span = payload.get("killedBetween")
+    # The dates, not just the claim. "Earliest kills" is only as true as the window
+    # is wide, and a reader who can see the dates can judge that; one who is only
+    # told "the earliest kills" cannot.
+    when = (
+        f", {span['first'][:10]} to {span['last'][:10]} ({span.get('spanDays')} days)"
+        if isinstance(span, dict) and span.get("first")
+        else ""
+    )
+    unchecked = (
+        ""
+        if when
+        else " No kill dates were recorded, so how early they really were cannot be checked."
+    )
+    if order == "first":
+        return (
+            f"Sampled from the earliest kills by kill date{when} -- long kills at the "
+            f"intended tuning, whose timings are alike. Earliest here means earliest "
+            f"among the ranking pages gathered, which Warcraft Logs sorts by damage, so "
+            f"a slow early kill can fall outside the window: widen it with "
+            f"--rankings-pages.{unchecked}"
+        )
+    # `public` reaches past the rankings, so its remaining bound is a different one:
+    # a kill in a report the search never read, rather than one ranked too low.
+    # `searchExhausted` is the probe's own record of having run out of reports rather
+    # than out of budget, so it is the one field that can retire that bound -- and
+    # absent it stays stated, because a page-limited walk and a completed one are
+    # exactly what this project refuses to publish as the same thing.
+    reach = (
+        "The search read every report in its window, so the only bound left is the window itself."
+        if payload.get("searchExhausted")
+        else "Both are bounded -- the rankings by --rankings-pages, the search by "
+        "--report-pages -- so a kill in a report neither reached is still invisible."
+    )
+    return (
+        f"Sampled from the earliest kills by kill date{when}, over two sources: the "
+        f"ranking pages and a search of the zone's public logs, which reaches kills "
+        f"Warcraft Logs never ranked. {reach}{unchecked}"
+    )
 
 
 def _comparison(profile: FightProfile, measured: MeasuredEncounter | None) -> list[dict]:
