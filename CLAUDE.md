@@ -5920,6 +5920,118 @@ rather than after it.
 `logs-verification.json` carries neither block; the next Monday writes both, and the
 web type carries them as optional so a reader of the old file is not lied to.
 
+## One key space instead of four caches (#170 Schritt 2)
+
+`wclstore.py` + `WarcraftLogsClient._fetch`. The contract is
+`docs/warcraftlogs-konzept.md` §4.3; where this section and that file disagree, the
+file wins.
+
+> The key is `(kind, natural key, schema version)`, **never the query text**.
+
+The old key is `sha256(json({q: document, v: variables}))`, which binds an entry to
+the **command** rather than to the **thing**. Every measured duplication in the
+concept follows from it, and so does a subtler one: a document whose text is merely
+reformatted is a cold cache.
+
+**The payoff is not points.** It is being able to change an extraction without
+paying for the fetches again -- plus the half that is immediate, a lean document
+answered out of a rich one.
+
+### What an entry carries, and what each field refuses
+
+| field | refuses |
+|---|---|
+| `schemaVersion` | reinterpreting an entry under rules it was not written under |
+| `variant` | claiming an entry carries a field its payload does not have |
+| `budget` | a page-limited **prefix** answering as a complete response |
+| `expiresAt` | believing a time-dependent answer for ever |
+
+`variant` is the one that earns its keep, and it is per **field group** rather than
+per document: `ENCOUNTER_NAME_QUERY` needs `{"name"}`, `ENCOUNTER_ZONE_QUERY` writes
+`{"name", "zone"}`, and both put the name in the same place. So the subset test is a
+fact about the payload rather than a claim about the documents -- and
+`harvest.choose_encounter_id`'s name lookup is now free after any `fightprobe` zone
+lookup of the same encounter. Measured through the client with a counting transport:
+**two requests become one**, and the control (name first, then zone) still pays,
+because a name-only payload has no zone and serving it would make *"the API sent no
+zone"* and *"this document never asked for one"* the same answer.
+
+The same mechanism does more for talents than it looks: the actor ids are baked into
+`talent_codes_query`'s **text**, so under the old key every distinct actor set was
+its own entry -- including one that is a strict subset of an entry already on disk.
+They are a variant now, and a subset request hits.
+
+### Three decisions that are not plumbing
+
+- **`expiresAt` is absolute and written at write time**, from the caller's TTL,
+  rather than a rule the reader re-derives. An entry then keeps the rule it was
+  stored under, and changing the rule is a `schemaVersion` bump rather than a silent
+  reinterpretation of everything already on disk.
+- **A narrower write is decided by immutability.** Two payloads are never merged --
+  that is the filter trap again -- so a write whose variant is narrower than what is
+  on disk has to pick one. On an **immutable** key the wider entry is kept and the
+  write skipped (older is as good as newer by definition, so discarding ten
+  paid-for talent codes to store a fresher copy of two is a pure loss). On a
+  **mutable** key the new payload replaces it, because there the older *value* is
+  the thing in question; the wider request pays again, which is the right direction.
+- **Unknown is not zero, twice.** An entry that does not state a budget cannot
+  answer a caller that states one. And an encounter payload that does not state
+  `frozen` gets the **short** lifetime: being wrong that way costs one re-fetch,
+  being wrong the other way is the error this project has made twice -- reading a
+  whole season under the previous season's ids because a frozen answer kept saying
+  live.
+
+### What deliberately did NOT change, and that is the claim
+
+Schritt 2 changes the **key**, not what a run costs. So every lifetime is today's
+lifetime except the one the concept argues for:
+
+| kind | lifetime | why |
+|---|---|---|
+| `report/...` | immutable | a report's fights, events and tables do not move |
+| `zone/<id>/w.../p<n>` | immutable, **with the page limit as its budget** | |
+| rankings | immutable | today's behaviour. A ranking *does* move, so an argument for a TTL exists -- but `fights` and `spawns` resume against an `actions/cache` in which these pages are free, and giving them a clock here would raise what an hourly run costs |
+| `zones` | immutable | today's behaviour |
+| **`encounter/<id>`** | **frozen 168 h, live 6 h** | the one intentional change, and §4.3's own argument: `frozen` turns when the next zone opens, and the PTR/live twin answer hangs on `has_ranked_parses`, which flips at a season start |
+
+`zone(cache=False)` still bypasses everything -- it is the explicit "ask what it is
+NOW", and a store that answered it would be the bug it exists to avoid.
+
+**`fight_events` is NOT converted, and the reason is a trade rather than an
+oversight.** The concept's key is `report/<code>/f<id>/<stream>[+res]` with *pages
+aggregated*, which is the one place the budget rule has real teeth -- a stream read
+at four pages is a prefix that looks complete. But today each page is its own cache
+entry keyed on its cursor, so a run that died after three of five pages keeps those
+three. Aggregating trades that resume cheapness for the budget rule, and the trade
+deserves its own measurement rather than riding along in a plumbing change.
+
+### Two things about the disk that matter
+
+Store entries live under a kind directory (`encounter/3421.json`); legacy
+document-hash entries are 32-hex files at the root. **The two cannot collide**, and a
+restored `actions/cache` keeps answering whatever has not moved across -- which is
+why `progresshours` and `wclschema`, whose documents reach `query()` directly, are
+untouched. Writes go through a temporary file and `replace`, so a run killed
+mid-write leaves no half-written JSON that would read as a corrupt entry for ever.
+
+**A cold pass is the one-time cost**, and it is smaller than it sounds: `fight-probe`
+decides what to skip from the *payload* before a query is sent, so a resume that
+skips everything still sends nothing. Only an encounter a run actually reads pays
+again, once.
+
+### Two traps found while building it, both about the sandbox rather than the code
+
+- **`python3 -c "import wowdps"` reads a DIFFERENT checkout.** The editable install
+  in this container points at `/tmp/mine/pipeline/src/wowdps`, which is not a git
+  repository and is some earlier copy. `pytest` is unaffected -- `pyproject.toml`
+  sets `pythonpath = ["src"]`, so it imports the working tree -- but an ad-hoc
+  `python3 -c` check validates stale source and says nothing about what was just
+  written. Use `PYTHONPATH=src`.
+- **Two classes named `_CountingTransport` in one test file**, and Python takes the
+  last definition. Adding one shadowed the existing stub and turned four unrelated
+  tests red with a `TypeError`; had the signatures been compatible, four tests would
+  have silently run against the wrong double. The failures are the lucky case.
+
 ## Fight patterns per boss — what Warcraft Logs can and cannot tell you
 
 The logs cross-check compares Patchwerk single target against nine different encounters,

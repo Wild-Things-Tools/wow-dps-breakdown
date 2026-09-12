@@ -35,7 +35,7 @@ from pathlib import Path
 
 import httpx
 
-from . import fightprofile, logsanalysis
+from . import fightprofile, logsanalysis, wclstore
 
 log = logging.getLogger(__name__)
 
@@ -481,6 +481,27 @@ query FightTable(
 """
 
 
+#: The variant vocabulary, i.e. what a stored entry is allowed to claim it carries.
+#:
+#: A variant is per FIELD GROUP rather than per document, because that is what makes
+#: a lean document answerable out of a rich one: `ENCOUNTER_NAME_QUERY` needs
+#: `{"name"}` and `ENCOUNTER_ZONE_QUERY` writes `{"name", "zone"}`, and both put the
+#: name in the same place, so the subset test is a fact about the payload rather than
+#: a claim about the documents.
+#:
+#: Adding a token is a `wclstore.SCHEMA_VERSION` question: an entry written under an
+#: older vocabulary says nothing about a group that did not exist when it was stored,
+#: and reading its silence as coverage is exactly the "a filtered field and a field
+#: the API never sent look alike" trap one layer up.
+_ENCOUNTER_NAME = frozenset({"name"})
+_ENCOUNTER_ZONE = frozenset({"name", "zone"})
+_ZONE = frozenset({"zone"})
+#: One token rather than three: `FIGHT_STRUCTURE_QUERY` selects fights, phases and
+#: masterData together and nothing asks for a part of it, so splitting the group
+#: would be a vocabulary nobody can reach.
+_STRUCTURE = frozenset({"structure"})
+
+
 class WarcraftLogsError(RuntimeError):
     pass
 
@@ -738,6 +759,16 @@ class WarcraftLogsClient:
         #: makes the promise real for every caller rather than for the ones that
         #: remembered `Path(...)`.
         self._cache_dir = Path(cache_dir) if cache_dir else None
+        #: The key space (#170 Schritt 2), over the SAME directory. Its entries live
+        #: under a kind directory (`encounter/3421.json`) where the legacy ones are
+        #: 32-hex files at the root, so the two cannot collide and a restored cache
+        #: keeps answering whatever has not moved across yet.
+        #:
+        #: `query()` stays the route for a caller that hands in a raw document --
+        #: `progresshours` and `wclschema` do -- and those keep the document hash.
+        #: A key that names the THING cannot be derived from a document nobody has
+        #: told the client about.
+        self._store = wclstore.WclStore(self._cache_dir) if self._cache_dir else None
         self.ledger = PointLedger()
 
     def __enter__(self) -> WarcraftLogsClient:
@@ -838,6 +869,41 @@ class WarcraftLogsClient:
             cached_at.write_text(json.dumps(data), encoding="utf-8")
         return data
 
+    def _fetch(
+        self,
+        key: wclstore.Key,
+        document: str,
+        variables: dict | None,
+        label: str,
+        *,
+        ttl,
+    ) -> dict:
+        """Serve ``key`` from the store, or send ``document`` and record it there.
+
+        The stored value is the raw GraphQL ``data`` block, exactly what `query`
+        would have cached -- this is a change of KEY, not of content. Each caller
+        extracts from it afterwards as it did before, so a shape surprise stays
+        visible where it was.
+
+        ``cache=False`` on the inner call is not a bypass: it stops the legacy
+        document-hash file being written beside the store entry, which would double
+        the bytes and leave two answers to one question on disk.
+        """
+        if self._store is not None:
+            stored = self._store.get(key)
+            if stored is not None:
+                self.ledger.record(label, stored, cached=True)
+                return stored
+        data = self.query(document, variables, label=label, cache=False)
+        if self._store is not None:
+            # `ttl` may be a function of the answer, because two of these keys can
+            # only say how long they are good for once they have been read: an
+            # encounter's lifetime follows its zone's `frozen`, which is in the
+            # payload. Passing the value where it is known and the rule where it is
+            # not keeps the decision at the call site either way.
+            self._store.put(key, data, ttl=ttl(data) if callable(ttl) else ttl)
+        return data
+
     def rate_limit(self) -> dict:
         """The current point budget, as its own query. **Never cached.**
 
@@ -862,10 +928,12 @@ class WarcraftLogsClient:
 
     def fight_structure(self, code: str, encounter_id: int, difficulty: int) -> dict:
         """Fights, phase metadata and the report's actor/ability names, in one call."""
-        data = self.query(
+        data = self._fetch(
+            wclstore.report_key(code, f"e{encounter_id}", f"d{difficulty}", variant=_STRUCTURE),
             FIGHT_STRUCTURE_QUERY,
             {"code": code, "encounterId": encounter_id, "difficulty": difficulty},
             label=f"fights:{code}",
+            ttl=wclstore.IMMUTABLE,
         )
         return ((data.get("reportData") or {}).get("report")) or {}
 
@@ -931,7 +999,8 @@ class WarcraftLogsClient:
         view_by: str = "Default",
         hostility: str = "Friendlies",
     ) -> dict | None:
-        data = self.query(
+        data = self._fetch(
+            wclstore.report_key(code, "f", fight_id, "table", data_type, view_by, hostility),
             TABLE_QUERY,
             {
                 "code": code,
@@ -941,6 +1010,7 @@ class WarcraftLogsClient:
                 "hostility": hostility,
             },
             label=f"table:{data_type}:{view_by}:{code}:{fight_id}",
+            ttl=wclstore.IMMUTABLE,
         )
         table = ((data.get("reportData") or {}).get("report") or {}).get("table")
         if isinstance(table, str):
@@ -956,10 +1026,12 @@ class WarcraftLogsClient:
         visible there rather than swallowed in the client. Same arrangement as
         ``reports_in_window``.
         """
-        data = self.query(
+        data = self._fetch(
+            wclstore.report_key(code, "f", fight_id, "players"),
             PLAYER_DETAILS_QUERY,
             {"code": code, "fightId": fight_id},
             label=f"player-details:{code}:{fight_id}",
+            ttl=wclstore.IMMUTABLE,
         )
         return ((data.get("reportData") or {}).get("report") or {}).get("playerDetails")
 
@@ -974,10 +1046,22 @@ class WarcraftLogsClient:
         rejection reason.
         """
         query = talent_codes_query(actor_ids)
-        data = self.query(
+        # The actor ids are the variant rather than part of the key, which is what
+        # lets a later call for a SUBSET of one pull's actors be answered out of the
+        # entry that already holds them all. Under the document-hash key those were
+        # two unrelated entries, because the ids are baked into the document text.
+        data = self._fetch(
+            wclstore.report_key(
+                code,
+                "f",
+                fight_id,
+                "talents",
+                variant=frozenset(f"a{int(actor)}" for actor in actor_ids),
+            ),
             query,
             {"code": code, "fightId": fight_id},
             label=f"talent-codes:{code}:{fight_id}",
+            ttl=wclstore.IMMUTABLE,
         )
         fights = ((data.get("reportData") or {}).get("report") or {}).get("fights") or []
         codes: dict[int, str] = {}
@@ -997,10 +1081,17 @@ class WarcraftLogsClient:
         is what makes it refuse. ``Encounter.name`` is `String!`, so a missing name
         can only mean a missing encounter.
         """
-        data = self.query(
+        data = self._fetch(
+            wclstore.encounter_key(encounter_id, variant=_ENCOUNTER_NAME),
             ENCOUNTER_NAME_QUERY,
             {"encounterId": encounter_id},
             label=f"encounter-name:{encounter_id}",
+            # This document does not select `frozen`, so it cannot claim the long
+            # lifetime; the short one is the safe half of that pair. An entry a
+            # `encounter_zone` call wrote DOES carry it, and a name request is a
+            # subset of that -- so the cheap question is answered out of the
+            # expensive one rather than costing a second entry.
+            ttl=wclstore.LIVE_TTL,
         )
         encounter = ((data.get("worldData") or {}).get("encounter")) or {}
         name = encounter.get("name")
@@ -1008,10 +1099,16 @@ class WarcraftLogsClient:
 
     def encounter_zone(self, encounter_id: int) -> dict:
         """The zone one encounter belongs to. `reports` is keyed on zone, not boss."""
-        data = self.query(
+        data = self._fetch(
+            wclstore.encounter_key(encounter_id, variant=_ENCOUNTER_ZONE),
             ENCOUNTER_ZONE_QUERY,
             {"encounterId": encounter_id},
             label=f"encounter-zone:{encounter_id}",
+            ttl=lambda payload: wclstore.encounter_ttl(
+                ((((payload.get("worldData") or {}).get("encounter")) or {}).get("zone") or {}).get(
+                    "frozen"
+                )
+            ),
         )
         encounter = ((data.get("worldData") or {}).get("encounter")) or {}
         return encounter.get("zone") or {}
@@ -1025,7 +1122,8 @@ class WarcraftLogsClient:
         be introspected, so reading it is `firstkills.reports_from_payload`'s job and
         an unexpected shape has to be visible there rather than swallowed here.
         """
-        data = self.query(
+        data = self._fetch(
+            wclstore.zone_key(zone_id, f"w{int(start_ms)}-{int(end_ms)}", f"p{page}", budget=limit),
             REPORTS_QUERY,
             {
                 "zoneId": zone_id,
@@ -1039,6 +1137,7 @@ class WarcraftLogsClient:
                 "page": page,
             },
             label=f"reports:{zone_id}:{page}",
+            ttl=wclstore.IMMUTABLE,
         )
         return ((data.get("reportData") or {}).get("reports")) or {}
 
@@ -1055,10 +1154,12 @@ class WarcraftLogsClient:
         compares as older than everything. Returning the two together is what stops
         them being used apart.
         """
-        data = self.query(
+        data = self._fetch(
+            wclstore.report_key(code, "kills"),
             REPORT_KILLS_QUERY,
             {"code": code},
             label=f"report-kills:{code}",
+            ttl=wclstore.IMMUTABLE,
         )
         report = ((data.get("reportData") or {}).get("report")) or {}
         fights = report.get("fights")
@@ -1075,13 +1176,34 @@ class WarcraftLogsClient:
         flag turns when the next zone opens, and a cached answer would keep saying
         live.
         """
-        data = self.query(
-            ZONE_BY_ID_QUERY, {"zoneId": zone_id}, label=f"zone:{zone_id}", cache=cache
+        if not cache:
+            data = self.query(
+                ZONE_BY_ID_QUERY, {"zoneId": zone_id}, label=f"zone:{zone_id}", cache=False
+            )
+            return (data.get("worldData") or {}).get("zone")
+        data = self._fetch(
+            wclstore.zone_key(zone_id, variant=_ZONE),
+            ZONE_BY_ID_QUERY,
+            {"zoneId": zone_id},
+            label=f"zone:{zone_id}",
+            ttl=lambda payload: wclstore.encounter_ttl(
+                ((payload.get("worldData") or {}).get("zone") or {}).get("frozen")
+            ),
         )
         return (data.get("worldData") or {}).get("zone")
 
     def zones(self) -> list[dict]:
-        data = self.query(ZONE_QUERY, label="zones")
+        data = self._fetch(
+            wclstore.Key(("zones",)),
+            ZONE_QUERY,
+            None,
+            label="zones",
+            # Today's lifetime, deliberately: the legacy cache held this for ever
+            # too, and #170 Schritt 2 changes the KEY rather than what a run costs.
+            # The list does move when a season turns, and giving it a TTL is a
+            # separate decision with a measurable price.
+            ttl=wclstore.IMMUTABLE,
+        )
         return (data.get("worldData") or {}).get("zones") or []
 
     def encounter_rankings(
@@ -1098,7 +1220,8 @@ class WarcraftLogsClient:
         no report search is needed. It also means the fights analysed are top-end
         pulls, which is a bias worth stating -- see ``fightprobe``.
         """
-        data = self.query(
+        data = self._fetch(
+            wclstore.rankings_key(encounter_id, difficulty=difficulty, metric=metric, page=page),
             RANKINGS_QUERY,
             {
                 "encounterId": encounter_id,
@@ -1109,6 +1232,13 @@ class WarcraftLogsClient:
                 "page": page,
             },
             label=f"rankings:{encounter_id}",
+            # Today's lifetime, and that is the decision rather than an oversight.
+            # A ranking DOES move, so an argument for a TTL exists -- but `fights`
+            # and `spawns` both resume against an `actions/cache` in which these
+            # pages are free today, and `is_complete` already decides whether an
+            # encounter is re-read at all. Giving them a clock here would raise
+            # what an hourly run costs, which is not what a change of KEY is for.
+            ttl=wclstore.IMMUTABLE,
         )
         return ((data.get("worldData") or {}).get("encounter")) or {}
 
@@ -1126,7 +1256,17 @@ class WarcraftLogsClient:
         ``characterRankings`` is an untyped JSON scalar in the WCL schema, so the shape
         is whatever the site returns; we read defensively.
         """
-        data = self.query(
+        data = self._fetch(
+            wclstore.rankings_key(
+                encounter_id,
+                difficulty=difficulty,
+                metric=metric,
+                page=page,
+                # The folded spelling, not the caller's: Warcraft Logs is sent
+                # `DeathKnight` where simc says `Death Knight`, and two keys for one
+                # ranking is the duplication this module exists to remove.
+                spec=(class_name.replace(" ", ""), spec_name.replace(" ", "")),
+            ),
             RANKINGS_QUERY,
             {
                 "encounterId": encounter_id,
@@ -1137,6 +1277,7 @@ class WarcraftLogsClient:
                 "page": page,
             },
             label=f"rankings:{encounter_id}:{class_name}:{spec_name}",
+            ttl=wclstore.IMMUTABLE,
         )
         encounter = ((data.get("worldData") or {}).get("encounter")) or {}
         return encounter

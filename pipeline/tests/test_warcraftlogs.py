@@ -640,6 +640,127 @@ def test_no_module_outside_warcraftlogs_grows_an_unmeasured_query_document():
     assert stale == [], f"these now carry a reading and should leave the set: {stale}"
 
 
+# --------------------------------------------------------------------------------
+# The key space: one entry per thing (#170 Schritt 2)
+# --------------------------------------------------------------------------------
+
+
+class _StoreTransport:
+    """Answers every document with one payload and counts what was actually sent."""
+
+    def __init__(self, payload: dict) -> None:
+        self.posts = 0
+        self.payload = payload
+
+    def __call__(self, *_a, **_k):
+        self.posts += 1
+        body = {"data": dict(self.payload)}
+        return type("R", (), {"status_code": 200, "json": lambda s: body, "headers": {}})()
+
+
+def _stubbed_client(tmp_path, transport):
+    from wowdps.warcraftlogs import Credentials, WarcraftLogsClient
+
+    client = WarcraftLogsClient(Credentials("id", "secret"), cache_dir=tmp_path / "cache")
+    client._token = "token"
+    client._client.post = transport
+    return client
+
+
+def test_a_name_request_is_answered_out_of_the_zone_fetch(tmp_path):
+    """The immediate win of keying on the thing, measured in requests.
+
+    `encounter_zone` and `encounter_name` are two DOCUMENTS about one encounter, and
+    the zone one selects the name as well. Under `sha256(document + variables)` they
+    were two cache entries and two requests; under `encounter/<id>` plus a variant
+    the second is free.
+
+    `harvest.choose_encounter_id` asks for the name and `fightprobe` for the zone, so
+    this is a pair a real pass sends.
+    """
+    transport = _StoreTransport(
+        {"worldData": {"encounter": {"id": 3421, "name": "The Twin Fangs", "zone": {"id": 53}}}}
+    )
+    client = _stubbed_client(tmp_path, transport)
+
+    assert client.encounter_zone(3421) == {"id": 53}
+    assert transport.posts == 1
+    assert client.encounter_name(3421) == "The Twin Fangs"
+    assert transport.posts == 1, "the name was already paid for by the zone fetch"
+
+
+def test_the_other_direction_still_pays(tmp_path):
+    """The control, without which the test above passes against a broken store.
+
+    A name-only payload carries no zone. If the lean entry answered the rich
+    request, "the API sent no zone" and "this document never asked for one" would be
+    the same answer -- and `encounter_zone` would start returning `{}` for every
+    encounter, silently.
+    """
+    transport = _StoreTransport(
+        {"worldData": {"encounter": {"id": 3421, "name": "The Twin Fangs"}}}
+    )
+    client = _stubbed_client(tmp_path, transport)
+
+    assert client.encounter_name(3421) == "The Twin Fangs"
+    assert transport.posts == 1
+    assert client.encounter_zone(3421) == {}
+    assert transport.posts == 2, "a zone request may not be served from a name-only entry"
+
+
+def test_a_subset_of_one_pull_s_actors_is_answered_out_of_the_superset(tmp_path):
+    """The actor ids are a variant, not part of the key.
+
+    They are baked into the document text (`talent_codes_query`), so under the old
+    key every distinct actor set was its own entry -- including one that is a strict
+    subset of an entry already on disk.
+    """
+    transport = _StoreTransport(
+        {"reportData": {"report": {"fights": [{"a1": "AAA", "a2": "BBB", "a3": "CCC"}]}}}
+    )
+    client = _stubbed_client(tmp_path, transport)
+
+    assert client.talent_import_codes("abc", 1, [1, 2, 3]) == {1: "AAA", 2: "BBB", 3: "CCC"}
+    assert transport.posts == 1
+    assert client.talent_import_codes("abc", 1, [1, 3]) == {1: "AAA", 2: "BBB", 3: "CCC"}
+    assert transport.posts == 1
+    # And a set the entry does NOT cover pays, which is what stops the rule above
+    # from being "any talent request hits any talent entry".
+    client.talent_import_codes("abc", 1, [1, 4])
+    assert transport.posts == 2
+
+
+def test_a_client_without_a_cache_directory_keeps_working(tmp_path):
+    """The store is optional in exactly the way the cache was: absent, not empty."""
+    from wowdps.warcraftlogs import Credentials, WarcraftLogsClient
+
+    transport = _StoreTransport({"worldData": {"zones": [{"id": 53}]}})
+    client = WarcraftLogsClient(Credentials("id", "secret"))
+    client._token = "token"
+    client._client.post = transport
+
+    assert client._store is None
+    assert client.zones() == [{"id": 53}]
+    assert client.zones() == [{"id": 53}]
+    assert transport.posts == 2
+
+
+def test_a_store_entry_does_not_also_write_the_legacy_cache_file(tmp_path):
+    """One answer to one question on disk, rather than two under two keys.
+
+    `_fetch` passes `cache=False` to the inner `query` for that reason, and without
+    it every fetch would be stored twice -- which would read as the store working
+    while the bytes said otherwise.
+    """
+    transport = _StoreTransport({"reportData": {"report": {"startTime": 1.0, "fights": []}}})
+    client = _stubbed_client(tmp_path, transport)
+    client.report_kills("abc")
+
+    cache = tmp_path / "cache"
+    assert (cache / "report" / "abc" / "kills.json").is_file()
+    assert not list(cache.glob("*.json")), "a flat document-hash file was written too"
+
+
 class _VerifyTransport:
     """A rankings service whose hourly counter moves, and which can start 429-ing."""
 
@@ -824,7 +945,11 @@ def test_verify_writes_no_cache_by_default(tmp_path, monkeypatch):
     )
     assert code == 0
     assert cached._cache_dir == tmp_path / "wcl"
-    assert list((tmp_path / "wcl").glob("*.json"))
+    # `rglob`, not `glob`: since #170 Schritt 2 a ranking is stored under the thing
+    # it is about (`encounter/<id>/rankings/<metric>/d<diff>/p<n>.json`) rather than
+    # as a flat document hash. The claim this line makes is unchanged -- asked for a
+    # cache, the client writes one -- only where it looks.
+    assert list((tmp_path / "wcl").rglob("*.json"))
 
 
 def test_a_rankings_cache_key_does_not_vary_with_time(tmp_path):
