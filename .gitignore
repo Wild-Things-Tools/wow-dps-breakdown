@@ -35,6 +35,12 @@ spawn-probe/
 harvest/
 # Written at the repository root by `harvest-builds.yml`'s probe step.
 harvest-report.txt
+# `wowdps verify --cache <dir>` names its own directory, so there is no one path to
+# ignore -- this is the name the command's own help and CLAUDE.md use, and it is the
+# one a canary for the "cache is off by default" rule produced here on 2026-09-12
+# and `git add -A` duly staged. A ranking payload carries `name`/`guild`/`server`
+# per row, so the near-miss is the same one the three entries above record.
+.wclcache/
 
 # Editors / OS
 .DS_Store

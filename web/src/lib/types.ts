@@ -340,6 +340,20 @@ export interface LogsVerification {
   analysis?: LogsAnalysis | null;
   minSampleSize?: number;
   withheldForSmallSample?: number;
+  /**
+   * Rows the query could not answer for, as opposed to rows whose ranking was thin.
+   * Absent on files written before 2026-09-12, where a failed query was counted into
+   * `withheldForSmallSample` -- so an older file's count is a statement about parses
+   * AND about failures, with no way to separate them.
+   */
+  withheldForQueryError?: number;
+  /**
+   * What the pass cost, read back from the hourly meter rather than predicted. Shaped
+   * like every other cost block here (`PointLedger.to_json`). Absent on files written
+   * before the pass could measure itself at all: the ranking query carried no
+   * `rateLimitData`, so the ledger ended a whole run with no reading.
+   */
+  cost?: Record<string, unknown> | null;
 }
 
 /**

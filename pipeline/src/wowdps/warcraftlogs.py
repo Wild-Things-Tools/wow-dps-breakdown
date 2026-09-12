@@ -47,6 +47,20 @@ API_URL = "https://www.warcraftlogs.com/api/v2/client"
 #: it wants a different one.
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
+# Two of this module's thirteen query documents used to carry no `rateLimitData`,
+# and this was one of them -- the one `wowdps verify` sends 208 times a week. The
+# `PointLedger` docstring below says, in words, that *"every query in this module
+# asks for rateLimitData alongside its real payload"*; it was false for exactly the
+# document belonging to the only scheduled, points-spending pass with no cost
+# measurement at all. Measured on 2026-09-12: a whole verify run left the ledger at
+# `firstReading None, lastReading None` -- UNMEASURED by construction rather than
+# merely un-bracketed, so no ceiling could be checked and no cost published.
+#
+# The block rides on a query that is being sent anyway, so it costs no round trip.
+# Whether a resolved field costs POINTS is a different question and is one of #170's
+# open measurements; it is not claimed here. What is claimed is that the other
+# eleven documents already take that bet, and that a reading nobody takes cannot be
+# compared with anything.
 RANKINGS_QUERY = """
 query SpecRankings(
   $encounterId: Int!
@@ -56,6 +70,7 @@ query SpecRankings(
   $specName: String
   $page: Int!
 ) {
+  rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
   worldData {
     encounter(id: $encounterId) {
       id
@@ -94,8 +109,15 @@ query ZoneById($zoneId: Int!) {
 }
 """
 
+# The second document that carried no reading, and the same defect one command
+# across: `cmd_fight_zones` prints `spend_sentence(ledger)` over a ledger this was
+# the only feed for, so a read-only `wowdps fight-zones` could only ever print
+# UNMEASURED. Its sibling `ZONE_BY_ID_QUERY` -- the `--seed`/`--scan` path -- has
+# always carried one, so the same command measured itself on one route and never on
+# the other.
 ZONE_QUERY = """
 query Zones {
+  rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
   worldData {
     zones {
       id
@@ -1299,7 +1321,34 @@ def summarise_rankings(encounter: dict) -> dict | None:
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
-    """Fetch rankings for every spec in the dataset and write a comparison file."""
+    """Fetch rankings for every spec in the dataset and write a comparison file.
+
+    **What a pass costs, and why it was UNMEASURED until 2026-09-12.** 26 distinct
+    (class, spec) pairs x 8 encounters is **208 ranking queries** every Monday, and
+    the client was built with no cache directory, the workflow restored none, no
+    bracketing reading was taken, and `RANKINGS_QUERY` -- alone with `ZONE_QUERY`
+    among this module's thirteen documents -- carried no `rateLimitData` at all. So
+    the ledger ended a whole run at `firstReading None`: the only scheduled,
+    points-spending fetcher in the project with no measurement of any kind.
+
+    **`--cache` is for iterating locally, and the workflow deliberately restores
+    none.** This is where a ranking differs from a report, and the difference is
+    measured rather than argued: `spec_rankings` sends `(encounterId, difficulty,
+    metric, className, specName, page)` and nothing in that varies with time, so the
+    cache key of a given spec's ranking is **byte-identical week to week**. A report's
+    events are immutable, so `fight-probe`'s restored cache is as good as a fresh
+    fetch; a *ranking* is the thing this pass exists to re-read, so a restored cache
+    would serve last week's medians under this week's `generatedAt` and the weekly
+    run would become a no-op that looks like a measurement.
+
+    Within one run the disk cache saves nothing either -- the in-memory `cache` dict
+    below already fetches each (class, spec, encounter) exactly once. So the flag's
+    whole value is offline: pay for a pass once, then re-run `summarise_rankings`
+    and the analysis over it for free.
+    """
+    # Absent stays absent: `WarcraftLogsClient` coerces a string, and a falsy value
+    # must not become `Path(".")` and start caching into the working directory.
+    cache_dir = Path(args.cache) if getattr(args, "cache", None) else None
     # The dataset is namespaced by tier; verify whichever tier was asked for, or the
     # current one if not told.
     root = Path(args.data)
@@ -1369,17 +1418,66 @@ def cmd_verify(args: argparse.Namespace) -> int:
             ", ".join(profile.name for _, profile in sorted(tier_profiles.profiles.items())),
         )
 
-    with WarcraftLogsClient(credentials) as client:
+    # Deferred, because `fightprobe` imports this module at module level and the
+    # ceiling rule must exist exactly once -- the same reason `harvest` reaches for
+    # `fightprobe.check_budget` rather than carrying a second copy.
+    from .fightprobe import PointBudgetExhausted, check_budget
+
+    # Rows withheld because the *query* failed, not because the ranking was thin.
+    # Counted apart, because the two are different findings and only the second is a
+    # fact about the game: `withheldForSmallSample` is read as a statement about how
+    # many parses Warcraft Logs holds, and folding a failed query into it makes that
+    # number say something nobody measured. The published MID2 file states 358 of
+    # them and cannot say whether any were failures.
+    #
+    # Counted in ROWS, like `thin`, rather than in queries: specs sharing a
+    # (class, spec) pair share one query, so a query count and a row count are
+    # different units and putting them side by side in one document invites the
+    # subtraction that does not work.
+    errored = 0
+    errored_keys: set[tuple[str, str, int]] = set()
+    #: Set when the pass stopped early. The document is all-or-nothing -- one
+    #: comparison set covering the whole tier -- so a short one published under the
+    #: same name is a floor wearing a measurement's clothes, and nothing is written.
+    stopped: str | None = None
+
+    with WarcraftLogsClient(credentials, cache_dir=cache_dir) as client:
+        # The bracket. Taken before any ranking is fetched, so `firstReading` is the
+        # counter as it stood BEFORE this pass rather than after its first query --
+        # which is the one-query lag the ledger's own docstring warns about, and the
+        # difference between a total and an estimate.
+        #
+        # A reading that will not come back is not fatal: a budget reading must never
+        # be the thing that kills a pass, and an unmeasured cost is a state the
+        # document can express.
+        try:
+            client.rate_limit()
+        except WarcraftLogsError as exc:
+            log.warning("could not read the point budget before the pass: %s", exc)
+
         # One request per spec per encounter. Specs sharing a class/spec pair but
         # differing only in hero talent resolve to the same Warcraft Logs query, so
         # results are cached per (class, spec, encounter).
         cache: dict[tuple[str, str, int], dict | None] = {}
 
         for spec in manifest.get("specs", []):
+            if stopped:
+                break
             for encounter_id in encounter_ids:
                 key = (spec["class"], spec["spec"], encounter_id)
                 if key not in cache:
                     try:
+                        # Free: `check_budget` reads the ledger, which every ranking
+                        # response now feeds. Before the point ceiling existed here a
+                        # pass ran until the service refused, and the refusal was
+                        # published -- see the `RateLimited` clause below.
+                        #
+                        # Read straight off `args`, where `--cache` above goes through
+                        # `getattr`. Not an inconsistency: an absent cache means "do
+                        # not cache", which is the safe direction, while an absent
+                        # ceiling would mean inventing a budget nobody set. A caller
+                        # that forgot it should fail loudly.
+                        check_budget(client, args.point_ceiling)
                         encounter = client.spec_rankings(
                             encounter_id,
                             spec["class"],
@@ -1388,13 +1486,31 @@ def cmd_verify(args: argparse.Namespace) -> int:
                             metric=args.metric,
                         )
                         cache[key] = summarise_rankings(encounter)
+                    except (RateLimited, PointBudgetExhausted) as exc:
+                        # **This is the one that used to publish a wrong document.**
+                        # `RateLimited` subclasses `WarcraftLogsError`, so the clause
+                        # below caught it, set the summary to None, and the row was
+                        # counted as `withheldForSmallSample` -- once per remaining
+                        # spec. Measured on 2026-09-12 against the real command with
+                        # a stub that 429s halfway: exit 0, half the comparisons, and
+                        # the rate limit published as "too few parses". The workflow
+                        # then commits that over a good file.
+                        #
+                        # A budget stop is a fact about the hour, never about a
+                        # ranking, so it stops the pass and writes nothing.
+                        stopped = str(exc)
+                        break
                     except WarcraftLogsError as exc:
                         log.warning("%s %s on %d: %s", *key, exc)
                         cache[key] = None
+                        errored_keys.add(key)
 
                 summary = cache[key]
                 if not summary:
-                    thin += 1
+                    if key in errored_keys:
+                        errored += 1
+                    else:
+                        thin += 1
                     continue
 
                 sim_dps = spec.get("scenarios", {}).get("patchwerk", {}).get("dps", {}).get("1")
@@ -1413,6 +1529,34 @@ def cmd_verify(args: argparse.Namespace) -> int:
                     }
                 )
 
+        # The other end of the bracket. Uncached like the first, so the difference
+        # is this pass's own cost rather than two halves of different hours.
+        try:
+            client.rate_limit()
+        except WarcraftLogsError as exc:
+            log.warning("could not read the point budget after the pass: %s", exc)
+
+        ledger = client.ledger
+
+    log.info("cost: %s over %d quer(y/ies)", spend_sentence(ledger), len(ledger.entries))
+
+    if stopped:
+        # Nothing is written. The alternative -- publishing the rows that were read
+        # before the budget ran out -- replaces a whole-tier comparison with a
+        # partial one under the same name, and the document has no field that could
+        # say so. Exit 2 is the ceiling's status throughout this project; the
+        # workflow turns it into a warning and commits nothing.
+        planned = len(manifest.get("specs", [])) * len(encounter_ids)
+        log.error(
+            "stopped %d row(s) into a planned %d: %s Nothing was written -- a partial "
+            "comparison under the same name is not a smaller measurement, it is a "
+            "different one. Re-run when the hour resets.",
+            len(comparisons) + thin + errored,
+            planned,
+            stopped,
+        )
+        return 2
+
     output = {
         "generatedAt": datetime.now(UTC).isoformat(timespec="seconds"),
         "metric": args.metric,
@@ -1429,14 +1573,26 @@ def cmd_verify(args: argparse.Namespace) -> int:
         "analysis": logsanalysis.analyse(comparisons),
         "minSampleSize": MIN_SAMPLE,
         "withheldForSmallSample": thin,
+        # Rows the query could not answer for, apart from the thin ones. Always
+        # emitted rather than only when non-zero: this block is rebuilt on every run,
+        # so an absent key means "written before this existed" and a zero means "no
+        # query failed" -- which are different sentences.
+        "withheldForQueryError": errored,
+        # What the pass cost, read back rather than predicted. This is a reading of
+        # the hourly meter taken when the run happened, so five of its fields differ
+        # on every run by construction -- anything that ever grows a settle here must
+        # exclude it, which is the `_PROVENANCE_PATHS` lesson stated before the trap
+        # rather than after it.
+        "cost": ledger.to_json(),
     }
     out_path = data_dir / "logs-verification.json"
     out_path.write_text(json.dumps(output, separators=(",", ":")) + "\n", encoding="utf-8")
     log.info(
-        "wrote %s (%d comparisons, %d withheld for fewer than %d parses)",
+        "wrote %s (%d comparisons, %d withheld for fewer than %d parses, %d for a failed query)",
         out_path,
         len(comparisons),
         thin,
         MIN_SAMPLE,
+        errored,
     )
     return 0
