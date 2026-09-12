@@ -5801,6 +5801,63 @@ Whether a resolved field costs **points** is a different question and is one of
 other eleven documents already take that bet, and that a reading nobody takes
 cannot be compared with anything.
 
+#### And the ratchet was scoped to one file, by the person who had just written it
+
+Found the same evening, while reading #170's Schritt 1c -- *"die zwei
+`ENCOUNTER_ZONE_QUERY`-Fassungen werden eine"*. The two do not differ only in
+spelling:
+
+```
+warcraftlogs   query EncounterZone($encounterId: Int!) {
+                 rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
+                 worldData { encounter(id:) { id name zone { id name frozen } } } }
+
+progresshours  query($e:Int!){
+                 worldData { encounter(id:$e) { id name zone { id name } } } }
+```
+
+So the leaner one carries **no budget reading** -- and
+`test_every_query_document_asks_for_a_budget_reading` scans `vars(warcraftlogs)`,
+which cannot see it. **A guard that is present and answers over the wrong
+population is this repository's signature defect, and building one and then
+scoping it to one file is that defect committed in the same session that wrote
+about it.**
+
+Counted over the package rather than guessed: **17 query documents in three
+modules, 13 carrying a reading.** The four without are
+`wclschema.TYPE_QUERY` and all three of `progresshours` --
+`ENCOUNTER_ZONE_QUERY`, `PROGRESS_RANKINGS_QUERY` and `GUILD_PULLS_QUERY`.
+
+**And two of those three are a cron job's hot path.** `progresssweep` sends
+`GUILD_PULLS_QUERY` and `PROGRESS_RANKINGS_QUERY`, and its contract checks the
+ceiling *before every walk* with a standalone `rate_limit()` per guild. That poll
+exists because the walk's own queries cannot answer: this file already records the
+same tax on the chart producer at **180 of 432 queries, 42%**, before it was cut to
+one poll per boss. The four documents are why both producers have to ask twice.
+
+**They are deliberately not fixed here**, and the reason is that adding the field
+changes two things nobody has measured: the **cache key** of every response the
+chart producer has stored (a `--cache` run would go cold once), and the **point
+cost**, if Warcraft Logs really does charge per resolved field -- which is one of
+#170's own open measurements. Taking that bet in passing, on the hot path of a cron
+that went live the same day, is not a change to make on the way past.
+
+What is done is the instrument:
+`test_no_module_outside_warcraftlogs_grows_an_unmeasured_query_document` walks the
+whole package, and `_DOCUMENTS_WITHOUT_A_READING` names the four with a reason
+each. It is a two-sided ratchet on purpose -- a **fifth** document without a
+reading fails by name, and a listed one that **grows** a reading fails too, so the
+set cannot outlive its own evidence. Both canaries fired by name. A document
+imported from `warcraftlogs` is skipped by object identity rather than by equality,
+because two modules genuinely holding the same text is exactly the duplication
+Schritt 1c is about.
+
+Note which direction a unification has to go, since the obvious reading is
+backwards: `fight-zones` and `fightprobe` need `frozen`, so the two can only merge
+onto the **richer** document, i.e. the one that also asks for the reading. There is
+no version of this that makes the progress side cheaper.
+
+
 ### A 429 was published as "too few parses"
 
 The defect the ceiling work found, measured against the real command with a stub

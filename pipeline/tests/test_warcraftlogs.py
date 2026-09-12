@@ -564,6 +564,82 @@ def test_every_query_document_asks_for_a_budget_reading():
     assert missing == [], f"these documents cannot feed the ledger: {missing}"
 
 
+#: Query documents that live outside `warcraftlogs` and carry no budget reading.
+#:
+#: Each entry needs a REASON, and the default answer is to add `rateLimitData` to the
+#: document rather than a line here. The set exists because the four below are
+#: pre-existing and each would change something a measurement has not yet settled --
+#: never as somewhere to put a new document that was easier not to fix.
+_DOCUMENTS_WITHOUT_A_READING = {
+    # Introspection rather than data. `wowdps wcl-schema` brackets its own pass with
+    # two standalone `rate_limit()` readings and reports what the counter did, so the
+    # document has nothing to contribute that the brackets do not already have.
+    ("wclschema", "TYPE_QUERY"),
+    # The three progress documents, and the reason is #170 Schritt 1c rather than
+    # neglect. Adding the field to them changes two things nobody has measured: the
+    # cache key of every response the chart producer has stored (`--cache` would go
+    # cold once), and the point cost, if Warcraft Logs really does charge per
+    # resolved field -- which is one of #170's own open measurements. Two of the
+    # three are the hot path of a cron job (`progresssweep`), so the bet is not one
+    # to take in passing.
+    #
+    # What it costs meanwhile is measured and is the argument for eventually doing
+    # it: because these documents carry no reading, both producers have to poll the
+    # counter separately -- 180 of 432 queries (42%) on the chart producer before it
+    # was reduced to one poll per boss, and one `rate_limit()` per guild in the sweep
+    # to this day.
+    ("progresshours", "ENCOUNTER_ZONE_QUERY"),
+    ("progresshours", "PROGRESS_RANKINGS_QUERY"),
+    ("progresshours", "GUILD_PULLS_QUERY"),
+}
+
+
+def test_no_module_outside_warcraftlogs_grows_an_unmeasured_query_document():
+    """The same ratchet, scoped the way it should have been on 2026-09-12.
+
+    The test above scans `vars(warcraftlogs)` and so cannot see a query document in
+    any other module -- and there are four, three of them sent by `cli` and
+    `progresssweep`. A guard that is present and answers over the wrong population is
+    this repository's signature defect, and building one and then scoping it to one
+    file is that defect committed by the person who had just written about it.
+
+    Counted, so the shape is on the record rather than in a commit message: 17
+    documents across three modules, 13 of them carrying a reading.
+    """
+    import importlib
+    import pkgutil
+
+    import wowdps
+
+    native = {id(v) for v in vars(warcraftlogs).values() if isinstance(v, str)}
+    found: dict[tuple[str, str], str] = {}
+    for info in pkgutil.iter_modules(wowdps.__path__):
+        module = importlib.import_module(f"wowdps.{info.name}")
+        for name, value in vars(module).items():
+            if not name.endswith("QUERY") or not isinstance(value, str):
+                continue
+            if "query" not in value and "mutation" not in value:
+                continue
+            # A document imported from `warcraftlogs` is that module's to answer for;
+            # identity rather than equality, because two modules genuinely holding the
+            # same text is exactly the duplication #170 Schritt 1c is about.
+            if info.name != "warcraftlogs" and id(value) in native:
+                continue
+            found[(info.name, name)] = value
+
+    assert len(found) >= 17, f"the package lost query documents; re-read this test: {len(found)}"
+
+    missing = {key for key, text in found.items() if "rateLimitData" not in text}
+    unexpected = sorted(missing - _DOCUMENTS_WITHOUT_A_READING)
+    assert unexpected == [], f"these documents cannot feed the ledger: {unexpected}"
+
+    # And the other direction, so the set cannot outlive its own evidence: a document
+    # that grows a reading has to leave the list, or the list stops being a statement
+    # about today.
+    stale = sorted(_DOCUMENTS_WITHOUT_A_READING - missing)
+    assert stale == [], f"these now carry a reading and should leave the set: {stale}"
+
+
 class _VerifyTransport:
     """A rankings service whose hourly counter moves, and which can start 429-ing."""
 
