@@ -2233,3 +2233,50 @@ def test_a_publish_that_would_shrink_a_published_block_is_refused_at_the_call_si
     target.write_text(json.dumps(published), encoding="utf-8")
     assert run() == 0
     assert json.loads(target.read_text(encoding="utf-8")) != published, "and it wrote"
+
+
+def test_an_encounter_with_no_ranked_parses_stops_after_one_ranking_page():
+    """160 queries a pass, to learn four times what one page says each time.
+
+    `_select_kills` walked `--rankings-pages` pages unconditionally. Four of MID2's
+    eight encounters are PTR ids with no ranked parses at all, so each of them paid
+    for the whole walk -- 4 x 40 = **160 ranking queries a pass** -- to re-read four
+    empty lists. `harvest.gather_rankings` has stopped on an exhausted list since it
+    was written; this is the same rule, in the place that lacked it.
+
+    The page is appended BEFORE the break, so `gathered[0]` is still there for the
+    twin check even when page one is the empty one. That is what the assertion on
+    the returned payload's name is for: a break placed one line earlier would
+    `IndexError` on exactly the ids this exists for.
+    """
+    client = TwinStub(names={53420: "Sszorak"}, rankings_for=set())
+
+    encounter, pairs, outcome = fightprobe._select_kills(
+        client, 53420, settings(order="first", rankings_pages=40)
+    )
+
+    assert [c for c in client.calls if c.startswith("rankings:")] == ["rankings:53420:page1"]
+    assert pairs == []
+    # The payload the twin check reads is still the one page that was fetched.
+    assert encounter["name"] == "Sszorak"
+    assert outcome is None
+
+
+def test_an_encounter_that_has_parses_still_walks_the_whole_page_budget():
+    """The control, and the half that makes the break safe to ship.
+
+    The saving must come from pages that hold NOTHING. An id with ranked parses is
+    the case `--rankings-pages` exists for -- Warcraft Logs sorts rankings by damage,
+    so the earliest kills sit deep in the list -- and narrowing that walk would cost
+    exactly the kills the `first`/`public` orders are built to reach.
+    """
+    client = TwinStub(names={3420: "Sszorak"}, rankings_for={3420})
+
+    _, _, _ = fightprobe._select_kills(client, 3420, settings(order="first", rankings_pages=4))
+
+    assert [c for c in client.calls if c.startswith("rankings:")] == [
+        "rankings:3420:page1",
+        "rankings:3420:page2",
+        "rankings:3420:page3",
+        "rankings:3420:page4",
+    ]

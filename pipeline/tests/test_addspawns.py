@@ -806,3 +806,58 @@ def test_reading_two_streams_does_not_double_the_copies(monkeypatch, tmp_path):
     assert len(fight["pattern"]["waves"]) == 3
     assert [row["sightings"] for row in fight["pattern"]["waves"]] == [14, 14, 14]
     assert fight["pattern"]["waves"][0]["maxPerPosition"] == 2
+
+
+def test_the_encounter_name_comes_off_the_rankings_payload_already_fetched(tmp_path):
+    """A second query for a name that was in the answer to the first.
+
+    `RANKINGS_QUERY` selects `encounter { id name characterRankings }`, so the
+    name is on every rankings answer -- including one carrying no rankings at all,
+    which is exactly the case the PTR/live twin check needs it for. `_kill_candidates`
+    read that payload, took the rows, and threw the name away; the caller then spent
+    a whole `encounter_name` query asking for it again. `fightprobe._name_of` has
+    read it off the payload since it was written.
+
+    The lookup stays as the FALLBACK rather than being removed: a payload stating no
+    name is a different thing from one stating an empty one, and feeding the twin
+    check a name nobody read is how a full set of real kills gets filed under the
+    wrong boss.
+    """
+
+    class _Named(_StubClient):
+        def __init__(self, **kw):
+            super().__init__(**kw)
+            self.name_lookups: list[int] = []
+
+        def query(self, document, variables, label=None):
+            return {
+                "worldData": {
+                    "encounter": {
+                        "name": "The Twin Fangs",
+                        "characterRankings": {"rankings": self.rankings_rows},
+                    }
+                }
+            }
+
+        def encounter_name(self, encounter_id):
+            self.name_lookups.append(encounter_id)
+            return super().encounter_name(encounter_id)
+
+    client = _Named(rankings_rows=[], report={}, events=[])
+    pairs, rows, name = addspawns._kill_candidates(client, 53421, 5, 10)
+
+    assert (pairs, rows) == ([], 0)
+    assert name == "The Twin Fangs"
+    # The whole point: the name was there, so nothing asked for it a second time.
+    assert client.name_lookups == []
+
+
+def test_a_payload_that_states_no_name_still_falls_back_to_the_lookup(tmp_path):
+    """The control. Absent is not empty, and a stub whose payload happens to carry
+    the name cannot tell a reader whether the fallback survived -- so the case that
+    has to keep working is the one where it is genuinely missing.
+    """
+    client = _StubClient(rankings_rows=[], report={}, events=[])
+    _, _, name = addspawns._kill_candidates(client, 53421, 5, 10)
+
+    assert name is None
