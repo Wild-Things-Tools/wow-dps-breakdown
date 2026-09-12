@@ -1957,6 +1957,30 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
                 return False
             return budget["spent"] >= limit * args.point_ceiling
 
+        # One encounter block per id for the whole pass.
+        #
+        # `WarcraftLogsClient.encounter` sends `ENCOUNTER_ZONE_QUERY`, whose payload
+        # carries the name AND the zone -- which is why this command no longer has a
+        # second, leaner copy of that document. It ran three queries on a boss whose
+        # twin was accepted (filed zone, twin name, twin zone) where two answer, and
+        # the leaner copy asked for no `rateLimitData`, so none of the three could be
+        # compared against anything.
+        #
+        # The dict is what makes that true HERE: `wowdps progress-hours` takes no
+        # `--cache`, so the client's own store is inert in this command and the twin's
+        # name and the twin's zone would otherwise be two fetches of one payload.
+        seen_encounters: dict[int, dict] = {}
+
+        def encounter_block(eid: int) -> dict:
+            """This run's answer for one encounter, fetched at most once.
+
+            A failure is deliberately NOT memoised: nothing is stored, so the caller's
+            own handler sees the exception and a later ask may still succeed.
+            """
+            if eid not in seen_encounters:
+                seen_encounters[eid] = client.encounter(eid)
+            return seen_encounters[eid]
+
         for order, entry in enumerate(encounters, start=1):
             encounter_id = int(entry["encounterId"])
             boss = progresshours.BossProgress(
@@ -2008,15 +2032,11 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
             wcl_name = None
             if not zone_id:
                 try:
-                    payload = client.query(
-                        progresshours.ENCOUNTER_ZONE_QUERY,
-                        {"e": encounter_id},
-                        label=f"zone:{encounter_id}",
-                    )
-                    zone_id = progresshours.encounter_zone(payload) or 0
+                    encounter = encounter_block(encounter_id)
+                    zone_id = progresshours.encounter_zone(encounter) or 0
                     # Fetched all along and discarded. It is what verifies the twin
                     # substitution below, so it costs no extra query.
-                    wcl_name = progresshours.encounter_name(payload)
+                    wcl_name = progresshours.encounter_name(encounter)
                 except WarcraftLogsError as exc:
                     logging.warning("%s: zone lookup failed: %s", boss.name, exc)
                     zone_id = 0
@@ -2033,13 +2053,7 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
 
                 def _lookup(twin_id: int) -> str | None:
                     try:
-                        return progresshours.encounter_name(
-                            client.query(
-                                progresshours.ENCOUNTER_ZONE_QUERY,
-                                {"e": twin_id},
-                                label=f"twin:{twin_id}",
-                            )
-                        )
+                        return progresshours.encounter_name(encounter_block(twin_id))
                     except WarcraftLogsError:
                         return None
 
@@ -2048,14 +2062,13 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
                 logging.info("%s: %s", boss.name, choice.reason)
                 if choice.substituted and choice.used:
                     encounter_id = int(choice.used)
+                    # The twin's zone rides in the very payload its NAME was verified
+                    # from, so an accepted substitution needs no second lookup. A twin
+                    # stating no zone falls through to the `no-zone` refusal below --
+                    # the same refusal a filed id gets, rather than a quieter one.
                     zone_id = 0
                     try:
-                        payload = client.query(
-                            progresshours.ENCOUNTER_ZONE_QUERY,
-                            {"e": encounter_id},
-                            label=f"zone:{encounter_id}",
-                        )
-                        zone_id = progresshours.encounter_zone(payload) or 0
+                        zone_id = progresshours.encounter_zone(encounter_block(encounter_id)) or 0
                     except WarcraftLogsError as exc:
                         logging.warning("%s: twin zone lookup failed: %s", boss.name, exc)
                     for page in range(1, pages + 1):

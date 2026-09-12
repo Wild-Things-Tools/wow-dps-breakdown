@@ -216,14 +216,14 @@ def test_the_zone_is_read_out_of_the_encounter_and_zero_is_not_a_zone():
     (`hostilityType`, `includeResources`): after an omitted argument comes a *zero*
     one, and a zero is a value the service may interpret.
     """
-    payload = {"worldData": {"encounter": {"id": 3176, "zone": {"id": 46, "name": "VS"}}}}
-    assert encounter_zone(payload) == 46
+    # The encounter BLOCK, which is what `WarcraftLogsClient.encounter` returns --
+    # the client unwraps the envelope, so this function no longer walks it.
+    assert encounter_zone({"id": 3176, "zone": {"id": 46, "name": "VS"}}) == 46
 
     # Each of these must be None rather than 0, because the caller's whole job is to
     # tell "no zone" from a zone, and 0 is what made the failing run look healthy.
-    assert encounter_zone({"worldData": {"encounter": {"zone": {"id": 0}}}}) is None
-    assert encounter_zone({"worldData": {"encounter": {"zone": None}}}) is None
-    assert encounter_zone({"worldData": {"encounter": None}}) is None
+    assert encounter_zone({"zone": {"id": 0}}) is None
+    assert encounter_zone({"zone": None}) is None
     assert encounter_zone({}) is None
 
 

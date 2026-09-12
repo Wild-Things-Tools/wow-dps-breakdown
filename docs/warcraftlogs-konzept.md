@@ -545,6 +545,27 @@ dieselben Dokumente, ein Schluesselraum statt vier.
 benutzen. Und die Zwillingsantwort einmal unter `encounter/<id>` notieren, **mit** der
 Gueltigkeitsdauer aus 4.3. (geschaetzt: ~4 h)
 
+> **Stand 12.09.2026: die zweite Haelfte ist gebaut, die erste ist gemessen und
+> abgelehnt.**
+>
+> Gebaut: `WarcraftLogsClient.encounter` ist der einzige Sender von
+> `ENCOUNTER_ZONE_QUERY` und gibt den ganzen Block zurueck, also liegt die
+> Zwillingsantwort unter `encounter/<id>` mit der `frozen`-abgeleiteten Dauer. Die
+> zweite Kopie in `progresshours` ist geloescht (2.5), und
+> `addspawns._kill_candidates` holt seine Ranking-Seite ueber
+> `client.encounter_rankings` statt das Dokument selbst zu schicken (2.3), also ist
+> sie ein Eintrag mit `fightprobe`s und `harvest`s.
+>
+> Abgelehnt, mit Zahl: die Ereignisabrufe der beiden Proben schicken
+> **verschiedene Dokumente** (`EVENTS_WITH_RESOURCES_QUERY` gegen `EVENTS_QUERY`),
+> und das ist die teure Haelfte -- am 36-Kill-Lauf 34457405665 sind 36 von 404
+> Abfragen Kampfstrukturen und der Rest Ereignisseiten. Ein gemeinsamer Cache kann
+> also unter 10 % der Abfragen teilen, und davon faktisch nur, was beide am selben
+> Kill fragen; sie sampeln aber verschieden (`spawn-probe` nach Ranking,
+> `fight-probe` mit `--order public` nach Datum). Dagegen steht, dass `fight-probe`
+> stuendlich laeuft und `spawn-probe` nur auf Zuruf: ein gemeinsamer Schluessel gaebe
+> dem stuendlichen Lauf einen zweiten Schreiber fuer ein paar Dispatches im Monat.
+
 **Schritt 4 -- `logs-verification` messbar machen:** `rate_limit()`-Klammer,
 `cost`-Block, `--cache`. Schliesst die letzte ungemessene wiederkehrende Ausgabe.
 (geschaetzt: ~3 h)

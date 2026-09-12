@@ -110,11 +110,19 @@ class StubClient:
         self.rate_limit_calls += 1
         return {"limitPerHour": 18000.0, "pointsSpentThisHour": 0.0}
 
+    def encounter(self, encounter_id):
+        """The client's own method since 2026-09-12, not a routed document.
+
+        `cmd_progress_hours` used to send a second, leaner copy of
+        `ENCOUNTER_ZONE_QUERY` through `query()`; it now asks the client, which is
+        the one sender and puts the answer in the `encounter/<id>` key space.
+        """
+        self.sent.append((f"encounter:{encounter_id}", {"e": encounter_id}))
+        zone = {"id": self.zone} if self.zone else None
+        return {"id": ENCOUNTER, "zone": zone}
+
     def query(self, document, variables, label=None):
         self.sent.append((label, dict(variables)))
-        if document is progresshours.ENCOUNTER_ZONE_QUERY:
-            zone = {"id": self.zone} if self.zone else None
-            return {"worldData": {"encounter": {"id": ENCOUNTER, "zone": zone}}}
         if document is progresshours.PROGRESS_RANKINGS_QUERY:
             if variables.get("p", 1) > 1:
                 # One page holds every stubbed guild, so page 2 is empty. Modelled
@@ -141,6 +149,18 @@ class StubClient:
 
 def listing(reports, more):
     return {"has_more_pages": more, "data": reports}
+
+
+def _encounters_asked(client):
+    """Which encounter ids the run actually fetched a block for, in order.
+
+    The stubs record every `encounter()` call, so this counts FETCHES rather than
+    asserting how the command is wired: a refactor that re-introduces a second lookup
+    still produces the right answer, and only the count says it paid twice for it.
+    """
+    return [
+        int(label.split(":", 1)[1]) for label, _ in client.sent if label.startswith("encounter:")
+    ]
 
 
 def run(monkeypatch, tmp_path, client, **overrides):
@@ -453,15 +473,21 @@ class TwinClient(StubClient):
         self.twin_name = twin_name
         self.filed_name = filed_name if filed_name is not None else twin_name
 
+    def encounter(self, encounter_id):
+        """One block per id, carrying the name AND the zone -- which is the point.
+
+        An id the schema does not know answers `{}`, which is what
+        `harvest.choose_encounter_id` refuses a substitution on.
+        """
+        self.sent.append((f"encounter:{encounter_id}", {"e": encounter_id}))
+        name = self.filed_name if encounter_id == self.filed else self.twin_name
+        if name is None:
+            return {}
+        zone = {"id": self.zone} if self.zone else None
+        return {"id": encounter_id, "name": name, "zone": zone}
+
     def query(self, document, variables, label=None):
         self.sent.append((label, dict(variables)))
-        if document is progresshours.ENCOUNTER_ZONE_QUERY:
-            which = variables["e"]
-            name = self.filed_name if which == self.filed else self.twin_name
-            if name is None:
-                return {"worldData": {"encounter": None}}
-            zone = {"id": self.zone} if self.zone else None
-            return {"worldData": {"encounter": {"id": which, "name": name, "zone": zone}}}
         if document is progresshours.PROGRESS_RANKINGS_QUERY:
             if variables["e"] != self.twin or variables.get("p", 1) > 1:
                 return {"worldData": {"encounter": {"fightRankings": {"rankings": []}}}}
@@ -483,6 +509,43 @@ def test_a_ptr_id_with_no_ranking_rows_is_read_as_its_live_twin(monkeypatch, tmp
     assert boss["medianHours"] == 1.0, "the twin's ranking was never used"
     assert "read as 3445" in (boss["readAs"] or "")
     assert any(label == "progress:3445:p1" for label, _ in client.sent)
+
+
+def test_an_accepted_twin_costs_two_encounter_fetches_and_not_three(monkeypatch, tmp_path):
+    """#170 Schritt 3: the twin's zone rides in the payload its name was verified from.
+
+    Until 2026-09-12 this command sent its own leaner copy of `ENCOUNTER_ZONE_QUERY`
+    three times on this branch -- the filed id's zone, the twin's name, the twin's
+    zone -- and that copy asked for no `rateLimitData`, so none of the three could be
+    compared against anything. The client's `encounter()` returns the whole block, so
+    the third fetch has nothing left to fetch.
+
+    Counting the fetches rather than asserting the wiring: a later refactor that
+    re-introduces a second lookup would still produce the right answer, and only the
+    count says it paid twice for it.
+    """
+    pages = [
+        listing([{"startTime": 0, "fights": [fight(0, HOUR, kill=True, encounter=3445)]}], False)
+    ]
+    client = TwinClient(pages, filed=53445, twin=3445, twin_name="Entombed Sentinels")
+    boss = run(monkeypatch, tmp_path, client, tier="MID2", encounter=53445)
+
+    assert "read as 3445" in (boss["readAs"] or ""), "the substitution has to have happened"
+    assert _encounters_asked(client) == [53445, 3445]
+
+
+def test_a_filed_id_with_ranked_rows_asks_about_one_encounter(monkeypatch, tmp_path):
+    """The control, because "two rather than three" is only a saving if the ordinary
+    case did not get more expensive.
+
+    A boss whose own ranking answers never reaches `choose_encounter_id` at all, so
+    it asks once -- exactly as it did before.
+    """
+    pages = [listing([{"startTime": 0, "fights": [fight(0, HOUR, kill=True)]}], False)]
+    client = StubClient(pages)
+    run(monkeypatch, tmp_path, client)
+
+    assert _encounters_asked(client) == [ENCOUNTER]
 
 
 def test_a_twin_that_is_a_different_boss_is_refused_not_substituted(monkeypatch, tmp_path):

@@ -6032,6 +6032,76 @@ again, once.
   tests red with a `TypeError`; had the signatures been compatible, four tests would
   have silently run against the wrong double. The failures are the lucky case.
 
+### One sender per question (#170 Schritt 3)
+
+Schritt 2 built the key space; this is what was still asking around it. Two call
+sites reached a stored thing by a route the store could not see, and neither was
+visible from any angle except counting the requests.
+
+**`cmd_progress_hours` carried its own copy of `ENCOUNTER_ZONE_QUERY`.** Same three
+fields, no `rateLimitData`, and sent **three times** on the branch where a twin is
+accepted -- the filed id's zone, the twin's name, the twin's zone. The last two are
+one payload. `WarcraftLogsClient.encounter` is the one sender now and returns the
+whole block; `encounter_zone` is a field taken off it. So an accepted substitution
+costs **two** queries where it cost three, the ordinary case (a boss whose own
+ranking answers) costs the one it always did, and the answer lands under
+`encounter/<id>` with the `frozen`-derived lifetime.
+
+**It is the only one of #180's four reading-less documents whose unification costs
+nothing unmeasured**, which is why it is done here and the other three are not:
+`wowdps progress-hours` restores no `actions/cache` (checked: it has no cache step
+at all), so there was no stored response to go cold, and the richer document is
+already sent by two other commands. The two progress *ranking* documents stay in
+`_DOCUMENTS_WITHOUT_A_READING` with their reason, and the ratchet's floor drops
+17 -> 16 -- which it caught by itself, which is what a two-sided ratchet is for.
+
+**`addspawns._kill_candidates` spelled out `RANKINGS_QUERY` and its six variables**
+and sent them through `query()` -- byte-for-byte the request
+`client.encounter_rankings` makes, which `fightprobe` and `harvest` use. One entry
+now instead of two. `addspawns` sends no document of its own at all any more.
+
+### What a shared `actions/cache` for the two probes would buy, measured
+
+Schritt 3's other half, and the answer is *not much*, for a reason that is a fact
+about the documents rather than about the caches:
+
+```
+fight-probe  fight_events(..., include_resources=False)  -> EVENTS_QUERY
+spawn-probe  fight_events(..., include_resources=True)   -> EVENTS_WITH_RESOURCES_QUERY
+```
+
+**Different documents, so different entries, however the caches are arranged** --
+and the event pages are the expensive half. On the 36-kill spawn run (34457405665)
+that is 432.3 points over 404 queries, of which 36 are fight structures and the
+rest event pages; the shareable fraction is **under 10% of the queries**. Of that
+tenth, only what both probes ask about the *same kill* is actually shared, and they
+do not sample the same kills by construction: `spawn-probe` takes the ranking's own
+order and `fight-probe` defaults to `--order public`, which is the report search
+unioned with the rankings and sorted by date.
+
+Against that, the cost is real: `fight-probe` runs hourly and `spawn-probe` is
+dispatch-only, so a shared key hands the hourly job's warm cache a second writer for
+the sake of a few dispatches a month. **So it is not built**, and what is built
+instead is the half that needed no workflow change -- one entry per question, which
+is what makes a shared cache worth anything if somebody ever does want one.
+
+### The canary did not fire, and the finding was the test
+
+`test_the_whole_block_and_its_zone_are_one_fetch` claimed `encounter_zone` was a
+field taken off `encounter`, and stayed **green** when `encounter_zone` was given
+back its own `_fetch`. It was not testing the change: it ran **with a store**, where
+the second call hits an entry whose variant is a superset and is free whatever the
+method does. The test pinned the store -- which
+`test_a_name_request_is_answered_out_of_the_zone_fetch` already pins.
+
+Replaced by two tests that each hit one claim, and `_stubbed_client` grew a
+`store=False` for the first of them: **one request has to carry both fields**,
+asserted in the configuration the command that needed this actually runs in (no
+`--cache`, so no store). Sixth instance in this file of the rule, and the sharpest:
+a canary that does not fire is a finding about the canary at least as often as about
+the code -- here it was about the *claim the test was making*, which is a third
+thing again.
+
 ## Fight patterns per boss — what Warcraft Logs can and cannot tell you
 
 The logs cross-check compares Patchwerk single target against nine different encounters,
