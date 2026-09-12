@@ -15,6 +15,11 @@ Speicher und die Regel, dieselben Daten nie zweimal zu holen. Dieses Dokument ni
 alle drei an und verschiebt zwei der drei Beispielzahlen, weil der Bestand sie nicht
 traegt.
 
+Die vier Fragen, die nur der Besitzer beantworten konnte, sind am selben Tag
+beantwortet und stehen in Kapitel 9. Eine davon -- der Umfang von Stufe 3 -- faellt
+genau auf das, was der Kohorten-Seed schon haelt, und macht damit ein zweites
+privates Repo entbehrlich.
+
 ---
 
 ## 1. Was heute passiert
@@ -509,9 +514,10 @@ Jeder Schritt ist einzeln lieferbar und einzeln nuetzlich. Kein Big Bang. Der Au
 ist **geschaetzt** und als solcher gekennzeichnet.
 
 **Schritt 0 -- zwei Lecks schliessen. Setzt nichts voraus.** (geschaetzt: je ~1 h)
-- (a) Die 70 Gilden-IDs aus `progress-hours.json` nehmen oder sie durch einen
-  laufstabilen Pseudonym-Schluessel ersetzen. Entscheidung des Besitzers, siehe
-  Kapitel 9.
+- (a) Die 70 Gilden-IDs in `progress-hours.json` durch einen laufstabilen, nicht
+  rueckrechenbaren Pseudonym-Schluessel ersetzen -- **entschieden am 12.09.2026**,
+  die beiden Anforderungen an den Schluessel stehen in Kapitel 9. Nicht entfernen:
+  die Zeilen tragen die Verteilung der `outcome`-Werte.
 - (b) Den Response-Cache aus dem hochgeladenen Artefaktordner herausnehmen
   (`path:` auf die Payload-Datei einschraenken oder `--cache` nach `.work/` legen),
   in `fight-probe.yml` und `spawn-probe.yml`.
@@ -637,22 +643,80 @@ Jede dieser Absagen ist geprueft und verworfen, damit sie niemand neu erfindet.
 
 ---
 
-## 9. Was ungeklaert ist
+## 9. Was entschieden ist, und was ungeklaert bleibt
 
-### Entscheidungen, die nur der Besitzer treffen kann
+### Entscheidungen des Besitzers, getroffen am 12.09.2026
 
-1. **Die 70 Gilden-IDs in `progress-hours.json`.** Entfernen, durch einen
-   laufstabilen Pseudonym-Schluessel ersetzen oder als bewusste Veroeffentlichung
-   stehen lassen? Sie tragen heute die Verteilung der `outcome`-Werte, die den
-   Screens ihre Glaubwuerdigkeit gibt.
-2. **Wie weit zurueck soll Stufe 3 reichen?** Nur die laufende Saison, oder die
-   Historie, die der Kohorten-Seed bereits abdeckt (5 Zonen, 30.586 Zeilen)? Davon
-   haengt ab, ob ein zweites privates Repo noetig ist.
-3. **Ein zweites privates Repo oder ein zweiter Ordner in `wtt-progress-data`?**
-   Ein Ordner ist billiger; ein eigenes Repo haelt Gildenstunden und Bossformen
-   getrennt, was ihre unterschiedliche Vertraulichkeit ausdrueckbar laesst.
-4. **Rechtfertigt Stufe 1 ueberhaupt einen eigenen Bestand?** Sie wird erst gebaut,
-   wenn eine Auswertung sie braucht. Gibt es eine?
+Alle vier offenen Fragen sind beantwortet. Sie stehen hier mit dem, was sie
+festlegen, und mit dem, was sie ausdruecklich **nicht** festlegen -- eine
+Entscheidung, deren Bedingung auf einer ungenommenen Messung ruht, ist eine
+Entscheidung und keine Messung.
+
+1. **Die 70 Gilden-IDs in `progress-hours.json`: pseudonymisieren.** Weder
+   entfernen noch stehenlassen. Was der oeffentliche Datensatz heute traegt, ist
+   nachgezaehlt: **70 verschiedene IDs in genau einem Bossblock** (The Twin Fangs),
+   mit den Ausgaengen `measured` 34, `no-reports` 31, `no-fights` 4, `no-kill` 1 --
+   also genau die Verteilung, die den Screens ihre Glaubwuerdigkeit gibt, und der
+   Grund, warum Entfernen die schlechtere Haelfte waere. Erzeuger ist
+   `progresshours.guild_row`. Zwei Eigenschaften muss der Schluessel haben, und die
+   zweite ist die schwerere: **laufstabil**, sonst ist eine Zeile ueber zwei
+   Dokumente nicht dieselbe Gilde und die Verteilung ist nur noch eine Summe; und
+   **nicht rueckrechenbar** aus dem oeffentlichen Dokument, sonst ist es eine
+   Umbenennung und keine Pseudonymisierung. Ein blosser Hash der Gilden-ID erfuellt
+   das erste und nicht das zweite -- der Schluesselraum ist die Menge der
+   WCL-Gilden-IDs und damit abzaehlbar.
+
+2. **Stufe 3 reicht ab The War Within, alle Seasons.** Das ist **genau der Umfang,
+   den der Kohorten-Seed schon haelt**, und das ist gemessen und kein Zufall: die
+   fuenf Zonen 53 / 46 / 44 / 42 / 38 sind The Venomous Abyss, VS/DR/MQD, Manaforge
+   Omega, Liberation of Undermine und Nerub-ar Palace -- Midnight S1-S2 und TWW
+   S1-S3, 30.586 Zeilen. Es ist also keine Zone nachzutragen. Was die Entscheidung
+   **abschneidet**, ist die Historie davor: `fetch_progress_hours --seasons all`
+   erreicht 16 Tiers zurueck bis Antorus (wtt-backend/CLAUDE.md), also elf weitere,
+   die nicht in den Bestand kommen. Und sie beantwortet Frage 3 mit: ein zweites
+   privates Repo waere **nicht** noetig gewesen -- der Umfang passt in den
+   bestehenden.
+
+3. **Ein zweiter Ordner in `wtt-progress-data`, kein zweites Repo.** Der Preis
+   dieser Entscheidung steht in Kapitel 8 und bleibt stehen: Gildenstunden und
+   Bossformen haben **unterschiedliche** Vertraulichkeit, und ein gemeinsames Repo
+   kann das nur noch per Ordnernamen ausdruecken statt per Zugriffsrecht. Der
+   Ordner traegt deshalb seine eigene `--validate`-Regel und sein eigenes Manifest,
+   und keine Datei liegt in beiden. Was die Absage aus Kapitel 8 (*"KEIN
+   gemeinsamer Speicher mit der Progress-Seite"*) meinte und weiter meint, ist das
+   Vermischen in **einer Datei**; ein Nachbarordner unter demselben PAT ist davon
+   nicht betroffen.
+
+4. **Stufe 1 haelt vorerst alles -- solange die Kosten nicht oder kaum steigen.**
+   Die Begruendung des Besitzers ist richtig in der Richtung, auf die es ankommt:
+   `fights` und die WCL-Components sind **stromweit** statt feldselektiv, also
+   wuerde ein verschmaelerter Bestand keinem von beiden nuetzen; und die Components
+   laufen in WCLs eigener Umgebung gegen die ambienten Event-Globals, zahlen also
+   je Event nichts.
+
+   Drei Praezisierungen, ohne die der Satz mehr verspricht, als er haelt:
+
+   - **Punkte fallen beim Abruf an, Bytes beim Behalten.** Ein bereits bezahlter
+     Payload laenger aufzuheben kostet **keinen einzigen Punkt**. Die Bedingung
+     *"solange die Kosten nicht oder kaum steigen"* ist damit eine Frage nach
+     Bytes -- und die Byte-Zahl ist die erste ungenommene Messung im naechsten
+     Abschnitt (233 MB roh oder komprimiert, Faktor ~8).
+   - **`fight-probe` liest nicht alle Events eines Kills.** `--max-pages` x
+     `--events-limit` begrenzt den Abruf, und CLAUDE.md haelt fest, dass diese
+     Grenze echte Pulls abschneidet. "Alles aufheben" bewahrt also, was geholt
+     wurde, nicht, was existiert -- ein Stufe-1-Bestand aus Probe-Payloads erbt die
+     Truncation mitsamt ihrem `truncated`-Flag.
+   - **Regal B haelt heute NICHT alles, und das ist nachgemessen.** `fight-probe.yml`
+     und `spawn-probe.yml` setzen beide `retention-days: 14`, das Artefakt mit dem
+     Rohschnitt ist also nach vierzehn Tagen weg; der `actions/cache` ueberlebt nur,
+     solange er angefasst wird. Die billigste Umsetzung dieser Entscheidung ist
+     deshalb **nicht** Schritt 7, sondern die Aufbewahrungsfrist -- und was dabei zu
+     pruefen ist, bevor sie hochgeht, sind GitHubs Grenzen fuer Cache und Artefakte
+     eines oeffentlichen Repos, die dieses Dokument nicht gemessen hat.
+
+   Schritt 7 bleibt damit unveraendert letzter Schritt und unveraendert an seine
+   zwei Bedingungen gebunden. Die Entscheidung beantwortet *"ist der Rohschnitt
+   ueberhaupt etwas wert"* mit ja und nicht *"baut ihn jetzt"*.
 
 ### Messungen, die noch niemand genommen hat
 
