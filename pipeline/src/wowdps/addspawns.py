@@ -839,21 +839,15 @@ def _kill_candidates(client, encounter_id: int, difficulty: int, limit: int):
     are deduplicated on the report and the fight together: two players in one kill
     are one kill.
     """
-    from .warcraftlogs import RANKINGS_QUERY
-
-    data = client.query(
-        RANKINGS_QUERY,
-        {
-            "encounterId": encounter_id,
-            "difficulty": difficulty,
-            "metric": "dps",
-            "className": None,
-            "specName": None,
-            "page": 1,
-        },
-        label=f"rankings:{encounter_id}:d{difficulty}",
-    )
-    encounter = ((data.get("worldData") or {}).get("encounter")) or {}
+    # `client.encounter_rankings` rather than the document, and the variables it
+    # sends are byte-for-byte the ones this function used to spell out. That matters
+    # since #181: the method goes through the key space, so this page is ONE entry
+    # with `fightprobe`'s and `harvest`'s rather than a second copy under the old
+    # `sha256(document + variables)` key. It is also the only question these two
+    # probes genuinely share -- their event fetches use different documents
+    # (`EVENTS_WITH_RESOURCES_QUERY` here, `EVENTS_QUERY` there), so the expensive
+    # half cannot be shared however the caches are arranged.
+    encounter = client.encounter_rankings(encounter_id, difficulty)
     rankings = encounter.get("characterRankings") or {}
     if isinstance(rankings, str):
         import json as _json

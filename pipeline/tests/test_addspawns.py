@@ -318,8 +318,15 @@ class _StubClient:
     def rate_limit(self):
         return {"limitPerHour": 18000.0, "pointsSpentThisHour": 0.0}
 
-    def query(self, document, variables, label=None):
-        return {"worldData": {"encounter": {"characterRankings": {"rankings": self.rankings_rows}}}}
+    def encounter_rankings(self, encounter_id, difficulty=5, metric="dps", page=1):
+        """The client's own method since 2026-09-12, returning the encounter BLOCK.
+
+        `_kill_candidates` sent `RANKINGS_QUERY` through `query()` with exactly these
+        variables, so the page was a second cache entry beside the one `fightprobe`
+        and `harvest` already wrote. A stub returning the envelope would pass against
+        that, which is why this one returns what the client returns.
+        """
+        return {"characterRankings": {"rankings": self.rankings_rows}}
 
     def encounter_name(self, encounter_id):
         return "The Twin Fangs"
@@ -829,14 +836,10 @@ def test_the_encounter_name_comes_off_the_rankings_payload_already_fetched(tmp_p
             super().__init__(**kw)
             self.name_lookups: list[int] = []
 
-        def query(self, document, variables, label=None):
+        def encounter_rankings(self, encounter_id, difficulty=5, metric="dps", page=1):
             return {
-                "worldData": {
-                    "encounter": {
-                        "name": "The Twin Fangs",
-                        "characterRankings": {"rankings": self.rankings_rows},
-                    }
-                }
+                "name": "The Twin Fangs",
+                "characterRankings": {"rankings": self.rankings_rows},
             }
 
         def encounter_name(self, encounter_id):
@@ -850,6 +853,29 @@ def test_the_encounter_name_comes_off_the_rankings_payload_already_fetched(tmp_p
     assert name == "The Twin Fangs"
     # The whole point: the name was there, so nothing asked for it a second time.
     assert client.name_lookups == []
+
+
+def test_the_ranking_page_goes_through_the_key_space_and_not_the_document(tmp_path):
+    """#170 Schritt 3: one entry per thing, not one per sender.
+
+    `_kill_candidates` spelled out `RANKINGS_QUERY` and its six variables and sent
+    them through `query()` -- the same page `fightprobe` and `harvest` ask for
+    through `client.encounter_rankings`, under a different key. Under
+    `sha256(document + variables)` that was invisible; under `rankings/<id>/...` the
+    two are one entry, so a probe that runs after the other pays nothing for it.
+
+    Asserted by making the document route FAIL, because a stub that answers both
+    routes cannot tell which one was taken.
+    """
+
+    class _NoDocuments(_StubClient):
+        def query(self, *_a, **_kw):  # pragma: no cover - the point is that it is not called
+            raise AssertionError("the ranking page was sent as a document, not as a question")
+
+    client = _NoDocuments(rankings_rows=[], report={}, events=[])
+    pairs, rows, name = addspawns._kill_candidates(client, 3421, 5, 10)
+
+    assert (pairs, rows, name) == ([], 0, None)
 
 
 def test_a_payload_that_states_no_name_still_falls_back_to_the_lookup(tmp_path):
