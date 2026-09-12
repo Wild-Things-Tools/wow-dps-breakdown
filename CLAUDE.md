@@ -4754,8 +4754,12 @@ two share `ranking_rows`, `pull_time` and the GraphQL documents, not a format.
 checkout of the private repository `Wild-Things-Tools/wtt-progress-data` made with a
 fine-grained PAT (`PROGRESS_DATA_PAT`, Contents read/write on that one repository),
 and pushes there. This repository is public, and a commit, a release or an artifact
-here is readable by anyone; ~84k rows of guild names, realms, hours and first kills
-over five seasons would be irreversible in git history. So the workflow's
+here is readable by anyone; the guild names, realms, hours and first kills of five
+seasons would be irreversible in git history -- **30,586 rows**, measured on
+2026-09-12 when the seed was exported, against the ~84k this paragraph estimated
+before one had been. The estimate was the whole `ProgressBossHours` table; what
+leaves the backend is `outside_cohort=False` over the five typed zones, which is a
+third of it. So the workflow's
 `permissions` is `contents: read`: it never commits to itself. The import on the
 private side reads the tarball with a token from Secret Manager. Nothing about guilds
 touches this repository at any point, and the schema twin in `web/` is not extended
@@ -4906,8 +4910,9 @@ source here before it was fixed, and each is pinned by a test whose canary was r
   sides, and the two must stay equal.
 - **`data/` was not gitignored here.** The workflow checks the private data repository
   out into it and the documented local command writes there, so one `git add -A` after a
-  local run commits ~84k rows of guild names, realms and first kills into a public
-  history, irreversibly. The entry is **`/data/`**, and the leading slash is
+  local run commits the guild names, realms and first kills of every measured cohort
+  guild into a public history, irreversibly -- 30,586 rows as of 2026-09-12, and
+  growing with every sweep. The entry is **`/data/`**, and the leading slash is
   load-bearing: a bare `data/` matches a directory of that name at any depth and would
   silently ignore `web/public/data/` (the published dataset) and
   `pipeline/src/wowdps/data/gear_pools.json`.
@@ -4959,6 +4964,50 @@ must read before the cron goes on: the eight zone-53 encounter ids against the k
 live ids (3420/3421/3429/3445/3455/3470/3492/3497), and `named`/`shape` per boss in
 `state.json` -- production counted 985-988 named of 1000 with the same reader, so a
 run that stores no names is this reader missing the block, not the payload lacking it.
+
+### The seed landed, and the eight ids came out live
+
+2026-09-12. `export_progress_hours --zones 53,46,44,42,38` in the Cloud Run job
+`wtt-masterdata` (execution `wtt-masterdata-482mv`, 36.15 s, read-only against the
+database) wrote the layout to a private GCS prefix; it was fetched from there and
+committed to `Wild-Things-Tools/wtt-progress-data` as `923fc30`, then the staging
+copy was deleted. **30,586 rows** over ten `(zone, difficulty)` pairs:
+
+```
+zone 53  The Venomous Abyss          Mythic 3,152   Heroic 5,381
+zone 46  VS / DR / MQD               Mythic 6,574   Heroic 6,284
+zone 44  Manaforge Omega             Mythic 2,605   Heroic 5,043
+zone 42  Liberation of Undermine     Mythic    88   Heroic 1,416
+zone 38  Nerub-ar Palace             Mythic    43   Heroic     0
+```
+
+`z38-d4` holding nothing is a state rather than a failure -- that pair has no cohort
+row in the database and no sweep state either, and the manifest carries it at
+`rows: 0` rather than omitting it.
+
+**Three checks, and the third is the one the PTR refusal exists for.** The manifest's
+counts and the files' line counts agree on **10 of 10** pairs; `progress-sweep
+--validate` reports **0 problems** locally and again in CI; and `--seed-only` reads
+all ten pairs with exit 0 and no query sent. Zone 53 comes back carrying **3379,
+3420, 3421, 3429, 3445, 3455, 3470, 3492, 3497** -- the eight ids the first hand run
+is told to check, plus Nymrissa Wavecaller, which the LIVE zone 53 has and the PTR
+zone 54 does not. No `53xxx` id anywhere: the export's `PTR_TWIN_ID_FLOOR` refusal
+did its job on real data.
+
+**The workflow's own dispatch is what proved the wiring**, not a local run: run
+34693569074, `seed_only: true`, **15 seconds end to end**. Its "Check out the data
+repository" step passing is the whole proof that `PROGRESS_DATA_PAT` reaches the
+private repository, and it happens *before* a point is spent, which is why that step
+sits where it does. The run printed `progress-cohort: 0 problem(s)` and `progress
+cohort unchanged` and committed nothing, which is what a seed-only pass must do.
+
+**One thing could not be cross-checked and is named rather than glossed.** An
+independent row count out of the database would have needed the job's stdout, and
+`wtt-masterdata` emits **none** to Cloud Logging -- an `explore sql` execution
+succeeded in 26 s and produced zero `run.googleapis.com%2Fstdout` entries, while
+`wtt-progress-refresh-eu-na` logs normally from the same project. So the counts above
+are the export's own, cross-checked against the bytes it wrote rather than against a
+second reader. Worth fixing before the next job whose answer only exists in its log.
 
 ## Probing across hours, rather than restarting
 
