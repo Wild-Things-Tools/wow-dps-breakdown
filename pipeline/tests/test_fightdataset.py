@@ -1714,3 +1714,122 @@ def test_force_writes_a_document_that_shrinks_a_block(tmp_path):
     write_fights(tmp_path, _doc(_encounter_with_blocks(1, heroic_5)), force=True)
     entry = json.loads((tmp_path / "fights.json").read_text(encoding="utf-8"))["encounters"][0]
     assert entry["measured"]["fightsSampled"] == 5
+
+
+def test_a_public_run_does_not_borrow_the_page_one_caveat():
+    """13 of 16 published blocks said "page 1 of the rankings" about a `public` run.
+
+    `_caveats` branched `if order == "first" ... elif rankings_page == 1`, and
+    `public` -- the workflow's default -- matched neither, so it fell through to the
+    sentence written for `--order top`. Measured against the committed
+    `web/public/data/MID2/fights.json` on 2026-09-12: `measurement.order` is
+    `public`, `rankingsPage` is 1, and every one of the 13 blocks that sampled a
+    fight carries it.
+
+    Every clause of that sentence is wrong here. `_select_kills` gathers
+    `--rankings-pages` pages for `public` (40 by default, not 1), sorts them by kill
+    DATE rather than by damage, and then unions the result with a search of the
+    zone's public logs -- so its advice, "probe with --order first instead", points
+    at a strictly NARROWER sample than the reader already has.
+    """
+    from wowdps.fightdataset import _caveats
+
+    payload = {
+        "fights": [{"code": "A", "duration": 400.0, "steps": [[0.0, 1]]}],
+        "killedBetween": {
+            "first": "2026-08-29T04:31:43+00:00",
+            "last": "2026-08-31T20:57:21+00:00",
+            "spanDays": 2.7,
+        },
+    }
+    notes = " ".join(_caveats(payload, 1, "public"))
+
+    assert "page 1" not in notes
+    assert "world's best pulls" not in notes
+    # And the advice that inverted the answer is gone with it.
+    assert "--order first" not in notes
+
+
+def test_a_public_run_publishes_the_date_window_it_sampled_by():
+    """The quiet half, and the one that cost more than the wrong sentence.
+
+    `--order first` publishes `killedBetween` in words, which is what makes
+    "earliest" checkable at all; `public` sorts by exactly the same key and
+    published none of it. So this is not a wording fix with a sentence removed --
+    it is a disclosure that was never reaching the page.
+    """
+    from wowdps.fightdataset import _caveats
+
+    payload = {
+        "fights": [{"code": "A", "duration": 400.0, "steps": [[0.0, 1]]}],
+        "killedBetween": {
+            "first": "2026-08-29T04:31:43+00:00",
+            "last": "2026-08-31T20:57:21+00:00",
+            "spanDays": 2.7,
+        },
+    }
+    notes = " ".join(_caveats(payload, 1, "public"))
+
+    assert "earliest kills by kill date" in notes
+    assert "2026-08-29 to 2026-08-31" in notes
+    assert "2.7 days" in notes
+    # The second source is named: it is what makes `public` wider than `first`.
+    assert "public logs" in notes
+
+
+def test_a_public_run_states_the_bound_that_is_left_and_drops_it_when_the_search_finished():
+    """A page-limited walk and a completed one are not the same claim.
+
+    `searchExhausted` is the probe's own record of having run out of REPORTS rather
+    than out of budget -- the one field that can retire the `--report-pages` bound.
+    Absent, the bound stays stated: this project refuses to publish a truncated walk
+    and an exhaustive one as the same sentence, and the caveat is where that shows.
+    """
+    from wowdps.fightdataset import _caveats
+
+    fights = [{"code": "A", "duration": 400.0, "steps": [[0.0, 1]]}]
+    bounded = " ".join(_caveats({"fights": fights}, 1, "public"))
+    exhausted = " ".join(_caveats({"fights": fights, "searchExhausted": True}, 1, "public"))
+
+    assert "--report-pages" in bounded
+    assert "still invisible" in bounded
+    assert "--report-pages" not in exhausted
+    assert "read every report in its window" in exhausted
+
+
+def test_order_first_keeps_its_own_sentence_and_does_not_take_publics():
+    """The control. A fix that gave both orders one wording would pass the tests
+    above and quietly stop telling a `--order first` reader the thing that bounds
+    THEIR sample: the ranking pages are sorted by damage, so a slow early kill can
+    sit past the window entirely. That limit is `first`'s and not `public`'s, which
+    reaches past the rankings by construction.
+    """
+    from wowdps.fightdataset import _caveats
+
+    payload = {
+        "fights": [{"code": "A", "duration": 400.0, "steps": [[0.0, 1]]}],
+        "killedBetween": {
+            "first": "2026-06-26T18:31:59+00:00",
+            "last": "2026-06-26T18:52:42+00:00",
+            "spanDays": 0.0,
+        },
+    }
+    notes = " ".join(_caveats(payload, 1, "first"))
+
+    assert "sorts by damage" in notes
+    assert "--rankings-pages" in notes
+    assert "public logs" not in notes
+    assert "page 1" not in notes
+
+
+def test_a_sample_with_no_kill_dates_says_so_under_both_date_orders():
+    """`killedBetween` is absent on a payload written before #134, and "earliest"
+    is then a claim with nothing behind it. Both orders have to say so rather than
+    print a sentence whose evidence is missing.
+    """
+    from wowdps.fightdataset import _caveats
+
+    fights = [{"code": "A", "duration": 400.0, "steps": [[0.0, 1]]}]
+    for order in ("first", "public"):
+        notes = " ".join(_caveats({"fights": fights}, 1, order))
+        assert "No kill dates were recorded" in notes, order
