@@ -80,7 +80,7 @@ equal.
 ```
 {"v":1,"zoneId":53,"code":"aBcD…","startedAtMs":1723456000000,
  "kills":[{"e":3421,"d":5,"f":32,"sMs":1723456100000,"eMs":1723456534000}, …],
- "fightsSeen":57,"readAt":"2026-09-12T21:00:00+00:00","run":"34720902342"}
+ "killsListed":57,"readAt":"2026-09-12T21:00:00+00:00","run":"34720902342"}
 ```
 
 **There is no report end time here, and that is the document rather than an
@@ -95,8 +95,20 @@ come from Stufe 2, which asks a different question.
 - `sMs`/`eMs` are **absolute**. `ReportFight.startTime` counts from the *report's*
   start, and this project has paid for that unit error once; a line whose time base
   cannot be established is refused, never written near the epoch.
-- `fightsSeen` is every fight the report listed, kills and wipes. It is what separates
-  "this report has no kill of anything" from "this report was not read".
+- `killsListed` is **the number of rows the kill-filtered query returned**, before this
+  producer's own re-check and refusals. It is what separates "this report holds no kill
+  of anything" from "this report was not read" -- a line exists at all only because the
+  report was read.
+
+  **v1 of this document called it `fightsSeen` and described it as "every fight the
+  report listed, kills and wipes". That is not obtainable from this query**, and the
+  correction is worth keeping as a shape rather than quietly applied: `fights(killType:
+  Kills)` filters SERVER-side, so a wipe never reaches us, and reading the whole list
+  would need a second unfiltered query nothing here has asked for or priced. Three
+  payload errors in this file were caught before it merged by reading the documents for
+  **field presence**; this fourth one survived because it is about a field's **meaning
+  under a server-side filter**, which reading the selection set does not show. Check what
+  a query *filters* as well as what it *selects*.
 - **No `title`.** `report.title` has zero readers across every Python file here
   (measured 2026-09-12) and is free-text a person wrote.
 
@@ -261,8 +273,13 @@ Both are in issue #170 and both need a live query:
 
 ## Status
 
-**Nothing is implemented.** This document is the contract, written first, the way
-`docs/progress-cohort.md` was -- because an append-only format committed into a
-private repository is not a thing to iterate on afterwards. The command, the
-`--validate` gate and the workflow follow it; a disagreement between them and this
-file is a defect in them.
+**The command and the gate are built** (`wowdps catalogue`, `catalogue.py`), and
+building them found the `killsListed` correction above. What is NOT built is the
+workflow, and that is deliberate: the cadence cannot be set before "how many reports
+does a zone hold" is measured, and this document already refuses a cron without it.
+
+The contract was written **first**, the way `docs/progress-cohort.md` was, because an
+append-only format committed into a private repository is not a thing to iterate on
+afterwards. A disagreement between the code and this file is a defect in the code --
+except where the code found this file wrong, which is recorded here rather than fixed
+silently.

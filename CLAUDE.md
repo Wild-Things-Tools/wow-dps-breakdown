@@ -6102,6 +6102,126 @@ a canary that does not fire is a finding about the canary at least as often as a
 the code -- here it was about the *claim the test was making*, which is a third
 thing again.
 
+### The catalogue: what a run may ask, and the three places the scrub is checked
+
+`catalogue.py` + `wowdps catalogue` -> the private repository's `progress-catalogue/`
+folder. The contract is `docs/progress-catalogue.md`, written **first** the way
+`docs/progress-cohort.md` was; where this section and that file disagree, the file
+wins.
+
+Two stages, and the split between them is a measurement rather than a preference:
+
+```
+REPORT_KILLS_QUERY    takes exactly ONE variable, $code
+  -> one request answers every boss AND every difficulty of a report   -> Stufe 3 per ZONE
+FIGHT_STRUCTURE_QUERY takes code + encounter + difficulty
+  -> that call is the only difficulty filter there is   -> Stufe 2 per (ZONE, DIFFICULTY)
+```
+
+Splitting Stufe 3 per difficulty is **refused**, not merely not done: it would throw
+away the saving that makes the stage affordable, and filtering it into one file would
+lose the other difficulty's kills for good.
+
+**It sends no GraphQL document of its own**, which is Schritt 3's rule applied to a
+new caller rather than re-derived, and `test_the_catalogue_sends_no_graphql_document_of_its_own`
+pins it with the ratchet's own detection rule (a module-level `*QUERY` name holding a
+string with `query` or `mutation` in it). Note what the package-wide ratchet could
+**not** have caught here: its floor is `len(found) >= 16`, so a new document that
+*carries* a reading raises the count and passes. "Adds no document at all" is a
+stronger claim than "adds no unmeasured document", and it needs its own test.
+
+The ceiling, the sleep-until-reset, the deadline and the atomic writes are
+`progresssweep`'s, **imported rather than copied**. The contract says "ported";
+importing is the stronger reading, because two implementations of one rule are what
+drifts -- and `PTR_TWIN_ID_FLOOR` is the measurement this repository already has for
+that, so `test_the_ptr_floor_is_the_sweeps_own_constant` asserts object identity
+rather than equality.
+
+### The scrub is checked three times, and the second one may not share the first's predicate
+
+The privacy line is **structural** (the folder is private); the scrub is a saving and
+a second belt. It drops a player-owned actor's name at extraction, and "player-owned"
+is `fightextract.friendly_source_ids` -- transitive, cycle-safe, and already the
+predicate the aura filter uses. A type test separates nothing, because a hunter's pet,
+a Mirror Image and a boss's add are all `Pet`.
+
+**The check that the drop happened reads a different field.** A guard built on
+`type`/`petOwner` -- the fields the drop reads -- cannot catch those fields changing
+shape: the drop stops recognising a player, the guard stops recognising one too, and
+the names reach disk under a green run. That is this repository's signature defect
+stated one layer in, so `leaked_player_names` reads `fight.friendlyPlayers` instead --
+the fight's own list of player actor ids, from a different part of the response. If
+`type` is renamed, every actor comes back un-owned, every name survives, and the check
+still names twenty ids. It is **one-sided** and says so: `friendlyPlayers` holds the
+players and not their pets.
+
+And the `--validate` gate reads the **file**, which is the third place and the reason
+the cohort folder's gate is not simply reused: the file is what leaves the machine, and
+a line written by an older build of this module would pass both of the others.
+
+A leak, or a `masterData` block that is absent entirely, is a **schema alarm**: the
+file set writes *nothing* -- no lines, no state -- the run continues, exit 3. A scrub
+that fails open is the one failure this folder's privacy cannot absorb.
+
+### The cursor is a pre-filter; the key set is the exact test
+
+The Stufe 2 cursor is a kill's absolute `startedAtMs`, and it skips **strictly**
+earlier kills. The exact "already judged" test is the stored key set `(code, fightId)`,
+because a cursor alone cannot be right on a tie: two kills on the same millisecond make
+it either skip one it never judged or re-read one it did. The fixture is two kills at
+one timestamp, read one per run.
+
+### `fights(killType: Kills)` filters server-side, and the contract said otherwise
+
+**Found by building the thing, after three payload errors had already been caught by
+reading the documents before it merged.** The contract's Stufe 3 line carried
+`fightsSeen`, described as *"every fight the report listed, kills and wipes"*. It is
+not obtainable from that query at all: the filter is on the server, so a wipe never
+reaches us, and reading the whole list would need a second unfiltered query nothing
+here has asked for or priced.
+
+Renamed to `killsListed` rather than re-described -- a name that promises more than its
+computation delivers is the `inRotation` failure, and this file already records it
+twice.
+
+The shape is the part worth keeping: the three errors caught earlier were about a
+field's **presence** in the selection set, which reading the document shows. This one
+is about a field's **meaning under a filter**, which reading the selection set does
+not. **Check what a query filters as well as what it selects.**
+
+### Two canaries of fifteen stayed green, and they are different findings
+
+Run against the source, one break at a time, after the format:
+
+- **Thirteen fired by name.**
+- *"validate stops reading names off the file"* stayed green because the patch was a
+  **no-op**: `[] or leaked_player_names(...)` is `leaked_player_names(...)`. Re-run
+  against the finding's own `if`, it fires. A canary that does not fire is a finding
+  about the canary, and here it was about the patch rather than the test.
+- *"rows are rewritten even when nothing was appended"* stayed green for a real reason
+  and produced a new test. `atomic_write` over content the file already holds writes
+  **identical bytes**, so a byte comparison passes whether or not the `if new_rows:`
+  guard exists. The existing test pins the CLAIM the contract makes (byte-identity);
+  `test_a_settled_run_does_not_even_TOUCH_the_row_files` pins the MECHANISM, by
+  counting writes. Both canaries for it now fire.
+
+The second is worth generalising: **a test over a file's bytes cannot see a guard whose
+only effect is not writing them.** Where the guard matters is the case byte-identity
+cannot reach -- it is what confines the requirement that `read_lines` + `"".join`
+round-trip exactly to runs that append.
+
+### What is NOT built, and why that is the contract's own rule
+
+The **workflow**. The cadence cannot be set before "how many reports does a zone hold"
+is measured, and the contract already refuses a cron without that number. The priced
+floor is ~830 points for one encounter's 500-report window (4.6% of an 18,000 hour);
+what a zone costs in full is **UNMEASURED**.
+
+Nothing has been sent to the live service from this code. The stub answers what the
+**client** returns rather than what the service does -- the distinction `addspawns`
+paid for once, where a stub built from the envelope would have passed against broken
+code.
+
 ## Fight patterns per boss — what Warcraft Logs can and cannot tell you
 
 The logs cross-check compares Patchwerk single target against nine different encounters,
