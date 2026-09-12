@@ -6421,6 +6421,84 @@ say is the rule this file already carries: a canary that does not fire is a
 finding about the canary at least as often as about the code, and one green is
 not a verdict until it reproduces.
 
+### The report search REPLACED the ranked sample, and one kill stood for thirty-six (#164, 2026-09-12)
+
+Found by reading two committed documents of this repository against each other --
+same tier, same boss, same difficulty, both published:
+
+| document | The Twin Fangs, Mythic | evidence |
+|---|---:|---|
+| `spawns.json` | **36** kills | none truncated, span 7.13 days |
+| `fights.json` | **1** | `distinctKills: 1`, `truncated: false`, `abortedBecause: null` |
+
+Nothing was broken in the ways that usually produce a thin sample. The block was
+not aborted and not truncated, `reportsPerEncounter` was 30, and #160's twin
+resolution had worked perfectly -- `idChoice` names `53421 -> 3421` with the name
+verified. It was not the addressing and it was not a shortage of kills.
+
+**The guard was `if found:` -- a truthiness test where a size question was meant.**
+Under `--order public`, `_select_kills` gathers the ranking pages, anchors on their
+earliest kill, runs the public-report search from before that anchor, and then:
+
+```python
+found, outcome = _public_first_kills(client, encounter_id, anchor, settings)
+if found:
+    return encounter, found, outcome     # <- up to 30 ranked kills, discarded
+```
+
+So **one** unranked kill replaced the *entire* ranked sample. `spawn-probe` reads
+the same boss through the same `characterRankings` (`addspawns._kill_candidates`) and got 36;
+`fight-probe` fetched those pages, paid for them, and threw them away.
+
+The intent above it was right and is preserved: the search exists to reach a kill
+Warcraft Logs **never ranked** -- a privately logged first kill is in no ranking at
+any depth. The defect was that its result *substituted* for the other rather than
+*adding* to it. Same family as every other entry here where a guard is present and
+answers the wrong question.
+
+**The fix is a union, and it costs nothing.** Both sets are already paid for in the
+run; one was being discarded. `warcraftlogs.merge_kill_selections` folds them,
+one fight per report **across both**, earliest first, truncated to `--reports`.
+What rises is the number of *event* fetches per encounter -- which is the real cost
+and is capped by `--reports` exactly as before.
+
+Three decisions in it that are not arithmetic:
+
+- **It is not folded into `select_report_fights`.** That function also serves
+  `order="top"`, which must keep the rankings' own damage order and therefore must
+  not sort at all; and it reads encounter *payloads* where these are triples that
+  have already been through a selector. Two different inputs, one of which must not
+  be sorted, is not one function with a flag.
+- **A row with no timestamp still sorts LAST.** `select_report_fights` has that
+  rule because a missing `startTime` arrives as `0.0`, and read as a date that is
+  1970 -- it would win every "earliest kill" comparison and push real kills past
+  `--reports`. Re-sorting the triples had to carry it across.
+- **On a report both sources found, the earlier start wins.** That is what
+  `order="first"` means; ties break on the report code so a re-run picks the same
+  kills. `beat_anchor` is unaffected -- it measures the search against the anchor,
+  not against the sample -- so the union cannot inflate it.
+
+**Why no existing test could see it**, and it is the fixture lesson again: every
+test of this path sets `rankings_for=set()`, i.e. the rankings are empty and the
+search is the only source. A fixture in which the two sources cannot both be
+non-empty cannot express "one replaced the other", however end-to-end it is.
+
+**And the canary for the dedup rule did not fire on its first attempt.** Breaking
+"the earlier start wins" to "whichever source came last wins" left the test green,
+because the fixture happened to put the earlier row in the *second* list -- so both
+rules gave the same answer. It pins the rule only with **both** orderings present,
+one shared report earlier in `ranked` and one earlier in `found`. A canary that
+does not fire is a finding about the canary, measured here for the fourth time.
+
+The canary that does fire reproduces the issue's own numbers:
+`assert 1 == 10, where 1 = len(['UNRANKED'])`.
+
+**Nothing published moves until a probe run writes.** The committed `fights.json`
+still carries the 1. The four PTR bosses are re-read the way the resume rule
+already allows -- a raised `--report-pages`/`--reports` re-opens them by the
+`searchBudget` rule -- and **not** with `--no-resume`, which discards paid-for
+measurements and is the owner's decision.
+
 ### What Vashnik's adds look like, and why Mythic cannot show it
 
 Read out of the committed `fights.json`, no new run.

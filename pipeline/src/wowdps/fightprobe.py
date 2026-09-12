@@ -60,6 +60,7 @@ from .warcraftlogs import (
     Credentials,
     WarcraftLogsClient,
     WarcraftLogsError,
+    merge_kill_selections,
     select_report_fights,
 )
 
@@ -263,13 +264,23 @@ def _select_kills(
     anchor = min((start for _, _, start in ranked if start), default=0.0)
     found, outcome = _public_first_kills(client, encounter_id, anchor, settings)
     log.info("  public-log search: %s", outcome.summary(anchor))
-    if found:
-        return encounter, found, outcome
-    log.warning(
-        "  the report search found no kills; falling back to the ranked sample so "
-        "this encounter is still measured"
+    # UNION, never replace. The search answers "what did the rankings never hold",
+    # so its result ADDS to the ranked sample rather than standing in for it. The
+    # guard here used to be `if found:` -- a truthiness test where a size question
+    # was meant -- so one unranked kill replaced up to `--reports` ranked ones, and
+    # `fights.json` published 1 kill of The Twin Fangs where `spawns.json`, reading
+    # the same boss through the same rankings, published 36 (#164). Both sets are
+    # already paid for in this run; one of them was being thrown away.
+    if not found:
+        log.warning("  the report search found no kills; the ranked sample is the whole of it")
+    chosen = merge_kill_selections(ranked, found, limit=settings.reports)
+    log.info(
+        "  kills to read: %d (ranked %d + search %d, one per report, earliest first)",
+        len(chosen),
+        len(ranked),
+        len(found),
     )
-    return encounter, ranked, outcome
+    return encounter, chosen, outcome
 
 
 def _name_of(encounter: dict, client: WarcraftLogsClient, encounter_id: int) -> str | None:

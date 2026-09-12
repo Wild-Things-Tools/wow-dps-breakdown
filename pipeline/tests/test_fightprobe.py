@@ -589,6 +589,54 @@ def test_a_row_without_a_timestamp_sorts_last_not_first():
     assert [(code, fight) for code, fight, _ in selected] == [("REAL", 2), ("NOTS", 1)]
 
 
+def test_merging_two_selections_keeps_one_fight_per_report_across_both():
+    """The union's own rules, which the end-to-end test cannot separate.
+
+    A report BOTH sources found is one kill, not two -- and when they disagree
+    about which fight of it to take, the earlier start wins, because that is what
+    `order="first"` means.
+    """
+    from wowdps.warcraftlogs import merge_kill_selections
+
+    # BOTH orderings of a shared report, on purpose. With only one of them a rule
+    # of "whichever source came last wins" gives the same answer as "the earlier
+    # start wins", so the fixture would pin nothing -- measured: that canary stayed
+    # green until this second row was added.
+    ranked = [
+        ("LATE_IN_RANKED", 1, 300.0),
+        ("EARLY_IN_RANKED", 8, 120.0),
+        ("ONLY_RANKED", 2, 100.0),
+    ]
+    found = [("ONLY_FOUND", 3, 50.0), ("LATE_IN_RANKED", 7, 200.0), ("EARLY_IN_RANKED", 9, 400.0)]
+
+    merged = merge_kill_selections(ranked, found, limit=10)
+
+    assert merged == [
+        ("ONLY_FOUND", 3, 50.0),
+        ("ONLY_RANKED", 2, 100.0),
+        ("EARLY_IN_RANKED", 8, 120.0),  # the ranked row wins: it is the earlier one
+        ("LATE_IN_RANKED", 7, 200.0),  # the found row wins, for the same reason
+    ]
+    # `limit` truncates the union, so a run never reads more fights than --reports.
+    assert merge_kill_selections(ranked, found, limit=2) == merged[:2]
+
+
+def test_the_merge_keeps_an_undated_row_last_rather_than_at_the_epoch():
+    """`select_report_fights` puts a row with no startTime last; re-sorting the
+    triples had to keep that. Read as a date a zero is 1970, so it would win every
+    "earliest kill" comparison and push real kills past `--reports`."""
+    from wowdps.warcraftlogs import merge_kill_selections
+
+    ranked = [("UNDATED", 1, 0.0), ("DATED", 2, 500.0)]
+    found = [("FOUND", 3, 900.0)]
+
+    merged = merge_kill_selections(ranked, found, limit=10)
+
+    assert [code for code, _, _ in merged] == ["DATED", "FOUND", "UNDATED"]
+    # And it must not be dropped either: an undated kill is still a kill.
+    assert merge_kill_selections(ranked, [], limit=1) == [("DATED", 2, 500.0)]
+
+
 # --------------------------------------------------------------------------------
 # Resuming a pass the point ceiling cut short
 # --------------------------------------------------------------------------------
@@ -825,6 +873,85 @@ def test_the_report_search_finds_a_kill_the_rankings_never_carried():
     assert outcome.beat_anchor == 2
     assert outcome.reports_seen == 3
     assert "2 earlier than the best-parse sample" in outcome.summary(anchor)
+
+
+class _RankedAndSearchClient(_ReportSearchClient):
+    """Both sources answering for one encounter, which is the case #164 needed.
+
+    Every other test of this path sets `rankings_for=set()`, i.e. the rankings are
+    empty and the search is the only source -- so none of them could see one result
+    REPLACING the other. A fixture that cannot express the difference pins nothing.
+    """
+
+    def __init__(self, ranked, **kw):
+        super().__init__(**kw)
+        self._ranked = ranked
+
+    def encounter_rankings(self, encounter_id, difficulty=5, metric="dps", page=1):
+        rows = [
+            {"startTime": started, "report": {"code": code, "fightID": fight}}
+            for code, fight, started in self._ranked
+        ]
+        return {
+            "id": encounter_id,
+            "name": "The Twin Fangs",
+            "characterRankings": {"rankings": rows},
+        }
+
+
+def test_the_search_adds_to_the_ranked_sample_instead_of_replacing_it():
+    """#164: `if found:` was a truthiness test where a size question was meant.
+
+    One unranked kill replaced the whole ranked sample, which is how `fights.json`
+    published 1 kill of The Twin Fangs while `spawns.json` -- the same boss, the
+    same rankings -- published 36.
+    """
+    from wowdps.fightprobe import _select_kills
+
+    anchor = 1_700_000_000_000.0
+    base = 3_600_000.0
+    ranked = [(f"RANK{i}", 10 + i, anchor + (i + 1) * 1_000) for i in range(10)]
+
+    client = _RankedAndSearchClient(
+        ranked=ranked,
+        pages=[[{"code": "UNRANKED"}]],
+        kills={
+            "UNRANKED": [
+                {"id": 3, "encounterID": 42, "kill": True, "startTime": base, "endTime": base + 200}
+            ]
+        },
+        starts={"UNRANKED": anchor - 50_000 - base},
+    )
+
+    _, pairs, outcome = _select_kills(client, 42, _settings(reports=10))
+
+    codes = [code for code, _, _ in pairs]
+    # Before the fix this was exactly ["UNRANKED"] -- one kill standing for ten.
+    assert len(codes) == 10
+    # The search's find is kept: it is the kill no ranking depth could reach.
+    assert codes[0] == "UNRANKED"
+    # And the ranked sample survives rather than being thrown away.
+    assert len([code for code in codes if code.startswith("RANK")]) == 9
+    # Earliest first, over the union rather than over either source alone.
+    assert [start for _, _, start in pairs] == sorted(start for _, _, start in pairs)
+    # The search's own verdict is unchanged: it is measured against the anchor,
+    # not against the sample, so the union cannot inflate it.
+    assert outcome.beat_anchor == 1
+
+
+def test_a_search_that_finds_nothing_still_leaves_the_ranked_sample_whole():
+    """The other half, and the reason the fallback branch could be deleted: a union
+    with an empty set is the set. Kept as a test because the warning beside it is a
+    real diagnostic and a refactor could take both."""
+    from wowdps.fightprobe import _select_kills
+
+    anchor = 1_700_000_000_000.0
+    ranked = [(f"RANK{i}", 10 + i, anchor + (i + 1) * 1_000) for i in range(4)]
+    client = _RankedAndSearchClient(ranked=ranked, pages=[[]], kills={})
+
+    _, pairs, _ = _select_kills(client, 42, _settings(reports=10))
+
+    assert [code for code, _, _ in pairs] == ["RANK0", "RANK1", "RANK2", "RANK3"]
 
 
 def test_paging_stops_on_a_short_page_rather_than_on_an_unverified_field():
