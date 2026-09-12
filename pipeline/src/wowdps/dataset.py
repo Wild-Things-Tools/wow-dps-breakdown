@@ -721,7 +721,11 @@ def _describes_a_different_shape(published: object, produced: object) -> bool:
     )
 
 
-def _median(errors: list[float]) -> float | None:
+def median_error(errors: list[float]) -> float | None:
+    """Median of measured per-cell errors, in percent, rounded the way every
+    ``medianDpsError`` in a published document is. Public because ``talentsweep``
+    publishes the same figure over its own rows, and a second copy of the median
+    arithmetic is what this file warns about everywhere else."""
     if not errors:
         return None
     errors = sorted(errors)
@@ -732,7 +736,7 @@ def _median(errors: list[float]) -> float | None:
 
 def _median_dps_error(results: list[SpecResult]) -> float | None:
     """Median per-cell standard error across the whole run, in percent."""
-    return _median(
+    return median_error(
         [
             cell.dps_error
             for result in results
@@ -757,7 +761,7 @@ def _median_dps_error_of_files(specs_dir: Path) -> float | None:
                 error = cell.get("dpsError") or 0
                 if error > 0:
                     errors.append(error)
-    return _median(errors)
+    return median_error(errors)
 
 
 def write_tier_index(out_dir: Path) -> Path:

@@ -163,3 +163,174 @@ def test_ranking_never_invents_an_entry(metric):
         "s", "S", "Mage", "b", 1, [BuildMeasurement("a", "A", "A", 1.0, 0.1, None, 1)]
     )
     assert len(result.ranked_by(metric)) == (1 if metric == "dps" else 0)
+
+
+# --------------------------------------------------------------------------------
+# The document's provenance: `simc`, `settings.medianDpsError`, `coverage`
+# --------------------------------------------------------------------------------
+
+
+def _sweep(*builds, targets: int = 1, spec: str = "mage_arcane"):
+    """One spec's result over `(id, dps, dpsError)` triples."""
+    from wowdps.talentsweep import BuildMeasurement
+
+    return SweepResult(
+        spec_id=spec,
+        spec_label="Arcane Mage",
+        wow_class="Mage",
+        base_profile_id=builds[0][0],
+        targets=targets,
+        builds=[
+            BuildMeasurement(key, key, key, dps, error, None, 1000) for key, dps, error in builds
+        ],
+    )
+
+
+def _write(
+    tmp_path,
+    results,
+    *,
+    revision="abc",
+    available=("mage_arcane_sunfury", "mage_arcane_spellslinger"),
+):
+    import json
+
+    from wowdps.scenarios import SimSettings
+    from wowdps.talentsweep import write_talents
+
+    path = write_talents(
+        tmp_path,
+        "MID2",
+        results,
+        SimSettings(target_error=0.0, max_iterations=1000),
+        simc_meta={"gitRevision": revision, "dataSource": "Live"},
+        builds_available=list(available),
+    )
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_the_document_carries_the_three_blocks_gear_json_has(tmp_path):
+    """Until 2026-09-12 `talents.json` said which iteration count it ran at and
+    nothing else: no simc revision, no measured precision, no coverage. A reader
+    could not say which game data the comparison modelled -- the one question a
+    tuning pass makes somebody ask of it."""
+    document = _write(
+        tmp_path,
+        [_sweep(("mage_arcane_sunfury", 500.0, 0.12), ("mage_arcane_spellslinger", 450.0, 0.1))],
+    )
+    assert document["simc"] == {"gitRevision": "abc", "dataSource": "Live"}
+    assert document["settings"] == {
+        "iterations": 1000,
+        "deterministic": True,
+        # The MEASURED figure over the rows: the median of 0.12 and 0.10.
+        "medianDpsError": 0.11,
+    }
+    assert document["coverage"] == {
+        "specs": 2,
+        "specsAvailable": 2,
+        "buildsAvailable": ["mage_arcane_spellslinger", "mage_arcane_sunfury"],
+    }
+    assert "staleRows" not in document["coverage"], "a healthy document claims nothing"
+
+
+def test_specs_available_is_derived_from_the_id_list_never_passed_beside_it(tmp_path):
+    """#114's rule: two counts can say a document holds more rows than the tier has
+    builds and never which row. So the ids are what is published, and the count is
+    taken from them -- a duplicate in the input is one build, not two."""
+    document = _write(
+        tmp_path,
+        [_sweep(("mage_arcane_sunfury", 500.0, 0.1), ("mage_arcane_spellslinger", 450.0, 0.1))],
+        available=("mage_arcane_sunfury", "mage_arcane_sunfury", "mage_arcane_spellslinger"),
+    )
+    assert document["coverage"]["buildsAvailable"] == [
+        "mage_arcane_spellslinger",
+        "mage_arcane_sunfury",
+    ]
+    assert document["coverage"]["specsAvailable"] == len(document["coverage"]["buildsAvailable"])
+
+
+def test_a_row_whose_build_the_tier_no_longer_ships_is_named(tmp_path):
+    """Named, not clamped, not counted -- the same discipline as `gear.json`'s
+    `staleRows` and `gearpool`'s `unplaced`. A count cannot say which row to go and
+    look at."""
+    document = _write(
+        tmp_path,
+        [_sweep(("mage_arcane_sunfury", 500.0, 0.1), ("mage_arcane_gone", 450.0, 0.1))],
+        available=("mage_arcane_sunfury", "mage_arcane_spellslinger"),
+    )
+    assert document["coverage"]["staleRows"] == ["mage_arcane_gone"]
+    # The row itself is kept: it is the honest record of a build that was simulated.
+    assert {b["id"] for b in document["specs"][0]["builds"]} == {
+        "mage_arcane_sunfury",
+        "mage_arcane_gone",
+    }
+    assert document["coverage"]["specs"] == 2, "counted from the rows, stale or not"
+
+
+def test_a_quiet_re_run_is_byte_identical_with_the_clock_and_the_revision_moved(
+    tmp_path, monkeypatch
+):
+    """The settle, with the trap the manifest's own test fell into closed: two calls
+    in one test land in the same second, so a settle that keeps nothing still
+    reproduces the file. The clock is monkeypatched to move a day per call, and the
+    simc revision moves too -- simc merges nightly and `gitRevision` alone would
+    otherwise restamp a document whose numbers never moved."""
+    from datetime import UTC, datetime
+
+    from wowdps import talentsweep
+
+    stamps = iter(
+        [
+            datetime(2026, 9, 12, 8, 0, 0, tzinfo=UTC),
+            datetime(2026, 9, 13, 8, 0, 0, tzinfo=UTC),
+            datetime(2026, 9, 14, 8, 0, 0, tzinfo=UTC),
+        ]
+    )
+
+    class _Clock:
+        @staticmethod
+        def now(_tz=None):
+            return next(stamps)
+
+    monkeypatch.setattr(talentsweep, "datetime", _Clock)
+    rows = [_sweep(("mage_arcane_sunfury", 500.0, 0.1), ("mage_arcane_spellslinger", 450.0, 0.1))]
+
+    _write(tmp_path, rows, revision="aaa")
+    first = (tmp_path / "talents.json").read_bytes()
+    _write(tmp_path, rows, revision="bbb")
+    second = (tmp_path / "talents.json").read_bytes()
+    assert first == second, "nothing but the stamps moved, so nothing may move"
+
+    document = _write(tmp_path, rows, revision="bbb")
+    assert document["generatedAt"] == "2026-09-12T08:00:00+00:00"
+    assert document["simc"]["gitRevision"] == "aaa", "the published simc block is kept too"
+
+
+def test_a_moved_number_still_takes_the_new_stamp(tmp_path, monkeypatch):
+    """The control, or the test above passes against a writer that never restamps."""
+    from datetime import UTC, datetime
+
+    from wowdps import talentsweep
+
+    stamps = iter(
+        [datetime(2026, 9, 12, 8, 0, 0, tzinfo=UTC), datetime(2026, 9, 13, 8, 0, 0, tzinfo=UTC)]
+    )
+
+    class _Clock:
+        @staticmethod
+        def now(_tz=None):
+            return next(stamps)
+
+    monkeypatch.setattr(talentsweep, "datetime", _Clock)
+    _write(
+        tmp_path,
+        [_sweep(("mage_arcane_sunfury", 500.0, 0.1), ("mage_arcane_spellslinger", 450.0, 0.1))],
+        revision="aaa",
+    )
+    document = _write(
+        tmp_path,
+        [_sweep(("mage_arcane_sunfury", 510.0, 0.1), ("mage_arcane_spellslinger", 450.0, 0.1))],
+        revision="bbb",
+    )
+    assert document["generatedAt"] == "2026-09-13T08:00:00+00:00"
+    assert document["simc"]["gitRevision"] == "bbb"

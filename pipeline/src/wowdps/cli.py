@@ -2368,7 +2368,12 @@ def cmd_talents(args: argparse.Namespace) -> int:
     tier = _resolve_tier(profiles_dir, args.tier)
     simc = simc_runner.find_simc(args.simc)
 
-    found = profiles.discover(profiles_dir, tier, dps_only=not args.include_tanks)
+    # The unfiltered list is what `coverage.buildsAvailable` publishes: the tier's
+    # builds as this run found them, not the slice `--wow-class`/`--spec` chose --
+    # a denominator taken from the selection could never report a gap (the same
+    # defect `buffs.json` and `gear.json` each shipped once).
+    all_profiles = profiles.discover(profiles_dir, tier, dps_only=not args.include_tanks)
+    found = list(all_profiles)
     # Filtered by *spec name* rather than by build id: this command compares the
     # builds of a spec, so naming one build would leave it nothing to compare
     # against. `--spec Arcane`, not `--spec mage_arcane_sunfury`.
@@ -2426,7 +2431,20 @@ def cmd_talents(args: argparse.Namespace) -> int:
         # tier nobody has run this for, and the view says so.
         out_dir = Path(args.out) / tier
         out_dir.mkdir(parents=True, exist_ok=True)
-        talentsweep.write_talents(out_dir, tier, results, settings)
+        # Which binary and which game data, read off a real report -- the same
+        # throwaway probe `wowdps gear` takes, on a profile that just ran, so a
+        # profile simc refuses cannot be the one asked. `run_profilesets` hands back
+        # the parsed table and not the report, which is why this is a second run
+        # rather than a field on the sweep.
+        simc_meta = _probe_simc_metadata(simc, talentsweep.choose_base(by_spec[results[0].spec_id]))
+        talentsweep.write_talents(
+            out_dir,
+            tier,
+            results,
+            settings,
+            simc_meta=simc_meta,
+            builds_available=[profile.id for profile in all_profiles],
+        )
         logging.info(
             "wrote %s (%d spec/target combination(s))", out_dir / "talents.json", len(results)
         )

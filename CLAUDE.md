@@ -76,6 +76,47 @@ Against the published dataset, where each build wears its own gear, Sunfury lead
 `prioritydps` equals `dps` exactly, and the base build's talents-only number reproduced
 its shipped number to 0.3% (across different iteration counts, so different seeds).
 
+### `talents.json` said which iteration count it ran at, and nothing else (2026-09-12)
+
+Read off the committed document rather than assumed: `settings` held `iterations`
+and `deterministic`, and that was the whole of its provenance -- **no `simc` block,
+no measured precision, no `coverage`**. The gear document has carried all three since
+#95/#114, and the two are read by the same people for the same reason: after a tuning
+pass, *which game data is this comparison of* is the first question, and this
+document could not answer it. Nor could a reader say how many of the tier's builds
+the rows held, or whether a row belonged to a build simc had since stopped shipping.
+
+`write_talents` writes the three now, on `gear.json`'s pattern. Two things about the
+shape that are decisions rather than copying:
+
+- **The blocks are this run's and describe every row.** `talents.yml` is one job
+  with no shard merge, so every row in the document comes out of the invocation that
+  writes it -- there is no older run's provenance to fold in and no per-slot block to
+  fall back to. That is the simpler half of the gear document's arrangement, and it
+  is why `medianDpsError` is taken over the rows once rather than recounted by a
+  merge. The `simc` block is read off a real report by the same throwaway probe
+  `wowdps gear` takes (`run_profilesets` returns the parsed table, not the report),
+  from a profile that just ran so a refused hash cannot be the one asked.
+- **`coverage` follows #114's rule as written for `gear.json`**: the tier's build
+  *ids* are published (`buildsAvailable`, from the unfiltered discovery, never from
+  the `--spec` selection), `specsAvailable` is derived from that list rather than
+  passed beside it, `specs` is counted from the rows, and a row whose build the tier
+  no longer ships is named in `staleRows` -- kept, never clamped or dropped. One
+  ordinary state to know: a spec with a single build is never compared, so `specs`
+  below `specsAvailable` is what a healthy document looks like, not a gap.
+
+The settle is `dataset.settle_provenance`, the manifest's own, rather than the
+timestamp-only comparison that stood here -- because a `simc` block that moves with
+every nightly simc build would otherwise restamp a document whose numbers never
+moved, which is the defect the settle exists to prevent. Same order as
+`publish_manifest`: read the published file first, build the whole document, settle
+last; and the test moves the clock a day per call, since two calls in one second
+reproduce the file whether the settle fires or not.
+
+**Nothing published moves until `talents.yml` runs.** The committed document still
+carries the two-key `settings`; the next dispatch writes the blocks, and the web
+type carries them as optional so a reader of the old file is not lied to.
+
 ### The finding: on four specs of eleven, the two rankings disagree
 
 The whole tier at five targets, 1000 deterministic iterations, gear held at each
