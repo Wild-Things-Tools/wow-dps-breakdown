@@ -669,10 +669,21 @@ class _StoreTransport:
         return type("R", (), {"status_code": 200, "json": lambda s: body, "headers": {}})()
 
 
-def _stubbed_client(tmp_path, transport):
+def _stubbed_client(tmp_path, transport, *, store=True):
+    """A client whose only real part is the key space.
+
+    ``store=False`` is not a detail: `wowdps progress-hours` takes no ``--cache``, so
+    the store is INERT in the one command #170 Schritt 3 was about, and a claim about
+    how many requests a pair of calls costs has to be made in that configuration.
+    With a store, a second call is free whatever the method does -- which is how the
+    first version of `test_one_fetch_carries_both_the_name_and_the_zone` passed
+    against a deliberately broken implementation.
+    """
     from wowdps.warcraftlogs import Credentials, WarcraftLogsClient
 
-    client = WarcraftLogsClient(Credentials("id", "secret"), cache_dir=tmp_path / "cache")
+    client = WarcraftLogsClient(
+        Credentials("id", "secret"), cache_dir=(tmp_path / "cache") if store else None
+    )
     client._token = "token"
     client._client.post = transport
     return client
@@ -700,25 +711,43 @@ def test_a_name_request_is_answered_out_of_the_zone_fetch(tmp_path):
     assert transport.posts == 1, "the name was already paid for by the zone fetch"
 
 
-def test_the_whole_block_and_its_zone_are_one_fetch(tmp_path):
-    """#170 Schritt 3: `encounter_zone` is `encounter` with one field taken off it.
+def test_one_fetch_carries_both_the_name_and_the_zone(tmp_path):
+    """#170 Schritt 3: `encounter` returns the block, `encounter_zone` takes a field.
 
     The pair matters because a twin resolution needs the NAME to verify the
     substitution and the ZONE to walk the reports afterwards, and those are two
     fields of one payload. `cmd_progress_hours` asked for them through two documents
     until 2026-09-12 -- the second of which carried no budget reading at all.
+
+    Store-less on purpose; see `_stubbed_client`. The claim is that ONE request
+    yields both fields, and with a store a second call is free however the method is
+    written, so the store version of this test cannot fail for the right reason.
     """
+    transport = _StoreTransport(
+        {"worldData": {"encounter": {"id": 3421, "name": "The Twin Fangs", "zone": {"id": 53}}}}
+    )
+    client = _stubbed_client(tmp_path, transport, store=False)
+
+    block = client.encounter(3421)
+    assert transport.posts == 1
+    assert block.get("name") == "The Twin Fangs", "the name has to be in the block"
+    assert block.get("zone") == {"id": 53}, "and so does the zone"
+    assert transport.posts == 1, "reading two fields of one block is not two requests"
+
+
+def test_the_block_fetch_also_answers_the_lean_name_request(tmp_path):
+    """The variant pairing again, now that `encounter` is the writer rather than
+    `encounter_zone`. Without it a `fightprobe` block fetch would stop paying for the
+    twin lookup `harvest.choose_encounter_id` sends right after it."""
     transport = _StoreTransport(
         {"worldData": {"encounter": {"id": 3421, "name": "The Twin Fangs", "zone": {"id": 53}}}}
     )
     client = _stubbed_client(tmp_path, transport)
 
-    block = client.encounter(3421)
-    assert block == {"id": 3421, "name": "The Twin Fangs", "zone": {"id": 53}}
+    assert client.encounter(3421).get("name") == "The Twin Fangs"
     assert transport.posts == 1
-    assert client.encounter_zone(3421) == {"id": 53}
     assert client.encounter_name(3421) == "The Twin Fangs"
-    assert transport.posts == 1, "both were already paid for by the block fetch"
+    assert transport.posts == 1, "the name was already paid for by the block fetch"
 
 
 def test_an_encounter_the_schema_does_not_know_is_an_empty_block(tmp_path):
