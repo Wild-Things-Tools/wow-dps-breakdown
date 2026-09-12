@@ -273,10 +273,23 @@ Both are in issue #170 and both need a live query:
 
 ## Status
 
-**The command and the gate are built** (`wowdps catalogue`, `catalogue.py`), and
-building them found the `killsListed` correction above. What is NOT built is the
-workflow, and that is deliberate: the cadence cannot be set before "how many reports
-does a zone hold" is measured, and this document already refuses a cron without it.
+**The command, the gate and the workflow are built** (`wowdps catalogue`,
+`catalogue.py`, `.github/workflows/catalogue.yml`), and building them found the
+`killsListed` correction above.
+
+**The workflow is `workflow_dispatch` only, and the distinction is load-bearing.**
+A first draft of this paragraph said the workflow was deliberately NOT built
+"because this document already refuses a cron without that number" -- which reads
+the refusal as bigger than it is. What is refused above is a **cron**, and a
+dispatch-only run is precisely the instrument that takes the measurement: Stufe 3
+records `pagesRead`, `reportsSeen` and `walled` per window, so one dispatch at
+`--stages 3 --report-pages 40` answers "how many reports does a zone hold" directly
+(`walled: false` -> `reportsSeen` IS the number; `walled: true` -> it is a lower
+bound). The cron stays commented out in the workflow with that reason beside it.
+
+Worth keeping as a shape, because it is this file's own failure pointing inward: a
+refusal restated one paragraph later grew from "not on a cron" to "not at all", and
+the larger version would have blocked the run that lifts it.
 
 The contract was written **first**, the way `docs/progress-cohort.md` was, because an
 append-only format committed into a private repository is not a thing to iterate on

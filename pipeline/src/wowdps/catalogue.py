@@ -1138,12 +1138,16 @@ def validate(out_dir: Path) -> list[str]:
                     f"{path.name}:{number}: {len(leaked)} player actor(s) carry a name "
                     f"(ids {leaked[:5]}); this file must not be committed"
                 )
-        rows_name = "reports" if kind == "reports" else "kills"
-        entry = (
-            listed.get(f"{stem}.{rows_name}.jsonl")
-            if kind != "refused"
-            else listed.get(f"{stem}.reports.jsonl") or listed.get(f"{stem}.kills.jsonl")
-        )
+        # A file set is listed in the manifest under its ROWS path, so a refused
+        # file has to look its own set up -- and which of the two names that is
+        # depends on the stage, which the file name does not carry. Both are tried
+        # rather than derived from the stem, because `z53` and `z53-d5` are the
+        # stage's only tell and a rule over the stem would be a second place to
+        # get it wrong.
+        if kind == "refused":
+            entry = listed.get(f"{stem}.reports.jsonl") or listed.get(f"{stem}.kills.jsonl")
+        else:
+            entry = listed.get(f"{stem}.{kind}.jsonl")
         if entry is None:
             problems.append(f"{path.name}: not in manifest.json")
         else:
