@@ -1044,3 +1044,126 @@ def test_a_rankings_cache_key_does_not_vary_with_time(tmp_path):
     assert client._cache_path(warcraftlogs.RANKINGS_QUERY, variables) == client._cache_path(
         warcraftlogs.RANKINGS_QUERY, dict(variables)
     )
+
+
+# --- Every fetching method runs, and the suite could not say so --------------
+#
+# #181 gave `reports_in_window` a `wclstore.zone_key(..., budget=limit)` against a
+# constructor that took no `budget`, and it merged green: every test of that method
+# is a STUB method on a stub client, so the real one was never executed. The hourly
+# `fight-probe` died on it with a `TypeError` the next time it ran.
+#
+# Counted the day it was found: **8 of 13** methods that go through `_fetch` had no
+# real-client test at all. The fold -- `Key`, `Entry.satisfies`, the budget rule --
+# was tested three ways; the call sites were not, which is the shape this repository
+# keeps producing.
+#
+# This is deliberately a SMOKE test rather than an assertion about each answer: the
+# claim is only that the method's own plumbing runs, which is exactly the claim a
+# stub cannot make. Two-sided like the query ratchet -- a new fetching method that is
+# not in the table fails by name, so the set cannot outlive its own evidence.
+
+#: One plausible call per public method that sends a request. Values are not payload
+#: assertions; the transport answers everything with the same block.
+_FETCHING_CALLS: dict[str, tuple[tuple, dict]] = {
+    "encounter": ((3421,), {}),
+    "encounter_name": ((3421,), {}),
+    "encounter_rankings": ((3421,), {"difficulty": 5, "metric": "dps", "page": 1}),
+    "fight_structure": (("abc", 3421, 5), {}),
+    # Not a `_fetch` caller: `fight_events` is deliberately still on the legacy
+    # document-hash cache (see wclstore's "NOT converted" note). It sends a request
+    # and pages through cursors, so it is exactly the plumbing this test is for.
+    "fight_events": (("abc", 12, "DamageTaken", "Enemies", 0.0, 1000.0), {"max_pages": 1}),
+    "rate_limit": ((), {}),
+    "fight_table": (("abc", 12), {}),
+    "player_details": (("abc", 12), {}),
+    "report_kills": (("abc",), {}),
+    "reports_in_window": ((53, 0, 1000), {"page": 1, "limit": 100}),
+    "spec_rankings": ((3421, "Death Knight", "Frost"), {}),
+    "talent_import_codes": (("abc", 12, [1, 2]), {}),
+    "zone": ((53,), {}),
+    "zones": ((), {}),
+}
+
+
+def _methods_that_fetch() -> set[str]:
+    """Every PUBLIC client method that sends a request, read off the source.
+
+    Derived rather than listed, so the table cannot quietly fall behind the client.
+    Both routes count -- `self._fetch` (the key space) and `self.query` (the legacy
+    document-hash cache `fight_events` and `rate_limit` still use) -- because the
+    defect this guards against is a method whose plumbing is never executed, and
+    which cache it reaches is beside that point.
+    """
+    import re
+    from pathlib import Path
+
+    import wowdps.warcraftlogs as module
+
+    source = Path(module.__file__).read_text(encoding="utf-8")
+    found: set[str] = set()
+    current: str | None = None
+    for line in source.splitlines():
+        match = re.match(r"    def (\w+)\(", line)
+        if match:
+            current = match.group(1)
+        if current and not current.startswith("_") and re.search(r"self\.(_fetch|query)\(", line):
+            found.add(current)
+    return found
+
+
+def test_the_fetching_method_table_names_every_one_of_them():
+    """The ratchet's other side: a method added without a call here fails by name."""
+    assert _methods_that_fetch() == set(_FETCHING_CALLS), (
+        "every public method that sends a request needs a real-client smoke call; "
+        "the table and the client have diverged"
+    )
+
+
+@pytest.mark.parametrize("method", sorted(_FETCHING_CALLS))
+def test_every_fetching_client_method_runs_against_a_real_client(method, tmp_path):
+    """Execute the real method, with only the HTTP hop stubbed.
+
+    Reverting `zone_key`'s `budget` parameter turns exactly `reports_in_window` red
+    here, with the `TypeError` the live run produced.
+    """
+    payload = {
+        "worldData": {
+            "encounter": {"id": 3421, "name": "The Twin Fangs", "zone": {"id": 53, "frozen": True}},
+            "zone": {"id": 53, "name": "The Venomous Abyss", "frozen": True, "encounters": []},
+            "zones": [],
+        },
+        "reportData": {
+            "reports": {"data": [], "has_more_pages": False},
+            "report": {
+                "startTime": 0.0,
+                "fights": [],
+                "events": {"data": [], "nextPageTimestamp": None},
+                "table": {"data": {}},
+                "playerDetails": {"data": {"playerDetails": {}}},
+            },
+        },
+    }
+    args, kwargs = _FETCHING_CALLS[method]
+    client = _stubbed_client(tmp_path, _StoreTransport(payload))
+
+    getattr(client, method)(*args, **kwargs)
+
+
+def test_a_report_window_read_at_a_smaller_limit_does_not_answer_a_bigger_one(tmp_path):
+    """What `budget` on that key is FOR, so restoring the parameter alone is not enough.
+
+    A page fetched at `limit=100` is a prefix of the one a caller asking for 200
+    wants. `Entry.satisfies` refuses it -- but only if the limit reached the key, so
+    a `zone_key` that accepted `budget` and dropped it would pass the smoke test
+    above and fail here.
+    """
+    transport = _StoreTransport({"reportData": {"reports": {"data": [], "has_more_pages": False}}})
+    client = _stubbed_client(tmp_path, transport)
+
+    client.reports_in_window(53, 0, 1000, page=1, limit=100)
+    assert transport.posts == 1
+    client.reports_in_window(53, 0, 1000, page=1, limit=100)
+    assert transport.posts == 1, "the same window at the same limit is the stored entry"
+    client.reports_in_window(53, 0, 1000, page=1, limit=200)
+    assert transport.posts == 2, "a 100-report page cannot answer a caller asking for 200"

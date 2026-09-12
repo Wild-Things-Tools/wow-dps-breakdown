@@ -355,9 +355,28 @@ def report_key(code: str, *rest: object, variant: frozenset[str] = frozenset()) 
     return Key(("report", code, *(str(part) for part in rest)), variant=variant)
 
 
-def zone_key(zone_id: int, *rest: object, variant: frozenset[str] = frozenset()) -> Key:
-    """``zone/<id>/...`` -- the zone itself, and the report windows under it."""
-    return Key(("zone", str(zone_id), *(str(part) for part in rest)), variant=variant)
+def zone_key(
+    zone_id: int,
+    *rest: object,
+    variant: frozenset[str] = frozenset(),
+    budget: int | None = None,
+) -> Key:
+    """``zone/<id>/...`` -- the zone itself, and the report windows under it.
+
+    ``budget`` is the page ``limit`` a report window was read at, and this is the
+    one constructor that takes it because the windows are the one kind of entry
+    that can be a PREFIX: a page read at 100 does not answer a caller asking for
+    200, and `Entry.satisfies` refuses it rather than serving the short read.
+
+    It was missing until 2026-09-12 while `Key` carried the field and
+    `reports_in_window` passed it, so the hourly `fight-probe` died on a
+    ``TypeError`` -- see the test that now executes every fetching method.
+    """
+    return Key(
+        ("zone", str(zone_id), *(str(part) for part in rest)),
+        variant=variant,
+        budget=budget,
+    )
 
 
 def rankings_key(

@@ -6019,6 +6019,63 @@ decides what to skip from the *payload* before a query is sent, so a resume that
 skips everything still sends nothing. Only an encounter a run actually reads pays
 again, once.
 
+### `zone_key` never took the `budget` the caller passed, and no test ran that line
+
+Merged green in #181 and found the next hour, when the scheduled `fight-probe`
+died on it:
+
+```
+File "warcraftlogs.py", line 1141, in reports_in_window
+    wclstore.zone_key(zone_id, f"w{...}", f"p{page}", budget=limit),
+TypeError: zone_key() got an unexpected keyword argument 'budget'
+```
+
+`Key` carries `budget`, `Entry.satisfies` enforces it, and the table above says a
+report window is *"immutable, with the page limit as its budget"*. All three were
+written and tested. **The constructor's signature was the one place the field was
+missing**, and `reports_in_window` is its only caller.
+
+**Why the suite could not see it: every test of that method is a STUB method on a
+stub client.** Five hits across three files, all of them
+`def reports_in_window(self, zone_id, start_ms, end_ms, page=1, limit=100)` on a
+double -- so the real method was never executed. Counted the same day, **8 of the
+13** client methods that reach `_fetch` had no real-client test at all. The fold was
+tested three ways and the call sites were not, which is the shape this file records
+for `WarcraftLogsClient(cache_dir=...)`, for `seen_difficulties`, and for
+`fold_upload_start_times`.
+
+`test_every_fetching_client_method_runs_against_a_real_client` is the instrument: a
+parametrised smoke call per method through `_stubbed_client`, with only the HTTP hop
+replaced. It asserts nothing about the answers -- the claim is that the method's own
+plumbing runs, which is exactly the claim a stub cannot make.
+
+Three decisions in it that are not plumbing:
+
+- **The set is derived, and it is two-sided.** `_methods_that_fetch` reads the
+  source, so a method added without a call in the table fails **by name** (canary 4
+  printed `'brand_new_thing'`), and a method dropped from the table fails too. Same
+  shape as `test_every_query_document_asks_for_a_budget_reading`.
+- **It covers every PUBLIC method that sends a request, not only `_fetch` callers.**
+  `fight_events` and `rate_limit` go through `query()` -- `fight_events` deliberately,
+  per the "NOT converted" note above -- and the defect class is *a method whose
+  plumbing is never executed*, which does not care which cache it reaches.
+  `fight_events` pages through cursors, so it is the likeliest of all of them to break
+  this way.
+- **A second test pins what the parameter is FOR**, because a `zone_key` that
+  *accepted* `budget` and dropped it would pass the smoke test. A window read at
+  `limit=100` must not answer a caller asking for 200. Canary 2 confirms the split:
+  restoring the parameter alone leaves that one red.
+
+All four canaries fire by name, and canary 1 reproduces the live `TypeError` on the
+same source line CI named.
+
+**What it cost in points: nothing, and that is luck rather than design.** The hourly
+probe crashed before its first paid query on every run since #181 merged, so the
+failure was free and loud. Had the line sat in a branch a pass reaches *after*
+spending -- `catalogue.py:749` calls the same method -- it would have discarded a
+paid run instead, which is the "beside the guard, not inside it" family this file
+records five times.
+
 ### Two traps found while building it, both about the sandbox rather than the code
 
 - **`python3 -c "import wowdps"` reads a DIFFERENT checkout.** The editable install
