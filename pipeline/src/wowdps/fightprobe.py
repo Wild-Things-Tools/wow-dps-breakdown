@@ -144,6 +144,12 @@ def probe_encounter(
     are two fights' worth of evidence, and throwing them away to raise an exception
     would mean paying for them twice.
 
+    That holds for a stop during the SELECTION too, and there the observation is
+    EMPTY -- no kill was ever chosen. An empty one is not a measurement and the
+    caller must not publish it as one, because `fightsSampled: 0` is a finding about
+    the encounter where the truth is a fact about the run; `cmd_fight_probe` owns
+    that rule and states it where it applies.
+
     ``encounter_id`` is the id the tier FILES the boss under, and it stays the
     observation's id whatever was read. When it yields nothing -- no ranked parse
     and, under ``--order public``, no kill in the report search either -- its
