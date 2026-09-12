@@ -1097,8 +1097,20 @@ class WarcraftLogsClient:
         name = encounter.get("name")
         return name if isinstance(name, str) and name.strip() else None
 
-    def encounter_zone(self, encounter_id: int) -> dict:
-        """The zone one encounter belongs to. `reports` is keyed on zone, not boss."""
+    def encounter(self, encounter_id: int) -> dict:
+        """One encounter's own block -- its id, its name and its zone.
+
+        The only sender of ``ENCOUNTER_ZONE_QUERY``, and it returns the whole block
+        rather than one field for a measured reason: a caller resolving a PTR/live
+        twin needs the **name** to verify the substitution and the **zone** to walk
+        the reports afterwards, and those are two fields of one payload.
+        `cmd_progress_hours` asked for them separately until 2026-09-12 -- through a
+        second, leaner copy of this document that carried no budget reading at all --
+        and so spent three queries on a boss whose twin was accepted where two answer.
+
+        ``{}`` when the schema has no such encounter, which is the answer
+        ``harvest.choose_encounter_id`` refuses a substitution on.
+        """
         data = self._fetch(
             wclstore.encounter_key(encounter_id, variant=_ENCOUNTER_ZONE),
             ENCOUNTER_ZONE_QUERY,
@@ -1110,8 +1122,11 @@ class WarcraftLogsClient:
                 )
             ),
         )
-        encounter = ((data.get("worldData") or {}).get("encounter")) or {}
-        return encounter.get("zone") or {}
+        return ((data.get("worldData") or {}).get("encounter")) or {}
+
+    def encounter_zone(self, encounter_id: int) -> dict:
+        """The zone one encounter belongs to. `reports` is keyed on zone, not boss."""
+        return self.encounter(encounter_id).get("zone") or {}
 
     def reports_in_window(
         self, zone_id: int, start_ms: int, end_ms: int, page: int = 1, limit: int = 100

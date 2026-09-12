@@ -575,20 +575,26 @@ _DOCUMENTS_WITHOUT_A_READING = {
     # two standalone `rate_limit()` readings and reports what the counter did, so the
     # document has nothing to contribute that the brackets do not already have.
     ("wclschema", "TYPE_QUERY"),
-    # The three progress documents, and the reason is #170 Schritt 1c rather than
-    # neglect. Adding the field to them changes two things nobody has measured: the
-    # cache key of every response the chart producer has stored (`--cache` would go
-    # cold once), and the point cost, if Warcraft Logs really does charge per
-    # resolved field -- which is one of #170's own open measurements. Two of the
-    # three are the hot path of a cron job (`progresssweep`), so the bet is not one
-    # to take in passing.
+    # The two progress RANKING documents, and the reason is #170 Schritt 1c rather
+    # than neglect. Adding the field to them changes two things nobody has measured:
+    # the cache key of every response the chart producer has stored (`--cache` would
+    # go cold once), and the point cost, if Warcraft Logs really does charge per
+    # resolved field -- which is one of #170's own open measurements. Both are the
+    # hot path of a cron job (`progresssweep`), so the bet is not one to take in
+    # passing.
     #
     # What it costs meanwhile is measured and is the argument for eventually doing
     # it: because these documents carry no reading, both producers have to poll the
     # counter separately -- 180 of 432 queries (42%) on the chart producer before it
     # was reduced to one poll per boss, and one `rate_limit()` per guild in the sweep
     # to this day.
-    ("progresshours", "ENCOUNTER_ZONE_QUERY"),
+    #
+    # `progresshours.ENCOUNTER_ZONE_QUERY` was the third and is GONE (2026-09-12):
+    # it was a second copy of `warcraftlogs.ENCOUNTER_ZONE_QUERY` selecting the same
+    # three fields, so unifying it onto the richer document cost no measurement --
+    # `wowdps progress-hours` restores no `actions/cache`, so there was no stored
+    # response to go cold, and that document was already being sent by two other
+    # commands.
     ("progresshours", "PROGRESS_RANKINGS_QUERY"),
     ("progresshours", "GUILD_PULLS_QUERY"),
 }
@@ -627,7 +633,12 @@ def test_no_module_outside_warcraftlogs_grows_an_unmeasured_query_document():
                 continue
             found[(info.name, name)] = value
 
-    assert len(found) >= 17, f"the package lost query documents; re-read this test: {len(found)}"
+    # 16 since 2026-09-12, down from 17: `progresshours.ENCOUNTER_ZONE_QUERY` was a
+    # second copy of `warcraftlogs.ENCOUNTER_ZONE_QUERY` and is gone. A floor rather
+    # than an equality, because a NEW document must go through the reading check
+    # below rather than through this line -- and a document that DISAPPEARS should
+    # make somebody read the test, which is exactly what happened here.
+    assert len(found) >= 16, f"the package lost query documents; re-read this test: {len(found)}"
 
     missing = {key for key, text in found.items() if "rateLimitData" not in text}
     unexpected = sorted(missing - _DOCUMENTS_WITHOUT_A_READING)
@@ -687,6 +698,39 @@ def test_a_name_request_is_answered_out_of_the_zone_fetch(tmp_path):
     assert transport.posts == 1
     assert client.encounter_name(3421) == "The Twin Fangs"
     assert transport.posts == 1, "the name was already paid for by the zone fetch"
+
+
+def test_the_whole_block_and_its_zone_are_one_fetch(tmp_path):
+    """#170 Schritt 3: `encounter_zone` is `encounter` with one field taken off it.
+
+    The pair matters because a twin resolution needs the NAME to verify the
+    substitution and the ZONE to walk the reports afterwards, and those are two
+    fields of one payload. `cmd_progress_hours` asked for them through two documents
+    until 2026-09-12 -- the second of which carried no budget reading at all.
+    """
+    transport = _StoreTransport(
+        {"worldData": {"encounter": {"id": 3421, "name": "The Twin Fangs", "zone": {"id": 53}}}}
+    )
+    client = _stubbed_client(tmp_path, transport)
+
+    block = client.encounter(3421)
+    assert block == {"id": 3421, "name": "The Twin Fangs", "zone": {"id": 53}}
+    assert transport.posts == 1
+    assert client.encounter_zone(3421) == {"id": 53}
+    assert client.encounter_name(3421) == "The Twin Fangs"
+    assert transport.posts == 1, "both were already paid for by the block fetch"
+
+
+def test_an_encounter_the_schema_does_not_know_is_an_empty_block(tmp_path):
+    """`{}` rather than a raised error, because that is the answer
+    `harvest.choose_encounter_id` refuses a substitution on -- an id whose twin is not
+    an encounter Warcraft Logs knows. A raise there would take the pass down over a
+    boss that simply has no twin."""
+    transport = _StoreTransport({"worldData": {"encounter": None}})
+    client = _stubbed_client(tmp_path, transport)
+
+    assert client.encounter(444) == {}
+    assert client.encounter_zone(444) == {}
 
 
 def test_the_other_direction_still_pays(tmp_path):

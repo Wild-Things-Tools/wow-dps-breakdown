@@ -85,23 +85,22 @@ NIGHT_GAP_MS = 21_600_000
 RANKING_PAGE_SIZE = 50
 RANKING_MAX_PAGE = 20
 
-#: Which raid an encounter belongs to.
-#:
-#: **The zone is derived, never typed.** `fight_profiles.json` carries encounter ids
-#: and no `zoneId` for any tier, so `block.get("zoneId") or args.zone or 0` resolved
-#: to **0** on every query of the 2026-08-26 run -- and Warcraft Logs accepted it
-#: rather than refusing, returning each guild's reports across *all* content. That is
-#: this project's own recurring trap in its third disguise: after an omitted argument
-#: (`hostilityType`, `includeResources`) comes a *zero* one, and a zero is a value the
-#: service is entitled to interpret.
-#:
-#: A zone is a property of the encounter, and the encounter ids are the one thing the
-#: tier file is authoritative about, so it is asked for rather than asserted. An
-#: encounter whose zone cannot be resolved is REFUSED, because `zoneID: 0` is not a
-#: narrower question -- it is a different one, answered plausibly.
-ENCOUNTER_ZONE_QUERY = """query($e:Int!){
-  worldData { encounter(id:$e) { id name zone { id name } } }
-}"""
+# Which raid an encounter belongs to used to be asked here, by a second copy of
+# `warcraftlogs.ENCOUNTER_ZONE_QUERY` that selected the same three fields and no
+# `rateLimitData`. It is gone (2026-09-12): `WarcraftLogsClient.encounter` is the one
+# sender, so the answer lands in the `encounter/<id>` key space, carries a budget
+# reading, and is shared with every other command that asks the same encounter.
+#
+# The reason the zone is asked for at all stands and is the whole of why the two
+# functions below refuse rather than default:
+#
+# **The zone is derived, never typed.** `fight_profiles.json` carries encounter ids
+# and no `zoneId` for any tier, so `block.get("zoneId") or args.zone or 0` resolved
+# to **0** on every query of the 2026-08-26 run -- and Warcraft Logs accepted it
+# rather than refusing, returning each guild's reports across *all* content. That is
+# this project's own recurring trap in its third disguise: after an omitted argument
+# (`hostilityType`, `includeResources`) comes a *zero* one, and a zero is a value the
+# service is entitled to interpret.
 
 
 #: One guild's first kill, from `fightRankings(metric: progress)`.
@@ -137,14 +136,17 @@ GUILD_PULLS_QUERY = f"""query($g:Int!,$z:Int!,$e:Int!,$d:Int!,$page:Int!){{
 }}"""
 
 
-def encounter_zone(payload: dict) -> int | None:
-    """The zone id in an ``ENCOUNTER_ZONE_QUERY`` payload, or None.
+def encounter_zone(encounter: dict) -> int | None:
+    """The zone id in a ``WarcraftLogsClient.encounter`` block, or None.
 
     None rather than 0: the caller must be able to tell "no zone" from a zone whose
     id happens to be falsy, because 0 is exactly the value that made the failing run
     look like a working one.
+
+    Takes the encounter block rather than the whole payload since 2026-09-12, because
+    the client now unwraps it -- the refusal is the part worth keeping as a named
+    function, not the envelope walk.
     """
-    encounter = ((payload.get("worldData") or {}).get("encounter")) or {}
     zone = encounter.get("zone") or {}
     zone_id = zone.get("id")
     if not isinstance(zone_id, int) or zone_id <= 0:
@@ -152,14 +154,13 @@ def encounter_zone(payload: dict) -> int | None:
     return zone_id
 
 
-def encounter_name(payload: dict) -> str | None:
-    """The encounter's name in an ``ENCOUNTER_ZONE_QUERY`` payload, or None.
+def encounter_name(encounter: dict) -> str | None:
+    """The encounter's name in a ``WarcraftLogsClient.encounter`` block, or None.
 
     Already fetched by the zone lookup and discarded until 2026-08-27. It is what
     verifies a PTR/live twin substitution: two ids differing by a leading 5 are the
     same boss only if Warcraft Logs calls them the same thing.
     """
-    encounter = ((payload.get("worldData") or {}).get("encounter")) or {}
     name = encounter.get("name")
     return name if isinstance(name, str) and name else None
 
