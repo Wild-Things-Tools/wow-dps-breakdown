@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from . import (
+    catalogue,
     dataset,
     equipment,
     fightdataset,
@@ -2519,6 +2520,80 @@ def cmd_progress_sweep(args: argparse.Namespace) -> int:
     return report.exit_code
 
 
+def cmd_catalogue(args: argparse.Namespace) -> int:
+    """Build the catalogue: which reports hold which kills, and each kill's shape.
+
+    The contract is ``docs/progress-catalogue.md``. Exit codes are
+    ``progress-sweep``'s so one workflow shell reads both: 0 done or stopped on
+    budget (what was read is written), 1 a ``--validate`` violation, a usage error,
+    or a first budget reading that failed for a reason that is not the budget
+    (nothing catalogued, so the job must go red), 2 a zone Warcraft Logs would not
+    list, 3 a schema alarm on some file set.
+    """
+    import json as _json
+
+    from . import catalogue
+    from .warcraftlogs import Credentials, WarcraftLogsClient, WarcraftLogsError
+
+    if args.validate:
+        problems = catalogue.validate(Path(args.validate))
+        for problem in problems:
+            print(f"INVALID {problem}")
+        print(f"{args.validate}: {len(problems)} problem(s)")
+        return catalogue.EXIT_FAILED if problems else catalogue.EXIT_OK
+    if not args.out:
+        logging.error("--out is required unless --validate is given")
+        return 1
+    # Parsed here rather than as an argparse `type=`, for `_int_list`'s reason: an
+    # ArgumentTypeError is SystemExit(2), and 2 is this command's code for "a zone
+    # Warcraft Logs would not list", which the workflow downgrades to a warning and
+    # a GREEN step. A usage error must not read as a swept-nothing success.
+    try:
+        zones = _int_list("--zones", args.zones)
+        difficulties = _int_list("--difficulties", args.difficulties, allow=(4, 5))
+        stages = _int_list("--stages", args.stages, allow=(2, 3))
+    except ValueError as refusal:
+        logging.error("%s", refusal)
+        return catalogue.EXIT_FAILED
+    if args.describe:
+        for line in catalogue.describe(Path(args.out), zones, difficulties):
+            print(line)
+        return 0
+
+    try:
+        credentials = Credentials.from_env()
+    except WarcraftLogsError as exc:
+        logging.error("%s", exc)
+        return 1
+
+    options = catalogue.CatalogueOptions(
+        zones=zones,
+        difficulties=difficulties,
+        stages=stages,
+        report_pages=args.report_pages,
+        report_limit=args.report_limit,
+        kills=args.kills,
+        point_ceiling=args.point_ceiling,
+        deadline_minutes=args.deadline_minutes,
+        retry_errors=args.retry_errors,
+    )
+    # `cache_dir` is set and that is the OPPOSITE of the cohort sweep, deliberately:
+    # every question this producer asks is about an immutable thing (a report's
+    # fights, a fight's shape). A ranking -- the one thing a re-read exists for --
+    # never appears here.
+    with WarcraftLogsClient(
+        credentials,
+        cache_dir=Path(args.cache) if args.cache else None,
+        timeout=progresssweep.SWEEP_TIMEOUT_SECONDS,
+    ) as client:
+        report = catalogue.run_catalogue(client, Path(args.out), options)
+    summary = report.to_json()
+    print(f"summary: {_json.dumps(summary)}")
+    if args.summary:
+        Path(args.summary).write_text(_json.dumps(summary, indent=1) + "\n", encoding="utf-8")
+    return report.exit_code
+
+
 def cmd_fight_probe(args: argparse.Namespace) -> int:
     from . import fightprobe
 
@@ -3464,6 +3539,84 @@ def build_parser() -> argparse.ArgumentParser:
         help="parallel guild walks. Only 1 is implemented; anything else is refused",
     )
     p_sweep.set_defaults(func=cmd_progress_sweep)
+
+    p_cat = sub.add_parser(
+        "catalogue",
+        help="build the kill catalogue: Stufe 3 and Stufe 2 (docs/progress-catalogue.md)",
+    )
+    # Every default here is the workflow's default and the two MUST stay equal: a
+    # scheduled run gets no inputs, so what is written here is what it runs with.
+    p_cat.add_argument(
+        "--zones",
+        default=",".join(str(z) for z in progresssweep.DEFAULT_ZONES),
+        help="Warcraft Logs LIVE zone ids in PRIORITY order, comma-separated. Never 0, "
+        "and never a PTR zone -- its encounter ids join a live catalogue",
+    )
+    p_cat.add_argument(
+        "--difficulties",
+        default=",".join(str(d) for d in catalogue.DEFAULT_DIFFICULTIES),
+        help="comma-separated, swept in this order on one budget (5 Mythic, 4 Heroic). Default 5,4",
+    )
+    p_cat.add_argument(
+        "--stages",
+        default="3,2",
+        help="which stages to run: 3 the report directory, 2 a kill's shape. Stufe 3 "
+        "first is the contract's order -- a report can be set private, a kill's shape "
+        "cannot be lost by waiting",
+    )
+    p_cat.add_argument(
+        "--report-pages",
+        type=int,
+        default=catalogue.DEFAULT_REPORT_PAGES,
+        help="pages of the zone's report list per run; the limit is walled, not exhausted",
+    )
+    p_cat.add_argument(
+        "--report-limit",
+        type=int,
+        default=catalogue.DEFAULT_REPORT_LIMIT,
+        help="reports per page",
+    )
+    p_cat.add_argument(
+        "--kills",
+        type=int,
+        default=0,
+        help="Stufe 2 kills READ per (zone, difficulty) per run (0 = unlimited)",
+    )
+    p_cat.add_argument(
+        "--point-ceiling",
+        type=float,
+        default=catalogue.DEFAULT_POINT_CEILING,
+        help="share of the hourly budget, against the ABSOLUTE counter; at it the run "
+        "sleeps until the counter resets",
+    )
+    p_cat.add_argument(
+        "--deadline-minutes",
+        type=float,
+        default=catalogue.DEFAULT_DEADLINE_MINUTES,
+        help="wall-clock budget; reached, the run writes and exits 0",
+    )
+    p_cat.add_argument(
+        "--retry-errors",
+        action="store_true",
+        help="re-offer exactly the things refused as a transport failure, and nothing else",
+    )
+    p_cat.add_argument(
+        "--describe",
+        action="store_true",
+        help="print what --out holds per file set and send no query",
+    )
+    p_cat.add_argument(
+        "--validate",
+        metavar="DIR",
+        help="check a file set instead of building: JSON per line, manifest counts, no "
+        "file shorter than at HEAD, and no player name on any line. Exit 1 on any violation",
+    )
+    p_cat.add_argument("--out", metavar="DIR", help="the file set (required unless --validate)")
+    p_cat.add_argument("--cache", metavar="DIR", help="response cache; on for this producer")
+    p_cat.add_argument(
+        "--summary", metavar="FILE", help="also write the run's summary as JSON here"
+    )
+    p_cat.set_defaults(func=cmd_catalogue)
 
     p_fights = sub.add_parser(
         "fights",
