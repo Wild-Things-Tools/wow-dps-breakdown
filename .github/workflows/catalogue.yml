@@ -1,0 +1,306 @@
+name: Catalogue
+
+# The kill catalogue: which reports hold which kills (Stufe 3) and what each kill
+# looks like (Stufe 2), committed into the PRIVATE data repository
+# `Wild-Things-Tools/wtt-progress-data`, folder `progress-catalogue/`. The contract
+# is docs/progress-catalogue.md.
+#
+# Same posture as `progress-sweep.yml` and for the same reasons: the runner minutes
+# are free on a public repository, the Warcraft Logs credentials are already here,
+# and nothing about guilds or players is written into THIS repository. `permissions`
+# is `contents: read` -- this workflow never commits to itself.
+#
+# ── Why there is no schedule, and what would earn one ──────────────────────────
+#
+# The contract refuses a CRON without one number: "how many reports does a zone
+# really hold". Until that is measured, "every kill" is not priceable and a cadence
+# is a guess -- 500 reports per encounter at the measured 1.66 points per query is
+# ~830 points (4.6 % of an 18,000 hour), and that is a FLOOR for one window.
+#
+# It does NOT refuse this workflow, and the distinction is load-bearing: a
+# dispatch-only run is exactly the instrument that takes the measurement. Stufe 3
+# records `pagesRead`, `reportsSeen` and `walled` per window in `z<zone>.state.json`,
+# so
+#
+#     stages 3, zones 53, report_pages 40
+#
+# answers it directly -- `walled: false` means the zone was read to the end and
+# `reportsSeen` IS the number; `walled: true` means 4,000 reports were not enough and
+# the answer is a lower bound. Read that before writing a cron here.
+#
+# The Status paragraph of the contract said "the workflow is not built ... because
+# this document refuses a cron", which reads the refusal as bigger than it is. That
+# is corrected there; this comment is the other half of the correction.
+#
+# schedule:
+#   - cron: '43 1,7,13,19 * * *'   # DELIBERATELY OFF. See above.
+on:
+  workflow_dispatch:
+    inputs:
+      # Every default here MUST equal the CLI's (`wowdps catalogue --help`). A
+      # scheduled run gets no inputs, so what is written here is what it would run
+      # with -- `fight-probe` shipped a form default that did not match a real pass
+      # and every continuation went silently inert.
+      zones:
+        description: 'Warcraft Logs LIVE zone ids in PRIORITY order, comma-separated. Never 0, never a PTR zone'
+        default: '53,46,44,42,38'
+      difficulties:
+        description: 'Comma-separated (5 Mythic, 4 Heroic)'
+        default: '5,4'
+      stages:
+        description: '3 the report directory, 2 a kill shape. Stufe 3 first is the contract order'
+        default: '3,2'
+      report_pages:
+        description: 'Pages of the zone report list per run, 100 each. Raise this to MEASURE how many a zone holds'
+        default: '5'
+      kills:
+        description: 'Stufe 2 kills READ per (zone, difficulty) per run. 0 = unlimited'
+        default: '0'
+      deadline_minutes:
+        description: 'Wall-clock budget. Reached, the run writes what it has and exits 0'
+        default: '300'
+      point_ceiling:
+        description: 'Share of the hourly point budget, against the ABSOLUTE counter. At it the run sleeps until the counter resets'
+        default: '0.3'
+      retry_errors:
+        description: 'Re-offer exactly the things refused as a transport failure, and nothing else'
+        type: boolean
+        default: false
+      describe_only:
+        description: 'Print what the checkout holds per file set and send no query'
+        type: boolean
+        default: false
+
+concurrency:
+  group: catalogue
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  catalogue:
+    # A fork inherits the workflow file and none of the secrets; a run there should
+    # not even reach a checkout that names the private data repository.
+    if: github.repository == 'Wild-Things-Tools/wow-dps-breakdown'
+    runs-on: ubuntu-latest
+    # GitHub's job limit is 6 h; the run's own deadline is 300 min by default, and
+    # install, validate and the push fit in the rest.
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      # The private data repository, at ./data. `persist-credentials` (the default)
+      # keeps the PAT in that checkout's git config, which is what the push uses.
+      # If the secret is missing the checkout fails HERE, before a point is spent --
+      # which is why this step sits above the credential check rather than below it.
+      - name: Check out the data repository
+        uses: actions/checkout@v4
+        with:
+          repository: Wild-Things-Tools/wtt-progress-data
+          token: ${{ secrets.PROGRESS_DATA_PAT }}
+          path: data
+          fetch-depth: 1
+
+      - name: Check credentials
+        id: creds
+        env:
+          WCL_CLIENT_ID: ${{ secrets.WCL_CLIENT_ID }}
+          WCL_CLIENT_SECRET: ${{ secrets.WCL_CLIENT_SECRET }}
+        run: |
+          if [ -z "$WCL_CLIENT_ID" ] || [ -z "$WCL_CLIENT_SECRET" ]; then
+            echo "::error::WCL_CLIENT_ID / WCL_CLIENT_SECRET are not set."
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install
+        working-directory: pipeline
+        run: pip install -e '.[dev]'
+
+      # The response cache, and this is the OPPOSITE of progress-sweep.yml on
+      # purpose: every question the catalogue asks is about an immutable thing (a
+      # report's fights, a fight's shape), where the sweep's rankings are the one
+      # thing a re-read exists for. It rides OUTSIDE `data/`, so nothing of it can
+      # reach a commit -- and outside the artifact, which is the leak #172 closed.
+      - name: Restore the response cache
+        uses: actions/cache@v4
+        with:
+          path: .wclcache
+          key: catalogue-cache-${{ github.run_id }}
+          restore-keys: |
+            catalogue-cache-
+
+      # Inputs are bound in `env:`, never interpolated into `run:`. A dispatched
+      # value carrying a quote and a semicolon would otherwise become script, in a
+      # job holding the Warcraft Logs secret and a PAT.
+      - name: Catalogue
+        env:
+          WCL_CLIENT_ID: ${{ secrets.WCL_CLIENT_ID }}
+          WCL_CLIENT_SECRET: ${{ secrets.WCL_CLIENT_SECRET }}
+          ZONES: ${{ inputs.zones || '53,46,44,42,38' }}
+          DIFFICULTIES: ${{ inputs.difficulties || '5,4' }}
+          STAGES: ${{ inputs.stages || '3,2' }}
+          REPORT_PAGES: ${{ inputs.report_pages || '5' }}
+          KILLS: ${{ inputs.kills || '0' }}
+          DEADLINE_MINUTES: ${{ inputs.deadline_minutes || '300' }}
+          POINT_CEILING: ${{ inputs.point_ceiling || '0.3' }}
+          RETRY_ERRORS: ${{ inputs.retry_errors }}
+          DESCRIBE_ONLY: ${{ inputs.describe_only }}
+        run: |
+          set -uo pipefail
+          extra=()
+          [ "$RETRY_ERRORS" = "true" ] && extra+=(--retry-errors)
+          [ "$DESCRIBE_ONLY" = "true" ] && extra+=(--describe)
+          # Exit 2 (a zone the service would not list, PTR ids among them) and 3 (a
+          # schema alarm on some file set) are findings, and what the OTHER file sets
+          # read is written and worth committing; anything else is a real failure.
+          # The runner's default shell is `bash -eo pipefail`, so without `set +e` a
+          # non-zero exit ends the step AT the pipeline and none of the branches
+          # below runs -- the dead-branch defect progress-sweep.yml shipped once.
+          set +e
+          python -m wowdps.cli catalogue \
+            --zones "$ZONES" \
+            --difficulties "$DIFFICULTIES" \
+            --stages "$STAGES" \
+            --report-pages "$REPORT_PAGES" \
+            --kills "$KILLS" \
+            --deadline-minutes "$DEADLINE_MINUTES" \
+            --point-ceiling "$POINT_CEILING" \
+            "${extra[@]}" \
+            --cache .wclcache \
+            --out data/progress-catalogue \
+            --summary catalogue-summary.json 2>&1 | tee catalogue.log
+          status=$?
+          set -e
+          if [ "$status" = "2" ]; then
+            echo "::warning::a zone could not be listed (or carried PTR ids); the others were read"
+          elif [ "$status" = "3" ]; then
+            echo "::error::a schema alarm fired on some file set; THAT file set wrote nothing"
+          elif [ "$status" != "0" ]; then
+            exit "$status"
+          fi
+
+      # `always()`: the catalogue writes after every zone and every pair, so a run
+      # that failed on its last one still holds paid-for lines from every one before
+      # it. The validator is what stands between that and a bad commit -- and it is
+      # the only one of the three scrub checks that reads the FILE.
+      - name: Validate and commit into the data repository
+        if: always()
+        working-directory: data
+        env:
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # The one case where an absent directory is expected rather than a typo:
+          # the very first run, which failed before `run_catalogue` created it. The
+          # gate itself stays STRICT -- `--validate` on a path that does not exist is
+          # a violation there, because a mistyped path passing silently is the worse
+          # error -- so the case is stated here instead of weakened in the gate.
+          if [ ! -d progress-catalogue ]; then
+            echo "progress-catalogue does not exist yet; nothing was written"
+            exit 0
+          fi
+          python -m wowdps.cli catalogue --validate progress-catalogue
+          git add progress-catalogue
+          if git diff --staged --quiet; then
+            echo "progress catalogue unchanged"
+            exit 0
+          fi
+          message=$(python - <<'PY'
+          import json, os, pathlib
+          summary = pathlib.Path("../catalogue-summary.json")
+          d = json.loads(summary.read_text()) if summary.is_file() else {}
+          points = d.get("points")
+          points = "UNMEASURED" if points is None else f"{points:.0f}"
+          print(
+              f"catalogue: +{d.get('newReports', 0)} reports, +{d.get('newKills', 0)} kills, "
+              f"+{d.get('newRefused', 0)} refusals, {points} points, "
+              f"{d.get('queries', 0)} queries (run {os.environ['RUN_ID']})"
+          )
+          PY
+          )
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git commit -m "$message"
+          # The push loop is progress-sweep.yml's, with its correction: NOT
+          # `git pull --rebase || true`, which on a conflict leaves the clone
+          # mid-rebase with HEAD on origin/main, so the push says "Everything
+          # up-to-date", succeeds, and the run's lines never reach the repository
+          # while the step exits 0. A conflicting rebase is aborted and retried, and
+          # afterwards the commit at HEAD is asserted to be this run's and to be on
+          # origin/main -- so "pushed" is a fact rather than a flag.
+          pushed=false
+          for attempt in 1 2 3; do
+            if ! git pull --rebase --autostash origin main; then
+              git rebase --abort || true
+              echo "rebase attempt $attempt conflicted; retrying"
+              sleep $((attempt * 5))
+              continue
+            fi
+            if git push origin HEAD:main; then pushed=true; break; fi
+            echo "push attempt $attempt lost the race; retrying"
+            sleep $((attempt * 5))
+          done
+          [ "$pushed" = true ]
+          git fetch origin main
+          [ "$(git log -1 --format=%s HEAD)" = "$message" ]
+          git merge-base --is-ancestor HEAD origin/main
+
+      # Always: the run whose log somebody needs is precisely the one that stopped
+      # early. The cache is NOT in this path -- it holds raw API payloads, and an
+      # artifact of a public repository is downloadable by anyone (#172).
+      - name: Upload the log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: catalogue
+          path: |
+            catalogue.log
+            catalogue-summary.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # The measurement the cron waits on, printed where a person will see it rather
+      # than left in a state file nobody opens.
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo '## Catalogue'
+            echo
+            echo '```'
+            cat catalogue-summary.json 2>/dev/null || echo 'no summary written'
+            echo '```'
+            echo
+            echo '### Reports per zone (the measurement the cron waits on)'
+            echo
+            echo '`walled: false` means the zone was read to the end and `reportsSeen`'
+            echo 'IS the number. `walled: true` means the page limit stopped it, so the'
+            echo 'figure is a LOWER BOUND -- raise `report_pages` and dispatch again.'
+            echo
+            echo '```'
+            python - <<'PY' 2>/dev/null || echo 'no state written'
+          import json, pathlib
+          for path in sorted(pathlib.Path("data/progress-catalogue").glob("z*.state.json")):
+              state = json.loads(path.read_text())
+              if state.get("stage") != 3:
+                  continue
+              for window in state.get("windows") or []:
+                  print(
+                      f"{path.name}: pagesRead={window.get('pagesRead')} "
+                      f"reportsSeen={window.get('reportsSeen')} walled={window.get('walled')} "
+                      f"({state.get('zoneName')})"
+                  )
+          PY
+            echo '```'
+            echo
+            echo 'Last lines of the log:'
+            echo
+            echo '```'
+            tail -n 40 catalogue.log 2>/dev/null || echo 'no log'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
