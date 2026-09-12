@@ -6499,6 +6499,103 @@ already allows -- a raised `--report-pages`/`--reports` re-opens them by the
 `searchBudget` rule -- and **not** with `--no-resume`, which discards paid-for
 measurements and is the owner's decision.
 
+### The fifth "beside the guard, not inside it", and the row it would have written (#159, 2026-09-12)
+
+`_select_kills` checks the point budget once per ranking page. Nothing between that
+check and `cli.main` caught `PointBudgetExhausted`: `probe_encounter` guarded only
+its fight loop, `cmd_fight_probe` had no `try` around `probe_encounter`, and
+`cli.main` is `return int(args.func(args))`. So an hour already over the ceiling
+when an encounter **starts** -- after a boss that spent it, or a spawn pass in the
+same hour -- threw on that encounter's first ranking page.
+
+Reproduced here before it was touched, driving the real command with a stubbed
+client, two encounters, the ceiling crossed on the last paid call of the first one:
+
+```
+before   PointBudgetExhausted ESCAPED cmd_fight_probe       payload written: False
+after    exit 3                                             payload written: True
+                                                            encounters: [(3180, 1)]
+```
+
+**The payload is written after the loop, so the escape loses the whole pass.**
+Encounter 3180 was fully read and PAID FOR in that same run and went with the
+traceback. And exit 1 is the one status `fight-probe.yml` fails the step on
+(`elif [ "$status" != "0" ]; then exit "$status"`), where 2 is a warning and 3 a
+notice -- so nothing was uploaded either. Fifth instance of the shape this file
+already records for `harvest_encounter`, `_public_first_kills`, `_head_to_head`
+and the sibling repo: **a call placed beside a guard rather than inside it.**
+
+#### The half that had to be decided: zero is not absent
+
+Catching it exposes what #160 deferred. A selection the ceiling stopped has read no
+fight, so its row would say `fightsSampled: 0` -- and `by_id = {**previous,
+**fresh}` is a flat replacement, so that row **overwrites** whatever an earlier run
+measured for the same `(encounter, difficulty)`.
+
+**It is not a harm the fix would have introduced. It already ships, through the
+fight loop's own guard**, which returns an empty observation when the ceiling falls
+before the first fight. Measured on this branch, a previous row of three kills
+against a run asking for five:
+
+```
+before   encounter 3180: fightsSampled=0     <- the previous row said 3
+after    encounter 3180: fightsSampled=3
+```
+
+So the rule is one rule over both paths: **an encounter the ceiling stopped before
+any fight was read contributes nothing** -- no row, no transcript section, no place
+in the per-encounter cost. Absent reads as *never probed*, which is what happened;
+`fightsSampled: 0` is a finding about the **encounter** (its rankings carried no
+kill) and would be a false sentence about a pass that asked nothing. Same direction
+as `_keep_measurements`: never replace a measurement with an absence. The encounter
+stays in `incomplete`, so the next hour re-opens it.
+
+**Deliberately NOT extended to a partial read.** An encounter that got 2 of 5 fights
+really did measure two kills, `is_complete` re-opens it next hour, and
+`write_fights` refuses to publish a document that shrinks. Only the zero case states
+something untrue. "Keep the bigger row" is a different question with its own
+machinery downstream, and widening into it here would answer it in the wrong place.
+
+Also not done: `_unselected`'s observation claims nothing it did not see --
+`search_exhausted` stays False and `search_budget` None, because a stopped walk saw
+a window rather than the whole list and claiming otherwise would let `is_complete`
+close the encounter for good over a selection that never ran.
+
+#### The canaries, and the one that did not fire
+
+`1282 passed, 15 skipped` before, **`1286 passed, 15 skipped`** after, `ruff check`
+and `ruff format --check` clean. Four canaries, each reverted:
+
+| broken | red |
+|---|---|
+| the selection guard stops catching the ceiling | `test_a_ceiling_stop_in_the_selection_returns_the_reason_instead_of_raising`, `..._keeps_the_encounters_already_paid_for` |
+| the contribution rule removed, the empty row published again | `..._keeps_the_encounters_already_paid_for`, `test_an_encounter_stopped_before_any_fight_does_not_replace_an_older_measurement` |
+| `_unselected` claims `search_exhausted` | `test_a_ceiling_stop_in_the_selection_returns_the_reason_instead_of_raising` |
+| the rule widened to withhold a partial read too | **nothing** -- see below |
+
+**The fourth did not fire, and the finding was about the test.**
+`test_a_partial_read_still_replaces_the_older_row_and_that_is_deliberate` drove
+`probe_encounter` directly and asserted the observation still carried its one
+fight -- true whatever the command then does with it, so widening the command's
+guard to `if aborted:` left it green. The fold was tested and the call site was
+not, which is the shape this repository keeps producing (`seen_difficulties`
+declared and never written to; `fold_upload_start_times` tested while its caller
+was not). Rewritten as
+`test_a_partial_read_is_still_written_and_that_boundary_is_deliberate`, which
+runs the command and asserts the partial row reaches the payload, the same
+canary goes red by name.
+
+The issue's claim about the existing tests is re-verified rather than repeated:
+`test_running_out_of_budget_keeps_the_fights_already_paid_for` records its high
+reading inside `fight_structure`, i.e. after a fight is read, and
+`test_the_point_ceiling_returns_what_was_found_instead_of_losing_the_pass` calls
+`_public_first_kills` directly and raises inside `report_kills`, inside that
+function's own `try`. Neither ever leaves the ranking walk. Confirmed by reverting
+the fix: both stayed green.
+
+**Nothing published moves.** No dataset is regenerated by this; it changes what a
+run that hits the ceiling does with what it already read.
+
 ### What Vashnik's adds look like, and why Mythic cannot show it
 
 Read out of the committed `fights.json`, no new run.
