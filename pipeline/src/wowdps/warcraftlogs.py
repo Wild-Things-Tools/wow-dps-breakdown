@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import statistics
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1191,6 +1192,50 @@ def select_report_fights(
         # earliest kill, so those go last rather than first.
         rows.sort(key=lambda row: (row[0] == 0.0, row[0]))
     return [(code, fight_id, started) for started, code, fight_id in rows[:limit]]
+
+
+def _earliest_first(started: float) -> tuple[bool, float]:
+    """Sort key that puts a row with NO timestamp last rather than first.
+
+    A ranking row that states no start time arrives as ``0.0``, and read as a date
+    that is 1970 -- so it wins every "earliest kill" comparison there is.
+    ``select_report_fights`` has carried this rule since it learned to sort by date;
+    it has to survive anywhere those triples are re-sorted.
+    """
+    return (started == 0.0, started)
+
+
+def merge_kill_selections(
+    *selections: Sequence[tuple[str, int, float]], limit: int
+) -> list[tuple[str, int, float]]:
+    """Fold several already-chosen kill lists into one, earliest first.
+
+    ``--order public`` has two sources for the same encounter and they answer
+    different questions: ``characterRankings`` holds only what Warcraft Logs
+    *ranked*, while the public-report search reaches a kill nobody ranked. Taking
+    one INSTEAD of the other throws away a sample that is already paid for, which
+    is how one kill came to stand where thirty-six existed (#164) -- the guard was
+    ``if found:``, a truthiness test where a size question was meant.
+
+    One fight per report across ALL of them, so a log both sources found is one
+    kill rather than two. Where they disagree about which fight of a report to
+    take, the earlier start wins -- that is what ``order="first"`` means -- and
+    ties break on the report code so a re-run picks the same kills.
+
+    **This is deliberately not folded into ``select_report_fights``.** That one
+    also serves ``order="top"``, which must keep the rankings' own damage order and
+    therefore must not sort at all; and it reads encounter *payloads* where these
+    are triples that have already been through a selector. Two different inputs and
+    one of them must not be sorted is not one function with a flag.
+    """
+    best: dict[str, tuple[float, int]] = {}
+    for selection in selections:
+        for code, fight_id, started in selection:
+            current = best.get(code)
+            if current is None or _earliest_first(started) < _earliest_first(current[0]):
+                best[code] = (started, fight_id)
+    ordered = sorted(best.items(), key=lambda item: (_earliest_first(item[1][0]), item[0]))
+    return [(code, fight_id, started) for code, (started, fight_id) in ordered[:limit]]
 
 
 def top_report_fights(encounter: dict, limit: int) -> list[tuple[str, int, float]]:
