@@ -4733,6 +4733,233 @@ Drawing a Heroic band on a tab a reader takes for Mythic is a mislabelling, and 
 the *same* mislabelling that the document's own `measuredDifficulty` exists to
 prevent. Issue #48 holds the three options; the run half of it is now done.
 
+## The cohort sweep moved here, and its rows do not (2026-09-11)
+
+`progresssweep.py` + `wowdps progress-sweep` + `.github/workflows/progress-sweep.yml`.
+The contract is `docs/progress-cohort.md`; where this section and that file disagree,
+the file wins.
+
+**What moved, and why.** The cohort walk -- every guild on a boss's progress ranking,
+ranking pages plus a report walk per guild -- is the one thing in the progress-hours
+feature that costs Warcraft Logs points *and* Cloud Run hours, and it was running
+in wtt-backend as `fetch_progress_hours` on a scheduler (~43 USD a month of GCP for
+the two jobs, per the design's cost table). The runner minutes are free here, the
+Warcraft Logs credentials are already here, and the walk needs no database. So the
+walk is a command in this repository now and the backend keeps what only it can do:
+the own-guild lookup, the catalogue, and the import. `wowdps progress-hours` is
+untouched; it is still the chart producer for `<tier>/progress-hours.json`, and the
+two share `ranking_rows`, `pull_time` and the GraphQL documents, not a format.
+
+**The rows are private, option B.** The sweep writes into `data/`, which is a
+checkout of the private repository `Wild-Things-Tools/wtt-progress-data` made with a
+fine-grained PAT (`PROGRESS_DATA_PAT`, Contents read/write on that one repository),
+and pushes there. This repository is public, and a commit, a release or an artifact
+here is readable by anyone; ~84k rows of guild names, realms, hours and first kills
+over five seasons would be irreversible in git history. So the workflow's
+`permissions` is `contents: read`: it never commits to itself. The import on the
+private side reads the tarball with a token from Secret Manager. Nothing about guilds
+touches this repository at any point, and the schema twin in `web/` is not extended
+for it on purpose.
+
+**Zone-addressed, never tier-addressed.** Encounters and the `frozen` flag come from
+`worldData.zone(id:)` for the typed zones 53, 46, 44, 42, 38 -- live ids, the zone's
+own list -- and never from `fight_profiles.json`, which files MID2 under PTR `53xxx`
+ids, and never through `harvest.choose_encounter_id`. The private import refuses a row
+whose `zoneId` disagrees with its catalogue (zone 54 IS in that catalogue with the
+`53xxx` ids, so a PTR id would join and land under the wrong zone); this side simply
+cannot write one. Order of `--zones` is priority and is never re-sorted; `0` and a
+non-integer are refused by the parser, because Warcraft Logs accepts `zoneID: 0` and
+answers with everything.
+
+**The cursor is the backend's `before_cursor`, ported 1:1**, and so are
+`guild_identity`, `_text` and `_region_of` from its `pullhours`. What is deliberately
+NOT ported: `night_span_ms` and `logging_gap_ratio`. A row carries the raw inputs
+instead -- `reportStartsMs` (every report the walk read, ascending) and `nightsMs`
+(one `[first start, last end]` pair per raid night over the attempts up to the kill,
+partitioned the way the backend's `night_span_ms` partitions) -- and the derivation
+stays on the private side, by the owner's decision.
+
+**Two schema alarms, failing in different directions.** A ranking row with no
+`fromlog` means the completeness screen cannot run, and the PAIR then writes nothing
+-- no rows, no state -- the run goes on to the next pair and exits 3 at the end.
+Per pair rather than per run: the backend's `guildmeasure` merely refuses the row and
+moves the cursor past it, so a renamed field would persist a thousand rows as judged
+in one run; a run-level stop would hold 84 pairs over one anomalous row on one boss.
+The other alarm is the one both repositories had been getting wrong: a row with
+`fromlog` but no `killTime` used to reach `pull_time` with `kill_time_ms=None`, which
+switches screen 2 off while every number looks healthy. It is refused as
+`no-kill-time` and never reaches `pull_time`; a test monkeypatches `pull_time` to
+raise and proves it is not called.
+
+**The firing-rate measurement, and the sleep-until-reset rule that follows from it.**
+Measured on this repository: the hourly `fight-probe` cron fired 20-23 times a day
+until 2026-08-25 and only **2-8 times a day (median 6) since 2026-08-27**, with delays
+p50 28 min, p90 47, max 60. So a public schedule cannot be planned as 22-24 short runs.
+The sweep is built for few long runs instead: the point ceiling is checked against
+the ABSOLUTE hourly counter before every walk (a `rate_limit()` per guild -- the
+42%-of-queries figure the chart producer paid to avoid is accepted here, because the
+contract says before every walk and a wrong ceiling read costs a 429), and at the
+ceiling the run **sleeps until `pointsResetIn` + 30 s** and continues -- runner
+minutes are free -- until `--deadline-minutes` (300) is reached, then writes and
+exits 0. `time.sleep` and the clock are injectable, so the tests drive it in no time.
+`timeout-minutes: 350` is the job limit's 6 h minus the deadline. The cron
+(`17 0,6,12,18 * * *`) is in the workflow **commented out**; it goes live in a later PR
+after the seed and the first hand runs, and the comment beside it says so.
+
+**Per-encounter atomic writes, append-only rows, and a manifest with no run stamp.**
+Every encounter ends with tmp-file-and-`os.replace` writes of rows, refused, state and
+manifest -- the per-encounter write the chart producer lacks (`cli.py` writes only at
+the end). Rows and refusals are rewritten only when there is something to append, and
+the bytes before the appended lines are the bytes that were read, so a run that
+measures nothing leaves `rows.jsonl` byte-identical -- pinned by a test, together with
+"a settled pair produces byte-identical files on the next run". The manifest is
+derived from the directory and carries counts and `lastSweptAt` only: no
+`generatedAt`, no `cost`, the lesson of `_PROVENANCE_PATHS`. Points and queries go in
+the commit message.
+
+**The wall, and the skip matrix.** `walled` is claimed only when page 20 was read,
+`hasMorePages` was still true and nothing fresh was on it -- and never when
+`--guilds` stopped the walk first, because then the rows beyond were never seen. A
+frozen zone's encounter is skipped once exhausted or walled, for `--refresh-after`
+168 h; a live zone's for 6 h, or 24 h when walled; `stoppedOnBudget` or `attempted >
+0` last time is never skipped. Note the consequence a test had to learn: the run
+straight after a measuring run is NOT skipped (it attempted something), it re-walks
+the ranking, attempts nothing and records the exhaustion, and only the run after that
+skips. A skip too many costs latency, never a guild.
+
+**`--validate` is the commit gate**, run inside `data/` before `git add`: every
+`.jsonl` line is JSON, the manifest's counts equal the files' line counts, no
+tracked rows/refused file is shorter than at `HEAD` (`git show HEAD:path`), and no
+`.tmp` file from an interrupted write is lying about for `git add` to take. Any
+violation exits 1 and nothing is committed.
+
+**Four things the review of the first version found, each measured rather than
+read, and each the shape this file already names somewhere else.**
+
+- **The Sweep step's exit-code branches were dead.** The runner's default shell is
+  `bash -eo pipefail`, so `set -uo pipefail` leaves errexit ON and a non-zero sweep
+  exit ends the step AT the `| tee` pipeline, before `status=$?`. Reproduced by
+  running the block verbatim under `bash --noprofile --norc -eo pipefail` with an
+  exit-3 stand-in: the step died with 3 and the annotation never printed. So every
+  exit-2 run (a zone the service would not list) was a red job and every exit-3 one
+  never said which pair alarmed. `set +e` before the pipeline and `set -e` after
+  `status=$?`, exactly as `fight-probe.yml` does it.
+- **The push loop exited 0 with the run's commit lost.** `git pull --rebase
+  --autostash origin main || true` -- inherited from `fight-probe.yml` -- leaves the
+  clone mid-rebase on a conflict with HEAD on `origin/main`; `git push origin
+  HEAD:main` then says "Everything up-to-date", succeeds, and the sweep commit (rows,
+  refusals, the advanced cursors) never reaches the data repository. Reproduced
+  against a bare remote with a conflicting hand push: exit 0, remote holding only
+  `hand` and `seed`, the runner clone "interactive rebase in progress". The loop now
+  aborts a conflicted rebase and retries, and after it the commit at HEAD is asserted
+  to be the sweep's (`git log -1 --format=%s` equals the message) and to be an
+  ancestor of `origin/main` -- a real conflict three times over is then an honest
+  red step with the commit intact in the clone, and a non-conflicting hand push
+  rebases and lands. `fight-probe.yml` still carries the `|| true` and is not touched
+  here; that is a finding for its own PR.
+- **A credential failure was a green run.** Any `WarcraftLogsError` on the first
+  budget reading -- a 401 from the token endpoint, a dead route -- became a budget
+  stop: exit 0, `attempted: 0`, nothing written. With the cron on, a rotated secret
+  would have produced green scheduled runs that swept nothing, indefinitely -- the
+  #219 shape. It is `EXIT_FAILED` (1) now, and ONLY there: no walk has begun and
+  nothing is paid for, so it is a run that could not start. A 429 or the deadline on
+  that same reading stays a stop, and a failed reading mid-run still stops the run
+  with what was measured written, because by then something was paid for.
+- **A 429 on the zone query escaped `run_sweep`.** `_zone_encounters` re-raised
+  `RateLimited` and the runner's outer `try` caught only `_StopRun`, so a 429 while
+  listing the second zone was a traceback, exit 1, no summary file -- and the
+  workflow's commit message would have read "+0 rows, 0 queries" over rows that were
+  written. The contract's 429 clause holds on every query now.
+
+Smaller, from the same review: the ceiling fails CLOSED on a reading that carries no
+`limitPerHour` (fail-open would have walked the shared counter down to a 429 with the
+guard switched off); `sweptAt` is the encounter's own time, not the run's (on a
+five-hour run the last boss was stamped five hours stale and re-walked early); a
+transport failure gets the one in-run retry DECISIONS.md specifies; a crash inside
+the per-guild loop writes what was paid for before re-raising (the fourth-time
+`PointBudgetExhausted` shape, pre-empted rather than repeated); a `--retry-errors`
+run keeps the full walk's `named`/`shape` tallies; guild ids no longer reach the log
+or the `--seed-only` output, both of which land in a public artifact and the step
+summary; `--difficulties` refuses 3, which the import would refuse row by row; and
+the validator refuses a stray `.tmp`. Every one of those is pinned by a test whose
+canary was run.
+
+**A cross-repo parity pass found four more, and three are the same shape as the four
+above: a guard that is present and answers wrongly.** Each was re-derived from the
+source here before it was fixed, and each is pinned by a test whose canary was run.
+
+- **A refused `--zones`/`--difficulties` value exited 2, and 2 means something else.**
+  Handed to argparse as a `type=`, an `ArgumentTypeError` becomes `parser.error()` ->
+  `SystemExit(2)` -- and the workflow reads 2 as "a zone Warcraft Logs would not list",
+  prints a warning and lets the step **succeed**. Measured: `--difficulties 3`, the
+  exact input that refusal exists for and the one a person reaches for when they want
+  Normal, reported a green run that swept nothing, under a warning sentence about zones
+  that was not even true. Both options are parsed inside `cmd_progress_sweep` now and
+  return 1, the way `--out` and `--workers` already did.
+- **The sweep could write PTR `53xxx` encounter ids; the private export refuses exactly
+  that.** `ZONE_BY_ID_QUERY` reaches a zone `worldData.zones` never lists, which is what
+  makes `--zones 54` -- The Venomous Abyss's live-but-unlisted PTR twin -- a plausible
+  hand dispatch. Its rows are the **one** shape the import cannot catch: the
+  zone-mismatch guard AGREES with them, because the catalogue really does hold
+  `ProgressEncounter[53470].zone_id == 54`. So a PTR measurement lands as a live one and
+  nothing downstream can say otherwise. `PTR_TWIN_ID_FLOOR = 50_000` is now on both
+  sides, and the two must stay equal.
+- **`data/` was not gitignored here.** The workflow checks the private data repository
+  out into it and the documented local command writes there, so one `git add -A` after a
+  local run commits ~84k rows of guild names, realms and first kills into a public
+  history, irreversibly. The entry is **`/data/`**, and the leading slash is
+  load-bearing: a bare `data/` matches a directory of that name at any depth and would
+  silently ignore `web/public/data/` (the published dataset) and
+  `pipeline/src/wowdps/data/gear_pools.json`.
+- **Screen 2 was still silently off in `wowdps progress-hours`** -- the chart producer,
+  not the sweep, and so a number on the site rather than a hypothetical. A ranking row
+  stating `fromlog` and no `killTime` reached `pull_time(..., kill_time_ms=None)`, which
+  is the documented "no ranked kill" mode that finds *a* kill and calls it the first one.
+  Measured by deleting the clause and running the fixture: a two-minute wipe on day 0 and
+  the only logged kill four weeks later are summed into ONE progression and published as
+  `medianHours 1.033` over `sample 1` -- a four-week gap read as an hour of pulls. The
+  sweep and the backend both carry this refusal; the third producer did not, which is why
+  the contract says "**both repositories** used to disable screen 2 silently in that
+  case; do not copy that" and now has a third reader to say it to.
+
+Two fixture lessons came out of the last one. The chart producer's `StubClient` derived a
+ranking row's `killTime` from the canned pages and returned `None` when they held no kill
+-- so an **empty listing** fixture, which is about paging, silently became a fixture about
+the screen and failed as `no-kill-time`. A ranking row exists *because* the guild killed
+the boss, so the derivation states a time (`_UNMATCHED_KILL_MS`) and `kill_time=None` is
+passed explicitly where a row genuinely states none. And the figure this file carries for
+that defect is **the one measured here**, not the one the parity pass quoted from a
+different window: re-measure before copying a number across a fixture.
+
+**Deliberately not implemented.** `--workers > 1` is refused with a reason rather than
+silently run sequentially: a pool needs a lock around `PointLedger.record` and a
+low-water cursor (verdicts return out of order, so the cursor may only advance past
+the last row BEFORE which every row has a verdict), and neither exists. The per-guild
+walk is `attempt_guild`, one function taking a client and a row, so a pool would call
+it rather than re-derive it. The derived metrics stay private, above. And a
+`--seed-only` run reads the files and prints rows/refusals/cursor/walled per pair
+without constructing a client at all -- the check to run after the seed lands and
+before the cron goes on.
+
+**Two small things in `warcraftlogs.py` that the sweep needed and every other caller
+gains.** `WarcraftLogsClient.query` maps every `httpx.HTTPError` -- a read timeout
+above all; the backend measured them above 60 s on `reports(guildID){fights}` -- to
+`WarcraftLogsError`, so a guild's fetch failing on the network is caught where a
+service refusal already was, instead of escaping every handler and taking the pass
+down one guild in. A 429 is its own subclass, `RateLimited`, because "this guild
+failed, name it and move on" and "the service will refuse everything for the rest of
+the hour" were one class told apart by message text. The timeout was already a
+constructor parameter; it is named (`DEFAULT_TIMEOUT_SECONDS` = 30) and the sweep
+passes 90.
+
+**Nothing has been sent to the live service from this code.** The stub answers what
+the client returns; the first dispatch is a schema check as much as a sweep, as every
+other Warcraft Logs feature here was on its first run. The two things a first hand run
+must read before the cron goes on: the eight zone-53 encounter ids against the known
+live ids (3420/3421/3429/3445/3455/3470/3492/3497), and `named`/`shape` per boss in
+`state.json` -- production counted 985-988 named of 1000 with the same reader, so a
+run that stores no names is this reader missing the block, not the payload lacking it.
+
 ## Probing across hours, rather than restarting
 
 Warcraft Logs meters by points per hour and a pass at a useful sample size does not

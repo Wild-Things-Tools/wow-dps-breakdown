@@ -37,3 +37,14 @@ web/shot.mjs
 
 # Screenshot output from the local helper above.
 web/shots*/
+
+# The private cohort data repository, checked out here by progress-sweep.yml and
+# written by `wowdps progress-sweep --out data/progress-cohort`. It holds guild
+# names, realms, hours and first kills -- the rows this repository exists to keep
+# OUT of a public history. A local run leaves them here, and one `git add -A`
+# would commit them irreversibly.
+#
+# The leading slash is load-bearing: a bare `data/` matches any directory of that
+# name at any depth, which would silently ignore `web/public/data/` (the published
+# dataset) and `pipeline/src/wowdps/data/` (gear_pools.json).
+/data/

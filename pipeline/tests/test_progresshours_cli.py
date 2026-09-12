@@ -43,12 +43,28 @@ def fight(start, end, kill=False, encounter=None, fight_id=None):
 _DERIVE = object()
 
 
+#: What a derived `killTime` falls back to when the canned pages hold no kill.
+#:
+#: A ranking row exists BECAUSE the guild killed the boss, so a row stating
+#: `fromlog` and no `killTime` is an anomaly the producer now refuses outright
+#: (`no-kill-time`). Returning None here would hand that anomaly to every fixture
+#: whose pages hold no kill -- an empty listing, another boss's listing -- and
+#: those tests are about the LISTING, not about the screen. They would then fail
+#: as `no-kill-time` and the finding would read as a bug in the producer rather
+#: than a fixture modelling a world that does not occur.
+_UNMATCHED_KILL_MS = 1_700_000_000_000
+
+
 def _earliest_kill(pages):
-    """The absolute time of the first kill in the canned pages, or None.
+    """The absolute time of the first kill in the canned pages.
 
     Absolute -- `report["startTime"] + fight["startTime"]` -- because that is the
     clock a ranking row's `killTime` is on. A stub that returned the report-relative
     number would model a world where the two disagree by hours on every fixture.
+
+    With no kill in the pages the guild is still ranked, so a time is still
+    stated: see :data:`_UNMATCHED_KILL_MS`. Pass `kill_time=None` explicitly to
+    model a row that genuinely states none.
     """
     times = []
     for page in pages:
@@ -59,7 +75,7 @@ def _earliest_kill(pages):
             for f in report.get("fights") or []:
                 if f.get("kill") is True:
                     times.append(base + f["startTime"])
-    return min(times) if times else None
+    return min(times) if times else _UNMATCHED_KILL_MS
 
 
 class StubClient:
@@ -582,3 +598,45 @@ def test_a_payload_stating_no_fight_id_is_not_asked_for_a_roster(monkeypatch, tm
     assert boss["guilds"][0]["outcome"] == "measured"
     assert "fieldsSpec" not in boss["guilds"][0]
     assert "compositionSplit" not in boss
+
+
+def test_a_row_with_fromlog_and_no_kill_time_is_refused_before_the_report_walk(
+    monkeypatch, tmp_path
+):
+    """Screen 2 has to be REACHABLE, not merely written.
+
+    `pull_time(..., kill_time_ms=None)` is the documented "no ranked kill" mode:
+    it finds *a* kill and calls it the first one. So a ranking row that states
+    `fromlog` and no `killTime` switched screen 2 off for that guild and
+    published a number nothing had checked, while every figure beside it looked
+    healthy.
+
+    The window here is the one that shows the size of it: a two-minute wipe on
+    day 0 and the only logged kill four weeks later. Measured by deleting the
+    clause and running this fixture: the two are summed into ONE progression and
+    `medianHours 1.033` over `sample 1`, `medianAttempts 2.0` is published --
+    a four-week gap read as an hour of pulls, with nothing beside it saying so.
+    With the clause the guild is refused and `sample` is 0.
+
+    Canary: drop the `kill_time_ms is None` clause in `cmd_progress_hours` and
+    this goes red -- `refused` comes back `{}`.
+    """
+    month = 28 * 86_400_000
+    pages = [
+        listing(
+            [
+                {"startTime": 0, "fights": [fight(0, 2 * 60_000)]},
+                {"startTime": month, "fights": [fight(0, HOUR, kill=True)]},
+            ],
+            False,
+        )
+    ]
+    client = StubClient(pages, kill_time=None)
+    boss = run(monkeypatch, tmp_path, client)
+
+    assert boss["refused"] == {"no-kill-time": 1}
+    assert boss["sample"] == 0
+    assert boss["medianHours"] is None
+    assert not [1 for label, _ in client.sent if label and label.startswith("pulls:")], (
+        "the report walk ran for a guild the screen had already refused"
+    )

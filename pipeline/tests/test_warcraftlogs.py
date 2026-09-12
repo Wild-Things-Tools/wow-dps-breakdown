@@ -465,3 +465,73 @@ def test_a_response_with_no_headers_at_all_is_survived():
     ledger.note_response(None)
     assert ledger.requests_sent == 1
     assert ledger.request_headers == {}
+
+
+# ── the httpx mapping, the 429 class and the reset field ───────────────────────
+
+
+def _bare_client():
+    from wowdps.warcraftlogs import Credentials, WarcraftLogsClient
+
+    client = WarcraftLogsClient(Credentials("id", "secret"))
+    client._token = "token"
+    return client
+
+
+def test_an_httpx_timeout_is_a_warcraftlogs_error_not_a_crash():
+    """A read timeout was the one failure that escaped every `except
+    WarcraftLogsError` around a guild's fetch and took a whole pass down."""
+    import httpx
+
+    from wowdps.warcraftlogs import WarcraftLogsError
+
+    client = _bare_client()
+
+    def post(*_a, **_k):
+        raise httpx.ReadTimeout("slow")
+
+    client._client.post = post
+    with pytest.raises(WarcraftLogsError, match="ReadTimeout"):
+        client.query("query Q { x }", {}, cache=False)
+
+
+def test_any_httpx_transport_failure_maps_the_same_way():
+    import httpx
+
+    from wowdps.warcraftlogs import WarcraftLogsError
+
+    client = _bare_client()
+
+    def post(*_a, **_k):
+        raise httpx.ConnectError("refused")
+
+    client._client.post = post
+    with pytest.raises(WarcraftLogsError, match="ConnectError"):
+        client.query("query Q { x }", {}, cache=False)
+
+
+def test_a_429_is_its_own_class_and_still_a_warcraftlogs_error():
+    from wowdps.warcraftlogs import RateLimited, WarcraftLogsError
+
+    client = _bare_client()
+    client._client.post = lambda *_a, **_k: type(
+        "R", (), {"status_code": 429, "text": "slow down", "headers": {}}
+    )()
+    with pytest.raises(RateLimited) as caught:
+        client.query("query Q { x }", {}, cache=False)
+    assert isinstance(caught.value, WarcraftLogsError)
+
+
+def test_the_timeout_is_a_constructor_parameter_with_the_old_default():
+    from wowdps.warcraftlogs import DEFAULT_TIMEOUT_SECONDS, Credentials, WarcraftLogsClient
+
+    assert DEFAULT_TIMEOUT_SECONDS == 30.0
+    assert WarcraftLogsClient(Credentials("id", "secret"))._timeout == 30.0
+    assert WarcraftLogsClient(Credentials("id", "secret"), timeout=90.0)._timeout == 90.0
+
+
+def test_rate_limit_returns_points_reset_in(tmp_path):
+    client = _client(tmp_path)
+    client._client.post = _CountingTransport()
+    reading = client.rate_limit()
+    assert reading["pointsResetIn"] == 900

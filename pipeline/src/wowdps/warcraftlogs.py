@@ -41,6 +41,11 @@ log = logging.getLogger(__name__)
 TOKEN_URL = "https://www.warcraftlogs.com/oauth/token"
 API_URL = "https://www.warcraftlogs.com/api/v2/client"
 
+#: What a client waits for one response unless told otherwise. 30 s is the value
+#: every existing caller has always run with; it is named so a caller can say why
+#: it wants a different one.
+DEFAULT_TIMEOUT_SECONDS = 30.0
+
 RANKINGS_QUERY = """
 query SpecRankings(
   $encounterId: Int!
@@ -457,6 +462,16 @@ class WarcraftLogsError(RuntimeError):
     pass
 
 
+class RateLimited(WarcraftLogsError):
+    """A 429: the hourly point budget is spent.
+
+    Its own class because a caller that walks guilds one at a time has to tell
+    "this guild's fetch failed" (name it, move on, retry later) from "the service
+    will refuse everything for the rest of the hour" (stop the run). Both used to
+    arrive as one class distinguished only by the message text.
+    """
+
+
 @dataclass
 class Credentials:
     client_id: str
@@ -678,10 +693,13 @@ class WarcraftLogsClient:
     def __init__(
         self,
         credentials: Credentials,
-        timeout: float = 30.0,
+        timeout: float = DEFAULT_TIMEOUT_SECONDS,
         cache_dir: Path | None = None,
     ) -> None:
         self._credentials = credentials
+        #: Per-request timeout, in seconds. A constructor parameter because callers
+        #: differ: a rankings check wants to fail fast, a guild's report walk has
+        #: been measured taking over a minute (see `progresssweep`).
         self._timeout = timeout
         self._token: str | None = None
         self._client = httpx.Client(timeout=timeout)
@@ -711,11 +729,14 @@ class WarcraftLogsClient:
     def _authenticate(self) -> str:
         if self._token:
             return self._token
-        response = self._client.post(
-            TOKEN_URL,
-            data={"grant_type": "client_credentials"},
-            auth=(self._credentials.client_id, self._credentials.client_secret),
-        )
+        try:
+            response = self._client.post(
+                TOKEN_URL,
+                data={"grant_type": "client_credentials"},
+                auth=(self._credentials.client_id, self._credentials.client_secret),
+            )
+        except httpx.HTTPError as exc:
+            raise WarcraftLogsError(f"token request failed: {type(exc).__name__}: {exc}") from exc
         if response.status_code != 200:
             raise WarcraftLogsError(
                 f"token request failed ({response.status_code}): {response.text[:200]}"
@@ -755,13 +776,23 @@ class WarcraftLogsClient:
             return payload
 
         token = self._authenticate()
-        response = self._client.post(
-            API_URL,
-            json={"query": query, "variables": variables},
-            headers={"Authorization": f"Bearer {token}"},
-        )
+        # Every httpx failure -- a read timeout above all, measured at over 60 s on
+        # `reports(guildID){fights}` by the backend -- becomes a WarcraftLogsError
+        # here, so a caller's `except WarcraftLogsError` around one guild's fetch
+        # catches the network failing as well as the service refusing. Until this,
+        # a timeout was the one failure that escaped every such handler and took
+        # the whole pass down one guild in. `TimeoutException` subclasses
+        # `HTTPError` in httpx, so one clause covers both.
+        try:
+            response = self._client.post(
+                API_URL,
+                json={"query": query, "variables": variables},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        except httpx.HTTPError as exc:
+            raise WarcraftLogsError(f"request failed: {type(exc).__name__}: {exc}") from exc
         if response.status_code == 429:
-            raise WarcraftLogsError(
+            raise RateLimited(
                 "rate limited by Warcraft Logs: the hourly point budget is spent. "
                 "Re-run later; cached responses cost nothing."
             )
@@ -1014,9 +1045,16 @@ class WarcraftLogsClient:
             fights if isinstance(fights, list) else [],
         )
 
-    def zone(self, zone_id: int) -> dict | None:
-        """One zone by id, including zones the list does not return."""
-        data = self.query(ZONE_BY_ID_QUERY, {"zoneId": zone_id}, label=f"zone:{zone_id}")
+    def zone(self, zone_id: int, *, cache: bool = True) -> dict | None:
+        """One zone by id, including zones the list does not return.
+
+        ``cache=False`` for a caller asking what the zone is NOW -- its ``frozen``
+        flag turns when the next zone opens, and a cached answer would keep saying
+        live.
+        """
+        data = self.query(
+            ZONE_BY_ID_QUERY, {"zoneId": zone_id}, label=f"zone:{zone_id}", cache=cache
+        )
         return (data.get("worldData") or {}).get("zone")
 
     def zones(self) -> list[dict]:
