@@ -224,6 +224,23 @@ z<zone>-d<diff>.state.json
   **The field is emitted only where there IS a wall.** A window that ran out of
   reports has none, and a window written before 2026-09-13 was walled and cannot say
   by what -- absent is that third state rather than a fourth value nobody measured.
+- **The report list carries no order, so a window is a SET and not a prefix.**
+  Measured on run 34753269256's own 100 rows (zone 53, one page, 2026-09-13): the
+  report start times take 59 descending steps and 40 ascending, sorted neither way,
+  and the cheapest proxy for a report's end (`max` of its listed kill ends) is 48
+  against 51 -- a coin flip. Page 1 spans **159 hours**, so it is not "the last 100
+  reports" either. Two things follow. The narrower `fromMs`/`toMs` is the only way to
+  address a subset of a zone deterministically, because it is a **server-side
+  filter** and not a position in a sorted list; and 2,500 reports of an unknown total
+  is a **sample**, which a catalogue claiming completeness may not read as a prefix.
+  Whether that arbitrary order is at least *stable* between runs is unmeasured --
+  two one-page dispatches of the same window would say.
+- **A zone's report is not a zone's report.** Same 100 rows: **83 of the 402 listed
+  kills are outside zone 53** (difficulty 10 keystones, 12xxx encounter ids, older
+  raids) and **24 rows list no kill at all**. That is `REPORT_KILLS_QUERY` taking
+  only `$code` behaving exactly as designed -- one request answers every boss and
+  every difficulty of a report, which is the saving Stufe 3 rests on. The consumer
+  filters; the row does not.
 
 ## Refusals
 
@@ -265,6 +282,13 @@ and `staleRows`.
   changed on 2026-09-12: it is no longer "nobody knows how many reports a zone holds"
   but "one window serves at most 2,500 of them, and nobody has measured how many
   windows a zone needs". Do not put this on a cron before that number exists.
+- **`queries` counts what the run SENT; `cacheHits` counts what it did not.** The
+  summary carries both and the commit message prints the first, with the second in
+  brackets when it is non-zero. Folding them would say a resumed pass (mostly hits,
+  this producer restores an `actions/cache`) and a cold one cost the same. An
+  **absent** count prints `UNMEASURED`, never `0`: `report.queries` read an attribute
+  `PointLedger` does not have until 2026-09-13, so "0 queries" was committed beside a
+  real point figure on every run since the command shipped -- see CLAUDE.md.
 - **Half the cost of a page walk is the guard.** Measured on the same run: 52 queries
   for a 25-page walk, 26 of them `Budget.check()` reading the absolute counter before
   every page. Left alone deliberately -- the cohort sweep already paid this tax on

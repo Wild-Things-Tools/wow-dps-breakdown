@@ -664,6 +664,7 @@ class CatalogueReport:
     points_first: float | None = None
     points_last: float | None = None
     queries: int = 0
+    cache_hits: int = 0
 
     def to_json(self) -> dict:
         spent = (
@@ -692,7 +693,12 @@ class CatalogueReport:
             # None is UNMEASURED, never zero: a counter that did not move is the
             # absence of a measurement, not a free run.
             "points": spent,
+            # What the service actually saw. A cache hit is counted apart rather
+            # than folded in: `catalogue.yml` restores an `actions/cache`, so a
+            # resumed pass can be mostly hits, and one number for both would say a
+            # free run and a paid one cost the same.
             "queries": self.queries,
+            "cacheHits": self.cache_hits,
         }
 
 
@@ -1090,7 +1096,23 @@ def run_catalogue(
         report.stopped = exc.reason
 
     report.points_last = _spent(client)
-    report.queries = getattr(getattr(client, "ledger", None), "queries", 0) or 0
+    # `PointLedger` has never had a `queries` attribute -- it has `entries` and
+    # `requests_sent` -- so the `getattr(..., 0)` this used to be answered **0** on
+    # every run, and the commit message built from this summary said "0 queries"
+    # beside a real point figure. Measured on run 34753269256 (13.09.2026), which
+    # succeeded, wrote its summary, and committed
+    # "catalogue: +100 reports, ..., 204 points, 0 queries" into the private
+    # repository. #187 fixed the MISSING-summary case and quoted that same message
+    # as evidence without noticing the zero is wrong when the summary IS written:
+    # a second, independent "UNMEASURED, never zero" failure hiding inside the
+    # sentence that names the first. `query_count` is now the one definition, and
+    # `progresssweep` is deliberately untouched -- it reads `len(ledger.entries)`,
+    # which is a different (looser) number that its own commit messages have
+    # published for weeks; moving it is a change to a published figure and not
+    # this fix.
+    ledger = getattr(client, "ledger", None)
+    report.queries = getattr(ledger, "query_count", 0) or 0
+    report.cache_hits = getattr(ledger, "cache_hit_count", 0) or 0
     report.sleeps = budget.sleeps
     report.slept_seconds = budget.slept_seconds
     if report.alarmed_sets:
