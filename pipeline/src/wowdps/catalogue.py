@@ -73,7 +73,7 @@ DEFAULT_REPORT_LIMIT = 100
 # remedy for a walled window is "raise report_pages", and past 25 that remedy does
 # not exist. The only route further is a NARROWER TIME WINDOW, which is why
 # `state.json` carries a LIST of `fromMs`/`toMs` windows rather than one count --
-# and which this command does not yet take an option for.
+# and which `--window` is (`parse_windows` below, `CatalogueOptions.windows`).
 MAX_REPORT_PAGE = 25
 DEFAULT_POINT_CEILING = 0.3
 DEFAULT_DEADLINE_MINUTES = 300.0
@@ -82,6 +82,90 @@ DEFAULT_DIFFICULTIES: tuple[int, ...] = (5, 4)
 #: Stufe 3 refusals do not retry; a `report-error` does, on the next run, because a
 #: transport failure is not a property of the report.
 RETRYABLE_OUTCOMES = frozenset({"report-error", "structure-error"})
+
+
+# ── the window ───────────────────────────────────────────────────────────────────────────
+
+
+def parse_bound(text: str, *, side: str, now_ms: int) -> int:
+    """One end of a ``--window``: epoch milliseconds, an ISO date, or empty.
+
+    Empty means the open end on its side -- ``..2026-01-01`` reads from the
+    beginning of time and ``2026-01-01..`` reads to now -- because those are the two
+    ends the un-windowed sweep already uses, and spelling them out would make the
+    first and last window of a walk the only ones a person has to compute.
+
+    A **date** is read as UTC midnight and never as local time. The bound goes into
+    a Warcraft Logs filter, which is in epoch milliseconds and has no timezone; a
+    local reading would silently move every window by the runner's offset, and the
+    runner's offset is not a property of the zone.
+    """
+    text = text.strip()
+    if not text:
+        return 0 if side == "from" else now_ms
+    if text.isdigit():
+        return int(text)
+    try:
+        # `fromisoformat` takes a full timestamp too, which is deliberate: a person
+        # narrowing a walled window wants finer than a day soon enough, and refusing
+        # it here would send them to compute milliseconds by hand.
+        when = datetime.fromisoformat(text)
+    except ValueError:
+        raise ValueError(
+            f"--window {side} bound {text!r}: expected epoch milliseconds, an ISO "
+            "date like 2026-09-01, an ISO timestamp, or nothing for the open end"
+        ) from None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return int(when.timestamp() * 1000)
+
+
+def parse_windows(
+    specs: Sequence[str], *, now_ms: int | None = None
+) -> tuple[tuple[int, int], ...]:
+    """``FROM..TO`` strings to ``(fromMs, toMs)`` pairs, or raise with the reason.
+
+    The route past the 2,500-report wall, and the only one: `MAX_REPORT_PAGE` is the
+    service's, so "raise --report-pages" stops being a remedy there and a narrower
+    `fromMs`/`toMs` is what is left. `state.json` has carried a LIST of windows since
+    it was written, so nothing downstream changes shape -- this is the option that
+    was missing in front of it.
+
+    Two refusals, and both would otherwise produce a plausible answer rather than an
+    error. An **inverted or empty** window (``to <= from``) is a filter no report can
+    satisfy, so it would read nothing, record an unwalled window, and look exactly
+    like a zone that has been read to the end. And a **bound that does not parse** is
+    refused rather than skipped, because dropping one bound of a walk silently leaves
+    a hole in the coverage that the window list then claims to have.
+
+    Windows are **not** sorted, merged or de-overlapped here. The order given is the
+    order swept, which is what lets a person put the interesting slice first on a run
+    that may stop on the budget; and two overlapping windows cost their report pages
+    twice and read each report once, because the code set is what dedupes.
+    """
+    import time
+
+    if now_ms is None:
+        now_ms = int(time.time() * 1000)
+    windows: list[tuple[int, int]] = []
+    for spec in specs:
+        if ".." not in spec:
+            raise ValueError(
+                f"--window {spec!r}: expected FROM..TO, for example 2026-08-01..2026-09-01"
+            )
+        left, _, right = spec.partition("..")
+        start = parse_bound(left, side="from", now_ms=now_ms)
+        end = parse_bound(right, side="to", now_ms=now_ms)
+        if end <= start:
+            raise ValueError(
+                f"--window {spec!r}: the window ends at or before it starts "
+                f"({start} -> {end}). No report can match it, so the sweep would read "
+                "nothing and record a window that looks read to the end."
+            )
+        windows.append((start, end))
+    if specs and not windows:
+        raise ValueError("--window was given with no window in it")
+    return tuple(windows)
 
 
 # ── the scrub ───────────────────────────────────────────────────────────────────
@@ -641,6 +725,10 @@ class CatalogueOptions:
     stages: tuple[int, ...] = (3, 2)
     report_pages: int = DEFAULT_REPORT_PAGES
     report_limit: int = DEFAULT_REPORT_LIMIT
+    #: Stufe 3 windows as ``(fromMs, toMs)``. **Empty means the whole of time**, which
+    #: is the un-windowed sweep exactly as it was -- so a run that names no window
+    #: sends the requests it sent before this existed.
+    windows: tuple[tuple[int, int], ...] = ()
     kills: int = 0
     point_ceiling: float = DEFAULT_POINT_CEILING
     deadline_minutes: float = DEFAULT_DEADLINE_MINUTES
@@ -764,13 +852,55 @@ def sweep_zone_reports(
     data.state["zoneName"] = zone.get("name")
     data.state["frozen"] = zone.get("frozen")
     seen = data.done() - (data.retryable() if options.retry_errors else set())
+    # One window when none is named -- `search_window(0, 0, 0)` is `(0, now)`, which
+    # is what this walk has always sent. `seen` is carried ACROSS the windows and
+    # grows as reports are read, so two overlapping windows pay their report pages
+    # twice and read each report once; the code set is what dedupes, not the filter.
+    for start_ms, end_ms in options.windows or (firstkills.search_window(0.0, 0.0, 0.0),):
+        _sweep_one_window(
+            client,
+            out_dir,
+            data,
+            zone_id,
+            start_ms,
+            end_ms,
+            options,
+            budget,
+            report,
+            seen=seen,
+            run_id=run_id,
+        )
+
+
+def _sweep_one_window(
+    client,
+    out_dir: Path,
+    data: FileSet,
+    zone_id: int,
+    start_ms: int,
+    end_ms: int,
+    options: CatalogueOptions,
+    budget: Budget,
+    report: CatalogueReport,
+    *,
+    seen: set[tuple],
+    run_id: str,
+) -> None:
+    """One `fromMs`/`toMs` window of Stufe 3, written before the next one starts.
+
+    Its own `try`/`finally`, so a budget stop or a deadline inside window two still
+    records window one and everything it read -- the same reason the cohort sweep
+    writes per encounter rather than at the end.
+
+    `seen` is the caller's set and is **mutated**: a report read in an earlier window
+    must not be paid for again in a later one.
+    """
     new_rows: list[str] = []
     new_refused: list[str] = []
     codes: list[str] = []
     pages_read = 0
     walled = False
 
-    start_ms, end_ms = firstkills.search_window(0.0, 0.0, 0.0)
     # Never past `MAX_REPORT_PAGE`: the service refuses it with a GraphQL error, which
     # is a crash and not a short page. Stopping here turns the same wall into a
     # recorded one, and `walled_by` is what separates the two -- "raise report_pages"
@@ -799,6 +929,11 @@ def sweep_zone_reports(
         for code in codes:
             if (code,) in seen:
                 continue
+            # Added BEFORE the query rather than after a verdict: every branch below
+            # ends in a row or a refusal, so the code is judged either way, and a
+            # later window must not pay for it again. Adding it on success alone
+            # would re-read every `report-error` once per window.
+            seen.add((code,))
             budget.check()
             report.attempted += 1
             try:

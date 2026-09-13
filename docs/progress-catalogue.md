@@ -220,7 +220,16 @@ z<zone>-d<diff>.state.json
   larger `--report-pages` instead of clamping it. At any `--report-limit` the cap
   puts **2,500 reports on one window**, so past it the only route further is a
   narrower `fromMs`/`toMs` -- which is what the window list has always had the shape
-  for and which this command does not yet take an option for.
+  for, and which **`--window FROM..TO` now is** (repeatable, swept in the order
+  given). Each end is epoch milliseconds, an ISO date or timestamp read as **UTC**,
+  or empty for the open end; omitting the option sweeps the whole of time, i.e. the
+  exact requests this walk sent before the option existed. Two refusals rather than
+  a plausible answer: a window ending at or before it starts matches no report, so
+  it would read nothing and record a window that looks read to the end; and a bound
+  that does not parse is refused rather than skipped, because a dropped bound leaves
+  a hole in the coverage the window list then claims to have. Overlapping windows
+  are allowed and cost their report pages twice -- the code set dedupes, not the
+  filter.
   **The field is emitted only where there IS a wall.** A window that ran out of
   reports has none, and a window written before 2026-09-13 was walled and cannot say
   by what -- absent is that third state rather than a fourth value nobody measured.
@@ -282,6 +291,13 @@ and `staleRows`.
   changed on 2026-09-12: it is no longer "nobody knows how many reports a zone holds"
   but "one window serves at most 2,500 of them, and nobody has measured how many
   windows a zone needs". Do not put this on a cron before that number exists.
+  `--window` is the instrument that can now take it, and it is deliberately only
+  that: it addresses a subset, and **how to slice a zone is not decided here.** An
+  equal split of a zone's lifetime is the obvious rule and the wrong one -- reports
+  cluster at a season's start, so equal time gives one walled slice and many empty
+  ones. Bisecting a walled window is the other candidate and re-pays each sub-window's
+  pages. Which is cheaper is a measurement nobody has taken, and a policy baked in
+  before it would be a guess with the authority of code.
 - **`queries` counts what the run SENT; `cacheHits` counts what it did not.** The
   summary carries both and the commit message prints the first, with the second in
   brackets when it is non-zero. Folding them would say a resumed pass (mostly hits,
