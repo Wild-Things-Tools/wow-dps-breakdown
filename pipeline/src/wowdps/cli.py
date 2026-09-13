@@ -843,6 +843,82 @@ def cmd_spawn_map(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_wcl_cost(args: argparse.Namespace) -> int:
+    """Price one resolved field against the same document without it.
+
+    The open question behind #170: does Warcraft Logs charge per RESOLVED FIELD? Two
+    documents in this package still carry no ``rateLimitData`` block, and both are on
+    a cron's hot path, so both producers pay a standalone ``rate_limit()`` per walk to
+    learn what the walk's own queries could have told them. Adding the block would
+    close that -- and would also change every stored response's cache key and,
+    possibly, the cost. Nobody has measured the second half; this measures it.
+
+    Three refusals, and each of them is a number this cannot honestly report:
+
+    * a cached response really does spend nothing, so **every query here bypasses the
+      store**. There is deliberately no ``--cache`` option: a warm store would report
+      zeros, which reads as "the field is free";
+    * a counter that did not move is **UNMEASURED**, never zero;
+    * two ranges that overlap are **inside the noise**, never "the same cost". A probe
+      that called an overlap equality could only ever confirm what it set out to show.
+    """
+    from . import fightprobe, wclcost
+    from .warcraftlogs import Credentials, WarcraftLogsClient, WarcraftLogsError
+
+    pairs = wclcost.build_pairs(
+        encounter=args.encounter, difficulty=args.difficulty, page=args.page
+    )
+
+    try:
+        credentials = Credentials.from_env()
+    except WarcraftLogsError as exc:
+        logging.error("%s", exc)
+        return 1
+
+    with WarcraftLogsClient(credentials) as client:
+
+        def poll() -> float | None:
+            reading = client.rate_limit() or {}
+            spent = reading.get("pointsSpentThisHour")
+            return float(spent) if spent is not None else None
+
+        def send(document: str, variables: dict) -> None:
+            # `cache=False` is the whole measurement. See the docstring.
+            client.query(document, variables, label="cost-probe", cache=False)
+
+        # The poll's own cost is measured ONCE and shared by every pair: the same
+        # poll sits on both sides of every comparison, so it cancels there -- and
+        # printing it is what lets a reader check that it did.
+        poll_sample = wclcost.measure_poll(poll=poll, repeats=args.repeats)
+        for line in wclcost.describe_poll(poll_sample):
+            print(line)
+
+        for pair in pairs:
+            try:
+                fightprobe.check_budget(client, args.point_ceiling)
+            except fightprobe.PointBudgetExhausted as exc:
+                logging.warning("%s", exc)
+                return 2
+            try:
+                result = wclcost.probe(
+                    pair,
+                    poll=poll,
+                    send=send,
+                    repeats=args.repeats,
+                    poll_sample=poll_sample,
+                )
+            except wclcost.CostProbeError as exc:
+                logging.error("%s", exc)
+                return 1
+            except WarcraftLogsError as exc:
+                logging.error("pair %s failed: %s", pair.key, exc)
+                return 1
+            for line in wclcost.describe(result):
+                print(line)
+
+    return 0
+
+
 def cmd_wcl_schema(args: argparse.Namespace) -> int:
     """Introspect the Warcraft Logs schema and print what it offers.
 
@@ -3804,6 +3880,23 @@ def build_parser() -> argparse.ArgumentParser:
         "kills can be ordered",
     )
     p_wcl_schema.set_defaults(func=cmd_wcl_schema)
+
+    p_wcl_cost = sub.add_parser(
+        "wcl-cost",
+        help="measure whether asking for rateLimitData costs points (needs credentials)",
+    )
+    p_wcl_cost.add_argument("--encounter", type=int, default=3421, help="encounter id to ask about")
+    p_wcl_cost.add_argument("--difficulty", type=int, default=5)
+    p_wcl_cost.add_argument("--page", type=int, default=1)
+    p_wcl_cost.add_argument(
+        "--repeats",
+        type=int,
+        default=3,
+        help="how many read/send/read rounds per side. The SPREAD decides the "
+        "verdict, so one round can never separate anything",
+    )
+    p_wcl_cost.add_argument("--point-ceiling", type=float, default=0.8)
+    p_wcl_cost.set_defaults(func=cmd_wcl_cost)
 
     p_fight_probe = sub.add_parser(
         "fight-probe",
