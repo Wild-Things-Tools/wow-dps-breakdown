@@ -58,6 +58,23 @@ SCHEMA_VERSION = 1
 
 DEFAULT_REPORT_PAGES = 5
 DEFAULT_REPORT_LIMIT = 100
+
+# `reportData.reports` REFUSES page 26 and above. Measured live on 2026-09-12 (run
+# 34723281158, zone 53, dispatched at `--report-pages 40`), as a GraphQL error:
+#
+#     The maximum allowed page is 25 until the performance of paginated queries
+#     can be improved.
+#
+# A GraphQL error aborts the query rather than returning a short page, so the walk
+# did not stop at the wall -- it crashed on it, with 25 pages already paid for.
+#
+# At the default `--report-limit 100` the cap puts **2,500 reports** on one window
+# whatever `--report-pages` says, and that is what makes it more than a bound: the
+# remedy for a walled window is "raise report_pages", and past 25 that remedy does
+# not exist. The only route further is a NARROWER TIME WINDOW, which is why
+# `state.json` carries a LIST of `fromMs`/`toMs` windows rather than one count --
+# and which this command does not yet take an option for.
+MAX_REPORT_PAGE = 25
 DEFAULT_POINT_CEILING = 0.3
 DEFAULT_DEADLINE_MINUTES = 300.0
 DEFAULT_DIFFICULTIES: tuple[int, ...] = (5, 4)
@@ -638,6 +655,7 @@ class CatalogueReport:
     new_refused: int = 0
     attempted: int = 0
     zones_skipped: list[int] = field(default_factory=list)
+    zones_failed: list[int] = field(default_factory=list)
     alarmed_sets: list[str] = field(default_factory=list)
     stopped: str | None = None
     failed: str | None = None
@@ -662,6 +680,10 @@ class CatalogueReport:
             "newRefused": self.new_refused,
             "attempted": self.attempted,
             "zonesSkipped": self.zones_skipped,
+            # A zone whose sweep the service refused mid-walk, which is a DIFFERENT
+            # claim from one it would not list: this one was paid for, and what it
+            # read before the refusal is on disk.
+            "zonesFailed": self.zones_failed,
             "alarmedSets": self.alarmed_sets,
             "stopped": self.stopped,
             "failed": self.failed,
@@ -743,8 +765,14 @@ def sweep_zone_reports(
     walled = False
 
     start_ms, end_ms = firstkills.search_window(0.0, 0.0, 0.0)
+    # Never past `MAX_REPORT_PAGE`: the service refuses it with a GraphQL error, which
+    # is a crash and not a short page. Stopping here turns the same wall into a
+    # recorded one, and `walled_by` is what separates the two -- "raise report_pages"
+    # is the remedy for OUR limit and is no remedy at all for the service's.
+    last_page = min(options.report_pages, MAX_REPORT_PAGE)
+    walled_by = ""
     try:
-        for page in range(1, options.report_pages + 1):
+        for page in range(1, last_page + 1):
             budget.check()
             payload = client.reports_in_window(
                 zone_id, start_ms, end_ms, page=page, limit=options.report_limit
@@ -754,11 +782,12 @@ def sweep_zone_reports(
             codes.extend(str(row["code"]) for row in rows)
             if len(rows) < options.report_limit:
                 break
-            if page == options.report_pages:
+            if page == last_page:
                 # The page limit, not exhaustion. `fight-probe` already records that
                 # difference, because a zone nobody has read would otherwise look
                 # like a zone with nothing left to read.
                 walled = True
+                walled_by = "service-page-cap" if last_page == MAX_REPORT_PAGE else "our-page-limit"
 
         at = _now()
         for code in codes:
@@ -795,6 +824,10 @@ def sweep_zone_reports(
                 "pagesRead": pages_read,
                 "reportsSeen": len(codes),
                 "walled": walled,
+                # Only when there IS a wall to name. A window that ran out of reports
+                # has none, and an absent field is the third state a pre-2026-09-13
+                # window is honestly in: it was walled and cannot say by what.
+                **({"walledBy": walled_by} if walled_by else {}),
                 # The ENCOUNTER's own time, not the run's: on a five-hour run the last
                 # window would otherwise be stamped five hours stale and re-walked
                 # early. Measured on the cohort sweep and fixed there.
@@ -1033,6 +1066,26 @@ def run_catalogue(
                 raise _StopRun(str(exc)) from exc
             except RateLimited as exc:
                 raise _StopRun(str(exc)) from exc
+            except WarcraftLogsError as exc:
+                # AFTER the two clauses above and never before: `RateLimited`
+                # subclasses `WarcraftLogsError`, so catching the base first would
+                # turn "the service will refuse everything for the rest of the hour"
+                # into "this zone failed, move on" -- and walk the shared hourly
+                # counter into a 429 with the guard switched off.
+                #
+                # That it was MISSING is this repository's "beside the guard, not
+                # inside it" again: `_zone_block` a dozen lines up carries exactly
+                # this clause, and the sweeps beside it did not. Measured live on
+                # 2026-09-12 (run 34723281158): the page-cap refusal above escaped
+                # `run_catalogue`, `cmd_catalogue` and `main` as a traceback, so the
+                # step failed with exit 1 AND no summary file was written -- and the
+                # commit message computed from that absence read "+0 reports, +0
+                # kills, +0 refusals, UNMEASURED points, 0 queries" over a run that
+                # had paid for 25 pages and written a window. The traceback was the
+                # smaller harm; a committed record asserting zeros is the larger one.
+                log.error("zone %s: %s", zone_id, exc)
+                report.zones_failed.append(zone_id)
+                continue
     except _StopRun as exc:
         report.stopped = exc.reason
 
@@ -1042,7 +1095,11 @@ def run_catalogue(
     report.slept_seconds = budget.slept_seconds
     if report.alarmed_sets:
         report.exit_code = EXIT_SCHEMA_ALARM
-    elif report.zones_skipped:
+    elif report.zones_skipped or report.zones_failed:
+        # Exit 2 rather than 1, and that is the honest half of the correction above:
+        # the run delivered every other zone and wrote what this one had paid for, so
+        # failing the step would over-claim exactly as loudly as the traceback did.
+        # The zone is NAMED in the summary and the workflow prints a warning.
         report.exit_code = EXIT_ZONE_SKIPPED
     return report
 

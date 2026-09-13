@@ -13,24 +13,36 @@ name: Catalogue
 # ── Why there is no schedule, and what would earn one ──────────────────────────
 #
 # The contract refuses a CRON without one number: "how many reports does a zone
-# really hold". Until that is measured, "every kill" is not priceable and a cadence
-# is a guess -- 500 reports per encounter at the measured 1.66 points per query is
-# ~830 points (4.6 % of an 18,000 hour), and that is a FLOOR for one window.
+# really hold". It does NOT refuse this workflow, and the distinction is
+# load-bearing: a dispatch-only run is exactly the instrument that takes the
+# measurement. Stufe 3 records `pagesRead`, `reportsSeen`, `walled` and `walledBy`
+# per window in `z<zone>.state.json`.
 #
-# It does NOT refuse this workflow, and the distinction is load-bearing: a
-# dispatch-only run is exactly the instrument that takes the measurement. Stufe 3
-# records `pagesRead`, `reportsSeen` and `walled` per window in `z<zone>.state.json`,
-# so
+# -- The measurement was taken, and the answer is a CEILING rather than a count --
 #
-#     stages 3, zones 53, report_pages 40
+# Run 34723281158, 2026-09-12, zone 53 at `report_pages 40`: pages 1-25 were read
+# (2,500 reports) and page 26 came back as a GraphQL error --
 #
-# answers it directly -- `walled: false` means the zone was read to the end and
-# `reportsSeen` IS the number; `walled: true` means 4,000 reports were not enough and
-# the answer is a lower bound. Read that before writing a cron here.
+#     The maximum allowed page is 25 until the performance of paginated queries
+#     can be improved.
 #
-# The Status paragraph of the contract said "the workflow is not built ... because
-# this document refuses a cron", which reads the refusal as bigger than it is. That
-# is corrected there; this comment is the other half of the correction.
+# So `reportData.reports` serves 2,500 reports per window and NO MORE, at any
+# `report_limit`, and the remedy this comment used to print for a walled window
+# ("raise report_pages") stops existing there. `MAX_REPORT_PAGE` is that cap, the
+# CLI refuses a larger `--report-pages` rather than clamping it, and the window now
+# says WHICH wall it hit: `our-page-limit` is still raisable, `service-page-cap` is
+# not.
+#
+# What a cron still waits on is therefore a different question from the one asked:
+# not "how many pages" but whether a zone needs SEVERAL TIME WINDOWS, which
+# `state.json` has always had the shape for (`fromMs`/`toMs`, a list) and which the
+# command does not yet take an option for. Until then a zone over 2,500 reports is
+# catalogued only as far as one window reaches -- honestly, and in the record.
+#
+# Priced from the same run: 52 queries for a 25-page walk, of which 26 are BUDGET
+# POLLS -- `Budget.check()` reads the absolute counter before every page, so half
+# the cost of the cheapest part of Stufe 3 is the guard. Left alone deliberately: a
+# ceiling argued from a stale number is what a 429 costs.
 #
 # schedule:
 #   - cron: '43 1,7,13,19 * * *'   # DELIBERATELY OFF. See above.
@@ -51,7 +63,7 @@ on:
         description: '3 the report directory, 2 a kill shape. Stufe 3 first is the contract order'
         default: '3,2'
       report_pages:
-        description: 'Pages of the zone report list per run, 100 each. Raise this to MEASURE how many a zone holds'
+        description: 'Pages of the zone report list per run, 100 each. 25 is the CEILING -- the service refuses page 26'
         default: '5'
       kills:
         description: 'Stufe 2 kills READ per (zone, difficulty) per run. 0 = unlimited'
@@ -177,7 +189,7 @@ jobs:
           status=$?
           set -e
           if [ "$status" = "2" ]; then
-            echo "::warning::a zone could not be listed (or carried PTR ids); the others were read"
+            echo "::warning::a zone was not listed, carried PTR ids, or its sweep was refused mid-walk; the others were read and what this one paid for is on disk. See zonesSkipped and zonesFailed in the summary"
           elif [ "$status" = "3" ]; then
             echo "::error::a schema alarm fired on some file set; THAT file set wrote nothing"
           elif [ "$status" != "0" ]; then
@@ -212,14 +224,29 @@ jobs:
           fi
           message=$(python - <<'PY'
           import json, os, pathlib
+          # No summary means the command did not RETURN -- and the files it wrote
+          # before that are exactly what is being committed. Reading that absence
+          # as zeros put "+0 reports ... 0 queries" on a run that had paid for 25
+          # pages and written a window (run 34723281158). UNMEASURED, never zero,
+          # applies to a commit message too.
           summary = pathlib.Path("../catalogue-summary.json")
-          d = json.loads(summary.read_text()) if summary.is_file() else {}
+          run = os.environ["RUN_ID"]
+          if not summary.is_file():
+              print(
+                  "catalogue: these files were written and then the run did not "
+                  f"return, so it reported nothing -- counts and cost UNMEASURED (run {run})"
+              )
+              raise SystemExit(0)
+          d = json.loads(summary.read_text())
           points = d.get("points")
           points = "UNMEASURED" if points is None else f"{points:.0f}"
+          failed = d.get("zonesFailed") or []
           print(
               f"catalogue: +{d.get('newReports', 0)} reports, +{d.get('newKills', 0)} kills, "
               f"+{d.get('newRefused', 0)} refusals, {points} points, "
-              f"{d.get('queries', 0)} queries (run {os.environ['RUN_ID']})"
+              f"{d.get('queries', 0)} queries"
+              + (f", zone(s) {failed} refused mid-walk" if failed else "")
+              + f" (run {run})"
           )
           PY
           )
@@ -279,8 +306,15 @@ jobs:
             echo '### Reports per zone (the measurement the cron waits on)'
             echo
             echo '`walled: false` means the zone was read to the end and `reportsSeen`'
-            echo 'IS the number. `walled: true` means the page limit stopped it, so the'
-            echo 'figure is a LOWER BOUND -- raise `report_pages` and dispatch again.'
+            echo 'IS the number. `walled: true` means a page limit stopped it, so the'
+            echo 'figure is a LOWER BOUND -- and `walledBy` says WHICH limit, because'
+            echo 'only one of the two can be raised:'
+            echo
+            echo '  our-page-limit     raise `report_pages` and dispatch again'
+            echo '  service-page-cap   Warcraft Logs refuses page 26. 2,500 is all one'
+            echo '                     window serves, at any `report_limit`; more needs'
+            echo '                     a narrower time window, which this command does'
+            echo '                     not yet take.'
             echo
             echo '```'
             python - <<'PY' 2>/dev/null || echo 'no state written'
@@ -293,6 +327,7 @@ jobs:
                   print(
                       f"{path.name}: pagesRead={window.get('pagesRead')} "
                       f"reportsSeen={window.get('reportsSeen')} walled={window.get('walled')} "
+                      f"walledBy={window.get('walledBy') or '-'} "
                       f"({state.get('zoneName')})"
                   )
           PY

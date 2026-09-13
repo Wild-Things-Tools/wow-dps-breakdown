@@ -183,6 +183,7 @@ failure this folder's privacy cannot absorb.
 z<zone>.state.json
 {"v":1,"zoneId":53,"zoneName":"The Venomous Abyss","frozen":false,"stage":3,
  "windows":[{"fromMs":…,"toMs":…,"pagesRead":5,"reportsSeen":500,"walled":true,
+             "walledBy":"our-page-limit"|"service-page-cap",  // only when walled
              "sweptAt":ISO}],
  "codesKnown":1234,"refusedCodes":7}
 
@@ -200,10 +201,29 @@ z<zone>-d<diff>.state.json
 - **`sweptAt` is the encounter's own time, not the run's.** On a five-hour run the
   last encounter would otherwise be stamped five hours stale and re-walked early --
   measured on the cohort sweep and fixed there; do not repeat it.
-- **`walled`** on a Stufe 3 window means the page limit was reached with
-  `has_more_pages` still true. It is not exhaustion: `fight-probe` already records the
-  difference (`searchExhausted` against `searchBudget`) because a boss nobody has
-  killed would otherwise read as a boss with no more kills to find.
+- **`walled`** on a Stufe 3 window means a page limit was reached with the page
+  still full. It is not exhaustion: `fight-probe` already records the difference
+  (`searchExhausted` against `searchBudget`) because a boss nobody has killed would
+  otherwise read as a boss with no more kills to find.
+- **`walledBy` says WHICH page limit**, and that is the difference between a window
+  somebody can do something about and one nobody can. `our-page-limit` is
+  `--report-pages`: raise it and dispatch again. `service-page-cap` is **Warcraft
+  Logs refusing page 26** --
+
+      The maximum allowed page is 25 until the performance of paginated queries
+      can be improved.
+
+  -- measured live on 2026-09-12 (run 34723281158, zone 53, dispatched at
+  `--report-pages 40`). It is a GraphQL error rather than a short page, so the walk
+  did not stop at that wall, it **crashed on it** with 25 pages already paid for;
+  `catalogue.MAX_REPORT_PAGE` is now where the walk stops and the CLI refuses a
+  larger `--report-pages` instead of clamping it. At any `--report-limit` the cap
+  puts **2,500 reports on one window**, so past it the only route further is a
+  narrower `fromMs`/`toMs` -- which is what the window list has always had the shape
+  for and which this command does not yet take an option for.
+  **The field is emitted only where there IS a wall.** A window that ran out of
+  reports has none, and a window written before 2026-09-13 was walled and cannot say
+  by what -- absent is that third state rather than a fourth value nobody measured.
 
 ## Refusals
 
@@ -241,9 +261,14 @@ and `staleRows`.
 - **Priced, and the price is a floor.** 500 reports per encounter at the measured
   1.66 points per query is **~830 points** -- 4.6% of an 18,000 hour, 23% of a 3,600
   one. That is Stufe 3 for one encounter's window; Stufe 2 is one query per kill on
-  top. What a zone's catalogue costs in full is **UNMEASURED**, because nobody knows
-  how many reports a zone holds (the search caps at `report_pages 5 x report_limit
-  100`). Do not put this on a cron before that number exists.
+  top. What a zone's catalogue costs in full is **UNMEASURED**, and the reason
+  changed on 2026-09-12: it is no longer "nobody knows how many reports a zone holds"
+  but "one window serves at most 2,500 of them, and nobody has measured how many
+  windows a zone needs". Do not put this on a cron before that number exists.
+- **Half the cost of a page walk is the guard.** Measured on the same run: 52 queries
+  for a 25-page walk, 26 of them `Budget.check()` reading the absolute counter before
+  every page. Left alone deliberately -- the cohort sweep already paid this tax on
+  purpose, and a ceiling argued from a stale number is what a 429 costs.
 - **Stufe 3 is built per zone ONCE and then only appended to**, never per boss again.
   The decision is the Konzept's and it follows from the query taking only `$code`.
 - Order of work, when a run cannot do everything: Stufe 3 for the **live** zone first
@@ -264,8 +289,13 @@ and `staleRows`.
 
 Both are in issue #170 and both need a live query:
 
-- **How many reports does a zone really hold?** Without it "every kill" is not
-  priceable and the cadence cannot be set.
+- ~~**How many reports does a zone really hold?**~~ **Answered on 2026-09-12, and
+  the answer is a ceiling rather than a count**: `reportData.reports` refuses page 26,
+  so one window serves 2,500 and no more. Zone 53 filled all 25 pages, so its own
+  figure is a lower bound of 2,500 and not a measurement of the zone. The question
+  that replaces it is **how many time windows a zone needs**, which needs
+  `--from`/`--to` on this command before it can be asked. Without that number "every
+  kill" is still not priceable and the cadence still cannot be set.
 - **Does `includeResources` cost points, and does an unfiltered `FIGHT_STRUCTURE`
   cost more than a filtered one?** The second bears on this folder directly: the
   Konzept refuses the unfiltered form on correctness grounds, and the measurement
@@ -281,11 +311,24 @@ Both are in issue #170 and both need a live query:
 A first draft of this paragraph said the workflow was deliberately NOT built
 "because this document already refuses a cron without that number" -- which reads
 the refusal as bigger than it is. What is refused above is a **cron**, and a
-dispatch-only run is precisely the instrument that takes the measurement: Stufe 3
-records `pagesRead`, `reportsSeen` and `walled` per window, so one dispatch at
-`--stages 3 --report-pages 40` answers "how many reports does a zone hold" directly
-(`walled: false` -> `reportsSeen` IS the number; `walled: true` -> it is a lower
-bound). The cron stays commented out in the workflow with that reason beside it.
+dispatch-only run is precisely the instrument that takes the measurement.
+
+**It has taken it, and the run that took it found three defects rather than one.**
+Run 34723281158, 2026-09-12, zone 53 at `--report-pages 40`:
+
+1. the service's own page cap, above -- the question is answered and the answer is
+   a ceiling;
+2. **a `WarcraftLogsError` from a sweep escaped `run_catalogue`.** `_zone_block` a
+   dozen lines above carries exactly that clause and the sweeps beside it did not,
+   so the refusal left the command as a traceback: exit 1, which the workflow fails
+   the step on, and **no summary file**;
+3. and the commit message, computed from that absence, read *"+0 reports, +0 kills,
+   +0 refusals, UNMEASURED points, 0 queries"* over a run that had paid for 25 pages
+   and written a window. That is the worst of the three: a traceback is loud, and a
+   committed record asserting zeros is not. Both the guard and the message are
+   fixed; UNMEASURED, never zero, applies to a commit message too.
+
+The cron stays commented out in the workflow, now with the narrower reason beside it.
 
 Worth keeping as a shape, because it is this file's own failure pointing inward: a
 refusal restated one paragraph later grew from "not on a cron" to "not at all", and
