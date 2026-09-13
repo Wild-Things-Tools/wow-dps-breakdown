@@ -922,6 +922,99 @@ def load_previous(path: Path) -> dict[EntryKey, dict]:
     return entries
 
 
+def kill_keys(entry: dict) -> frozenset[tuple[str, int]]:
+    """``(report code, fight id)`` of every kill a payload row holds."""
+    keys: set[tuple[str, int]] = set()
+    for fight in entry.get("fights") or []:
+        if not isinstance(fight, dict):
+            continue
+        code, fight_id = fight.get("reportCode"), fight.get("fightId")
+        if isinstance(code, str) and isinstance(fight_id, int):
+            keys.add((code, fight_id))
+    return frozenset(keys)
+
+
+def _same_selection(previous: dict, fresh: dict) -> bool:
+    """Whether the two rows are reads of the SAME selection, so one can stand in
+    for the other. Unknown is not equal: a row from before a setting was recorded
+    cannot answer the question, and claiming it can is the whole defect one level
+    along.
+    """
+    for field_name in ("order", "eventBudget"):
+        was, now = previous.get(field_name), fresh.get(field_name)
+        if was is None or now is None or was != now:
+            return False
+    return True
+
+
+def merge_entry(previous: dict, fresh: dict) -> tuple[dict, str]:
+    """The payload row to keep for one ``(encounter, difficulty)``, and why.
+
+    ``by_id = {**previous, **fresh}`` is a flat replacement, so a run that re-opened
+    an encounter and then stopped at the point ceiling **after** reading a fight wrote
+    a SMALLER row over a bigger one -- the kills it replaced were paid for and gone,
+    and the only place it showed was a red workflow step whose log expires (#171).
+    ``write_fights`` refuses to publish the shrunk document, correctly, and the
+    payload is already smaller by then, so the next run starts from the smaller one.
+
+    **The merge is at the ROW, not at the fight list, and that is forced rather than
+    chosen.** ``FightObservation.to_json`` does not emit ``friendly_ids``,
+    ``actor_names`` or ``actor_game_ids`` -- they are internal and out of the
+    payload -- so a fight cannot be rebuilt from a row. And ``pooled_auras`` filters
+    on ``friendly_ids``: a fight-level union would recompute a row's aura list with
+    an empty friendly set, which is the Avenging Wrath failure this repository has
+    shipped **twice**. So each row stays whole and internally consistent, and the
+    merge picks one.
+
+    **Only when the two rows are reads of the same selection.** ``is_complete``
+    exists to keep ``order`` and ``eventBudget`` apart -- a sample chosen one way is
+    not a smaller sample of one chosen another -- and a merge that ignored them would
+    pool two differently-chosen samples under one block, which is the mixing that
+    rule was written against. Where they differ or either is unstated, the fresh row
+    replaces the old one: exactly today's behaviour, so this can only ever preserve.
+
+    The one case a row-level merge cannot serve is named rather than hidden. A
+    cut-short read is a PREFIX of the same ordered selection, so the two key sets
+    nest and the superset is the answer. They can only be disjoint if the selection
+    itself moved (an earlier kill appearing and displacing one), and then keeping the
+    larger drops the smaller's own kills. That count travels on the row as
+    ``mergeDroppedKills`` -- a rule that silently drops a paid kill is the defect
+    being fixed, one level along -- and it is what would say whether a fight-level
+    union is ever worth its reconstruction.
+    """
+    if not _same_selection(previous, fresh):
+        return fresh, "different selection settings"
+    was, now = kill_keys(previous), kill_keys(fresh)
+    if now >= was:
+        return fresh, "fresh read is at least the previous one"
+    if was > now:
+        # The #171 case. `searchExhausted` and `searchBudget` are facts about the
+        # SELECTION rather than measurements, and the fresh run is the one that just
+        # walked it -- so they are carried across in the direction that cannot
+        # un-learn: exhaustion never goes back to unknown, and the budget takes the
+        # larger. Without this, keeping the older row discards what the newer run
+        # established about the walk, and the encounter re-opens and re-pays next
+        # hour -- which is the cost this function exists to stop.
+        kept = dict(previous)
+        if fresh.get("searchExhausted"):
+            kept["searchExhausted"] = True
+        budgets = [
+            b
+            for b in (previous.get("searchBudget"), fresh.get("searchBudget"))
+            if isinstance(b, int)
+        ]
+        if budgets:
+            kept["searchBudget"] = max(budgets)
+        return kept, f"kept the previous {len(was)} kill(s) over a shorter re-read of {len(now)}"
+    kept = dict(previous if len(was) >= len(now) else fresh)
+    dropped = len((was | now) - kill_keys(kept))
+    kept["mergeDroppedKills"] = int(kept.get("mergeDroppedKills") or 0) + dropped
+    return kept, (
+        f"the two reads are disjoint ({len(was)} and {len(now)} kill(s)); kept the larger "
+        f"and DROPPED {dropped} paid kill(s) a row-level merge cannot hold"
+    )
+
+
 def is_complete(
     entry: dict,
     wanted: int,
@@ -1229,7 +1322,18 @@ def cmd_fight_probe(args: argparse.Namespace) -> int:
         if observation.search_exhausted:
             entry["searchExhausted"] = True
         fresh[(observation.encounter_id, settings.difficulty)] = entry
-    by_id = {**previous, **fresh}
+    # Not `{**previous, **fresh}`: that is a flat replacement, and a re-opened
+    # encounter the ceiling stopped mid-read wrote a smaller row over a bigger one
+    # (#171). `merge_entry` states the whole rule and its one limit.
+    by_id = dict(previous)
+    for key, entry in fresh.items():
+        was = by_id.get(key)
+        if was is None:
+            by_id[key] = entry
+            continue
+        by_id[key], why = merge_entry(was, entry)
+        if by_id[key] is not entry:
+            log.warning("encounter %s difficulty %s: %s", key[0], key[1], why)
     # Every difficulty of every requested encounter, hardest first within a boss so a
     # reader meets Mythic before Heroic. Sorted rather than arrival-ordered so the file
     # does not reshuffle between runs and make a diff meaningless -- and `None` sorts

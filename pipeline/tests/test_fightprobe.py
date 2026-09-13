@@ -1258,28 +1258,19 @@ def test_a_partial_read_is_still_written_and_that_boundary_is_deliberate(tmp_pat
     command does with it, so widening the guard to `if aborted:` left it GREEN.
     The fold was tested and the call site was not, which is the shape this
     repository keeps producing. It runs the command now.
+
+    **It ran against a previous row of three kills until #171, and that scenario
+    is no longer this test's.** The owner's decision there is that the merge keeps
+    whichever row holds more of the SAME selection, so a partial read no longer
+    replaces a bigger previous one -- a different rule, at a different layer, and
+    it would decide the assertion here rather than the withholding boundary this
+    test is about. With no previous row the two cannot collide: the row is written
+    or it is not, which is exactly the claim. The bigger-previous case is
+    `test_a_shorter_re_read_of_the_same_selection_keeps_the_bigger_row`; the ZERO
+    case keeps its older-row fixture, because a withheld row never reaches the
+    merge at all.
     """
     from wowdps import cli, warcraftlogs
-
-    # A real earlier measurement of three kills, so a withheld row would be
-    # visible as the 3 surviving rather than as an absence.
-    (tmp_path / f"fight-probe-{VOIDSPIRE_TIER}.json").write_text(
-        json.dumps(
-            {
-                "tier": VOIDSPIRE_TIER,
-                "encounters": [
-                    {
-                        "encounterId": 3180,
-                        "difficulty": 5,
-                        "fightsSampled": 3,
-                        "fights": [],
-                        "eventBudget": 30000,
-                        "order": "top",
-                    }
-                ],
-            }
-        )
-    )
 
     class CeilingAfterTheFirstFight(StubClient):
         def fight_structure(self, code, encounter_id, difficulty):
@@ -1334,9 +1325,162 @@ def test_a_partial_read_is_still_written_and_that_boundary_is_deliberate(tmp_pat
 
     payload = json.loads((tmp_path / f"fight-probe-{VOIDSPIRE_TIER}.json").read_text())
     rows = {entry["encounterId"]: entry for entry in payload["encounters"]}
-    # The kill it DID read is written, replacing the older row -- a partial
-    # measurement is a measurement, and the row is re-opened next hour anyway.
+    # The kill it DID read is written -- a partial measurement is a measurement,
+    # and the row is re-opened next hour anyway. Only the ZERO case is withheld.
     assert rows[3180]["fightsSampled"] == 1
+
+
+# -- the payload merge (#171) ---------------------------------------------------
+
+
+def row(*keys, sampled=None, order="top", budget=30000, **extra):
+    """A payload row holding these ``(report code, fight id)`` kills."""
+    entry = {
+        "encounterId": 3180,
+        "difficulty": 5,
+        "fightsSampled": len(keys) if sampled is None else sampled,
+        "fights": [{"reportCode": code, "fightId": fight_id} for code, fight_id in keys],
+    }
+    if order is not None:
+        entry["order"] = order
+    if budget is not None:
+        entry["eventBudget"] = budget
+    entry.update(extra)
+    return entry
+
+
+def test_a_shorter_re_read_of_the_same_selection_keeps_the_bigger_row():
+    """#171: a re-opened encounter the ceiling stopped after ONE fight wrote a
+    smaller row over a bigger one, and the kills it replaced were paid for."""
+    kept, why = fightprobe.merge_entry(row(("a", 1), ("b", 1)), row(("a", 1)))
+    assert kept["fightsSampled"] == 2, "the shorter re-read replaced a bigger measurement"
+    assert "kept the previous 2" in why
+
+
+def test_a_complete_re_read_replaces_the_previous_row():
+    """The ordinary case: the fresh read holds everything the old one did."""
+    kept, _ = fightprobe.merge_entry(row(("a", 1)), row(("a", 1), ("b", 1)))
+    assert kept["fightsSampled"] == 2
+
+
+def test_two_rows_chosen_by_different_settings_are_never_merged():
+    """`is_complete` keeps `order` and `eventBudget` apart because a sample chosen
+    one way is not a smaller sample of one chosen another. A merge that ignored
+    them would pool two differently-chosen samples under one block."""
+    for differ in ({"order": "public"}, {"budget": 60000}):
+        kept, why = fightprobe.merge_entry(row(("a", 1), ("b", 1)), row(("a", 1), **differ))
+        assert kept["fightsSampled"] == 1, f"a {differ} row was merged with a foreign selection"
+        assert why == "different selection settings"
+
+
+def test_a_row_that_states_no_settings_cannot_answer_and_is_replaced():
+    """Unknown is not equal. A row from before a setting was recorded cannot say
+    whether it read the same selection, and claiming it can is the defect one level
+    along -- so the fresh row wins, which is exactly today's behaviour."""
+    kept, _ = fightprobe.merge_entry(row(("a", 1), ("b", 1), order=None), row(("a", 1)))
+    assert kept["fightsSampled"] == 1
+
+
+def test_two_disjoint_reads_name_the_kills_a_row_level_merge_cannot_hold():
+    """The one case the rule cannot serve, counted rather than hidden.
+
+    A cut-short read is a prefix of the same ordered selection, so the key sets
+    nest; they can only be disjoint if the selection itself moved. Then keeping the
+    larger drops the smaller's own kills, and a rule that silently drops a paid kill
+    is the defect being fixed, one level along.
+    """
+    kept, why = fightprobe.merge_entry(row(("a", 1), ("b", 1)), row(("c", 1)))
+    assert kept["fightsSampled"] == 2
+    assert kept["mergeDroppedKills"] == 1
+    assert "DROPPED 1 paid kill" in why
+
+
+def test_keeping_the_older_row_still_takes_what_the_newer_walk_established():
+    """`searchExhausted` and `searchBudget` are facts about the SELECTION, and the
+    fresh run is the one that just walked it. Dropping them would re-open the
+    encounter next hour and re-pay -- the cost this merge exists to stop."""
+    kept, _ = fightprobe.merge_entry(
+        row(("a", 1), ("b", 1), searchBudget=500),
+        row(("a", 1), searchExhausted=True, searchBudget=2000),
+    )
+    assert kept["fightsSampled"] == 2
+    assert kept["searchExhausted"] is True
+    assert kept["searchBudget"] == 2000
+
+
+def test_a_shorter_re_read_keeps_the_bigger_row_through_the_command(tmp_path, monkeypatch):
+    """#171 at the CALL SITE, because the fold being right is not the claim.
+
+    The previous row holds two REAL kills of the same selection; the run re-opens
+    the encounter, reads the first, and stops at the ceiling. A fixture whose
+    `fights` list is empty cannot express this -- it states a count and carries no
+    keys, so the merge correctly finds nothing to keep and the test passes without
+    reaching the rule.
+    """
+    from wowdps import cli, warcraftlogs
+
+    (tmp_path / f"fight-probe-{VOIDSPIRE_TIER}.json").write_text(
+        json.dumps(
+            {
+                "tier": VOIDSPIRE_TIER,
+                "encounters": [row(("aBcD1234", 7), ("eFgH5678", 7), order="top", budget=30000)],
+            }
+        )
+    )
+
+    class CeilingAfterTheFirstFight(StubClient):
+        def fight_structure(self, code, encounter_id, difficulty):
+            if self.calls.count("structure:aBcD1234") >= 1:
+                self.ledger.record(
+                    "x", {"rateLimitData": {"limitPerHour": 3600, "pointsSpentThisHour": 3500}}
+                )
+            return super().fight_structure(code, encounter_id, difficulty)
+
+        def encounter_rankings(self, encounter_id, difficulty=5, metric="dps", page=1):
+            self.calls.append(f"rankings:{encounter_id}:page{page}")
+            return {
+                "id": encounter_id,
+                "name": "Lightblinded Vanguard",
+                "characterRankings": {
+                    "rankings": [
+                        {"amount": 1.0, "report": {"code": "aBcD1234", "fightID": 7}},
+                        {"amount": 0.9, "report": {"code": "eFgH5678", "fightID": 7}},
+                    ]
+                },
+            }
+
+    stub = CeilingAfterTheFirstFight(
+        structure=structure_payload(),
+        events={"DamageTaken": [damage(s, a) for a in (10, 11, 12) for s in (0.5, 299.0)]},
+        tables={},
+    )
+    monkeypatch.setattr(
+        warcraftlogs.Credentials,
+        "from_env",
+        classmethod(lambda cls: warcraftlogs.Credentials("i", "s")),
+    )
+    monkeypatch.setattr(fightprobe, "WarcraftLogsClient", lambda *a, **k: stub)
+
+    args = cli.build_parser().parse_args(
+        [
+            "fight-probe",
+            "--tier",
+            VOIDSPIRE_TIER,
+            "--encounter",
+            "3180",
+            "--reports",
+            "5",
+            "--order",
+            "top",
+            "--out",
+            str(tmp_path),
+        ]
+    )
+    assert fightprobe.cmd_fight_probe(args) != 1
+
+    payload = json.loads((tmp_path / f"fight-probe-{VOIDSPIRE_TIER}.json").read_text())
+    rows = {entry["encounterId"]: entry for entry in payload["encounters"]}
+    assert rows[3180]["fightsSampled"] == 2, "the shorter re-read overwrote two paid kills"
 
 
 def test_a_stopped_search_that_found_nothing_earlier_does_not_claim_there_is_nothing():
