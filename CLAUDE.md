@@ -6231,31 +6231,53 @@ Three things fall out, and only the first is what the run was for:
 - **The verdict is `inside-the-noise` on all three runs, and that is the instrument
   working.** One 34.01 widens a range permanently under a disjoint-ranges test.
 
-**The probe is ONE-SIDED by construction, and the 12-repeat run makes it obvious.**
-Two sides that are exactly equal and perfectly stable both report `low == high ==
-2.01`, which overlaps, which is `inside-the-noise` -- so *equality can never be
-confirmed*, only a difference detected. That is the asymmetry the docstring argues
-for (a probe that called an overlap equality "could only ever confirm what it set out
-to show"), seen from the other end. So the honest sentence is a **non-detection**:
+**The three runs are not three samples of one thing, and the first reading of them
+here was weaker than the data.** The separation test is `with_block.low >
+without.high` -- the cheapest treatment round against the **dearest control** round --
+so a uniform extra cost `d` is detectable exactly when `2.01 + d > without.high`. Run
+the numbers back through that:
 
-> Over 24 clean rounds, at a resolution of 0.01 points against a query costing 1.01,
-> the probe detected **no cost** for the reading block. It has not shown the block is
-> free, and by its own design it cannot.
+| run | `without.high` | `with_block.low` | smallest `d` it could have caught |
+|---|---|---|---|
+| 1, 3 repeats | 3.01 | 3.01 | 1.01 |
+| 2, 6 repeats | **44.01** | 2.01 | **42.01** -- blind to a cost 40x the query itself |
+| 3, 12 repeats | **2.01** | 2.01 | **0.01** -- the counter's own resolution |
 
-**Do not now swap min/max for a median test.** The medians agreeing is what the data
+**Contamination on the CONTROL side is what blinds the test; on the treatment side it
+is harmless.** `without.high` is a max, so one poisoned control round raises the bar
+the treatment has to clear -- run 2 could not have detected a 40-point difference. A
+poisoned *treatment* round only raises `with_block.high`, which this direction never
+reads: run 3's 34.01 cost its verdict nothing.
+
+So run 3 is the one sensitive test of the three, its control side sat at its floor for
+twelve rounds of twelve, and it found no separation. That is a **bound**, not a shrug:
+
+> Any cost at or above 0.01 points -- the smallest the counter can express -- would
+> have separated on run 3. It did not. So the reading block costs **less than 1% of
+> the 1.01-point query it rides on**, and the rest is below what the meter reports.
+
+Strictly the test is non-strict at the boundary, so exact equality still reads as no
+separation and *equality itself* cannot be confirmed. The sensitivity is what turns
+that into something a reader can act on.
+
+**Two things follow, and one of them corrects this entry's own first version.**
+
+- **Publish the sensitivity per run.** The smallest detectable `d` is a property of
+  the data and the unchanged rule, derivable without knowing the answer, and it turns
+  `inside-the-noise` from an unhelpful verdict into a bound. That is the next
+  increment.
+- **The first version of this paragraph said the fix was to amortise -- send N
+  queries between two readings so a 34-point jump "is amortised rather than fatal".
+  That is wrong, and it is wrong in the direction of the flattering reading.** Under
+  a max-based control bar, a contaminated control round is still `+34` whatever N is,
+  so separation would then need `N x d > 34` -- with `d = 0.01` that is N > 3400,
+  which is not a measurement anyone will run. Amortisation shrinks the contamination
+  relative to the *signal* and does nothing about the *bar*. The bar is the problem.
+
+**Do not swap min/max for a median test.** The medians agreeing is what the data
 showed *after* the rule was chosen, and re-choosing the rule to make that reading the
-verdict is exactly the `counterResetMidRun` error -- a mechanism invented to fit the
-evidence. The derivable improvement, which needs no sight of these numbers, is to
-make the signal large against the contamination: send **N queries between two
-readings** and divide, so a 34-point jump is amortised rather than fatal. That is the
-next increment, and it is not this one.
-
-**What the two reading-less documents therefore rest on.** #170 says they hang on
-this measurement. What exists today is a non-detection at 0.01 resolution plus a
-modal delta identical on both sides -- strong, and not the probe's own verdict.
-Adding the block on that basis is a judgement about evidence rather than a
-measurement, and it should be taken with the amortised design above rather than by
-reading the raw rounds harder.
+verdict is the `counterResetMidRun` error. Reporting the sensitivity changes no rule
+and answers the same question.
 
 One thing the logs gave away for free: `x-ratelimit-limit: 800` with `remaining`
 decrementing per query (779, 778, 777), which is #170's other open measurement
