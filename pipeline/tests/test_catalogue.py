@@ -12,12 +12,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from wowdps import catalogue
-from wowdps.warcraftlogs import RateLimited, WarcraftLogsError
+from wowdps.warcraftlogs import PointLedger, RateLimited, WarcraftLogsError
 
 ZONE = 53
 MYTHIC = 5
@@ -127,10 +126,27 @@ class StubClient:
         self.readings = list(readings or [])
         self.calls: list[tuple] = []
         self.rate_limit_calls = 0
-        self.ledger = SimpleNamespace(queries=0)
+        # A REAL ledger, and that is the whole reason the defect it exposes survived
+        # review. It used to be `SimpleNamespace(queries=0)` -- a stub that invented
+        # the attribute `PointLedger` does not have, so `getattr(ledger, "queries", 0)`
+        # found it, answered 0, and every test here agreed with a producer that could
+        # only ever report zero. A fixture that grows a field to match its reader
+        # cannot test that reader.
+        self.ledger = PointLedger()
+        #: Codes whose `report_kills` is answered from the response cache, so the
+        #: split between "sent" and "free" is exercisable at all.
+        self.cached_codes: set[str] = set()
+
+    def _note(self, label: str, *, cached: bool = False) -> None:
+        self.ledger.record(
+            label,
+            {"rateLimitData": {"limitPerHour": 18000.0, "pointsSpentThisHour": 100.0}},
+            cached,
+        )
 
     def rate_limit(self):
         self.rate_limit_calls += 1
+        self._note("rate_limit")
         reading = self.readings.pop(0) if self.readings else None
         if isinstance(reading, Exception):
             raise reading
@@ -142,6 +158,7 @@ class StubClient:
 
     def zone(self, zone_id, *, cache=True):
         self.calls.append(("zone", zone_id))
+        self._note("zone")
         answer = self.zones.get(zone_id)
         if isinstance(answer, Exception):
             raise answer
@@ -149,6 +166,7 @@ class StubClient:
 
     def reports_in_window(self, zone_id, start_ms, end_ms, page=1, limit=100):
         self.calls.append(("reports", zone_id, page))
+        self._note("reports")
         rows = self.reports.get(zone_id, [])
         if isinstance(rows, Exception):
             raise rows
@@ -156,6 +174,7 @@ class StubClient:
 
     def report_kills(self, code):
         self.calls.append(("report_kills", code))
+        self._note("report_kills", cached=code in self.cached_codes)
         answer = self.kills.get(code)
         if isinstance(answer, Exception):
             raise answer
@@ -163,6 +182,7 @@ class StubClient:
 
     def fight_structure(self, code, encounter_id, difficulty):
         self.calls.append(("structure", code, encounter_id, difficulty))
+        self._note("structure")
         if self.structures is None:
             return structure(code=code)
         answer = self.structures.get((code, encounter_id, difficulty))
@@ -547,6 +567,7 @@ class WallingClient(StubClient):
     def reports_in_window(self, zone_id, start_ms, end_ms, page=1, limit=100):
         if page == self.fail_on_page:
             self.calls.append(("reports", zone_id, page))
+            self._note("reports")
             raise WarcraftLogsError(
                 "GraphQL errors: [{'message': 'The maximum allowed page is 25 until "
                 "the performance of paginated queries can be improved.'}]"
@@ -798,3 +819,42 @@ def test_the_catalogue_sends_no_graphql_document_of_its_own():
         and ("query" in value or "mutation" in value)
     }
     assert documents == {}, documents
+
+
+# ── what a run reports it cost ──────────────────────────────────────────────────
+
+
+def test_the_summary_counts_the_queries_the_run_actually_sent(tmp_path):
+    """`report.queries` used to read an attribute `PointLedger` does not have.
+
+    `getattr(ledger, "queries", 0)` therefore answered **0** on every run, and the
+    commit message built from this summary said "0 queries" beside a real point
+    figure. Measured on run 34753269256 (13.09.2026), which succeeded, wrote its
+    summary, and committed `catalogue: +100 reports, ..., 204 points, 0 queries`
+    into the private repository -- the second "UNMEASURED, never zero" failure in
+    the same sentence that names the first.
+
+    The assertion is against the ledger's own count rather than a literal, so the
+    test cannot go stale when the stub asks one query more or less.
+    """
+    client = StubClient()
+    report = run(client, tmp_path)
+    sent = client.ledger.query_count
+    assert sent > 0, "the stub answered nothing; the test cannot say anything"
+    assert report.queries == sent
+    assert report.to_json()["queries"] == sent
+
+
+def test_a_cache_hit_is_counted_apart_and_not_as_a_query(tmp_path):
+    """`catalogue.yml` restores an `actions/cache`, so a resumed pass can be mostly
+    free -- and one number for both would say a free run and a paid one cost the
+    same. The split is the ledger's own (`to_json` has always published it); this
+    pins that the summary carries it too.
+    """
+    client = StubClient()
+    client.cached_codes = {"aBcD"}
+    report = run(client, tmp_path)
+    block = report.to_json()
+    assert block["cacheHits"] == 1
+    assert block["queries"] == client.ledger.query_count
+    assert block["queries"] + block["cacheHits"] == len(client.ledger.entries)

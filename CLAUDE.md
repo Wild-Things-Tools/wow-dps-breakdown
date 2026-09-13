@@ -6350,6 +6350,12 @@ A refused sweep is **exit 2**, not 1: the run delivered every other zone and wro
 what this one paid for, so failing the step over-claims exactly as loudly as the
 traceback did. The zone is named in `zonesFailed` and the workflow prints a warning.
 
+**And the `0 queries` in that quoted message is wrong for a SECOND reason**, found
+on 2026-09-13 and recorded two entries down: `report.queries` read an attribute
+`PointLedger` does not have, so it answered zero on every run, summary or no
+summary. This entry fixed the reason the *whole* message was zeros and took the
+zero inside it at face value -- in the sentence naming the rule it breaks.
+
 ### The window in the private repository still says `walled: false`
 
 `z53.state.json` carries, committed:
@@ -6379,6 +6385,113 @@ Nothing has been sent to the live service from the fixed code. The stub answers 
 the **client** returns rather than what the service does -- the distinction
 `addspawns` paid for once, where a stub built from the envelope would have passed
 against broken code.
+
+### The first clean Stufe-3 run, and what its own commit message could not say (2026-09-13)
+
+Run 34753269256, zone 53, `stages: 3`, `report_pages 1` -- the small dispatch that
+proves the fixed code rather than re-paying for the crashed one. 78 seconds, exit 0,
+committed to the private repository as `1dea203`:
+
+```
+catalogue: +100 reports, +0 kills, +27 refusals, 204 points, 0 queries (run 34753269256)
+z53.state.json   third window: pagesRead 1, reportsSeen 100,
+                 walled true, walledBy "our-page-limit"
+                 codesKnown 100, refusedCodes 27
+```
+
+**`walledBy: "our-page-limit"` is the half of #187 that the crash could not
+demonstrate.** The crash proved `service-page-cap`; a full page 1 under
+`--report-pages 1` proves the raisable one, so both branches are now live rather
+than one measured and one reasoned.
+
+**`+0 kills` is correct and reads as a defect.** `new_kills` is **Stufe 2's**
+counter, and a `stages: 3` run never enters Stufe 2. The 100 report rows list
+**402 kills** between them; those are `killsListed` on the rows, which is a
+different number with a different name, and the summary has no field for it. Worth
+knowing before somebody "fixes" the zero.
+
+**`0 queries` beside `204 points` is NOT correct, and it is the same failure one
+layer in.** `report.queries` read `getattr(client.ledger, "queries", 0)` --
+
+```
+dataclasses.fields(PointLedger) -> limit_per_hour, first_reading, last_reading,
+                                   resets_in, entries, requests_sent, request_headers
+hasattr(PointLedger(), "queries") -> False
+```
+
+-- an attribute this class has never had, so the default answered **0 for every run
+since #184**. The point figure beside it is real, which is what makes the zero
+readable as "204 points for no queries" rather than as an absence.
+
+**#187 quoted that exact sentence as evidence and did not notice.** Its entry
+reproduces the crashed run's message -- *"+0 reports, +0 kills, +0 refusals,
+UNMEASURED points, 0 queries"* -- and fixes the reason the whole message was zeros
+(no summary was written). The `0 queries` in it is **independently** wrong, and
+stayed wrong in the very sentence naming the "UNMEASURED, never zero" rule. Two
+defects wearing one symptom, and reading the symptom as one of them is how the
+second survived.
+
+**The stub is why no test could see it.** `test_catalogue.py`'s `StubClient` carried
+`self.ledger = SimpleNamespace(queries=0)` -- a fixture that **invented the
+attribute to match its reader**, so `getattr` found it, answered zero, and 34 tests
+agreed with a producer that could only report zero. It holds a real `PointLedger`
+now and records an entry per answered call. The rule is the one this file keeps
+arriving at from new directions: *a fixture that grows a field to match the code
+under test cannot test that code* -- the same shape as
+`test_the_whole_block_and_its_zone_are_one_fetch` running with a store, and as the
+`--encounter 3180` fixture in which "pooled" and "per encounter" are the same list.
+
+`PointLedger.query_count` and `cache_hit_count` are the one definition now, and
+`to_json` (which has computed the split correctly since it was written) uses them.
+**The cache hit is counted apart rather than folded in**, because `catalogue.yml`
+restores an `actions/cache`: a resumed pass can be mostly free, and one number for
+both would say a free run and a paid one cost the same. The commit message prints
+`UNMEASURED` for an absent count -- a summary written before the field existed
+cannot say, and this is not the file to reintroduce a zero in.
+
+`progresssweep` is deliberately **untouched**. It reads `len(ledger.entries)`, which
+counts cache hits as queries -- a looser number, and one its commit messages have
+published for weeks. Moving it is a change to a published figure and not this fix.
+
+### `reportData.reports` is not ordered, and "the newest 2,500" was a premise nobody checked
+
+Read off that run's own 100 rows rather than asked for. #187 left the cron waiting on
+one question -- *how many time windows does a zone need* -- and the obvious way to
+answer it assumes the page walk is a prefix of a sorted list. It is not:
+
+```
+100 rows, 100 distinct codes, one page
+start times            59 descending steps, 40 ascending, 0 equal
+sorted ascending?      False        sorted descending?  False
+end-lower-bound        48 descending, 51 ascending      <- a coin flip
+span of page 1         159.1 h (6.6 days), from 09-06 19:49 to 09-13 10:57
+```
+
+The end-lower-bound is `max(fight end)` over each row's listed kills, which is the
+cheapest available proxy for a report's own end; it separates nothing. So the list is
+ordered by neither the report's start nor its end, and page 1 is **not** "the last
+100 reports". A likely key is the upload time, which correlates with neither -- but
+that is a hypothesis, and what is measured is the two refutations.
+
+Two consequences, and the second is the one that bites:
+
+- **The narrower-window route is still right, and for a better reason.** It is not
+  "take the oldest window first" -- there is no order to take from. It is that
+  `fromMs`/`toMs` is a **server-side filter**, so it is the only way to address a
+  subset of a zone's reports deterministically at all.
+- **2,500 of an unknown total is a SAMPLE, not a prefix**, and a catalogue whose
+  claim is completeness cannot read it as one. Whether the arbitrary order is at
+  least *stable* between runs is unmeasured; two one-page dispatches of the same
+  window would say, and nothing has asked.
+
+**And a zone-53 report is not a zone-53 report.** Over the same 100 rows: **83 of the
+402 listed kills are outside zone 53** -- difficulty 10 (Mythic Keystone) and
+encounter ids in the 12xxx block, plus older raids -- and **24 rows list no kill at
+all**. That is `REPORT_KILLS_QUERY` taking only `$code` doing exactly what the design
+says (one request answers every boss and every difficulty of a report), and it is the
+saving that makes Stufe 3 affordable. The consumer filters; the row does not. The 27
+refusals of this run are the rows the scrub and the id checks turned away, counted
+apart from the 100 kept.
 
 ## Fight patterns per boss — what Warcraft Logs can and cannot tell you
 

@@ -680,6 +680,33 @@ class PointLedger:
         assert self.first_reading is not None and self.last_reading is not None
         return round(self.last_reading - self.first_reading, 4)
 
+    @property
+    def query_count(self) -> int:
+        """Queries this run actually SENT. A cache hit is not one.
+
+        The one definition, because there were two and one of them was inert.
+        `to_json` has computed this inline since it was written; `catalogue.py`
+        read `ledger.queries`, an attribute this class has never had, so
+        `getattr(..., 0)` answered **0** for every run -- and a run that had paid
+        for 25 pages committed "0 queries" into the private repository's history
+        (#187 quoted that message as evidence and did not notice the zero was
+        independently wrong). Both read this now.
+
+        Excluding cache hits is the load-bearing half rather than pedantry:
+        `catalogue.yml` restores an `actions/cache` between runs, so a resumed
+        pass can be mostly hits, and a count that included them would say a free
+        run and a paid one cost the same.
+        """
+        return len([entry for entry in self.entries if not entry[2]])
+
+    @property
+    def cache_hit_count(self) -> int:
+        """Queries answered from disk. Published beside `query_count`, never
+        folded into it: "27 queries" and "27 queries of which 24 were free" are
+        different sentences about what a run cost.
+        """
+        return len([entry for entry in self.entries if entry[2]])
+
     def to_json(self) -> dict:
         return {
             "limitPerHour": self.limit_per_hour,
@@ -696,8 +723,8 @@ class PointLedger:
             # comparison, so an absent key means "written before this existed"
             # rather than "false".
             "counterWentBackwards": self.spend_state == SPEND_WENT_BACKWARDS,
-            "queries": len([entry for entry in self.entries if not entry[2]]),
-            "cacheHits": len([entry for entry in self.entries if entry[2]]),
+            "queries": self.query_count,
+            "cacheHits": self.cache_hit_count,
             "note": (
                 "Points are read back from rateLimitData rather than predicted: "
                 "Warcraft Logs does not publish a cost formula. The run total is a "

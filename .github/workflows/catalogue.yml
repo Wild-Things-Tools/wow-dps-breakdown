@@ -240,11 +240,21 @@ jobs:
           d = json.loads(summary.read_text())
           points = d.get("points")
           points = "UNMEASURED" if points is None else f"{points:.0f}"
+          # `.get(..., 0)` was the defect one layer down, in the producer: the
+          # count read an attribute that does not exist and committed "0 queries"
+          # over a paid run. Absent is UNMEASURED here too -- a summary written
+          # before the field existed cannot say, and a zero would read as a free
+          # run. A cache hit is named apart, because `catalogue.yml` restores an
+          # `actions/cache` and a resumed pass really can be nearly free.
+          queries = d.get("queries")
+          queries = "UNMEASURED" if queries is None else str(queries)
+          hits = d.get("cacheHits") or 0
           failed = d.get("zonesFailed") or []
           print(
               f"catalogue: +{d.get('newReports', 0)} reports, +{d.get('newKills', 0)} kills, "
               f"+{d.get('newRefused', 0)} refusals, {points} points, "
-              f"{d.get('queries', 0)} queries"
+              f"{queries} queries"
+              + (f" ({hits} from cache)" if hits else "")
               + (f", zone(s) {failed} refused mid-walk" if failed else "")
               + f" (run {run})"
           )
