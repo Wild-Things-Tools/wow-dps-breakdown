@@ -2552,6 +2552,7 @@ def cmd_catalogue(args: argparse.Namespace) -> int:
         zones = _int_list("--zones", args.zones)
         difficulties = _int_list("--difficulties", args.difficulties, allow=(4, 5))
         stages = _int_list("--stages", args.stages, allow=(2, 3))
+        windows = catalogue.parse_windows(args.window)
     except ValueError as refusal:
         logging.error("%s", refusal)
         return catalogue.EXIT_FAILED
@@ -2568,7 +2569,7 @@ def cmd_catalogue(args: argparse.Namespace) -> int:
             '("The maximum allowed page is %d until the performance of paginated '
             'queries can be improved.", measured 2026-09-12), so the pages past %d '
             "are unreachable at any --report-limit. A window that walls at %d needs a "
-            "narrower time window, which this command does not yet take.",
+            "narrower --window FROM..TO, which is the only route past this cap.",
             args.report_pages,
             catalogue.MAX_REPORT_PAGE + 1,
             catalogue.MAX_REPORT_PAGE,
@@ -2593,6 +2594,7 @@ def cmd_catalogue(args: argparse.Namespace) -> int:
         stages=stages,
         report_pages=args.report_pages,
         report_limit=args.report_limit,
+        windows=windows,
         kills=args.kills,
         point_ceiling=args.point_ceiling,
         deadline_minutes=args.deadline_minutes,
@@ -3600,6 +3602,19 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=catalogue.DEFAULT_REPORT_LIMIT,
         help="reports per page",
+    )
+    p_cat.add_argument(
+        "--window",
+        action="append",
+        default=[],
+        metavar="FROM..TO",
+        help=(
+            "Stufe 3 time window, repeatable, swept in the order given. Each end is "
+            "epoch milliseconds, an ISO date or timestamp (read as UTC), or empty for "
+            f"the open end. The service refuses page {catalogue.MAX_REPORT_PAGE + 1}, "
+            "so one window holds at most --report-pages x --report-limit reports and "
+            "a narrower window is the only route past that. Omit for the whole of time"
+        ),
     )
     p_cat.add_argument(
         "--kills",

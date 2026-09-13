@@ -118,13 +118,24 @@ def structure(*, code="aBcD", fights=None, master=True, player_name="Somebody"):
 class StubClient:
     """Answers from canned zones, report lists, report kills and fight structures."""
 
-    def __init__(self, *, zones=None, reports=None, kills=None, structures=None, readings=None):
+    def __init__(
+        self,
+        *,
+        zones=None,
+        reports=None,
+        kills=None,
+        structures=None,
+        readings=None,
+        report_windows=None,
+    ):
         self.zones = zones if zones is not None else {ZONE: zone_payload()}
         self.reports = reports if reports is not None else {ZONE: [{"code": "aBcD"}]}
         self.kills = kills if kills is not None else {"aBcD": (REPORT_START, [kill_fight()])}
         self.structures = structures
         self.readings = list(readings or [])
+        self.report_windows = report_windows
         self.calls: list[tuple] = []
+        self.windows_asked: list[tuple[int, int]] = []
         self.rate_limit_calls = 0
         # A REAL ledger, and that is the whole reason the defect it exposes survived
         # review. It used to be `SimpleNamespace(queries=0)` -- a stub that invented
@@ -166,8 +177,17 @@ class StubClient:
 
     def reports_in_window(self, zone_id, start_ms, end_ms, page=1, limit=100):
         self.calls.append(("reports", zone_id, page))
+        self.windows_asked.append((start_ms, end_ms))
         self._note("reports")
-        rows = self.reports.get(zone_id, [])
+        # A stub that IGNORED the window could not express "two windows return
+        # different reports", which is the whole claim `--window` makes. With
+        # `report_windows` set it answers per window and the un-windowed tests keep
+        # the flat mapping.
+        rows = (
+            self.report_windows.get((start_ms, end_ms), [])
+            if self.report_windows is not None
+            else self.reports.get(zone_id, [])
+        )
         if isinstance(rows, Exception):
             raise rows
         return {"data": rows[(page - 1) * limit : page * limit]}
@@ -858,3 +878,132 @@ def test_a_cache_hit_is_counted_apart_and_not_as_a_query(tmp_path):
     assert block["cacheHits"] == 1
     assert block["queries"] == client.ledger.query_count
     assert block["queries"] + block["cacheHits"] == len(client.ledger.entries)
+
+
+# ── the window ──────────────────────────────────────────────────────────────────
+
+
+def test_a_bound_reads_as_utc_and_the_open_ends_are_the_un_windowed_ones():
+    """A date is UTC midnight, never local: the bound goes into a Warcraft Logs
+    filter, which is epoch milliseconds with no timezone, so a local reading would
+    move every window by the runner's offset -- and the runner's offset is not a
+    property of the zone."""
+    assert catalogue.parse_windows(["2026-08-01..2026-09-01"]) == ((1785542400000, 1788220800000),)
+    assert catalogue.parse_windows(["..1000", "1000.."], now_ms=5000) == ((0, 1000), (1000, 5000))
+    assert catalogue.parse_windows([]) == (), "no window means the whole of time"
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        "2026-08-01",  # no separator at all
+        "2026-09-01..2026-08-01",  # inverted
+        "5..5",  # empty
+        "nonsense..2026-01-01",  # unreadable bound
+    ],
+)
+def test_a_window_that_can_match_nothing_is_refused_rather_than_swept(spec):
+    """Each of these would otherwise produce a PLAUSIBLE answer rather than an error:
+    the sweep reads nothing, records an unwalled window, and the zone looks read to
+    the end. A bound that does not parse is refused rather than skipped for the same
+    reason one layer up -- a dropped bound leaves a hole the window list then claims
+    to have covered."""
+    with pytest.raises(ValueError):
+        catalogue.parse_windows([spec], now_ms=9)
+
+
+def test_two_windows_are_two_walks_and_each_is_written_before_the_next(tmp_path):
+    """The claim `--window` makes, and it needs a stub that HONOURS the filter: one
+    that ignored it would pass whether the option reached the client or not."""
+    early, late = (1000, 2000), (2000, 3000)
+    rows = {early: [{"code": "EARLY"}], late: [{"code": "LATE"}]}
+    client = StubClient(
+        report_windows=rows,
+        kills={code: (REPORT_START, [kill_fight()]) for code in ("EARLY", "LATE")},
+    )
+    report = run(client, tmp_path, stages=(3,), windows=(early, late))
+
+    assert client.windows_asked == [early, late], "the windows were not both swept, in order"
+    state = json.loads((tmp_path / "z53.state.json").read_text())
+    assert [(w["fromMs"], w["toMs"]) for w in state["windows"]] == [early, late]
+    lines = (tmp_path / "z53.reports.jsonl").read_text().splitlines()
+    codes = {json.loads(line)["code"] for line in lines}
+    assert codes == {"EARLY", "LATE"}
+    assert report.exit_code == catalogue.EXIT_OK
+
+
+def test_a_report_two_windows_both_return_is_read_once(tmp_path):
+    """`seen` is carried ACROSS the windows, so overlapping windows cost their report
+    pages twice and the report itself once. Without that a walk of N overlapping
+    windows re-pays for every report in the overlap, which is the expensive direction
+    and invisible from the file (the row set is a set either way)."""
+    first, second = (1000, 3000), (2000, 4000)
+    both = [{"code": "SHARED"}]
+    client = StubClient(
+        report_windows={first: both, second: both},
+        kills={"SHARED": (REPORT_START, [kill_fight()])},
+    )
+    run(client, tmp_path, stages=(3,), windows=(first, second))
+
+    fetched = [call for call in client.calls if call[0] == "report_kills"]
+    assert fetched == [("report_kills", "SHARED")], f"the shared report was read twice: {fetched}"
+    rows = (tmp_path / "z53.reports.jsonl").read_text().splitlines()
+    assert len(rows) == 1
+
+
+def test_no_window_sends_exactly_the_request_it_sent_before_the_option_existed(tmp_path):
+    """The un-windowed sweep is `search_window(0, 0, 0)` -- `(0, now)` -- and must
+    stay it, or every settled zone re-reads on the next run for no reason."""
+    client = StubClient()
+    run(client, tmp_path, stages=(3,))
+
+    assert len(client.windows_asked) == 1
+    start, end = client.windows_asked[0]
+    assert start == 0 and end > 0, f"the whole-of-time window moved: {client.windows_asked[0]}"
+
+
+def test_the_cli_refuses_a_bad_window_with_1_and_not_argparses_2(tmp_path, monkeypatch, caplog):
+    """`_int_list`'s reason, one option across: handed to argparse as a ``type=``, a
+    refusal is ``SystemExit(2)`` -- and 2 is this command's code for "a zone Warcraft
+    Logs would not list", which the workflow downgrades to a warning and a GREEN step.
+    A usage error must not read as a swept-nothing success.
+
+    The credentials are unset and the assertion is on the SENTENCE, because
+    `Credentials.from_env` returns 1 too and the exit code alone cannot separate them.
+    """
+    import logging
+
+    from wowdps import cli
+
+    monkeypatch.delenv("WCL_CLIENT_ID", raising=False)
+    monkeypatch.delenv("WCL_CLIENT_SECRET", raising=False)
+    args = cli.build_parser().parse_args(
+        [
+            "catalogue",
+            "--out",
+            str(tmp_path),
+            "--zones",
+            "53",
+            "--window",
+            "2026-09-01..2026-08-01",
+        ]
+    )
+    with caplog.at_level(logging.ERROR):
+        assert cli.cmd_catalogue(args) == catalogue.EXIT_FAILED
+    assert "--window" in caplog.text, "refused for some other reason than the window"
+    assert list(tmp_path.iterdir()) == [], "a refused run reached the service"
+
+
+def test_the_cli_carries_the_windows_through_to_the_options(tmp_path):
+    """The fold is pure and passes on its own; this pins that the option REACHES it.
+
+    That split is this repository's most repeated defect -- `zone_key(budget=)`,
+    `seen_difficulties`, `fold_upload_start_times` -- a tested fold whose call site
+    was never executed.
+    """
+    from wowdps import cli
+
+    args = cli.build_parser().parse_args(
+        ["catalogue", "--out", str(tmp_path), "--zones", "53", "--window", "1000..2000"]
+    )
+    assert catalogue.parse_windows(args.window) == ((1000, 2000),)
