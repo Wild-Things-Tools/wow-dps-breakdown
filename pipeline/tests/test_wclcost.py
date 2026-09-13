@@ -282,3 +282,170 @@ def test_the_command_never_lets_a_query_touch_the_cache(monkeypatch, capsys):
     assert stub.cache_flags, "no query was sent at all"
     assert not any(stub.cache_flags), "a probe query went through the response cache"
     assert "what the standalone reading itself costs" in capsys.readouterr().out
+
+
+# -------------------------------------------------------------- the sensitivity
+
+
+def test_the_sensitivity_is_the_smallest_uniform_cost_the_rule_would_have_caught():
+    """The arithmetic, against the rule `compare` actually uses.
+
+    Raise every richer round by the answer and `with_block.low > without.high` has to
+    fire; raise it by one increment less and it must not. That is the whole claim, so
+    the test asserts both halves rather than the number alone.
+    """
+    without = _sample("without", [2.01, 2.01, 44.01])
+    with_block = _sample("with", [2.01, 2.01, 2.01])
+
+    measure = wclcost.sensitivity(without, with_block)
+
+    assert measure is not None
+    assert measure.smallest == pytest.approx(42.01)
+
+    lifted = _sample("with", [d + measure.smallest for d in with_block.deltas])
+    assert wclcost.compare(without, lifted)[0] == "separates"
+    short = _sample(
+        "with", [d + measure.smallest - wclcost.COUNTER_QUANTUM for d in with_block.deltas]
+    )
+    assert wclcost.compare(without, short)[0] == "inside-the-noise"
+
+
+def test_a_sample_that_already_separated_has_no_sensitivity_to_report():
+    """It has its answer. A bound on a question that is settled is noise."""
+    assert wclcost.sensitivity(_sample("without", [2.0, 2.0]), _sample("with", [5.0, 5.0])) is None
+
+
+@pytest.mark.parametrize(
+    "without, with_block",
+    [
+        ([0.0, 0.0], [0.0, 0.0]),  # UNMEASURED
+        ([2.0, -1500.0], [2.0, 2.0]),  # the hourly reset fired mid-probe
+        ([], []),  # nothing came back at all
+    ],
+)
+def test_a_refused_sample_gets_no_sensitivity(without, with_block):
+    """A bound computed over readings the module has just refused would be a number
+    wearing a measurement's clothes -- exactly what the refusals exist to prevent."""
+    assert wclcost.sensitivity(_sample("without", without), _sample("with", with_block)) is None
+
+
+def test_the_verdict_and_its_bound_cannot_disagree():
+    """The sensitivity asks `compare` rather than re-deriving the rule.
+
+    Two implementations of one comparison is the duplication this repository keeps
+    paying for, and here it would publish a bound under a verdict that contradicts it.
+    """
+    seen = set()
+    for without, with_block in (
+        ([2.01, 2.01], [2.01, 2.01]),
+        ([2.0, 2.0], [5.0, 5.0]),
+        ([5.0, 5.0], [2.0, 2.0]),
+        ([0.0], [0.0]),
+    ):
+        a, b = _sample("without", without), _sample("with", with_block)
+        verdict, _ = wclcost.compare(a, b)
+        seen.add(verdict)
+        assert (wclcost.sensitivity(a, b) is not None) == (verdict == "inside-the-noise")
+    assert seen == {"inside-the-noise", "separates", "unmeasured"}
+
+
+def test_a_dearer_cheapest_richer_round_is_named_rather_than_bounded():
+    """Contamination on the richer side's MINIMUM narrows the sensitivity.
+
+    That is the one direction in which this number over-claims, so a sample where the
+    cheapest richer round is above the cheapest control round says so instead of
+    publishing a tight bound. Run 1 of 2026-09-13 is exactly that shape.
+    """
+    # The poll is load-bearing rather than decoration: without it `query_cost` is None,
+    # the ratio line is never printed, and the assertion below that the verb follows
+    # the flag is vacuously true. It was, on the first attempt -- see CLAUDE.md.
+    measure = wclcost.sensitivity(
+        _sample("without", [3.01, 2.01, 2.01]),
+        _sample("with", [11.01, 3.01, 4.01]),
+        poll=_sample("poll", [28.0, 1.0, 2.0]),
+    )
+
+    assert measure is not None
+    assert measure.smallest == pytest.approx(0.01)
+    assert not measure.cheapest_rounds_agree
+    printed = "\n".join(wclcost.describe_sensitivity(measure))
+    assert "counterfactual rather than a bound" in printed
+    # And the verb follows the flag: a line calling it a bound, two lines above the
+    # clause withdrawing that, is an output that contradicts itself.
+    assert "bounds the block" not in printed
+
+
+def test_the_query_cost_needs_a_poll_and_is_absent_without_one():
+    """The ratio is the useful half and it is not guessed.
+
+    A delta contains the query AND the poll that brackets it, so the query's own cost
+    is only expressible where the poll was measured. Absent, never assumed.
+    """
+    without, with_block = _sample("without", [2.01, 2.01]), _sample("with", [2.01, 2.01])
+
+    assert wclcost.sensitivity(without, with_block).query_cost is None
+    priced = wclcost.sensitivity(without, with_block, poll=_sample("poll", [1.0, 1.0]))
+    assert priced.query_cost == pytest.approx(1.01)
+    printed = "\n".join(wclcost.describe_sensitivity(priced))
+    assert "bounds the block under 0.99% of what one query costs" in printed
+
+
+def test_describe_prints_the_bound_only_under_the_verdict_it_bounds():
+    pair = _pair()
+    overlapping = wclcost.probe(pair, poll=_Counter().poll, send=_Counter().send, repeats=2)
+    assert overlapping.verdict == "inside-the-noise"
+    assert any("sensitivity:" in line for line in wclcost.describe(overlapping))
+
+    counter = _Counter(extra_for_block=5.0)
+    separating = wclcost.probe(pair, poll=counter.poll, send=counter.send, repeats=3)
+    assert separating.verdict == "separates"
+    assert not any("sensitivity:" in line for line in wclcost.describe(separating))
+
+
+# The three live runs of 2026-09-13, read out of their own job logs. Runs 34761515445,
+# 34761672707 and 34761774999 -- 3, 6 and 12 repeats of `3421`/Mythic/page 1.
+MEASURED_RUNS = {
+    "34761515445": {
+        "poll": [28.0, 1.0, 2.0],
+        "with": [11.01, 3.01, 4.01],
+        "without": [3.01, 2.01, 2.01],
+        "smallest": 0.01,
+        "agree": False,
+        "query": 1.01,  # the poll read 28/1/2; its MEDIAN would price a query at 0.01
+    },
+    "34761672707": {
+        "poll": [1.0] * 6,
+        "with": [2.01, 52.01, 2.01, 2.01, 2.01, 2.01],
+        "without": [2.01, 2.01, 4.01, 44.01, 3.01, 2.01],
+        "smallest": 42.01,
+        "agree": True,
+        "query": 1.01,
+    },
+    "34761774999": {
+        "poll": [1.0] * 12,
+        "with": [2.01] * 9 + [34.01, 2.01, 2.01],
+        "without": [2.01] * 12,
+        "smallest": 0.01,
+        "agree": True,
+        "query": 1.01,
+    },
+}
+
+
+@pytest.mark.parametrize("run_id", sorted(MEASURED_RUNS))
+def test_the_three_measured_runs_reproduce_their_published_sensitivity(run_id):
+    """The figures in CLAUDE.md, pinned against the deltas the runs actually printed.
+
+    They are the whole evidence for the claim that the block costs under 1% of its
+    query, so a change to the arithmetic that quietly moved them would move a published
+    conclusion. All three verdicts were `inside-the-noise` live, which is the control:
+    a sensitivity is only defined there.
+    """
+    row = MEASURED_RUNS[run_id]
+    without, with_block = _sample("without", row["without"]), _sample("with", row["with"])
+
+    assert wclcost.compare(without, with_block)[0] == "inside-the-noise"
+    measure = wclcost.sensitivity(without, with_block, poll=_sample("poll", row["poll"]))
+    assert measure.smallest == pytest.approx(row["smallest"])
+    assert measure.cheapest_rounds_agree is row["agree"]
+    assert measure.query_cost == pytest.approx(row["query"])

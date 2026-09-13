@@ -52,6 +52,19 @@ ranges are **disjoint**, and ``inside-the-noise`` otherwise.
 Disjoint ranges rather than a test statistic, deliberately: at three or four repeats
 no test has power worth quoting, and a rule a reader can check by looking at the
 printed numbers is worth more than one they have to trust.
+
+AND THE VERDICT IS PUBLISHED WITH ITS SENSITIVITY
+--------------------------------------------------
+``inside-the-noise`` on its own says only that this sample could not separate the two
+sides, which is true of a sample of one and of a sample of a thousand. What a reader
+can act on is how far apart they would have had to be: ``sensitivity`` answers that
+from the data and the unchanged rule, so it is derivable without knowing the answer
+and it changes no verdict.
+
+Measured on the three live runs of 2026-09-13, it is what separates them -- 0.01,
+42.01 and 0.01 points against a query that costs about 1.01. Only the third is a
+bound, because the first rests on a richer round that is itself dearer than every
+control round in the run. See ``Sensitivity`` for why both directions matter.
 """
 
 from __future__ import annotations
@@ -66,6 +79,15 @@ from dataclasses import dataclass, field
 #: it appears verbatim in ``warcraftlogs.RATE_LIMIT_QUERY``, so a reformatting there
 #: fails here instead of quietly pricing a block nobody sends.
 RATE_LIMIT_BLOCK = "  rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }"
+
+#: The finest increment any reading in this project has been observed to move by.
+#:
+#: Measured over the three live runs of 2026-09-13 (3, 6 and 12 repeats): every poll
+#: delta is an exact integer and every query delta ends in ``.01``, so the counter
+#: reports hundredths. It is a floor on what this METHOD may claim rather than a
+#: property of the service -- a difference below what a reading can express is one no
+#: number of repeats would surface -- so a sensitivity is never reported finer.
+COUNTER_QUANTUM = 0.01
 
 
 class CostProbeError(RuntimeError):
@@ -206,6 +228,125 @@ def compare(without: Sample, with_block: Sample) -> tuple[str, str]:
     )
 
 
+@dataclass(frozen=True)
+class Sensitivity:
+    """The smallest cost this sample COULD have caught, and what that number rests on.
+
+    ``inside-the-noise`` is an honest verdict and an unhelpful one on its own: it says
+    this sample cannot tell the two sides apart, and not how far apart they would have
+    to be before it could. That distance is a property of the data and of the unchanged
+    rule -- derivable without knowing the answer -- and it is what turns the verdict
+    into a bound.
+
+    Two things it is built from, and both are extremes rather than averages, because
+    the rule it reports on compares extremes:
+
+    * ``bar`` is the DEAREST control round, which another job spending against the
+      shared hourly counter can only push up. A contaminated control round therefore
+      WIDENS the sensitivity -- run 2 of 2026-09-13 was blind to a difference forty
+      times the query's own cost for exactly that reason.
+    * ``floor`` is the CHEAPEST richer round, which contamination can only push up
+      too -- and that direction NARROWS the sensitivity, i.e. over-claims. So a small
+      number is a bound only while the cheapest richer round is plausibly clean, which
+      is what ``cheapest_rounds_agree`` reports and run 1 of 2026-09-13 fails.
+    """
+
+    smallest: float
+    bar: float
+    floor: float
+    query_cost: float | None
+    cheapest_rounds_agree: bool
+
+
+def sensitivity(
+    without: Sample, with_block: Sample, *, poll: Sample | None = None
+) -> Sensitivity | None:
+    """What extra cost would this sample have separated, under the rule it already used?
+
+    The verdict is asked of ``compare`` rather than re-derived, so the two cannot
+    disagree: a sensitivity is reported for exactly the verdict it bounds, and a
+    change to the comparison rule moves both at once.
+
+    ``None`` for every other verdict. A sample that separated has its answer, and one
+    that is UNMEASURED or backwards has no arithmetic to do -- publishing a number
+    there would be a bound computed over readings the module has just refused.
+    """
+    verdict, _ = compare(without, with_block)
+    if verdict != "inside-the-noise":
+        return None
+    if without.low is None or without.high is None or with_block.low is None:
+        return None  # compare() already refuses this; kept so the arithmetic cannot
+
+    # The rule is `with_block.low > without.high`. Raise every richer round by d and
+    # it fires once d clears the gap -- plus one increment, because the test is strict
+    # and a difference the counter cannot express is one this method cannot see.
+    smallest = round(without.high - with_block.low + COUNTER_QUANTUM, 4)
+
+    # What one query costs on its own: the cheapest round either side managed, less
+    # the poll that rides inside every delta. Absent rather than guessed without a
+    # poll reading, and absent when the subtraction does not leave anything -- a
+    # ratio against zero is not a reading of anything.
+    #
+    # The poll's CHEAPEST round rather than its median, for the reason every other
+    # extreme here is chosen: contamination can only add, so the smallest reading is
+    # the cleanest one. It is not academic -- run 1 of 2026-09-13 polled 28, 1 and 2,
+    # whose median is 2, and the query duly came out at "about 0.01" against the 1.01
+    # the other twenty-three clean rounds agree on.
+    query_cost: float | None = None
+    if poll is not None and poll.low is not None:
+        margin = round(min(without.low, with_block.low) - poll.low, 4)
+        query_cost = margin if margin > 0 else None
+
+    return Sensitivity(
+        smallest=smallest,
+        bar=without.high,
+        floor=with_block.low,
+        query_cost=query_cost,
+        cheapest_rounds_agree=with_block.low <= without.low,
+    )
+
+
+def describe_sensitivity(measure: Sensitivity) -> list[str]:
+    """The bound in words, with the two rounds it is computed from named.
+
+    The rounds are printed because they are what makes the number checkable against
+    the deltas listed three lines above it -- and because a bar that is plainly an
+    outlier is the difference between a wide sensitivity and a broken run.
+    """
+    lines = [
+        f"    sensitivity: a uniform extra cost of {measure.smallest:g} or more would "
+        f"have separated here, and none did",
+        f"                 the bar is the dearest 'as shipped' round ({measure.bar:g}) "
+        f"against the cheapest richer one ({measure.floor:g})",
+    ]
+    if measure.query_cost:
+        ratio = measure.smallest / measure.query_cost
+        scale = (
+            f"{ratio * 100:.2g}% of what one query costs"
+            if ratio < 1
+            else f"{ratio:.3g}x what one query costs"
+        )
+        # The verb follows the flag. A number that cannot be read as a bound must not
+        # be printed in a sentence that calls it one, two lines above the clause that
+        # withdraws it -- an output contradicting itself is worse than a bare figure.
+        if not measure.cheapest_rounds_agree:
+            claim = f"so that is {scale}"
+        elif ratio < 1:
+            claim = f"so this bounds the block under {scale}"
+        else:
+            claim = f"so this sample is blind to anything under {scale}"
+        lines.append(
+            f"                 one query itself costs about {measure.query_cost:g}, {claim}"
+        )
+    if not measure.cheapest_rounds_agree:
+        lines.append(
+            "                 read it as a counterfactual rather than a bound: the "
+            "cheapest richer round is dearer than the cheapest 'as shipped' one, so "
+            "the number above rests on a round that may itself be contaminated"
+        )
+    return lines
+
+
 def measure(
     variant: Variant,
     *,
@@ -337,6 +478,10 @@ def describe(result: PairResult) -> list[str]:
         "",
         f"    verdict: {result.verdict} -- {result.sentence}",
     ]
+    measure = sensitivity(result.without, result.with_block, poll=result.poll)
+    if measure is not None:
+        lines.append("")
+        lines.extend(describe_sensitivity(measure))
     for sample in (result.poll, result.with_block, result.without):
         for message in sample.errors:
             lines.append(f"    ! {sample.name}: {message}")

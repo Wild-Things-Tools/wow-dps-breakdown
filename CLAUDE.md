@@ -6239,7 +6239,7 @@ the numbers back through that:
 
 | run | `without.high` | `with_block.low` | smallest `d` it could have caught |
 |---|---|---|---|
-| 1, 3 repeats | 3.01 | 3.01 | 1.01 |
+| 1, 3 repeats | 3.01 | 3.01 | **0.01** -- and NOT a bound; see below |
 | 2, 6 repeats | **44.01** | 2.01 | **42.01** -- blind to a cost 40x the query itself |
 | 3, 12 repeats | **2.01** | 2.01 | **0.01** -- the counter's own resolution |
 
@@ -6264,8 +6264,8 @@ that into something a reader can act on.
 
 - **Publish the sensitivity per run.** The smallest detectable `d` is a property of
   the data and the unchanged rule, derivable without knowing the answer, and it turns
-  `inside-the-noise` from an unhelpful verdict into a bound. That is the next
-  increment.
+  `inside-the-noise` from an unhelpful verdict into a bound. **Built**, and it
+  corrected the run-1 figure in the table above -- see the next entry.
 - **The first version of this paragraph said the fix was to amortise -- send N
   queries between two readings so a 34-point jump "is amortised rather than fatal".
   That is wrong, and it is wrong in the direction of the flattering reading.** Under
@@ -6278,6 +6278,78 @@ that into something a reader can act on.
 showed *after* the rule was chosen, and re-choosing the rule to make that reading the
 verdict is the `counterResetMidRun` error. Reporting the sensitivity changes no rule
 and answers the same question.
+
+#### The sensitivity is published, and it is two numbers pulling opposite ways
+
+`wclcost.sensitivity` + `describe_sensitivity`. The increment named above, built the
+same day, and building it corrected two figures this file had published.
+
+**The verdict is asked of `compare`, never re-derived.** A sensitivity is returned for
+exactly the verdict it bounds and `None` for every other -- a sample that separated has
+its answer, and one that is UNMEASURED or backwards has no arithmetic to do. So a
+change to the comparison rule moves both at once, which is what stops the bound and the
+verdict from drifting into contradiction.
+
+**Both inputs are extremes, and contamination moves them in opposite directions.** The
+rule is `with_block.low > without.high`, so:
+
+| input | what it is | what a contaminated round does to the bound |
+|---|---|---|
+| `bar` = `without.high` | the DEAREST control round | **widens** it -- run 2 was blind to 41.6x a query for exactly this |
+| `floor` = `with_block.low` | the CHEAPEST richer round | **narrows** it, i.e. over-claims |
+
+The second is the dangerous one, because narrowing looks like precision.
+`cheapest_rounds_agree` is the in-run check: when the cheapest richer round is dearer
+than the cheapest control round, the tight number rests on a round that may itself be
+contaminated, and the output says *"read it as a counterfactual rather than a bound"*
+and drops the word *bounds* from the line above it. One run cannot do better than that
+-- it has no clean floor to compare against.
+
+**Run 1's published `d` of 1.01 was wrong, and the inputs beside it were right.**
+Re-derived from that run's own job log (34761515445: control `3.01 2.01 2.01`, richer
+`11.01 3.01 4.01`), `without.high - with_block.low + 0.01` is **0.01**. The table's two
+input columns reproduce the log exactly; only the arithmetic over them was wrong --
+this file's own *"plausible arithmetic over the wrong column"* shape, in the table whose
+entire subject is the arithmetic.
+
+**And the correction does not make run 1 look like run 3.** Both read 0.01, and only
+run 3's is a bound: run 1's floor is 3.01 against a control floor of 2.01, so
+`cheapest_rounds_agree` is false there and true on the other two. The corrected figure
+is what made the flag necessary rather than decorative -- without it the table would now
+show two runs at 0.01 with nothing saying that one of them means it.
+
+**The query's own cost comes from the CHEAPEST poll round, not the median**, for the
+same reason every other extreme here is chosen. Not academic: run 1 polled 28, 1 and 2,
+whose median is 2, and the first version duly printed *"one query itself costs about
+0.01"* against the 1.01 the other twenty-three clean rounds agree on -- a plainly false
+sentence about the thing the ratio is measured against.
+
+```
+run 1   0.01   NOT a bound -- cheapest richer round 3.01 against a control floor of 2.01
+run 2  42.01   blind to anything under 41.6x what one query costs
+run 3   0.01   bounds the block under 0.99% of what one query costs
+```
+
+`COUNTER_QUANTUM` is 0.01, measured rather than typed: every poll delta over the three
+runs is an exact integer and every query delta ends in `.01`. It is a floor on what the
+**method** may claim, not a property of the service.
+
+#### The seventh canary of seven was green, and the fixture was why
+
+Six broke by name: dropping the `compare` call, losing the strict test's increment,
+taking the control's *low* as the bar, going back to the poll's median, hard-coding the
+over-claim flag, and `describe` not printing the block at all.
+
+The seventh -- *the verb stops following the flag*, so the output would print
+*"bounds the block"* two lines above the clause withdrawing that -- stayed **green**, and
+the assertion written for it (`"bounds the block" not in printed`) was **vacuously
+true**: its fixture passed no poll, so `query_cost` was `None`, so the ratio line the
+verb lives on was never printed at all. Giving that test the run's real poll turns it
+red by name.
+
+Same lesson as `--encounter 3180` and as the store-backed `encounter_zone` test, arrived
+at from a third direction: **a fixture that cannot express the difference pins nothing**,
+and the way to find out is to run the canary rather than to read the assertion.
 
 One thing the logs gave away for free: `x-ratelimit-limit: 800` with `remaining`
 decrementing per query (779, 778, 777), which is #170's other open measurement
