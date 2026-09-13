@@ -6069,10 +6069,11 @@ Three decisions in it that are not plumbing:
 All four canaries fire by name, and canary 1 reproduces the live `TypeError` on the
 same source line CI named.
 
-**What it cost in points: nothing, and that is luck rather than design.** The hourly
-probe crashed before its first paid query on every run since #181 merged, so the
-failure was free and loud. Had the line sat in a branch a pass reaches *after*
-spending -- `catalogue.py:749` calls the same method -- it would have discarded a
+**What it cost: one hourly pass, and no points.** #181 merged between the 19:29 and
+22:24 scheduled runs, so exactly **1 of the last 22** `fight-probe` runs failed --
+counted, because "red since #181" invites reading it as many. The crash came before
+the first paid query, so the failure was free and loud. Had the line sat in a branch
+a pass reaches *after* spending -- `catalogue.py:749` calls the same method -- it would have discarded a
 paid run instead, which is the "beside the guard, not inside it" family this file
 records five times.
 
@@ -6267,17 +6268,117 @@ only effect is not writing them.** Where the guard matters is the case byte-iden
 cannot reach -- it is what confines the requirement that `read_lines` + `"".join`
 round-trip exactly to runs that append.
 
-### What is NOT built, and why that is the contract's own rule
+### The measurement the cron waited on: an answer, and three defects (2026-09-12)
 
-The **workflow**. The cadence cannot be set before "how many reports does a zone hold"
-is measured, and the contract already refuses a cron without that number. The priced
-floor is ~830 points for one encounter's 500-report window (4.6% of an 18,000 hour);
-what a zone costs in full is **UNMEASURED**.
+**This section replaces one headed "What is NOT built", whose subject was the
+workflow.** `catalogue.yml` was built the same day (#185) and that paragraph was
+never re-read -- a claim that outlived its truth by one pull request, which is the
+mirror of the `write_gear` entry above (a claim the code never grew INTO).
 
-Nothing has been sent to the live service from this code. The stub answers what the
-**client** returns rather than what the service does -- the distinction `addspawns`
-paid for once, where a stub built from the envelope would have passed against broken
-code.
+The contract refuses a cron without one number -- *how many reports does a zone
+hold* -- and a dispatch is the instrument that takes it. Three dispatches on
+2026-09-12, in this order, and each one is worth keeping for a different reason:
+
+| run | what it was for | outcome |
+|---|---|---|
+| 34722841371 | `describe_only`, no query at all | 17 s, exit 0. The proof that `PROGRESS_DATA_PAT` reaches the private repository **before a point is spent** |
+| 34723213449 | paid, `deadline_minutes 30` | stopped at the pre-flight ceiling: *"5587 of 18000 and the counter resets in 2891 s, past the deadline"*, **3 points, 0 queries**. #168's fix and the deadline rule, live |
+| 34723281158 | paid, `deadline_minutes 120`, `report_pages 40` | slept 2811 s, walked, and **crashed on page 26** |
+
+### `reportData.reports` refuses page 26, and it is a GraphQL error rather than a short page
+
+```
+The maximum allowed page is 25 until the performance of paginated queries
+can be improved.
+```
+
+So one window serves **2,500 reports and no more**, at any `--report-limit`, and the
+answer to the cron's question is a **ceiling rather than a count**: zone 53 filled
+all 25 pages, so its own figure (`pagesRead 25, reportsSeen 2500`) is a lower bound
+on the zone and an exact measurement of the service.
+
+Two things follow that are not arithmetic. A GraphQL error **aborts the query**, so
+the walk did not stop at the wall -- it died on it with 25 pages paid for; the walk
+stops at `catalogue.MAX_REPORT_PAGE` now and the CLI **refuses** a larger
+`--report-pages` rather than clamping it, because clamping answers a narrower
+question under the number the person typed. And the remedy the workflow prints for a
+walled window ("raise `report_pages`") stops existing at the cap, so the window says
+WHICH wall it hit: `walledBy` is `our-page-limit` (raisable) or `service-page-cap`
+(not), and is **absent** where there is no wall -- a window written before this was
+walled and cannot say by what, which is the honest third state.
+
+The route past 2,500 is a **narrower time window**, which `state.json` has always had
+the shape for (`fromMs`/`toMs`, a list) and which the command does not yet take an
+option for. That is the question that replaces the answered one, and the cron waits
+on it instead.
+
+**Cost, from the same run: 52 queries for a 25-page walk, and 26 of them are budget
+polls.** `Budget.check()` reads the absolute counter before every page, so half the
+cost of the cheapest part of Stufe 3 is the guard -- the same 42%-of-queries tax
+`progresshours` measured and cut. Left alone here deliberately: the contract says
+check before every walk, and a ceiling argued from a stale number is what a 429
+costs.
+
+### The sixth "beside the guard, not inside it", and the committed record that lied
+
+The page cap is the finding; **how the run reported it is the defect.**
+
+`run_catalogue`'s inner loop caught `DeadlineReached` and `RateLimited` around the
+sweeps, and `_zone_block` a dozen lines above it carries an `except
+WarcraftLogsError` of its own. The sweeps beside it did not. So the refusal escaped
+`run_catalogue`, `cmd_catalogue` and `main` as a traceback -- **exit 1**, the one
+status `catalogue.yml` fails the step on.
+
+That was the smaller half. `cmd_catalogue` writes `catalogue-summary.json` *after*
+`run_catalogue` returns, and it never returned, so no summary was written -- and the
+commit step's message builder read that absence as zeros:
+
+```
+catalogue: +0 reports, +0 kills, +0 refusals, UNMEASURED points, 0 queries (run 34723281158)
+```
+
+over a run that had paid for 25 pages and written a window. A traceback is loud in a
+place somebody looks; **a committed record asserting zeros is not**, and it is in the
+private repository's history. Both halves are fixed: the guard is in place (AFTER the
+`RateLimited` clause, never before -- `RateLimited` subclasses `WarcraftLogsError`,
+and catching the base first would demote "the service will refuse everything for the
+rest of the hour" to "this zone failed, move on"), and a missing summary now commits
+the sentence *"these files were written and then the run did not return ... counts
+and cost UNMEASURED"*. **UNMEASURED, never zero, applies to a commit message too.**
+
+A refused sweep is **exit 2**, not 1: the run delivered every other zone and wrote
+what this one paid for, so failing the step over-claims exactly as loudly as the
+traceback did. The zone is named in `zonesFailed` and the workflow prints a warning.
+
+### The window in the private repository still says `walled: false`
+
+`z53.state.json` carries, committed:
+
+```
+{"fromMs":0,"toMs":1789252708317,"pagesRead":25,"reportsSeen":2500,"walled":false,
+ "sweptAt":"2026-09-12T23:25:27+00:00"}
+```
+
+`pagesRead` and `reportsSeen` are true; `walled: false` is not, and the workflow's own
+summary reads it as *"the zone was read to the end and `reportsSeen` IS the
+number"* -- a lower bound published as an exact count, in the shape this file keeps
+recording. It is **not rewritten**: windows are append-only by design, the next
+correct run appends one saying `walled: true, walledBy: "service-page-cap"`, and
+`describe`'s `any(walled)` is true from then on. Read the newest window, not the list.
+
+### Six canaries, and the one that did not fire
+
+All six fire by name against the shipped source, re-run after `ruff format`
+reflowed one of the patched lines. The sixth needed a second attempt and the
+finding was about the TEST: `cmd_catalogue` returns `EXIT_FAILED` for a missing
+`WCL_CLIENT_ID` too, so an assertion on the exit code alone passed against the
+source with the page-cap refusal deleted. It asserts on the **sentence** now, with
+the credentials unset so it is hermetic in both directions.
+
+Nothing has been sent to the live service from the fixed code. The stub answers what
+the **client** returns rather than what the service does -- the distinction
+`addspawns` paid for once, where a stub built from the envelope would have passed
+against broken code.
 
 ## Fight patterns per boss — what Warcraft Logs can and cannot tell you
 

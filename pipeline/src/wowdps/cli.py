@@ -2555,6 +2555,27 @@ def cmd_catalogue(args: argparse.Namespace) -> int:
     except ValueError as refusal:
         logging.error("%s", refusal)
         return catalogue.EXIT_FAILED
+    # Refused rather than clamped, because the workflow's own remedy for a walled
+    # window is "raise --report-pages and dispatch again" and past 25 that remedy
+    # does not exist. Clamping would answer a narrower question under the number the
+    # person typed; this says why the number is unreachable. EXIT_FAILED and not 2:
+    # 2 is a zone the service would not list, which the workflow downgrades to a
+    # warning and a GREEN step, and a usage error must not read as a swept-nothing
+    # success -- `_int_list`'s reason, one argument across.
+    if args.report_pages > catalogue.MAX_REPORT_PAGE:
+        logging.error(
+            "--report-pages %d: Warcraft Logs refuses page %d and above "
+            '("The maximum allowed page is %d until the performance of paginated '
+            'queries can be improved.", measured 2026-09-12), so the pages past %d '
+            "are unreachable at any --report-limit. A window that walls at %d needs a "
+            "narrower time window, which this command does not yet take.",
+            args.report_pages,
+            catalogue.MAX_REPORT_PAGE + 1,
+            catalogue.MAX_REPORT_PAGE,
+            catalogue.MAX_REPORT_PAGE,
+            catalogue.MAX_REPORT_PAGE,
+        )
+        return catalogue.EXIT_FAILED
     if args.describe:
         for line in catalogue.describe(Path(args.out), zones, difficulties):
             print(line)
@@ -3568,7 +3589,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--report-pages",
         type=int,
         default=catalogue.DEFAULT_REPORT_PAGES,
-        help="pages of the zone's report list per run; the limit is walled, not exhausted",
+        help=(
+            "pages of the zone's report list per run; the limit is walled, not "
+            f"exhausted. Warcraft Logs refuses page {catalogue.MAX_REPORT_PAGE + 1} "
+            "and above, so this is the ceiling too"
+        ),
     )
     p_cat.add_argument(
         "--report-limit",

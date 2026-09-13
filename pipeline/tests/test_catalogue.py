@@ -17,7 +17,7 @@ from types import SimpleNamespace
 import pytest
 
 from wowdps import catalogue
-from wowdps.warcraftlogs import WarcraftLogsError
+from wowdps.warcraftlogs import RateLimited, WarcraftLogsError
 
 ZONE = 53
 MYTHIC = 5
@@ -518,6 +518,158 @@ def test_a_transport_failure_refuses_that_report_and_the_run_goes_on(tmp_path):
         json.loads(line) for line in (tmp_path / "z53.refused.jsonl").read_text().splitlines()
     ]
     assert [(r["code"], r["outcome"]) for r in refused] == [("bad", "report-error")]
+
+
+# ── the page cap, and the guard the sweeps did not have ─────────────────────────
+
+
+def many_reports(count):
+    return [{"code": f"r{n:03d}"} for n in range(count)]
+
+
+def kills_for(rows):
+    """Every code answers, so a walk test measures the WALK and not its refusals."""
+    return {row["code"]: (REPORT_START, []) for row in rows}
+
+
+class WallingClient(StubClient):
+    """Raises the service's own refusal on one page, the way the live run met it.
+
+    A GraphQL error is not a short page: it aborts the query, so the walk crashes on
+    the wall instead of stopping at it. Built from what the CLIENT raises rather than
+    from the envelope, for this file's own reason.
+    """
+
+    def __init__(self, *, fail_on_page, **kw):
+        super().__init__(**kw)
+        self.fail_on_page = fail_on_page
+
+    def reports_in_window(self, zone_id, start_ms, end_ms, page=1, limit=100):
+        if page == self.fail_on_page:
+            self.calls.append(("reports", zone_id, page))
+            raise WarcraftLogsError(
+                "GraphQL errors: [{'message': 'The maximum allowed page is 25 until "
+                "the performance of paginated queries can be improved.'}]"
+            )
+        return super().reports_in_window(zone_id, start_ms, end_ms, page=page, limit=limit)
+
+
+def test_the_walk_stops_at_the_services_own_page_cap_and_names_which_wall(tmp_path):
+    """`reportData.reports` refuses page 26, measured live on 2026-09-12.
+
+    Dispatched at ``--report-pages 40`` the walk did not stop at that wall, it crashed
+    on it with 25 pages already paid for (run 34723281158). Stopping at the cap turns
+    it into a recorded window -- and `walledBy` is what makes the record actionable,
+    because "raise report_pages" is the remedy for OUR limit and no remedy at all for
+    the service's.
+    """
+    rows = many_reports(60)
+    client = StubClient(reports={ZONE: rows}, kills=kills_for(rows))
+    report = run(client, tmp_path, stages=(3,), report_pages=40, report_limit=2)
+
+    asked = [call for call in client.calls if call[0] == "reports"]
+    assert len(asked) == catalogue.MAX_REPORT_PAGE, "the walk asked for a page past the cap"
+    window = json.loads((tmp_path / "z53.state.json").read_text())["windows"][-1]
+    assert window["pagesRead"] == catalogue.MAX_REPORT_PAGE
+    assert window["walled"] is True
+    assert window["walledBy"] == "service-page-cap"
+    assert report.exit_code == catalogue.EXIT_OK
+
+
+def test_our_own_page_limit_is_named_apart_from_the_services(tmp_path):
+    """Two walls, two remedies. Below the cap, raising `--report-pages` still works."""
+    rows = many_reports(60)
+    client = StubClient(reports={ZONE: rows}, kills=kills_for(rows))
+    run(client, tmp_path, stages=(3,), report_pages=3, report_limit=2)
+
+    window = json.loads((tmp_path / "z53.state.json").read_text())["windows"][-1]
+    assert window == dict(window, pagesRead=3, walled=True, walledBy="our-page-limit")
+
+
+def test_a_window_that_ran_out_of_reports_names_no_wall_at_all(tmp_path):
+    """`walledBy` is emitted only where there is a wall. Exhaustion has none, and a
+    window written before the field cannot say which it hit -- absent is that third
+    state rather than a fourth value nobody measured."""
+    rows = many_reports(3)
+    client = StubClient(reports={ZONE: rows}, kills=kills_for(rows))
+    run(client, tmp_path, stages=(3,), report_pages=10, report_limit=2)
+
+    window = json.loads((tmp_path / "z53.state.json").read_text())["windows"][-1]
+    assert window["walled"] is False and "walledBy" not in window
+
+
+def test_a_query_the_service_refuses_mid_walk_does_not_escape_the_run(tmp_path):
+    """The sixth "beside the guard, not inside it" in this repository, measured live.
+
+    `_zone_block` carries exactly this clause and the sweeps beside it did not, so the
+    page-cap refusal escaped `run_catalogue`, `cmd_catalogue` and `main` as a
+    traceback: exit 1, the status the workflow fails the step on, AND no summary file
+    -- so the commit message computed from that absence said "+0 reports ... 0
+    queries" over a run that had paid for 25 pages. The traceback was the smaller harm.
+    """
+    rows = many_reports(10)
+    client = WallingClient(fail_on_page=3, reports={ZONE: rows}, kills=kills_for(rows))
+    report = run(client, tmp_path, stages=(3,), report_pages=5, report_limit=2)
+
+    assert report.exit_code == catalogue.EXIT_ZONE_SKIPPED, "a refused sweep failed the whole run"
+    assert report.zones_failed == [ZONE]
+    assert report.to_json()["zonesFailed"] == [ZONE], "the summary cannot name the zone"
+    window = json.loads((tmp_path / "z53.state.json").read_text())["windows"][-1]
+    assert window["pagesRead"] == 2, "the pages that were paid for are not in the record"
+    assert window["reportsSeen"] == 4
+    assert "walledBy" not in window, "a walk that crashed reached no wall of its own"
+
+
+def test_a_rate_limit_mid_walk_still_stops_the_run(tmp_path):
+    """The ORDER of the two clauses, which is the whole of why this one is separate.
+
+    `RateLimited` subclasses `WarcraftLogsError`. Caught as a zone failure the run
+    would walk on to the next zone -- and walk the shared hourly counter into a 429
+    with the guard switched off.
+    """
+    second = 46
+    client = StubClient(
+        zones={ZONE: zone_payload(), second: zone_payload(second)},
+        reports={ZONE: RateLimited("429"), second: [{"code": "aBcD"}]},
+    )
+    report = catalogue.run_catalogue(
+        client, tmp_path, options(zones=(ZONE, second), stages=(3,)), run_id="TEST"
+    )
+
+    assert report.stopped and "429" in report.stopped
+    assert report.zones_failed == [], "a 429 was demoted to 'this zone failed, move on'"
+    assert ("reports", second, 1) not in client.calls, "the run went on after a 429"
+
+
+def test_the_cli_refuses_more_report_pages_than_the_service_will_serve(
+    tmp_path, monkeypatch, caplog
+):
+    """Refused, not clamped: the pages past the cap are unreachable at any limit, and
+    clamping would answer a narrower question under the number the person typed.
+
+    EXIT_FAILED and not 2 -- the workflow downgrades 2 to a warning and a GREEN step,
+    and a usage error must not read as a swept-nothing success.
+
+    **The exit code alone cannot pin this, and its canary is how that was found.**
+    With the refusal removed the command walks on to `Credentials.from_env`, which
+    returns 1 for a missing secret -- the same code, so the test passed against the
+    broken source. The credentials are unset here so the test is hermetic in both
+    directions, and the assertion is on the SENTENCE, which is the only thing that
+    separates the two refusals.
+    """
+    import logging
+
+    from wowdps import cli
+
+    monkeypatch.delenv("WCL_CLIENT_ID", raising=False)
+    monkeypatch.delenv("WCL_CLIENT_SECRET", raising=False)
+    args = cli.build_parser().parse_args(
+        ["catalogue", "--out", str(tmp_path), "--zones", "53", "--report-pages", "40"]
+    )
+    with caplog.at_level(logging.ERROR):
+        assert cli.cmd_catalogue(args) == catalogue.EXIT_FAILED
+    assert "--report-pages 40" in caplog.text, "refused for some other reason than the page cap"
+    assert list(tmp_path.iterdir()) == [], "a refused run reached the service"
 
 
 def test_a_first_reading_that_fails_is_a_run_that_could_not_start(tmp_path):
