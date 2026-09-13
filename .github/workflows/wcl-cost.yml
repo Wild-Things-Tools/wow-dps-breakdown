@@ -1,0 +1,123 @@
+name: WCL cost
+
+# Does asking for `rateLimitData` cost points?
+#
+# #170's cheapest open measurement, and the one two other things wait on. Two of
+# this package's seventeen query documents carry no reading block --
+# `PROGRESS_RANKINGS_QUERY` and `GUILD_PULLS_QUERY`, both on `progress-sweep`'s hot
+# path -- so that cron pays a standalone `rate_limit()` per guild to learn what its
+# own queries could have told it. Adding the block would close that and changes two
+# unmeasured things: every stored response's cache key, and possibly the cost. This
+# is the second half.
+#
+# THERE IS NO `actions/cache` STEP, AND THAT IS THE MEASUREMENT RATHER THAN AN
+# OMISSION. A cached response really does spend nothing, so a warm store reports
+# zeros on both sides -- which the command correctly calls UNMEASURED and a reader
+# would take for "the field is free". `harvest-builds.yml` shipped exactly that
+# defect once: it passed `--cache` unconditionally, so its probe mode, whose whole
+# purpose is to measure, could never measure. The command has no `--cache` option at
+# all; this file must not grow a cache around it.
+#
+# Read-only. It commits nothing, writes no dataset, and costs a few dozen queries.
+on:
+  workflow_dispatch:
+    inputs:
+      encounter:
+        description: 'Encounter id to ask about (a live id, not a PTR twin)'
+        default: '3421'
+      difficulty:
+        description: 'Difficulty'
+        default: '5'
+      page:
+        description: 'Ranking page'
+        default: '1'
+      repeats:
+        description: 'Read/send/read rounds per side. The SPREAD decides the verdict, so one round separates nothing'
+        default: '3'
+      point_ceiling:
+        description: 'Fraction of the hourly budget at which to stop'
+        default: '0.8'
+
+concurrency:
+  group: wcl-cost
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check credentials
+        id: creds
+        env:
+          WCL_CLIENT_ID: ${{ secrets.WCL_CLIENT_ID }}
+        run: |
+          if [ -z "$WCL_CLIENT_ID" ]; then
+            echo "::notice::WCL_CLIENT_ID is not set — skipping."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.creds.outputs.enabled == 'true'
+        with:
+          python-version: '3.12'
+
+      - name: Install pipeline
+        if: steps.creds.outputs.enabled == 'true'
+        run: pip install -e ./pipeline
+
+      - name: Measure
+        if: steps.creds.outputs.enabled == 'true'
+        env:
+          # Bound here, never interpolated into the script. `${{ inputs.x }}` is
+          # substituted BEFORE bash parses the line, so a dispatched value carrying a
+          # quote and a semicolon becomes script -- in a job holding the Warcraft Logs
+          # secret. An environment variable is data to bash however it is spelled.
+          WCL_CLIENT_ID: ${{ secrets.WCL_CLIENT_ID }}
+          WCL_CLIENT_SECRET: ${{ secrets.WCL_CLIENT_SECRET }}
+          ENCOUNTER: ${{ inputs.encounter }}
+          DIFFICULTY: ${{ inputs.difficulty }}
+          PAGE: ${{ inputs.page }}
+          REPEATS: ${{ inputs.repeats }}
+          CEILING: ${{ inputs.point_ceiling }}
+        run: |
+          # The runner's default shell is `bash -eo pipefail`, so errexit would end
+          # the step AT the pipeline and never reach `status=$?` -- which is how
+          # `progress-sweep.yml`'s exit-code branches were dead on arrival.
+          set +e
+          set -o pipefail
+          wowdps -v wcl-cost \
+            --encounter "$ENCOUNTER" \
+            --difficulty "$DIFFICULTY" \
+            --page "$PAGE" \
+            --repeats "$REPEATS" \
+            --point-ceiling "$CEILING" 2>&1 | tee cost.txt
+          status=$?
+          set -e
+          if [ "$status" = "2" ]; then
+            echo "::warning::the point ceiling stopped the pass; what was measured is above"
+            exit 0
+          fi
+          exit "$status"
+
+      - name: Summary
+        # `always()`, because the ceiling stop and a refusal both produce output a
+        # person has to read, and a custom `if:` with no status function silently
+        # gets `success()` ANDed in.
+        if: always() && steps.creds.outputs.enabled == 'true'
+        run: |
+          {
+            echo '## Does asking for rateLimitData cost points?'
+            echo
+            echo 'A counter that did not move is UNMEASURED, never zero. Two ranges'
+            echo 'that overlap are inside the noise, never "the same cost".'
+            echo
+            echo '```'
+            cat cost.txt 2>/dev/null || echo '(the command produced no output)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
