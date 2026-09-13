@@ -356,8 +356,13 @@ def test_a_dearer_cheapest_richer_round_is_named_rather_than_bounded():
     cheapest richer round is above the cheapest control round says so instead of
     publishing a tight bound. Run 1 of 2026-09-13 is exactly that shape.
     """
+    # The poll is load-bearing rather than decoration: without it `query_cost` is None,
+    # the ratio line is never printed, and the assertion below that the verb follows
+    # the flag is vacuously true. It was, on the first attempt -- see CLAUDE.md.
     measure = wclcost.sensitivity(
-        _sample("without", [3.01, 2.01, 2.01]), _sample("with", [11.01, 3.01, 4.01])
+        _sample("without", [3.01, 2.01, 2.01]),
+        _sample("with", [11.01, 3.01, 4.01]),
+        poll=_sample("poll", [28.0, 1.0, 2.0]),
     )
 
     assert measure is not None
