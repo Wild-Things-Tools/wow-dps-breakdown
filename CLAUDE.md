@@ -6204,6 +6204,63 @@ that it did.
 **Nothing has been sent to the live service from this code.** The stub answers what
 the *client* returns, which is the distinction `addspawns` paid for once.
 
+#### What three runs measured, and why the verdict stays `inside-the-noise`
+
+Dispatched the same day it merged (runs 34761515445, 34761672707, 34761774999 --
+`3421`/Mythic/page 1 at 3, 6 and 12 repeats). Every run exited 0 against the live
+service, so the documents, the store bypass and the whole fold hold end to end.
+
+```
+rate_limit() alone   1 x3    1 x6    1 x12          exactly 1.00, 24 of 24 clean rounds
+as shipped           2.01 x12 at 12 repeats         12 of 12 identical
++ rateLimitData      2.01 x11, 34.01 x1             11 of 12 identical to the other side
+outliers             28, 44.01, 52.01, 34.01        one per run, orders of magnitude off
+```
+
+Three things fall out, and only the first is what the run was for:
+
+- **A `progress-rankings` query costs 1.01 points, with the block and without.** The
+  delta is `poll, send, poll`, so it contains the send AND the second reading; the
+  poll is exactly 1.00, measured 24 times without a single deviation, which is
+  itself a number this project did not have. `progresssweep` polls once per guild.
+- **The outliers are the counter being SHARED.** A 34- to 52-point jump in the gap
+  between two readings is not a ranking query; it is the hourly `fight-probe`, a
+  cron, or another account job spending while the probe reads. That confound is a
+  property of the meter and no number of repeats removes it -- it makes a
+  contaminated round *more* likely, not less.
+- **The verdict is `inside-the-noise` on all three runs, and that is the instrument
+  working.** One 34.01 widens a range permanently under a disjoint-ranges test.
+
+**The probe is ONE-SIDED by construction, and the 12-repeat run makes it obvious.**
+Two sides that are exactly equal and perfectly stable both report `low == high ==
+2.01`, which overlaps, which is `inside-the-noise` -- so *equality can never be
+confirmed*, only a difference detected. That is the asymmetry the docstring argues
+for (a probe that called an overlap equality "could only ever confirm what it set out
+to show"), seen from the other end. So the honest sentence is a **non-detection**:
+
+> Over 24 clean rounds, at a resolution of 0.01 points against a query costing 1.01,
+> the probe detected **no cost** for the reading block. It has not shown the block is
+> free, and by its own design it cannot.
+
+**Do not now swap min/max for a median test.** The medians agreeing is what the data
+showed *after* the rule was chosen, and re-choosing the rule to make that reading the
+verdict is exactly the `counterResetMidRun` error -- a mechanism invented to fit the
+evidence. The derivable improvement, which needs no sight of these numbers, is to
+make the signal large against the contamination: send **N queries between two
+readings** and divide, so a 34-point jump is amortised rather than fatal. That is the
+next increment, and it is not this one.
+
+**What the two reading-less documents therefore rest on.** #170 says they hang on
+this measurement. What exists today is a non-detection at 0.01 resolution plus a
+modal delta identical on both sides -- strong, and not the probe's own verdict.
+Adding the block on that basis is a judgement about evidence rather than a
+measurement, and it should be taken with the amortised design above rather than by
+reading the raw rounds harder.
+
+One thing the logs gave away for free: `x-ratelimit-limit: 800` with `remaining`
+decrementing per query (779, 778, 777), which is #170's other open measurement
+showing its head. The **window** is still unestablished, so nothing here is a budget.
+
 #### A canary's RESTORE did not take, and the mechanism is measured rather than suspected
 
 The five canaries all fired by name, and the run ended `RESTORED -> 3 failed` over a
