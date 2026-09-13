@@ -6493,6 +6493,64 @@ saving that makes Stufe 3 affordable. The consumer filters; the row does not. Th
 refusals of this run are the rows the scrub and the id checks turned away, counted
 apart from the 100 kept.
 
+### `--window`: the route past the wall, and how to slice is NOT decided
+
+The measurement above answers *"how many reports does a zone hold"* with a **ceiling
+rather than a count**, so the cron the contract gates on needs the other half: a way
+to address a subset. `--window FROM..TO` is it -- repeatable, swept in the order
+given, each end epoch milliseconds or an ISO date/timestamp read as **UTC**, an empty
+end meaning the open one. Omitting it sweeps `search_window(0, 0, 0)`, i.e. the exact
+requests the walk sent before the option existed; a test pins that, because a moved
+default would silently re-read every settled zone.
+
+Four decisions in it, each of which reversed produces a plausible answer rather than
+an error:
+
+- **An inverted or empty window is refused, not swept.** It matches no report, so it
+  would read nothing, record an **unwalled** window, and look exactly like a zone read
+  to the end -- the `walled` flag's whole meaning inverted by an argument.
+- **A bound that does not parse is refused rather than skipped.** Dropping one bound
+  of a walk leaves a hole in the coverage that the window list then claims to have.
+- **The refusal exits 1, never argparse's 2.** `_int_list`'s reason one option across:
+  2 is this command's code for "a zone the service would not list", which
+  `catalogue.yml` downgrades to a warning and a **green** step.
+- **`seen` is carried ACROSS the windows**, and a code is added to it *before* the
+  query rather than after a verdict -- every branch ends in a row or a refusal, so
+  adding it on success alone would re-read every `report-error` once per window. Two
+  overlapping windows therefore cost their report pages twice and read each report
+  once: the code set dedupes, not the filter.
+
+**How to slice a zone is deliberately not built**, and the two candidates are why. An
+equal split of a zone's lifetime is the obvious rule and the wrong one -- reports
+cluster at a season's start, so equal time gives one walled slice and many empty ones.
+Bisecting a walled window re-pays each sub-window's pages. Which is cheaper is a
+measurement nobody has taken, and a policy baked in before it would be a guess with
+the authority of code.
+
+**The stub had to learn the filter.** `StubClient.reports_in_window` ignored
+`start_ms`/`end_ms`, so it could not express "two windows return different reports" --
+the claim the option makes -- and would have passed whether the option reached the
+client or not. That is the fixture rule this file keeps arriving at from new
+directions, caught here before shipping rather than after.
+
+### A canary that cannot fire ON THIS MACHINE is the same finding, one axis over
+
+Seven of eight canaries went red by name on the first pass. The eighth broke the UTC
+rule -- `when.replace(tzinfo=UTC)` swapped for `when.astimezone()` -- and the suite
+stayed **green**, because this container's local zone *is* UTC and the two are then
+the same function. The test was not wrong about the claim; it was unable to reach it.
+
+Measured rather than reasoned about: under `TZ=Asia/Tokyo` with `time.tzset()`, the
+same date bound comes out **1785510000000 against 1785542400000**, nine hours apart --
+exactly the silent shift a local reading would put on every window of a walk.
+`test_a_date_bound_is_utc_even_where_the_runner_is_not` sets the zone, and the canary
+then fires by name.
+
+The general form, and it sits beside the scoped-ratchet and the collation entries: a
+green canary is a finding about the canary at least as often as about the code, and
+*"the environment cannot tell the two apart"* is one of the ways -- alongside "the
+wrong population", "the wrong machine" and "the patch was a no-op".
+
 ## Fight patterns per boss — what Warcraft Logs can and cannot tell you
 
 The logs cross-check compares Patchwerk single target against nine different encounters,

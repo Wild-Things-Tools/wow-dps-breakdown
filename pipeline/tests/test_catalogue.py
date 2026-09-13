@@ -1007,3 +1007,26 @@ def test_the_cli_carries_the_windows_through_to_the_options(tmp_path):
         ["catalogue", "--out", str(tmp_path), "--zones", "53", "--window", "1000..2000"]
     )
     assert catalogue.parse_windows(args.window) == ((1000, 2000),)
+
+
+def test_a_date_bound_is_utc_even_where_the_runner_is_not(monkeypatch):
+    """The UTC claim, pinned where it is DISTINGUISHABLE.
+
+    Its first canary stayed green, and that was a finding about the canary rather
+    than about the code: this container's local zone is UTC, so swapping
+    ``replace(tzinfo=UTC)`` for ``astimezone()`` is a no-op here and the assertion
+    could not tell the two apart. Under a non-UTC ``TZ`` they differ by that zone's
+    offset -- nine hours for Tokyo -- which is exactly the silent shift a local
+    reading would put on every window of a walk.
+    """
+    import time
+
+    monkeypatch.setenv("TZ", "Asia/Tokyo")
+    time.tzset()
+    try:
+        assert catalogue.parse_windows(["2026-08-01..2026-08-02"]) == (
+            (1785542400000, 1785628800000),
+        ), "a date bound followed the runner's timezone instead of UTC"
+    finally:
+        monkeypatch.undo()
+        time.tzset()
