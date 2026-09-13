@@ -79,9 +79,6 @@ DEFAULT_POINT_CEILING = 0.3
 DEFAULT_DEADLINE_MINUTES = 300.0
 DEFAULT_DIFFICULTIES: tuple[int, ...] = (5, 4)
 
-#: One day in milliseconds, for reading a date bound.
-_DAY_MS = 86_400_000
-
 #: Stufe 3 refusals do not retry; a `report-error` does, on the next run, because a
 #: transport failure is not a property of the report.
 RETRYABLE_OUTCOMES = frozenset({"report-error", "structure-error"})
