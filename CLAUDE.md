@@ -6160,6 +6160,110 @@ a canary that does not fire is a finding about the canary at least as often as a
 the code -- here it was about the *claim the test was making*, which is a third
 thing again.
 
+### Does a resolved field cost points? `wowdps wcl-cost` is the instrument (#170)
+
+`wclcost.py` + `wowdps wcl-cost`. The question #180 left open and refused to answer
+in passing: **two** of the package's seventeen query documents still carry no
+`rateLimitData` block (`progresshours.PROGRESS_RANKINGS_QUERY` and
+`GUILD_PULLS_QUERY`), both on `progresssweep`'s hot path, which is why that cron
+pays a standalone `rate_limit()` per guild -- the same 42%-of-queries tax the chart
+producer measured and cut. Adding the block would close it and changes two things
+nobody has measured: every stored response's **cache key**, and possibly the
+**cost**.
+
+The probe prices one document against *itself with the block added*. Four refusals,
+and each names a number it must not report:
+
+- **A pair whose sides differ in more than the block is refused BEFORE a query is
+  sent.** Two documents differing in two things yield a perfectly good number about
+  the wrong difference, which is the one failure a reader of the output cannot
+  detect. `differs_only_by_the_block` normalises whitespace and compares; `is_sound`
+  is checked at the top of `probe`, and the test counts the calls to prove nothing
+  was spent.
+- **Every query bypasses the store, and there is deliberately NO `--cache` option.**
+  A cached response really does spend nothing, so a warm store reports zeros on both
+  sides -- which `compare` correctly calls UNMEASURED and a reader would take for
+  *"the field is free"*. Same rule `rate_limit()` has carried since it was written,
+  applied to a command whose whole subject is the counter.
+- **A counter that did not move is UNMEASURED, never zero**, and a counter that went
+  **backwards** is its own third state -- checked FIRST, because its deltas are
+  arithmetically fine and mean nothing. This is `#157`'s rule, from the published
+  `pointsSpentThisRun: -1524.0`, in a new producer rather than re-derived.
+- **Two overlapping ranges are `inside-the-noise`, never "the same cost".** A probe
+  that called an overlap equality could only ever confirm what it set out to show,
+  and the test that pins it is the CONTROL (a counter charging identically) rather
+  than the demonstration.
+
+**The poll's own cost is measured once, printed, and shared by every pair.** It is
+load-bearing rather than context: a `read, send, read` delta contains the query AND
+whatever the second reading costs, and nobody here has established whether a
+response's own counter includes that response. The same poll sits on both sides of
+every comparison, so it cancels there -- and printing it is what lets a reader check
+that it did.
+
+**Nothing has been sent to the live service from this code.** The stub answers what
+the *client* returns, which is the distinction `addspawns` paid for once.
+
+#### A canary's RESTORE did not take, and the mechanism is measured rather than suspected
+
+The five canaries all fired by name, and the run ended `RESTORED -> 3 failed` over a
+**clean `git status`** and a source file that plainly read `after = poll()`. Deleting
+`__pycache__` and re-running gave 15 passed from the same bytes.
+
+CPython validates a `.pyc` against the source's **(mtime, size)**, both at one-second
+resolution. The canary's two strings are
+
+```
+        after = poll()      22 bytes
+        after = before      22 bytes
+```
+
+-- and the break and its restore land in the same second. So the `.pyc` written for
+the BROKEN source is considered current for the RESTORED one, and the run executes
+code the file no longer contains.
+
+Established with two independent controls rather than by reasoning, each a full
+break/restore cycle on this file:
+
+| | equal byte length | bytecode cache | what the restore reads |
+|---|---|---|---|
+| 1 | yes | on | **3 failed** -- the restore did not take |
+| 2 | yes | **off** (`PYTHONDONTWRITEBYTECODE=1`) | 15 passed |
+| 3 | **no** (one char of padding) | on | 15 passed |
+
+Switching the cache off fixes it at equal length; changing the length fixes it with
+the cache on. Either alone would leave "the test is flaky" open; together they do
+not.
+
+**This upgrades a suspect to a mechanism.** The `fight-probe` twin-resolution entry
+records one canary of eleven staying green and says *"a bytecode cache keyed on mtime
+and size is the usual suspect for a miss with that shape, and it is a suspect, not a
+finding."* It is a finding now -- though whether it was THAT instance's cause is still
+unestablished, and inventing the link would be the `counterResetMidRun` error again.
+
+Two things to carry:
+
+- **Run a canary loop with `PYTHONDONTWRITEBYTECODE=1`.** It costs a few hundred
+  milliseconds per run and removes the whole class.
+- **The direction is the surprising half.** This did not make a break look fixed; it
+  made a *fix* look broken, which is the reading that sends somebody to debug correct
+  code. Both directions are reachable -- a break landing in the same second and at the
+  same size as a cached good version is the one that hides a defect.
+
+#### And `git checkout -- src/` cannot restore a file that was never committed
+
+The same run lost `cmd_wcl_cost` from `cli.py` entirely, and the two halves are
+opposite. `wclcost.py` and `test_wclcost.py` were **untracked**, so every canary patch
+to them *accumulated* -- the restore was a no-op. `cli.py` **is** tracked, so its
+restore took, and took the whole uncommitted command with it.
+
+`wtt-frontend/CLAUDE.md` already carries this rule verbatim -- *"Commit (or stash)
+before running a canary that reverts"* and *"when a canary's own edit lands in an
+untracked file, the revert step will not undo it"* -- from a session where it cost a
+full re-implementation. Written down in one repository and broken in another, in the
+same way, which is the argument for the rule living beside the canary runner rather
+than in prose.
+
 ### The catalogue: what a run may ask, and the three places the scrub is checked
 
 `catalogue.py` + `wowdps catalogue` -> the private repository's `progress-catalogue/`
