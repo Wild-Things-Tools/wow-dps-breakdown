@@ -6689,6 +6689,101 @@ any word -- `r` is in `query`, and a pair differing in `r: true` was refused as 
 before the anchor was ever looked at. Matched as an argument now: the name, then a
 colon. The useful direction for a test to miss in.
 
+#### Both argument questions are answered, and the run was the first clean one
+
+Run **34774586069**, 2026-09-22, Sszorak Mythic through its live twin `3420`, report
+`2ZzYG19fLw8NHq6P` fight 41 (read off the committed `fights.json`, so the inputs cost
+no query), 12 repeats, 229 API queries in **43 seconds**, exit 0.
+
+**Every round of every side came back identical.** 72 rounds, no outlier anywhere --
+where all three runs of 13.09 carried exactly one contaminated round each. So this is
+the shared counter being quiet rather than the method improving, and it is what makes
+the three bounds below real bounds rather than counterfactuals
+(`cheapestRoundsAgree` is true on all three).
+
+```
+                                     12 rounds each        one query costs   bound
+rate_limit() alone                   1    x12              --                --
+progress-rankings, as shipped        2.01 x12              1.01              --
+progress-rankings + rateLimitData    2.01 x12                                < 0.99%
+fight-structure, filtered as shipped 3    x12              2                 --
+fight-structure, UNFILTERED          3    x12                                < 0.5%
+events, as shipped                   2    x12              1                 --
+events + includeResources: true      2    x12                                < 1%
+```
+
+Three things fall out, and only the first two are what #170 asked:
+
+- **An unfiltered `fights()` costs no more than a filtered one**, bounded under 0.5%
+  of the 2-point query it rides on. So the catalogue's Stufe-3 saving is real in the
+  direction it was claimed: `REPORT_KILLS_QUERY` answers every boss and difficulty of
+  a report for the price of one filtered structure query, and the filter was never
+  what made it cheap.
+- **`includeResources: true` costs no more than leaving it out**, bounded under 1% of
+  a 1-point events query. The coordinate `spawn-probe` cannot work without is free;
+  what a spawn pass costs is the number of event *pages*, which is unchanged.
+- **A `FIGHT_STRUCTURE` query costs 2 where an events page and a rankings page cost
+  1 and 1.01.** Nobody had a per-document figure before; the earlier work only ever
+  priced `progress-rankings`.
+
+**Read the bound the way the block's is read.** Both new pairs return *different
+amounts of data* on their two sides, so a separation would have been a cost difference
+and no evidence about what is charged for -- the probe prints that note on every such
+pair rather than only on a separating one. And `inside-the-noise` is still not "they
+cost the same": equality is unconfirmable by construction, a difference is what this
+can detect, and at 0.01 resolution none was.
+
+**What it does NOT settle is the 800 counter**, and the way it fails to is worth
+keeping. The run's own headers are a 229-sample of exactly the behaviour the earlier
+three-sample note recorded: **228 of 228 steps are exactly -1, no increase anywhere**,
+798 down to 570. The window is therefore longer than 43 seconds and otherwise
+unbounded by this run -- 229 requests is 28.6% of 800 and never came near a 429. The
+counter reading 798 at the start is *consistent* with an hourly window in a quiet hour
+(the `progress-sweep` cron is `17 0,6,12,18` and the backend's jobs sit on 00/06/12/18,
+so 19:33 is quiet by construction) and equally consistent with a short one. It rules
+out nothing.
+
+**And the trap in reading that trace is the one this file names elsewhere.** A grep for
+`x-ratelimit-remaining` over the whole log yields 230 values whose first two are
+**299 then 798** -- which reads as a `+499` reset mid-run and is nothing of the kind.
+The 299 is the **token endpoint's** counter, which has its own `limit: 300`; pooling the
+two manufactures a reset that never happened. Split on the `limit` that travels in the
+same header tuple and both are monotone. Plausible arithmetic over the wrong column,
+in the one measurement whose whole subject is a counter.
+
+#### The bound named "the block" on all three pairs, and I had written down why it would not
+
+The same run's output, three times:
+
+```
+sensitivity: a uniform extra cost of 0.01 or more would have separated here, and none did
+             one query itself costs about 1, so this bounds the block under 1% ...
+```
+
+-- printed under **`events + includeResources`** and under **`fight-structure filter`**,
+whose differences are an argument and a filter. The `inRotation` shape, in the one line
+a reader takes the number away in.
+
+**The justification for it is in this repository's own words, one function too far.**
+`verdict_of` was split out of `compare` so that `sensitivity` "can ask for the verdict
+without being handed a noun it would then have to print correctly and never prints at
+all". That is true of `verdict_of`. `describe_sensitivity` **does** print one, and it
+hard-coded it -- so the reasoning was sound about the function it was written on and
+wrong about the function beside it. It stopped being true in the same change that added
+a second kind of difference, and **the run written to exercise that change is what said
+so**: the defect was invisible to 39 passing tests and visible in the first real output.
+
+The renderer takes `noun` now, defaulting as `compare` does. One consequence worth
+expecting: the block pair's line reads *"bounds the reading block"* rather than
+*"bounds the block"*, i.e. the same name the verdict sentence two lines above it already
+used.
+
+**The test drives `describe`, not `describe_sensitivity`**, and that is the half this
+file keeps recording: the renderer's default would have made a direct test pass while
+the call site still handed it nothing. Canary confirms the split -- breaking the
+hard-code turns two tests red, breaking only the call site turns exactly the new one
+red.
+
 ### The catalogue: what a run may ask, and the three places the scrub is checked
 
 `catalogue.py` + `wowdps catalogue` -> the private repository's `progress-catalogue/`
