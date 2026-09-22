@@ -209,7 +209,13 @@ def entry_to_seed(entry: dict, nodes: dict[int, list[tt.Trait]], *, key: str) ->
     if tt.spec_rule_violation(loadout, nodes):
         log.warning("harvested build %s breaks simc's spec rule", entry.get("buildKey"))
         return None
-    seen = entry.get("seenInKills")
+    # `distinctKills`, never `observations`: the row count is one player per
+    # *upload*, and Warcraft Logs indexes uploads rather than raid nights -- on the
+    # committed MID2 harvest 69 of 161 builds stood at two or more rows and were
+    # carried in exactly one kill. A label saying "seen in 3 kills" over one kill is
+    # the false sentence this reads around; a document written before schema 2
+    # states neither field and the label says only "harvested".
+    seen = entry.get("distinctKills")
     return Candidate(
         key=key,
         label=f"harvested, seen in {seen} kill(s)" if seen else "harvested",

@@ -94,8 +94,9 @@ find. Four things travel with every row for that reason:
 * the **date range** of the sampled kills, because a build is a snapshot of a
   tuning pass;
 * the **report code and fight id**, so any row can be opened and checked;
-* how many of the sampled kills ran it, which is the only thing here that
-  distinguishes a consensus build from one person's experiment.
+* how many **distinct kills** ran it, which is the only thing here that
+  distinguishes a consensus build from one person's experiment -- and which is
+  not the same as how many rows carried it, see ``group_uploads`` below.
 
 And one bound no setting reaches: ``characterRankings`` contains **ranked parses
 only**. A kill logged privately, or one Warcraft Logs declined to rank, is invisible
@@ -996,9 +997,121 @@ def loadout_key(loadout: Loadout) -> str:
     return hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
 
 
+#: Two ``(report, fight)`` rows are uploads of ONE kill when the loadouts they
+#: carry agree. Warcraft Logs indexes uploads rather than raid nights -- six people
+#: in one raid each running a logger produce six reports holding the same kill --
+#: and ``fightdataset`` already records the consequence for a *count of pulls*.
+#: This is the same rule for a count of *kills a build was seen in*, over the one
+#: signal this document has: its own rosters.
+#:
+#: Calibrated against the committed MID2 harvest (20 rows, 2026-08-24), every pair
+#: of rows of one encounter:
+#:
+#: ===========  ==========  =======================================
+#: shared       Jaccard     what it is
+#: ===========  ==========  =======================================
+#: 11 .. 14     0.85 .. 1.00  eight pairs -- uploads of one kill
+#: 0            0.00          every other pair
+#: ===========  ==========  =======================================
+#:
+#: Both columns are an order-of-magnitude hole with nothing in it, so the two
+#: floors sit in the middle of an empty band rather than on a tuned edge. One pair
+#: is corroborated by a completely independent reader: ``fights.json`` records
+#: ``gYmDTakQH8BXLVJh f19`` and ``7TYdmcv2ZK6WNDkR f19`` at 421.342 s and
+#: 421.363 s -- 21 ms apart, which is ``fightdataset``'s length-and-curve rule
+#: reaching the same verdict from fight length.
+_SAME_KILL_SHARE = 0.5
+_SAME_KILL_SHARED = 3
+
+#: What the rule does NOT use, measured rather than assumed. ``killedAt`` is the
+#: obvious cheap test (#135 asked for exactly it) and on this document it does not
+#: separate: the eight duplicate pairs state their kill 1, 1, 3, 4, 5, **48, 51 and
+#: 54** seconds apart, while pairs that are genuinely different kills sit at 37, 48,
+#: 49, 85, 90 and 125. There is no tolerance in that overlap, so the answer to
+#: "is the timestamp enough" is **no, on this sample**.
+_WHY_NOT_TIMESTAMPS = (
+    "Uploads are grouped by the loadouts they carry, not by their stated kill "
+    "time: on the sample this rule was calibrated against, two uploads of one "
+    "kill state that kill up to 54 s apart while two genuinely different kills "
+    "sit as close as 37 s, so no timestamp tolerance separates them."
+)
+
+
+def rosters_by_row(
+    builds: dict[str, list[HarvestedBuild]],
+) -> tuple[dict[tuple[str, int], set[str]], dict[tuple[str, int], int]]:
+    """``(loadouts per (report, fight), encounter per (report, fight))``.
+
+    Split out because how *wide* a row's roster is decides whether the rule below
+    could fire on it at all, and a run that publishes `distinctKills` without
+    saying that is the shape this repository keeps recording: a guard present and
+    answering over a population it cannot reach.
+    """
+    rosters: dict[tuple[str, int], set[str]] = {}
+    encounters: dict[tuple[str, int], int] = {}
+    for spec_builds in builds.values():
+        for build in spec_builds:
+            for observation in build.observations:
+                key = (observation.report, observation.fight_id)
+                rosters.setdefault(key, set()).add(build.key)
+                encounters[key] = observation.encounter_id
+    return rosters, encounters
+
+
+def group_uploads(
+    builds: dict[str, list[HarvestedBuild]],
+) -> dict[tuple[str, int], tuple[str, int]]:
+    """``(report, fight) -> the kill it is an upload of``, over the whole run.
+
+    Which uploads are the same kill is a fact about the **run**, not about one
+    build, so it is derived once from every spec's rows together and handed down.
+    A per-build view could not see it at all: a build carried by one player in one
+    raid appears once per upload, and nothing inside that build's own rows says the
+    three rows are one kill.
+
+    Two refusals, both failing towards *over*-counting kills, which is the
+    direction that cannot manufacture a consensus:
+
+    * rows of **different encounters** are never merged -- a raid killing two
+      bosses in one night is two kills;
+    * two rows sharing fewer than ``_SAME_KILL_SHARED`` loadouts are left apart
+      however well they agree in ratio. A ``--spec`` run narrows every roster to
+      one spec, where a single shared loadout is two guilds' Frost Death Knights
+      running the same popular build rather than evidence of anything.
+
+    This is deliberately **not** ``fightextract.group_uploads``' rule, and the two
+    are not shareable: that one groups on fight length and the target-count curve,
+    neither of which a harvest reads. What this has instead is the roster, which is
+    the stronger agreement signal of the two -- see ``_SAME_KILL_SHARE``.
+    """
+    rosters, encounters = rosters_by_row(builds)
+
+    parent = {key: key for key in rosters}
+
+    def find(node: tuple[str, int]) -> tuple[str, int]:
+        while parent[node] != node:
+            parent[node] = parent[parent[node]]
+            node = parent[node]
+        return node
+
+    ordered = sorted(rosters)
+    for index, left in enumerate(ordered):
+        for right in ordered[index + 1 :]:
+            if encounters[left] != encounters[right]:
+                continue
+            shared = rosters[left] & rosters[right]
+            if len(shared) < _SAME_KILL_SHARED:
+                continue
+            if len(shared) / len(rosters[left] | rosters[right]) < _SAME_KILL_SHARE:
+                continue
+            parent[find(left)] = find(right)
+
+    return {key: find(key) for key in rosters}
+
+
 @dataclass
 class HarvestedBuild:
-    """One distinct decoded loadout, and every kill it was seen in."""
+    """One distinct decoded loadout, and every row it was seen in."""
 
     key: str
     loadout: Loadout
@@ -1006,14 +1119,36 @@ class HarvestedBuild:
     observations: list[Observation] = field(default_factory=list)
 
     @property
-    def seen_in(self) -> int:
+    def observed(self) -> int:
+        """Rows: one damage player in one **upload**.
+
+        Renamed from ``seen_in``, whose published name (``seenInKills``) said kills
+        and counted this. See ``group_uploads``: on the committed MID2 harvest, 69
+        of 161 builds stood at two or more "kills" and were carried in exactly one.
+        """
         return len(self.observations)
+
+    def distinct_kills(self, kills: dict[tuple[str, int], tuple[str, int]]) -> int:
+        """How many different kills carried this loadout.
+
+        The number a consensus criterion reads. An upload this run's map does not
+        know counts as its own kill -- unknown is not "the same as one we have",
+        and over-counting is the direction that cannot manufacture a consensus.
+        """
+        return len(
+            {kills.get((o.report, o.fight_id), (o.report, o.fight_id)) for o in self.observations}
+        )
 
     def hero_tree(self, tables: TalentTables) -> tuple[int | None, str | None]:
         sub_tree = self.loadout.sub_tree
         return sub_tree, tables.sub_trees.get(sub_tree) if sub_tree else None
 
-    def to_json(self, tables: TalentTables, max_sources: int) -> dict:
+    def to_json(
+        self,
+        tables: TalentTables,
+        max_sources: int,
+        kills: dict[tuple[str, int], tuple[str, int]],
+    ) -> dict:
         sub_tree, tree_name = self.hero_tree(tables)
         # Newest kill first, so a capped list is the most recent evidence rather
         # than whichever report happened to be read first.
@@ -1039,7 +1174,13 @@ class HarvestedBuild:
                 }
                 for s in sorted(self.loadout.selections, key=lambda s: (s.tree_index, s.node_id))
             ],
-            "seenInKills": self.seen_in,
+            # Two counts, side by side and never one instead of the other -- the
+            # rule `fights.json` already publishes `fightsSampled` beside
+            # `distinctKills` for. `observations` is what the run read and what its
+            # cost is measured in; `distinctKills` is what the build was seen in,
+            # and it is the one a consensus criterion may read.
+            "distinctKills": self.distinct_kills(kills),
+            "observations": self.observed,
             "sources": [
                 {
                     **observation.source_json(),
@@ -1051,7 +1192,7 @@ class HarvestedBuild:
                 }
                 for observation in ordered[:max_sources]
             ],
-            "sourcesTruncated": max(0, self.seen_in - max_sources),
+            "sourcesTruncated": max(0, self.observed - max_sources),
         }
 
 
@@ -1086,8 +1227,11 @@ def group_builds(
         else:
             existing.observations.append(observation)
 
+    # Sorted by rows here; `build_document` re-sorts by distinct kills once the
+    # upload grouping is known, which needs every spec's rows and so cannot be done
+    # inside this loop.
     ordered = {
-        spec: sorted(bucket.values(), key=lambda b: (-b.seen_in, b.key))
+        spec: sorted(bucket.values(), key=lambda b: (-b.observed, b.key))
         for spec, bucket in builds.items()
     }
     return ordered, rejected
@@ -1097,7 +1241,12 @@ def group_builds(
 # The document
 # --------------------------------------------------------------------------------
 
-SCHEMA_VERSION = 1
+#: 2 (2026-09-22): `seenInKills` is gone -- it said kills and counted rows. Its
+#: value is `observations` and the count it promised is `distinctKills`; the spec
+#: row's `killsHarvested`/`killsUsable` are `playersHarvested`/`playersUsable` for
+#: the same reason. A reader joining on an old name gets a KeyError rather than a
+#: number that is wrong by the number of loggers in the raid.
+SCHEMA_VERSION = 2
 
 #: What ``characterRankings`` cannot reach, stated in the file rather than left to
 #: be rediscovered. Measured in this repository already: the ranking list is sorted
@@ -1146,6 +1295,11 @@ def build_document(
 ) -> dict:
     """The published shape. Every count in it comes from the rows above it."""
     builds, rejected = group_builds(observations, tables)
+    kills = group_uploads(builds)
+    _rosters, _ = rosters_by_row(builds)
+
+    def _kills_of(rows: list[Observation]) -> int:
+        return len({kills.get((o.report, o.fight_id), (o.report, o.fight_id)) for o in rows})
 
     spec_rows = []
     for spec_key in sorted(set(builds) | set(rejected)):
@@ -1158,14 +1312,31 @@ def build_document(
                 "specId": spec_key,
                 "class": sample.wow_class,
                 "spec": sample.spec,
-                "killsHarvested": len(spec_observations) + len(spec_rejects),
-                "killsUsable": len(spec_observations),
+                # Players, not kills, and the old names said kills: a raid with two
+                # Balance Druids contributes two rows, which is how the committed
+                # document came to state 24 "kills harvested" for that spec over a
+                # run that sampled 20 -- a shape no reading of "kill" allows.
+                "playersHarvested": len(spec_observations) + len(spec_rejects),
+                "playersUsable": len(spec_observations),
+                # Over `playersHarvested` rather than `playersUsable`: a rejected
+                # observation is still a sighting of the spec in that kill, and a
+                # count sitting between the two would be a third quantity under a
+                # name that names neither.
+                "distinctKills": _kills_of(
+                    spec_observations + [observation for observation, _ in spec_rejects]
+                ),
                 # The headline of this whole command: how many *different* builds
                 # the sampled players actually ran. One means a settled spec; ten
                 # over ten kills means there is no consensus to harvest.
                 "distinctBuilds": len(spec_builds),
                 "killedBetween": date_span(spec_observations),
-                "builds": [b.to_json(tables, max_sources) for b in spec_builds],
+                "builds": [
+                    b.to_json(tables, max_sources, kills)
+                    for b in sorted(
+                        spec_builds,
+                        key=lambda b: (-b.distinct_kills(kills), -b.observed, b.key),
+                    )
+                ],
                 "rejected": [
                     {
                         "reason": verdict.reason,
@@ -1184,7 +1355,27 @@ def build_document(
         "source": {
             "difficulty": difficulty,
             "encounters": encounters,
+            # Rows, which is what `--reports` bounds and what the pass paid for --
+            # `fights.json` keeps `fightsSampled` on the same argument. What they
+            # are kills *of* is the field below it.
             "killsSampled": len({(o.report, o.fight_id) for o in observations}),
+            "distinctKills": len(set(kills.values())) if kills else 0,
+            "uploadGrouping": {
+                "rule": (
+                    "Two sampled rows of one encounter are uploads of one kill when "
+                    f"they share at least {_SAME_KILL_SHARED} loadouts and at least "
+                    f"{_SAME_KILL_SHARE:.0%} of the loadouts either carries."
+                ),
+                "notTimestamps": _WHY_NOT_TIMESTAMPS,
+                # Whether the rule could fire at all, which a bare `distinctKills`
+                # cannot say. A `--spec` run narrows every roster to one spec, and
+                # a row under `_SAME_KILL_SHARED` loadouts wide is never merged with
+                # anything -- so `distinctKills` is then an upper bound and this is
+                # how a reader sees that from the file.
+                "narrowestRoster": min((len(r) for r in _rosters.values()), default=None),
+                "rowsMerged": len(_rosters) - len(set(kills.values())) if _rosters else 0,
+                "comparable": all(len(r) >= _SAME_KILL_SHARED for r in _rosters.values()),
+            },
             "playersRead": len(observations),
             "killedBetween": date_span(observations),
             "rankedParsesOnly": True,
@@ -2426,14 +2617,17 @@ def cmd_harvest_builds(args) -> int:
     for row in document["specs"]:
         transcript.append(
             f"  {row['specId']}: {row['distinctBuilds']} distinct build(s) from "
-            f"{row['killsUsable']} of {row['killsHarvested']} kill(s)"
+            f"{row['playersUsable']} of {row['playersHarvested']} player(s) "
+            f"over {row['distinctKills']} kill(s)"
             + (f", {len(row['rejected'])} rejected" if row["rejected"] else "")
         )
     log.info(
-        "%s: %d build(s) across %d spec(s) from %d kill(s); %d observation(s) rejected",
+        "%s: %d build(s) across %d spec(s) from %d kill(s) in %d upload(s); "
+        "%d observation(s) rejected",
         path,
         coverage["buildsTotal"],
         coverage["specsWithABuild"],
+        document["source"]["distinctKills"],
         document["source"]["killsSampled"],
         coverage["rejectedTotal"],
     )

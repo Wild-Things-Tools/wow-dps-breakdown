@@ -9,7 +9,7 @@ import random
 
 import pytest
 
-from wowdps import buildsearch, computedbuilds
+from wowdps import buildsearch, buildsearchrun, computedbuilds
 from wowdps.buildsearch import (
     Measurement,
     Round,
@@ -776,3 +776,42 @@ def test_the_gate_thresholds_are_the_ones_fixed_in_advance():
     """Pinned so that moving them to fit a run is a visible edit rather than a tweak."""
     assert computedbuilds.PASS_MIN_NOT_BEHIND == 0.80
     assert computedbuilds.PASS_MAX_LOSS == 0.02
+
+
+# --------------------------------------------------------------------------------
+# What a harvested seed is labelled with
+# --------------------------------------------------------------------------------
+
+
+def test_a_harvested_seed_is_labelled_with_kills_not_rows():
+    """The label a person reads in a search transcript, and it said the wrong number.
+
+    `harvested-builds.json` rows are one damage player in one UPLOAD, and Warcraft
+    Logs indexes uploads rather than raid nights -- on the committed MID2 harvest, 69
+    of 161 builds stood at two or more rows and were carried in exactly one kill. So
+    "harvested, seen in 3 kill(s)" over one kill is the false sentence here, and it
+    had no test at all: a canary that swapped the field back stayed green.
+    """
+    nodes = sample_nodes()
+    entry = {
+        "talentHash": encode_loadout(sample_build(), nodes),
+        "buildKey": "abc",
+        "distinctKills": 1,
+        "observations": 3,
+    }
+    seed = buildsearchrun.entry_to_seed(entry, nodes, key="h0")
+    assert seed is not None
+    assert seed.label == "harvested, seen in 1 kill(s)"
+
+
+def test_a_harvested_seed_from_an_older_document_claims_no_count():
+    """A document written before schema 2 states neither field.
+
+    Falling back to the row count would be the defect with an extra step, and
+    inventing a 1 would claim a kill nobody counted. The label says only "harvested".
+    """
+    nodes = sample_nodes()
+    entry = {"talentHash": encode_loadout(sample_build(), nodes), "seenInKills": 3}
+    seed = buildsearchrun.entry_to_seed(entry, nodes, key="h0")
+    assert seed is not None
+    assert seed.label == "harvested"
