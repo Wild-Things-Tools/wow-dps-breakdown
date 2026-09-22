@@ -486,12 +486,21 @@ def sensitivity(lean: Sample, rich: Sample, *, poll: Sample | None = None) -> Se
     )
 
 
-def describe_sensitivity(measure: Sensitivity) -> list[str]:
+def describe_sensitivity(measure: Sensitivity, *, noun: str = "the reading block") -> list[str]:
     """The bound in words, with the two rounds it is computed from named.
 
     The rounds are printed because they are what makes the number checkable against
     the deltas listed three lines above it -- and because a bar that is plainly an
     outlier is the difference between a wide sensitivity and a broken run.
+
+    ``noun`` is here for the same reason ``compare`` takes one, and it was missing for
+    a reason worth keeping: ``verdict_of`` was split out so ``sensitivity`` need not be
+    handed a name it never prints, and that argument was read one function too far.
+    This renderer DOES print one, and it printed "the block" on all three pairs of run
+    34774586069 -- including the two whose difference is an argument. The
+    justification ("it never prints it") stopped being true in the same change that
+    added a second kind of difference, and the run written to exercise it is what
+    said so.
     """
     lines = [
         f"    sensitivity: a uniform extra cost of {measure.smallest:g} or more would "
@@ -512,7 +521,7 @@ def describe_sensitivity(measure: Sensitivity) -> list[str]:
         if not measure.cheapest_rounds_agree:
             claim = f"so that is {scale}"
         elif ratio < 1:
-            claim = f"so this bounds the block under {scale}"
+            claim = f"so this bounds {noun} under {scale}"
         else:
             claim = f"so this sample is blind to anything under {scale}"
         lines.append(
@@ -678,7 +687,7 @@ def describe(result: PairResult) -> list[str]:
     measure = sensitivity(result.lean, result.rich, poll=result.poll)
     if measure is not None:
         lines.append("")
-        lines.extend(describe_sensitivity(measure))
+        lines.extend(describe_sensitivity(measure, noun=result.pair.difference.noun))
     for sample in (result.poll, result.rich, result.lean):
         for message in sample.errors:
             lines.append(f"    ! {sample.name}: {message}")
