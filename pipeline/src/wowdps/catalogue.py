@@ -79,8 +79,22 @@ DEFAULT_POINT_CEILING = 0.3
 DEFAULT_DEADLINE_MINUTES = 300.0
 DEFAULT_DIFFICULTIES: tuple[int, ...] = (5, 4)
 
-#: Stufe 3 refusals do not retry; a `report-error` does, on the next run, because a
-#: transport failure is not a property of the report.
+#: The refusals that `--retry-errors` offers again, because a transport failure is a
+#: fact about the network rather than about the report.
+#:
+#: **It is not the default, and this comment used to say it was** -- "a `report-error`
+#: does [retry], on the next run" described a mechanism the code does not implement:
+#: both call sites read `data.done() - (data.retryable() if options.retry_errors else
+#: set())`, so without the flag the set is never subtracted and such a line is never
+#: read again. That was the shape this repository keeps producing, in the one comment
+#: whose job was to excuse a 429 having no consequences (#199).
+#:
+#: Making the retry the default was considered and is NOT done: a retry is a paid
+#: query, and how many of these lines a real zone holds is **unmeasured** -- the rows
+#: live in the private data repo. The 429 fix above removes the largest source of
+#: them (a refused hour now writes none at all), so what is left should be rare, and
+#: a claim about a population nobody has counted is not a reason to spend points on
+#: every run. `--retry-errors` is the way.
 RETRYABLE_OUTCOMES = frozenset({"report-error", "structure-error"})
 
 
@@ -933,11 +947,28 @@ def _sweep_one_window(
             # ends in a row or a refusal, so the code is judged either way, and a
             # later window must not pay for it again. Adding it on success alone
             # would re-read every `report-error` once per window.
+            #
+            # The one branch that ends in NEITHER is the 429 below, which is why it
+            # discards this entry before re-raising. That keeps the invariant this
+            # comment states true rather than accidentally true: `seen` dies with the
+            # function today, so nothing observes the difference -- and a window-level
+            # handler added later would silently skip a report nobody judged.
             seen.add((code,))
             budget.check()
             report.attempted += 1
             try:
                 report_start, fights = client.report_kills(code)
+            except RateLimited:
+                # BEFORE the base clause, never after: `RateLimited` subclasses
+                # `WarcraftLogsError`, and caught as one it becomes a `report-error`
+                # line -- a statement that THIS report could not be read, where the
+                # service is refusing everything until the hour turns. Every
+                # following code of the zone gets the same treatment, so one 429
+                # writes a SERIES of them, permanently, into the private data repo.
+                # The outer loop turns this into `_StopRun`, and the `finally` below
+                # still writes every row already paid for.
+                seen.discard((code,))
+                raise
             except WarcraftLogsError as exc:
                 log.warning("zone %s report %s: %s", zone_id, code, exc)
                 new_refused.append(_refusal({"code": code}, "report-error", at=at, run_id=run_id))
@@ -1057,6 +1088,12 @@ def sweep_pair_kills(
             tally = outcomes.setdefault(encounter_id, {})
             try:
                 block = client.fight_structure(code, encounter_id, difficulty)
+            except RateLimited:
+                # Same rule as Stufe 3 above, and the same reason. Nothing is added
+                # to `seen` here -- the exact test is the stored row/refusal set --
+                # so letting it out records nothing about this kill, which is right:
+                # nobody judged it, the service simply did not answer.
+                raise
             except WarcraftLogsError as exc:
                 log.warning("%s fight %s: %s", code, fight_id, exc)
                 new_refused.append(

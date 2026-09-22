@@ -1810,6 +1810,36 @@ def _encounter_summary(
     }
 
 
+def _unread_encounter(encounter_id: int, exc: Exception, *, stopped: bool = False) -> dict:
+    """The entry for an encounter that was asked about and returned nothing.
+
+    It exists because the alternative is worse than a thin row: leaving the encounter
+    out entirely makes "the service refused" and "nobody asked" the same picture, and
+    only one of them is a reason to re-run. #200.
+
+    **It states what is true and claims nothing else.** `killsRead`/`playersRead` are
+    zero because nothing was read; every other field of a real summary is a claim
+    about the encounter -- `fewerKillsThanRequested` would say the rankings are thin,
+    `idResolution` would say which id the kills came from, `name` would name a boss
+    this pass never got a name for -- so they are ABSENT rather than null. A reader
+    that wants them has to notice `failedBecause` first, which is the point.
+
+    `stoppedBy` is separate from `failedBecause` and both can be true at once: one
+    says this encounter produced nothing, the other says the pass ended here.
+    """
+    return {
+        "id": encounter_id,
+        "killsRead": 0,
+        "playersRead": 0,
+        "failedBecause": str(exc),
+        **(
+            {"stoppedBy": f"the service refused the hour at encounter {encounter_id}"}
+            if stopped
+            else {}
+        ),
+    }
+
+
 def _metric_contributions(passes: list[dict]) -> list[dict]:
     """What each ranking metric added, in the order the passes ran.
 
@@ -2151,7 +2181,12 @@ def cmd_harvest_builds(args) -> int:
     that writes nothing, prints the payload shapes and reports what the counter did.
     """
     from . import fightprofile
-    from .warcraftlogs import Credentials, WarcraftLogsClient, WarcraftLogsError
+    from .warcraftlogs import (
+        Credentials,
+        RateLimited,
+        WarcraftLogsClient,
+        WarcraftLogsError,
+    )
 
     try:
         credentials = Credentials.from_env()
@@ -2271,8 +2306,34 @@ def cmd_harvest_builds(args) -> int:
                 refusal = str(exc)
                 log.error("refusing to pool difficulties: %s", exc)
                 break
+            except RateLimited as exc:
+                # BEFORE the base clause: `RateLimited` subclasses `WarcraftLogsError`,
+                # so caught as one it became a `continue` -- and the `continue` skips
+                # `encounters.append(summary)`, which left the encounter out of the
+                # document ALTOGETHER. A boss a 429 hit was then indistinguishable
+                # from one nobody asked about, which is the confusion this repository
+                # refuses at four other places (`fights.json`'s "probed and read
+                # nothing" against "never probed", `spawn-probe`'s `stoppedBy`,
+                # `progress-hours`' no-reports/no-fights split and its own
+                # `stoppedBy`). Here it runs the other way: the ABSENCE reads as
+                # "nobody looked", where somebody looked and paid.
+                #
+                # Both fields, because they answer different questions: the encounter
+                # could not be read, AND the pass stops here. A 429 is a fact about
+                # the hour, so there is no point asking the next boss.
+                log.error("encounter %d: %s", encounter_id, exc)
+                encounters.append(_unread_encounter(encounter_id, exc, stopped=True))
+                transcript.append(f"encounter {encounter_id}: the service refused -- {exc}")
+                stopped_early = True
+                break
             except WarcraftLogsError as exc:
+                # The summary is appended even though nothing was read: an encounter
+                # that was asked about and paid for belongs in the document. The pass
+                # goes on, because this one is a fact about the request rather than
+                # about the hour.
                 log.error("encounter %d failed: %s", encounter_id, exc)
+                encounters.append(_unread_encounter(encounter_id, exc))
+                transcript.append(f"encounter {encounter_id}: failed -- {exc}")
                 continue
             observations.extend(found)
             summary["playerDetailBuckets"] = buckets

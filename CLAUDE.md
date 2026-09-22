@@ -5319,6 +5319,84 @@ That is **not** a failed run; it is GitHub saying it could not read the file. Th
 workflow was undispatchable for two commits. So: check a workflow edit for duplicate
 keys explicitly, and read a step to its END before concluding what it does not have.
 
+### The other three producers, and each filed the 429 as a different wrong thing (#199-#201)
+
+The same two inheritance lines, three more call sites, and the shape of the wrong
+answer differs every time -- which is why one grep for `except WarcraftLogsError`
+does not settle it. What a 429 was written as:
+
+| producer | filed as | where it lands |
+|---|---|---|
+| `catalogue` Stufe 3 | a `report-error` **row per remaining code** | the private data repo, permanently |
+| `harvest-builds` | **nothing at all** -- the encounter left the document | the published document |
+| `spawn-probe` | not a refusal; a **stale closing reading** | `spawns.json`'s `cost` block |
+
+**The catalogue's is the one that compounds.** A 429 hits every following code of the
+zone, so one refusal writes a SERIES of lines each saying *this report could not be
+read*. Reproduced in the canary before the fix, which is the control the issue asked
+for:
+
+```
+WARNING zone 53 report r003: 429
+WARNING zone 53 report r004: 429
+```
+
+And they are permanent: `retryable()` is subtracted only under `--retry-errors`, so
+without that flag the report is never offered again.
+
+**Which is where the sharper half sat.** The comment over `RETRYABLE_OUTCOMES` read
+*"a `report-error` does [retry], on the next run, because a transport failure is not
+a property of the report"* -- and both call sites read
+`data.done() - (data.retryable() if options.retry_errors else set())`. A comment
+describing a mechanism the code does not implement, this file's signature defect,
+**in the one comment whose job was to excuse a 429 having no consequences.**
+
+Corrected rather than made true, and the reason is a measurement that does not
+exist: a retry is a paid query, and how many such lines a real zone holds is
+**unmeasured** -- they are in the private repo, which is not checked out here. The
+fix removes the largest source of them, so the rest should be rare; a claim about an
+uncounted population is not a reason to spend points on every run.
+
+**`harvest-builds` fails in the opposite direction from #159/#196.** There an empty
+block made a claim about the season; here the **absence** reads as *"nobody asked"*,
+where somebody asked and paid. `_unread_encounter` therefore states what is true
+(`killsRead`/`playersRead` zero) and omits every field that would be a claim --
+`fewerKillsThanRequested` would say the rankings are thin, `idResolution` would say
+which id the kills came from, `name` would name a boss this pass never got a name
+for. `failedBecause` and `stoppedBy` are separate and both can be true at once: one
+says this encounter produced nothing, the other says the pass ended here.
+
+**`spawn-probe`'s is not a refusal at all, and that is why it was invisible.** `run()`
+took a standalone reading at the start and none at the end, so `lastReading` was
+whatever `rateLimitData` the last *payload* query happened to carry. Since #157 a
+cache hit moves no reading -- correct, and it means a pass whose last queries came
+from the store ends on a **stale** closing reading and reports `pointsSpentThisRun`
+too small. That is the one number this file calls *"the only measurement of what a
+pass costs"*.
+
+Two decisions in the one-line fix, each pinned by a canary:
+
+- **It must sit INSIDE the client context.** `_finish` runs after the `with` block, so
+  a reading taken there could not be sent at all. Both exits through `_finish` are
+  covered, including the one that found no kill.
+- **It is guarded.** A 503 on this one call would otherwise discard a pass that has
+  already read and paid for its kills. An unanswered closing reading leaves the spend
+  UNMEASURED, which `spend_sentence` already has a word for.
+
+### Reading a workflow step to its END, the second time
+
+`spawn-probe.yml`'s commit step was checked for the same two defects
+`progress-hours.yml` had. **`TIER` is bound** -- in an `env:` block at the END of the
+step, behind `run:`, which is exactly where the one in `progress-hours.yml` was when
+it was reported missing and a duplicate key added. Read to the end this time; only
+the `stoppedBy` suffix was missing.
+
+And the duplicate-key check is an instrument now rather than an intention: a
+`SafeLoader` subclass whose mapping constructor refuses a repeated key, instead of
+`yaml.safe_load`, which silently keeps the last one. That is the one place PyYAML and
+GitHub's parser disagree, and from here the disagreement is visible only as a `push`
+run of a dispatch-only workflow.
+
 ## Probing across hours, rather than restarting
 
 Warcraft Logs meters by points per hour and a pass at a useful sample size does not

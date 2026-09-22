@@ -408,6 +408,100 @@ def test_the_command_reads_the_fight_the_ranking_named(monkeypatch, tmp_path, ca
     assert len(document["fights"][0]["sightings"]) == 3
 
 
+class _CountingReadings(_StubClient):
+    """Records every standalone reading and whether the client was still open for it.
+
+    "Still open" is the load-bearing half: `_finish` runs AFTER the `with` block, so a
+    closing reading taken there could not be sent at all -- it has to be the last
+    thing inside the context.
+    """
+
+    def __init__(self, *a, refuse_closing=False, **kw):
+        super().__init__(*a, **kw)
+        self.readings: list[bool] = []
+        self.closed = False
+        self.refuse_closing = refuse_closing
+
+    def __exit__(self, *exc):
+        self.closed = True
+        return False
+
+    def rate_limit(self):
+        self.readings.append(self.closed)
+        if self.refuse_closing and len(self.readings) > 1:
+            from wowdps.warcraftlogs import WarcraftLogsError
+
+            raise WarcraftLogsError("503 from the counter")
+        return {"limitPerHour": 18000.0, "pointsSpentThisHour": 0.0}
+
+
+def _one_kill_client(cls=_CountingReadings, **kw):
+    return cls(
+        rankings_rows=[{"report": {"code": "abc", "fightID": 22}}],
+        report={
+            "masterData": {"actors": [{"id": 11, "gameID": NPC, "name": "Broodling"}]},
+            "fights": [
+                {
+                    "id": 22,
+                    "encounterID": 3421,
+                    "difficulty": 5,
+                    "kill": True,
+                    "size": 20,
+                    "startTime": 0,
+                    "endTime": 400_000,
+                    "enemyNPCs": [{"id": 11, "gameID": NPC, "instanceCount": 14, "groupCount": 2}],
+                }
+            ],
+        },
+        events=[flat(timestamp=1000, targetInstance=1, x=1.0, y=1.0)],
+        **kw,
+    )
+
+
+def test_the_pass_brackets_itself_with_two_standalone_readings(monkeypatch, tmp_path):
+    """#201. `run()` took a reading at the start and none at the end, so `lastReading`
+    was whatever `rateLimitData` the last NUTZABFRAGE happened to carry -- and since
+    #157 a cache hit moves no reading, so a pass whose last queries came from the
+    store ended on a STALE one and reported `pointsSpentThisRun` too small. That is
+    the one number `spawns.json` publishes as the only measurement of what a pass
+    costs.
+
+    The second assertion is the one that would have caught a fix in the wrong place:
+    `_finish` runs after the client is closed.
+    """
+    client = _one_kill_client()
+    _wire(monkeypatch, client)
+
+    assert addspawns.run(_args(tmp_path)) == 0
+    assert client.readings == [False, False], "the bracket is missing a side"
+
+    # The other exit through `_finish`: a pass that found no kill at all.
+    empty = _CountingReadings(rankings_rows=[], report={"masterData": {"actors": []}}, events=[])
+    _wire(monkeypatch, empty)
+    assert addspawns.run(_args(tmp_path)) == 3
+    assert empty.readings == [False, False], "the no-kill exit is not bracketed either"
+
+
+def test_a_closing_reading_that_does_not_answer_does_not_lose_the_pass(
+    monkeypatch, tmp_path, caplog
+):
+    """The cost report must never fail the run.
+
+    A 503 on this one call would otherwise discard a pass that has already read its
+    kills and paid for them -- eight bosses' worth, in the instance the sibling
+    repository measured. An unanswered closing reading leaves the spend UNMEASURED,
+    which `spend_sentence` already has a word for; it is not a reason to lose data.
+    """
+    client = _one_kill_client(refuse_closing=True)
+    _wire(monkeypatch, client)
+
+    with caplog.at_level("WARNING"):
+        assert addspawns.run(_args(tmp_path)) == 0
+
+    assert (tmp_path / "spawn.json").exists(), "the pass lost its payload over a budget poll"
+    assert "closing budget reading" in caplog.text
+
+
 def test_a_fight_the_report_really_lacks_is_still_reported_as_missing(
     monkeypatch, tmp_path, capsys
 ):

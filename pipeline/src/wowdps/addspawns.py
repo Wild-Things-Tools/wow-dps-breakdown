@@ -1005,6 +1005,7 @@ def run(args) -> int:
         if not pairs:
             print("no kills to read: nothing here says anything about spawn positions")
             out["fights"] = []
+            _closing_reading(client)
             _finish(client, out, args)
             return 3
 
@@ -1201,6 +1202,9 @@ def run(args) -> int:
                 break
 
         out["fights"] = fights_out
+        # The last statement inside the `with`: `_finish` runs after the client is
+        # closed, so a reading taken there could not be sent at all.
+        _closing_reading(client)
 
     _finish(client, out, args)
     return 0
@@ -1245,6 +1249,36 @@ def _publish(out: dict, args) -> None:
         f"{coverage['encounters']} encounter(s); this pass -> "
         f"{block.get('refusal') or str(len(block.get('spots') or [])) + ' spot(s)'}"
     )
+
+
+def _closing_reading(client) -> None:
+    """The right half of the bracket, and it has to happen INSIDE the client context.
+
+    `run()` took a standalone `rate_limit()` at the start and none at the end, so
+    `lastReading` was whatever `rateLimitData` block the last NUTZABFRAGE happened to
+    carry. Since #157 a cache hit moves no reading at all -- which is right, and has
+    the consequence that a pass whose last queries were answered from the store ends
+    on a STALE closing reading and reports `pointsSpentThisRun` too small. That is the
+    one number `spawns.json` publishes as, in CLAUDE.md's words, "the only measurement
+    of what a pass costs". #201.
+
+    One query, measured at exactly 1.00 points over 24 clean rounds (`wowdps wcl-cost`).
+
+    **Guarded, because the cost report must never fail the run.** A 503 on this one
+    call would otherwise discard a pass that has already read its kills and paid for
+    them -- the shape wtt-backend measured and fixed once, and the reason its own
+    ledger has a word for an unmeasurable spend. A closing reading that did not
+    arrive leaves `spend_state` at whatever it was, which `spend_sentence` already
+    reports as UNMEASURED rather than as zero.
+    """
+    import logging
+
+    from .warcraftlogs import WarcraftLogsError
+
+    try:
+        client.rate_limit()
+    except WarcraftLogsError as exc:
+        logging.warning("the closing budget reading did not answer (%s); the cost is a floor", exc)
 
 
 def _finish(client, out: dict, args) -> None:
