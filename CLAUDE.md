@@ -5191,12 +5191,47 @@ sits where it does. The run printed `progress-cohort: 0 problem(s)` and `progres
 cohort unchanged` and committed nothing, which is what a seed-only pass must do.
 
 **One thing could not be cross-checked and is named rather than glossed.** An
-independent row count out of the database would have needed the job's stdout, and
-`wtt-masterdata` emits **none** to Cloud Logging -- an `explore sql` execution
-succeeded in 26 s and produced zero `run.googleapis.com%2Fstdout` entries, while
-`wtt-progress-refresh-eu-na` logs normally from the same project. So the counts above
+independent row count out of the database would have needed the job's stdout, and on
+**2026-09-12** an `explore sql` execution through `wtt-masterdata` succeeded in 26 s
+and produced zero `run.googleapis.com%2Fstdout` entries, while
+`wtt-progress-refresh-eu-na` logged normally from the same project. So the counts above
 are the export's own, cross-checked against the bytes it wrote rather than against a
-second reader. Worth fixing before the next job whose answer only exists in its log.
+second reader.
+
+**Measured again on 2026-09-22, and the job DOES log.** Four `explore sql` executions
+that day each returned their whole result table on `run.googleapis.com%2Fstdout`, read
+back with
+
+```
+gcloud logging read 'resource.type="cloud_run_job"
+  labels."run.googleapis.com/execution_name"="<execution>"
+  logName="projects/<project>/logs/run.googleapis.com%2Fstdout"' --format="value(textPayload)"
+```
+
+-- newest line first, so pipe through `tac`. **Why the 12.09. reading found nothing is
+not established**, and inventing a mechanism for it is the mistake this file records
+under #151. Two candidates, neither checked: the earlier read may have missed on its
+filter, or something changed between the dates. What is settled is the capability, and
+the rule this file already states for absences applies to it -- a date and a sample, or
+it is not a measurement.
+
+**So the gap is closed, and the answer is the one that was missing.** Read out of
+production the same day, `wclapi_progressbosshours` joined to
+`wclapi_progressencounter` for the zone:
+
+```
+zone 53  Mythic 3.759  Heroic 5.381        zone 42  Mythic 5.554  Heroic 4.889
+zone 46  Mythic 6.574  Heroic 6.284        zone 38  Mythic 5.452  Heroic 2.303
+zone 44  Mythic 5.513  Heroic 5.043
+                                           gesamt 50.752
+```
+
+Against the seed's **30.586** on 12.09: **+20.166 rows in ten days, about 2.017 a day**,
+which is what the hourly-then-two-hourly backfill predicts (this file's own figure is
+~2.300 a day). Four of the ten pairs are unchanged to the row -- `z53-d4`, `z46-d5`,
+`z46-d4`, `z44-d4` -- so the growth is where the backfill is working and nowhere else.
+That is a second reader agreeing with the first, which is what the paragraph above could
+not have.
 
 ## Probing across hours, rather than restarting
 
