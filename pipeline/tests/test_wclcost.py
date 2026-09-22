@@ -8,26 +8,27 @@ somebody would change a cron job on it.
 
 from __future__ import annotations
 
-import argparse
-
 import pytest
 
 from wowdps import cli, progresshours, warcraftlogs, wclcost
 
-#: What the CLI is handed when nothing in particular is under test. Kept in one place
-#: because an option added to the parser and forgotten here turns every CLI test into
-#: an AttributeError that reads like a defect in the command.
-_ARGS = {
-    "encounter": 3421,
-    "difficulty": 5,
-    "page": 1,
-    "repeats": 2,
-    "point_ceiling": 0.8,
-    "report": None,
-    "fight": None,
-    "events_limit": 300,
-    "event_window_ms": 10_000_000,
-}
+
+def _args(**overrides):
+    """What the CLI is handed, taken from the REAL parser rather than mirrored.
+
+    A hand-written Namespace is a fixture that grows a field to match its reader: an
+    option added to the parser and forgotten here turns every CLI test into an
+    AttributeError that reads like a defect in the command, and -- worse -- a default
+    changed in the parser leaves these tests pinning the OLD one. This repository has
+    already paid for that distinction once, in the other direction: `fight-probe`'s
+    dispatch form said `max_pages 3` while every real run passed 20, and every
+    scheduled continuation was a silent no-op for two days.
+    """
+    args = cli.build_parser().parse_args(["wcl-cost", "--repeats", "2"])
+    for key, value in overrides.items():
+        setattr(args, key, value)
+    return args
+
 
 # --------------------------------------------------------------- the documents
 
@@ -291,7 +292,7 @@ def test_the_command_never_lets_a_query_touch_the_cache(monkeypatch, capsys):
     monkeypatch.setattr(warcraftlogs.Credentials, "from_env", classmethod(lambda cls: object()))
     monkeypatch.setattr(warcraftlogs, "WarcraftLogsClient", lambda credentials: stub)
 
-    code = cli.cmd_wcl_cost(argparse.Namespace(**_ARGS))
+    code = cli.cmd_wcl_cost(_args())
 
     assert code == 0
     assert stub.cache_flags, "no query was sent at all"
@@ -624,7 +625,7 @@ def test_the_command_names_the_pairs_it_did_not_build(monkeypatch, capsys):
     monkeypatch.setattr(warcraftlogs.Credentials, "from_env", classmethod(lambda cls: object()))
     monkeypatch.setattr(warcraftlogs, "WarcraftLogsClient", lambda credentials: stub)
 
-    assert cli.cmd_wcl_cost(argparse.Namespace(**_ARGS)) == 0
+    assert cli.cmd_wcl_cost(_args()) == 0
 
     printed = capsys.readouterr().out
     for key in wclcost.NEEDS_A_REPORT:
@@ -648,4 +649,4 @@ def test_the_command_reports_a_stop_as_the_hour_rather_than_as_a_refused_pair(mo
     monkeypatch.setattr(warcraftlogs.Credentials, "from_env", classmethod(lambda cls: object()))
     monkeypatch.setattr(warcraftlogs, "WarcraftLogsClient", lambda credentials: stub)
 
-    assert cli.cmd_wcl_cost(argparse.Namespace(**_ARGS)) == 2
+    assert cli.cmd_wcl_cost(_args()) == 2
