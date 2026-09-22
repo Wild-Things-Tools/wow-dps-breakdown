@@ -6614,6 +6614,81 @@ full re-implementation. Written down in one repository and broken in another, in
 same way, which is the argument for the rule living beside the canary runner rather
 than in prose.
 
+#### The second difference: an argument, and why the probe CONSTRUCTS the other side
+
+`Difference` + `differs_only_by` + `with_argument`. #170's two remaining measurements
+are both about an **argument** rather than a field -- does an unfiltered
+`FIGHT_STRUCTURE` cost more than a filtered one, does `includeResources` cost anything
+-- and `differs_only_by_the_block` refuses both. **Correctly**, which is why they had
+been open: the two sides differ in an argument, not in the block, and loosening the
+rule to let them through would have priced them under a sentence naming the block.
+
+**The rule is an object now**, carrying the noun a verdict prints, the exact fragments,
+which SIDE writes them, and whether the two sides return the same answer. Three fields,
+three decisions:
+
+- **Fragments are exact text, never a pattern.** An expression matching "the filter"
+  matches a filter elsewhere in the document too and strips the wrong one -- and the
+  result is a perfectly good number about the wrong difference, the one failure a
+  reader of this output cannot detect.
+- **`written_on` is NOT always the dearer side.** Dropping a filter makes the document
+  *shorter* and the answer *bigger*, so on exactly the question this was built for,
+  text length and cost point in opposite directions. A rule assuming the rich side is
+  the longer one refuses that pair as unsound.
+- **`answers_differ` is the honesty flag.** The block adds three numbers to a response,
+  so a difference there is about the **asking**. An argument changes what comes back,
+  so a difference there is a cost difference and says nothing about whether the charge
+  is per field, per row or per byte. The probe prints that on every such pair rather
+  than only on a separating one -- a reader who sees `inside-the-noise` has to know the
+  two sides return different data, or the bound underneath reads as a bound on the
+  asking.
+
+**The richer side is CONSTRUCTED, not paired, and that is measured rather than
+argued.** `EVENTS_QUERY` and `EVENTS_WITH_RESOURCES_QUERY` are both shipped, both real,
+and differ in **two** things -- the argument *and* the operation name (`FightEvents`
+against `FightEventsWithResources`). Handed to the probe as a pair they would have
+answered a question nobody asked. The test pins both halves: the pairing is refused,
+**and** the constructed document is the shipped one once it is renamed, which is what
+makes the refusal a control rather than a hint.
+
+**The filter is TWO fragments, because GraphQL refuses an operation that declares a
+variable it does not use.** Stripping the argument alone produces a document the server
+rejects, so that version would have priced an error response against a real one:
+
+```
+query FightStructure($code: String!) {          <- no undeclared leftover
+      fights(killType: Encounters) {
+```
+
+Two renames travel with it, both because the old name would now be false.
+`without`/`with_block` are **`lean`/`rich`**, named for the ANSWER -- on two of the
+three pairs the old names are wrong, which is the `inRotation` shape. And `compare` is
+split into `verdict_of` plus a sentence, so `sensitivity` can ask for the verdict
+without being handed a noun it would have to print correctly and never prints at all:
+a function taking a name it does not use is a name waiting to be wrong.
+
+**A 429 cost a round rather than the pass, in the module whose whole subject is the
+counter.** `measure` caught `Exception` per round and walked on, so a 429 would have
+dropped exactly the rounds the hour ran out on and left a verdict over the ones that
+got in first -- a **biased** subset rather than a smaller one, and nothing in the
+printed output could say so. `CostProbeStopped` is its own class because the two
+answers are different actions: a soundness refusal means this pair can never be priced,
+a 429 means the HOUR is gone. The client translates once, in the CLI, so `wclcost` still
+imports no client; exit 2, the code the ceiling already uses, because it is the same
+fact. Seventh instance of the family #199-#201 closed.
+
+**Both new pairs need a report code, and that is an INPUT rather than a discovery** --
+read off a committed `fights.json`, so it costs no query, which is the rule
+`GUILD_PULLS_QUERY` is still excluded under. Without one the run prices the block pair
+alone and **names the questions it did not ask**: a probe that answered one of three
+and reported success would be this module's own failure, one level up from its verdicts.
+
+**A side finding, from the test written for the anchor.** `with_argument`'s
+already-carries check was a bare `in`, so a one-character argument name matched inside
+any word -- `r` is in `query`, and a pair differing in `r: true` was refused as reversed
+before the anchor was ever looked at. Matched as an argument now: the name, then a
+colon. The useful direction for a test to miss in.
+
 ### The catalogue: what a run may ask, and the three places the scrub is checked
 
 `catalogue.py` + `wowdps catalogue` -> the private repository's `progress-catalogue/`
