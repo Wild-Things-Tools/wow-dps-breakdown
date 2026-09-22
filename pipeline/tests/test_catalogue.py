@@ -682,6 +682,64 @@ def test_a_rate_limit_mid_walk_still_stops_the_run(tmp_path):
     assert ("reports", second, 1) not in client.calls, "the run went on after a 429"
 
 
+def outcomes_in(path: Path) -> list[str]:
+    """Every refusal's `outcome`, or none at all when nothing was refused."""
+    if not path.exists():
+        return []
+    return [json.loads(line)["outcome"] for line in path.read_text().splitlines() if line.strip()]
+
+
+def test_a_429_on_a_report_is_not_filed_as_a_fact_about_that_report(tmp_path):
+    """#199, and the same ordering rule as the test above, one loop deeper.
+
+    The page walk was already guarded; the CODE loop below it was not, and its
+    `except WarcraftLogsError` caught the 429 and wrote a `report-error` line -- a
+    statement that THIS report could not be read, where the service is refusing
+    everything until the hour turns. Every following code of the zone meets the same
+    refusal, so one 429 writes a SERIES of them, and they are permanent: they land in
+    the private data repo, and `retryable()` is only subtracted under
+    `--retry-errors`, so without that flag the report is never read again.
+
+    The two reports already paid for must survive, which is the `finally`'s job and
+    the half a re-raise must not cost.
+    """
+    rows = many_reports(5)
+    answers = kills_for(rows)
+    for row in rows[2:]:
+        answers[row["code"]] = RateLimited("429")
+    client = StubClient(reports={ZONE: rows}, kills=answers)
+
+    report = run(client, tmp_path, stages=(3,), report_limit=10)
+
+    assert report.stopped and "429" in report.stopped, "the hour's refusal did not stop the run"
+    assert "report-error" not in outcomes_in(tmp_path / "z53.refused.jsonl"), (
+        "the hour's refusal was filed as a property of the reports, permanently"
+    )
+    assert len((tmp_path / "z53.reports.jsonl").read_text().splitlines()) == 2, (
+        "the reports already paid for were not kept"
+    )
+    assert client.calls.count(("report_kills", "r003")) == 0, "the run asked on after a 429"
+
+
+def test_a_429_on_a_fight_is_not_filed_as_a_fact_about_that_kill(tmp_path):
+    """The same clause on Stufe 2, where the line would be `structure-error`.
+
+    Separate from the one above because it is a different call site with different
+    bookkeeping: Stufe 3 adds the code to `seen` BEFORE the query and so has to undo
+    it, Stufe 2 never does -- its exact test is the stored row/refusal set. So letting
+    the 429 out here records nothing at all about the kill, which is right.
+    """
+    client = StubClient(structures={("aBcD", ENCOUNTER, MYTHIC): RateLimited("429")})
+
+    report = run(client, tmp_path)
+
+    assert report.stopped and "429" in report.stopped
+    assert "structure-error" not in outcomes_in(tmp_path / "z53-d5.refused.jsonl"), (
+        "the hour's refusal was filed as a property of the kill"
+    )
+    assert report.zones_failed == [], "a 429 was demoted to 'this zone failed, move on'"
+
+
 def test_the_cli_refuses_more_report_pages_than_the_service_will_serve(
     tmp_path, monkeypatch, caplog
 ):
