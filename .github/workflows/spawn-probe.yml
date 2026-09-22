@@ -185,7 +185,15 @@ jobs:
             echo "spawn map unchanged"
             exit 0
           fi
-          git commit -m "data: refresh the spawn map for ${TIER} $(date -u +%Y-%m-%d)"
+          # A pass the point ceiling stopped is a PREFIX of the encounter, and the
+          # payload has said so as `stoppedBy` since it was written -- the record of
+          # the run did not. Same repair as `progress-hours.yml` got in #196, and the
+          # same reason: "UNMEASURED, never zero" applies to a commit message too.
+          stopped=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('stoppedBy') or '')" \
+            spawn-probe/spawn-probe.json 2>/dev/null || true)
+          suffix=""
+          [ -n "$stopped" ] && suffix=" (PARTIAL: stopped by $stopped)"
+          git commit -m "data: refresh the spawn map for ${TIER} $(date -u +%Y-%m-%d)${suffix}"
           # Rebase before pushing, for the reason `fight-probe.yml` records: these
           # workflows commit into one branch and run concurrently with each other and
           # with a person's own pushes, so a bare push loses the race and fails a run
