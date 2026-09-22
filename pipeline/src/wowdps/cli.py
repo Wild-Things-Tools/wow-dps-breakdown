@@ -2034,6 +2034,22 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
                 return False
             return budget["spent"] >= limit * args.point_ceiling
 
+        def stop_here(boss) -> int:
+            """Write what is measured, and say on the BOSS that it was cut short.
+
+            One definition rather than one per stop site. The marker belongs on the
+            block as well as on the document because the published file folds runs
+            on `(encounterId, difficulty)`: a document-level field describes the
+            newest run over blocks most of which came from other ones, which is
+            `gear.json`'s one-provenance-block-over-three-slots defect. Written at
+            two sites it was also written at one TESTED site and one untested twin,
+            which is where this project's defects live.
+            """
+            boss.stopped_by = "point-ceiling"
+            return _write_progress_hours(
+                args, bosses, client, start, limit, stopped_by="point-ceiling"
+            )
+
         # One encounter block per id for the whole pass.
         #
         # `WarcraftLogsClient.encounter` sends `ENCOUNTER_ZONE_QUERY`, whose payload
@@ -2227,7 +2243,7 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
 
                 if over_ceiling():
                     logging.warning("point ceiling reached; stopping with what is measured")
-                    return _write_progress_hours(args, bosses, client, start, limit)
+                    return stop_here(boss)
                 reports: list[dict] = []
                 seen_codes: set[str] = set()
                 duplicates = 0
@@ -2324,7 +2340,7 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
                                 "point ceiling reached before the roster; stopping "
                                 "with what is measured"
                             )
-                            return _write_progress_hours(args, bosses, client, start, limit)
+                            return stop_here(boss)
                         try:
                             composition = progresshours.raid_composition(
                                 client.player_details(answer.kill_report_code, answer.kill_fight_id)
@@ -2382,8 +2398,20 @@ def _progress_screen_totals(bosses) -> dict:
     return totals
 
 
-def _write_progress_hours(args, bosses, client, start: float, limit: float) -> int:
-    """Write the document, with the cost stated as measured or UNMEASURED."""
+def _write_progress_hours(
+    args, bosses, client, start: float, limit: float, *, stopped_by: str | None = None
+) -> int:
+    """Write the document, with the cost stated as measured or UNMEASURED.
+
+    ``stopped_by`` names why the pass returned early. A run the point ceiling
+    stopped used to be indistinguishable from one that read every boss out: it
+    returns 0, so the workflow's ``if: inputs.publish`` -- which has no status
+    function and therefore gets ``success()`` ANDed in -- committed the prefix
+    under the same name as a complete pass, and nothing in the document or the
+    commit message said which it was. A shorter document under the same name is a
+    DIFFERENT measurement, not a smaller one, which is the rule this project
+    already enforces for `write_fights` and for this metric's own floor.
+    """
     import json as _json
 
     from . import progresshours
@@ -2431,6 +2459,11 @@ def _write_progress_hours(args, bosses, client, start: float, limit: float) -> i
         # rather than as a line in a log nobody kept.
         "screens": _progress_screen_totals(bosses),
         "guildsRequested": args.guilds,
+        # Absent on a pass that read every boss out, so a clean run's bytes do not
+        # move -- and it cannot go stale, because the published document takes its
+        # top level from THIS run: the next complete publish simply writes no such
+        # key. The per-boss `stoppedBy` is the half that survives the merge.
+        **({"stoppedBy": stopped_by} if stopped_by else {}),
         "bosses": [boss.to_json() for boss in bosses],
         "seasonTotalHours": progresshours.stacked_total(bosses),
         "cost": cost,

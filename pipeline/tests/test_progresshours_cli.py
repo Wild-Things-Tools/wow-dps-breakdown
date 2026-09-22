@@ -703,3 +703,97 @@ def test_a_row_with_fromlog_and_no_kill_time_is_refused_before_the_report_walk(
     assert not [1 for label, _ in client.sent if label and label.startswith("pulls:")], (
         "the report walk ran for a guild the screen had already refused"
     )
+
+
+# --------------------------------------------------------------------------------
+# A pass the point ceiling stopped is a PREFIX, and it used to say so nowhere
+# --------------------------------------------------------------------------------
+
+
+class CeilingAfter(StubClient):
+    """A stub whose hourly counter crosses the ceiling on the Nth reading.
+
+    `refresh_budget()` polls once per boss, so a counter that jumps between two
+    bosses is what a real shared-budget stop looks like: one boss read out, the
+    next entered and abandoned, the rest never asked about at all.
+    """
+
+    def __init__(self, *args, jump_on: int, **kw):
+        super().__init__(*args, **kw)
+        self.jump_on = jump_on
+
+    def rate_limit(self):
+        self.rate_limit_calls += 1
+        spent = 9500.0 if self.rate_limit_calls >= self.jump_on else 0.0
+        return {"limitPerHour": 18000.0, "pointsSpentThisHour": spent}
+
+
+def _document(monkeypatch, tmp_path, client, **overrides):
+    monkeypatch.setattr(warcraftlogs.Credentials, "from_env", staticmethod(lambda: object()))
+    monkeypatch.setattr(warcraftlogs, "WarcraftLogsClient", lambda _c: client)
+    out = tmp_path / "progress-hours.json"
+    args = argparse.Namespace(
+        tier="MID1",
+        encounter=0,
+        zone=0,
+        difficulty=MYTHIC,
+        guilds=4,
+        max_pages=3,
+        rankings_pages=3,
+        point_ceiling=0.5,
+        composition=False,
+        out=str(out),
+    )
+    for key, value in overrides.items():
+        setattr(args, key, value)
+    assert cli.cmd_progress_hours(args) == 0
+    return json.loads(out.read_text(encoding="utf-8"))
+
+
+def _clean_pages():
+    return [listing([{"startTime": 0, "fights": [fight(0, HOUR, kill=True)]}], False)]
+
+
+def test_a_pass_the_ceiling_stopped_names_the_boss_it_stopped_in(monkeypatch, tmp_path):
+    """The whole of #196's second half, in one document.
+
+    `_write_progress_hours` returns 0 whether the pass read every boss out or the
+    point ceiling ended it at boss two of nine, and `progress-hours.yml`'s
+    `if: inputs.publish` carries no status function -- so GitHub ANDs in
+    `success()` and the prefix was committed under the same name as a complete
+    pass. A shorter document under one name is a DIFFERENT measurement, not a
+    smaller one; that is the rule this project already enforces for
+    `write_fights` and for this metric's own floor.
+
+    Two claims, and the second is the one a merge depends on:
+
+    * the boss the stop happened IN says so, per block, so the marker travels
+      with the thing it is about through a union merge on
+      `(encounterId, difficulty)`;
+    * the bosses the pass never entered contribute NOTHING -- absent reads as
+      "nobody asked", where a block of zeros reads as "nobody has killed it",
+      which is a claim about the season.
+
+    Canary: drop either `boss.stopped_by = ...` assignment in
+    `cmd_progress_hours` and the first assertion goes red by name.
+    """
+    # 1 = the pass's opening reading, 2 = boss one's poll, 3 = boss two's.
+    client = CeilingAfter(_clean_pages(), jump_on=3)
+    document = _document(monkeypatch, tmp_path, client)
+
+    assert document["stoppedBy"] == "point-ceiling"
+    bosses = document["bosses"]
+    assert len(bosses) == 2, "a boss the pass never entered still reached the document"
+    assert bosses[0]["sample"] == 1 and "stoppedBy" not in bosses[0]
+    assert bosses[1]["stoppedBy"] == "point-ceiling"
+    assert bosses[1]["sample"] == 0
+
+
+def test_a_pass_that_read_every_boss_out_carries_no_marker(monkeypatch, tmp_path):
+    """The control. Without it the test above passes against a writer that stamps
+    every document, which would make the marker worth nothing."""
+    client = StubClient(_clean_pages())
+    document = _document(monkeypatch, tmp_path, client, encounter=ENCOUNTER)
+
+    assert "stoppedBy" not in document
+    assert all("stoppedBy" not in boss for boss in document["bosses"])
