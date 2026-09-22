@@ -9873,6 +9873,92 @@ Expect one visible change when it does. Devastation Evoker (Scalecommander) is
 the site currently shows as its largest computed gain is one the measurement says
 is not a gain at all.
 
+### The sweeps measure on the computed build now, where it wins on simc's own gear
+
+Owner decision 5, stage 2 (2026-08-29), and the `shipped` block above is what makes
+it possible: **the gear and buff sweeps take the computed build as their base where
+it beats simc's outside the tie band.** `computedbuilds.computed_bases` reads the
+document, `computedbuilds.with_talents` writes the hash onto every variant, and each
+published row carries `talentsSource`.
+
+**It costs nothing.** Both sweeps are profileset-against-profileset differences, so
+this is the same number of profilesets with one option more on each. There was never
+a budget argument against it -- the argument was that nobody had measured the margin
+on simc's own kit, and #52 closed that.
+
+**What it changes is which comparison is being published.** A trinket that pairs with
+a talent simc's build does not take ranks differently; what a set bonus and an outside
+Power Infusion are worth is a property of the build being played. Measured over the
+committed `computed-builds.json` on 2026-09-22:
+
+```
+148 rows carry a shipped block, 68 of them separate
+  13 of 52 builds at one target     26 at five     29 at ten
+all 68 name a hash different from simc's; best.origin is `search` on every one
+```
+
+So a single-target gear sweep -- which is what `DEFAULT_GEAR_TARGETS` runs and what
+the loot question is about -- would move **13 of 52 builds** onto different talents.
+
+Three decisions in the gate, each of which reversed produces a plausible answer
+rather than an error:
+
+- **The `shipped` block is required and the anchored margin is never a fallback.**
+  The anchored margin is the projection this file already measures as accurate to a
+  tenth of a point on seven builds of nine and **wrong by 2.52 points on one**, sign
+  going both ways, with nothing visible saying which build is which. A row without
+  the block is left on the profile's own talents.
+- **`separates` is derived from the two numbers beside it, never read.**
+  `dps-best-build`'s rule. Measured: the derived answer agrees with the published
+  boolean on **148 of 148** rows and no row sits within 1e-6 of its band, so the
+  document's rounding cannot flip it today. The test fixtures deliberately publish a
+  `separates` that contradicts their own margin, so a reader that consulted it would
+  go red.
+- **The key carries the scenario AND the target count.** A five-target sweep taking
+  the one-target build would measure under talents nobody chose for it -- and how
+  often the two builds diverge grows with the target count, per the table above.
+
+**The hash rides on every variant rather than once on the command line**, and that is
+a refusal to rest on an unmeasured mechanism rather than tidiness. `buildsearch`
+passes `base_talents` as a command-line option ahead of the profileset lines; that one
+is measured (simc builds the base actor from the profile file and a refused hash exits
+81, taking every profileset with it). Whether a profileset carrying no `talents=` of
+its own then **inherits** the command line's is measured nowhere in this repository,
+and **no simc is reachable from the sandbox this was written in**. Writing it per
+variant removes the question; it costs one option per profileset.
+
+**`talentsSource` is an object, and absent means the profile's own talents.** A bare
+`"computed"` is a claim a reader cannot check against the figures beside it, so the
+margin and the band travel with it. And absent is a *fact* rather than an unknown:
+every gear and buff row ever published was swept on the profile's own `talents=` line,
+so a document written before this needs no field and no reader is lied to.
+
+**`--computed` takes a file or a published-data root, and refuses a missing
+document.** The root form exists because a dispatch says `latest` and only the command
+knows what that resolves to -- `_resolve_tier` asks simc's profiles, not `tiers.json`,
+so resolving it in a workflow would be a second definition that can disagree. The
+refusal covers both forms: a typo'd root would switch the whole feature off and look
+like a clean run, which is #219's shape. Not passing it at all is the ordinary state
+and the run says so in one line.
+
+Both workflows carry the switch, **on by default**. A default is configuration rather
+than a form hint -- `fight-probe`'s `max_pages` defaulted to 3 while every real
+dispatch passed 20, and every hourly continuation was a silent no-op for two days.
+MID2 is the only tier with a `computed-builds.json`, so a MID1 dispatch has to turn it
+off; the sweep jobs do a plain `actions/checkout`, so the document is on the runner.
+
+**Nothing published moves until a sweep runs.** `gear.yml` and `buffs.yml` are
+`workflow_dispatch` only, and a full single-target trinket pass is ~620 CPU-minutes by
+this file's own arithmetic. The first run is where the 13 builds change basis, and
+`talentsSource` is what makes that visible in the file rather than only in a
+transcript.
+
+**What is NOT done here, deliberately.** The two frontends do not read the field yet
+-- the product surface is nextpull, and a reader there is its own change; and the
+`bestSets` ceiling, the pool entries and the candidate gains inside a swept row are
+untouched, because they are still differences between profilesets that all carry these
+same talents.
+
 ## The Ulria sheet: an independent check that mostly agrees
 
 Read on **2026-08-25**. The owner asked how far this project's numbers sit from
