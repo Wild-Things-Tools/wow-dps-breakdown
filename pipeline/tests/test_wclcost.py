@@ -388,7 +388,7 @@ def test_a_dearer_cheapest_richer_round_is_named_rather_than_bounded():
     assert "counterfactual rather than a bound" in printed
     # And the verb follows the flag: a line calling it a bound, two lines above the
     # clause withdrawing that, is an output that contradicts itself.
-    assert "bounds the block" not in printed
+    assert "bounds the reading block" not in printed
 
 
 def test_the_query_cost_needs_a_poll_and_is_absent_without_one():
@@ -403,7 +403,35 @@ def test_the_query_cost_needs_a_poll_and_is_absent_without_one():
     priced = wclcost.sensitivity(without, with_block, poll=_sample("poll", [1.0, 1.0]))
     assert priced.query_cost == pytest.approx(1.01)
     printed = "\n".join(wclcost.describe_sensitivity(priced))
-    assert "bounds the block under 0.99% of what one query costs" in printed
+    assert "bounds the reading block under 0.99% of what one query costs" in printed
+
+
+def test_the_bound_names_the_pairs_own_difference_rather_than_the_block():
+    """Run 34774586069 printed "this bounds the block" on all three pairs.
+
+    Two of them differ in an ARGUMENT, so the sentence named something that is not
+    what was measured -- the `inRotation` shape, in the one line a reader takes the
+    number away in. It is driven through `describe` rather than through
+    `describe_sensitivity` on purpose: the renderer's default would have made a direct
+    test pass while the call site still handed it nothing, which is the half this
+    repository keeps having to learn twice.
+    """
+    pairs = wclcost.build_pairs(
+        encounter=3420, difficulty=5, page=1, report="2ZzYG19fLw8NHq6P", fight=41
+    )
+    by_key = {pair.key: pair for pair in pairs}
+
+    for key, expected in (
+        ("progress-rankings + rateLimitData", "the reading block"),
+        ("fight-structure filter", "the encounter/difficulty filter"),
+        ("events + includeResources", "`includeResources: true`"),
+    ):
+        counter = _Counter()
+        result = wclcost.probe(by_key[key], poll=counter.poll, send=counter.send, repeats=2)
+        printed = "\n".join(wclcost.describe(result))
+        assert f"bounds {expected} under" in printed, key
+        if expected != "the reading block":
+            assert "bounds the reading block" not in printed, key
 
 
 def test_describe_prints_the_bound_only_under_the_verdict_it_bounds():
