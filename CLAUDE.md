@@ -3073,6 +3073,16 @@ shareable: that one groups on fight length and the target-count curve, neither o
 which a harvest reads. What this has instead is the roster, which is the stronger
 agreement signal -- a curve can coincide, a fourteen-loadout roster does not.
 
+#### The seed label had no test at all, and a canary found that rather than a bug
+
+`buildsearchrun.entry_to_seed` prints *"harvested, seen in N kill(s)"* into a search
+transcript, and it read the row count. Nine canaries were run against this change;
+eight fired by name and the one that swapped that field back stayed **green** --
+there was no test of the label anywhere. It has two now, and the second is the half
+worth keeping: a document written before schema 2 states neither field, and the label
+then says only *"harvested"* rather than falling back to the row count (the defect
+with an extra step) or inventing a 1 (a kill nobody counted).
+
 #### Two fixtures could not express the difference, which is why nothing caught it
 
 `test_harvest.observation` defaults to one report and one fight, so every
