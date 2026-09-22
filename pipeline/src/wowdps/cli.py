@@ -1986,6 +1986,7 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
     from . import harvest, progresshours
     from .warcraftlogs import (
         Credentials,
+        RateLimited,
         WarcraftLogsClient,
         WarcraftLogsError,
     )
@@ -2026,8 +2027,34 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
         budget = {"spent": start}
 
         def refresh_budget() -> None:
-            if limit:
+            """Re-read the shared counter, and never die on the reading itself.
+
+            `rate_limit()` is a real query by construction -- it must never be
+            served from the cache, because a cached response is a record of *then*
+            and this asks about *now* -- so it can be refused like any other. It sat
+            in no `try` at all: the one call whose whole purpose is to warn before
+            the budget is overrun could end the pass with a traceback, after every
+            boss before it had been read and paid for and with the payload not yet
+            written.
+
+            The two failures are not one. A 429 means the hour is gone, which is a
+            STOP and is raised for the caller to handle; any other refusal is a poll
+            that did not answer, and ending a run nowhere near its ceiling over that
+            would be the opposite over-reaction. The stale reading is kept and said
+            out loud, which is the direction that costs at worst one boss's guilds.
+            """
+            if not limit:
+                return
+            try:
                 budget["spent"] = float(client.rate_limit().get("pointsSpentThisHour") or start)
+            except RateLimited:
+                raise
+            except WarcraftLogsError as exc:
+                logging.warning(
+                    "budget poll failed (%s); carrying the previous reading of %.1f",
+                    exc,
+                    budget["spent"],
+                )
 
         def over_ceiling() -> bool:
             if not limit:
@@ -2187,7 +2214,14 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
                 boss.refused["no-zone"] = boss.refused.get("no-zone", 0) + 1
                 continue
             boss.zone_id = zone_id
-            refresh_budget()
+            try:
+                refresh_budget()
+            except RateLimited as exc:
+                # The hour is spent, which is the same answer the ceiling gives --
+                # so it ends the pass the same way rather than as a traceback that
+                # loses every boss already paid for.
+                logging.warning("the hourly budget is spent (%s); stopping", exc)
+                return stop_here(boss)
 
             sample = ranked[: args.guilds]
             boss.sample_short_of_request = len(sample) < args.guilds
@@ -2262,6 +2296,17 @@ def cmd_progress_hours(args: argparse.Namespace) -> int:
                             },
                             label=f"pulls:{encounter_id}",
                         )
+                    except RateLimited as exc:
+                        # BEFORE the base class, which `RateLimited` inherits from.
+                        # Caught below it, a 429 was written as `refused["error"]` --
+                        # a statement about the GUILD -- and since a 429 hits every
+                        # guild after it, the boss ended `medianHours: null` with
+                        # `refused: {error: N}` and the document could not say that
+                        # the service had refused rather than that the guilds had
+                        # nothing to show. Same ordering rule `progresssweep` and
+                        # `catalogue` already state.
+                        logging.warning("the service refused the walk (%s); stopping", exc)
+                        return stop_here(boss)
                     except WarcraftLogsError as exc:
                         logging.warning("guild %s: %s", guild_id, exc)
                         boss.refused["error"] = boss.refused.get("error", 0) + 1
