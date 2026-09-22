@@ -955,6 +955,45 @@ def test_the_document_names_its_counts_and_states_what_it_does_not_use():
     assert "54 s" in grouping["notTimestamps"]
 
 
+def test_a_run_whose_rosters_are_too_thin_says_the_rule_could_not_fire():
+    """`distinctKills` alone cannot say whether anything was comparable.
+
+    A `--spec` run narrows every roster to one spec, so no row reaches the count
+    floor and nothing is ever merged -- and the document would then read as a run
+    with no duplicate uploads rather than as a run that could not look. The two are
+    different sentences, and only one of them is true.
+    """
+    thin = harvest.build_document(
+        "MID2",
+        5,
+        _upload("aBcD1234", 7, _RAID[:2]) + _upload("eFgH5678", 3, _RAID[:2]),
+        tables(),
+        encounters=[],
+    )
+    grouping = thin["source"]["uploadGrouping"]
+    assert grouping["narrowestRoster"] == 2
+    assert grouping["comparable"] is False
+    assert grouping["rowsMerged"] == 0
+
+    # Rows of two DIFFERENT widths, or `min` and `max` are the same function here
+    # and the canary for this field stays green -- which is what happened.
+    wide = harvest.build_document(
+        "MID2",
+        5,
+        _upload("aBcD1234", 7, _RAID)
+        + _upload("eFgH5678", 3, _RAID[:3])
+        + _upload("zZzZ0000", 1, _OTHER_RAID),
+        tables(),
+        encounters=[],
+    )
+    grouping = wide["source"]["uploadGrouping"]
+    assert grouping["narrowestRoster"] == 3
+    assert grouping["comparable"] is True
+    # The first two rows are one kill; the third guild is its own.
+    assert grouping["rowsMerged"] == 1
+    assert wide["source"]["distinctKills"] == 2
+
+
 def test_the_builds_are_ordered_by_kills_before_rows():
     """A build seen in two kills outranks one seen in three rows of one kill.
 

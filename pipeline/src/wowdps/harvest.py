@@ -1037,6 +1037,27 @@ _WHY_NOT_TIMESTAMPS = (
 )
 
 
+def rosters_by_row(
+    builds: dict[str, list[HarvestedBuild]],
+) -> tuple[dict[tuple[str, int], set[str]], dict[tuple[str, int], int]]:
+    """``(loadouts per (report, fight), encounter per (report, fight))``.
+
+    Split out because how *wide* a row's roster is decides whether the rule below
+    could fire on it at all, and a run that publishes `distinctKills` without
+    saying that is the shape this repository keeps recording: a guard present and
+    answering over a population it cannot reach.
+    """
+    rosters: dict[tuple[str, int], set[str]] = {}
+    encounters: dict[tuple[str, int], int] = {}
+    for spec_builds in builds.values():
+        for build in spec_builds:
+            for observation in build.observations:
+                key = (observation.report, observation.fight_id)
+                rosters.setdefault(key, set()).add(build.key)
+                encounters[key] = observation.encounter_id
+    return rosters, encounters
+
+
 def group_uploads(
     builds: dict[str, list[HarvestedBuild]],
 ) -> dict[tuple[str, int], tuple[str, int]]:
@@ -1063,14 +1084,7 @@ def group_uploads(
     neither of which a harvest reads. What this has instead is the roster, which is
     the stronger agreement signal of the two -- see ``_SAME_KILL_SHARE``.
     """
-    rosters: dict[tuple[str, int], set[str]] = {}
-    encounters: dict[tuple[str, int], int] = {}
-    for spec_builds in builds.values():
-        for build in spec_builds:
-            for observation in build.observations:
-                key = (observation.report, observation.fight_id)
-                rosters.setdefault(key, set()).add(build.key)
-                encounters[key] = observation.encounter_id
+    rosters, encounters = rosters_by_row(builds)
 
     parent = {key: key for key in rosters}
 
@@ -1282,6 +1296,7 @@ def build_document(
     """The published shape. Every count in it comes from the rows above it."""
     builds, rejected = group_builds(observations, tables)
     kills = group_uploads(builds)
+    _rosters, _ = rosters_by_row(builds)
 
     def _kills_of(rows: list[Observation]) -> int:
         return len({kills.get((o.report, o.fight_id), (o.report, o.fight_id)) for o in rows})
@@ -1352,6 +1367,14 @@ def build_document(
                     f"{_SAME_KILL_SHARE:.0%} of the loadouts either carries."
                 ),
                 "notTimestamps": _WHY_NOT_TIMESTAMPS,
+                # Whether the rule could fire at all, which a bare `distinctKills`
+                # cannot say. A `--spec` run narrows every roster to one spec, and
+                # a row under `_SAME_KILL_SHARED` loadouts wide is never merged with
+                # anything -- so `distinctKills` is then an upper bound and this is
+                # how a reader sees that from the file.
+                "narrowestRoster": min((len(r) for r in _rosters.values()), default=None),
+                "rowsMerged": len(_rosters) - len(set(kills.values())) if _rosters else 0,
+                "comparable": all(len(r) >= _SAME_KILL_SHARED for r in _rosters.values()),
             },
             "playersRead": len(observations),
             "killedBetween": date_span(observations),

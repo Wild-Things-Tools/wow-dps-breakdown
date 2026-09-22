@@ -3073,6 +3073,14 @@ shareable: that one groups on fight length and the target-count curve, neither o
 which a harvest reads. What this has instead is the roster, which is the stronger
 agreement signal -- a curve can coincide, a fourteen-loadout roster does not.
 
+**And the document says whether the rule could fire at all.** `distinctKills`
+alone cannot: a `--spec` run narrows every roster to one spec, no row reaches the
+count floor, nothing is ever merged, and the file then reads as *a run with no
+duplicate uploads* rather than as *a run that could not look*. So
+`source.uploadGrouping` carries `narrowestRoster`, `comparable` and `rowsMerged`
+beside the rule. Measured on the committed harvest: **narrowest roster 11,
+comparable, 7 rows merged**.
+
 #### The seed label had no test at all, and a canary found that rather than a bug
 
 `buildsearchrun.entry_to_seed` prints *"harvested, seen in N kill(s)"* into a search
