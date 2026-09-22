@@ -863,11 +863,28 @@ def cmd_wcl_cost(args: argparse.Namespace) -> int:
       that called an overlap equality could only ever confirm what it set out to show.
     """
     from . import fightprobe, wclcost
-    from .warcraftlogs import Credentials, WarcraftLogsClient, WarcraftLogsError
+    from .warcraftlogs import Credentials, RateLimited, WarcraftLogsClient, WarcraftLogsError
 
     pairs = wclcost.build_pairs(
-        encounter=args.encounter, difficulty=args.difficulty, page=args.page
+        encounter=args.encounter,
+        difficulty=args.difficulty,
+        page=args.page,
+        report=args.report,
+        fight=args.fight,
+        events_limit=args.events_limit,
+        event_window_ms=args.event_window_ms,
     )
+    # Named rather than counted, and named BEFORE anything is spent. A run that
+    # priced one question of three and reported success would be the shape this
+    # command exists to refuse, one level up from its own verdicts.
+    built = {pair.key for pair in pairs}
+    for key in wclcost.NEEDS_A_REPORT:
+        if key not in built:
+            print(
+                f"=== {key}: not built -- it needs --report"
+                + (" and --fight" if "events" in key else "")
+                + " (read one off web/public/data/<tier>/fights.json; it costs no query)"
+            )
 
     try:
         credentials = Credentials.from_env()
@@ -876,15 +893,25 @@ def cmd_wcl_cost(args: argparse.Namespace) -> int:
         return 1
 
     with WarcraftLogsClient(credentials) as client:
-
+        # `RateLimited` is translated to `CostProbeStopped` HERE, in the one place
+        # that holds the client, rather than in `wclcost` -- which otherwise needs no
+        # client at all. Without it a 429 inside `send` is recorded as a per-round
+        # error and the loop walks on, leaving a verdict computed over the rounds the
+        # hour let through: a biased subset, not a smaller one.
         def poll() -> float | None:
-            reading = client.rate_limit() or {}
+            try:
+                reading = client.rate_limit() or {}
+            except RateLimited as exc:
+                raise wclcost.CostProbeStopped(str(exc)) from exc
             spent = reading.get("pointsSpentThisHour")
             return float(spent) if spent is not None else None
 
         def send(document: str, variables: dict) -> None:
             # `cache=False` is the whole measurement. See the docstring.
-            client.query(document, variables, label="cost-probe", cache=False)
+            try:
+                client.query(document, variables, label="cost-probe", cache=False)
+            except RateLimited as exc:
+                raise wclcost.CostProbeStopped(str(exc)) from exc
 
         # The poll's own cost is measured ONCE and shared by every pair: the same
         # poll sits on both sides of every comparison, so it cancels there -- and
@@ -907,6 +934,14 @@ def cmd_wcl_cost(args: argparse.Namespace) -> int:
                     repeats=args.repeats,
                     poll_sample=poll_sample,
                 )
+            except wclcost.CostProbeStopped as exc:
+                # BEFORE the base clause: `CostProbeStopped` subclasses
+                # `CostProbeError`, and caught as one it would be reported as a
+                # refusal of this pair, where the service is refusing everything
+                # until the hour turns. Exit 2, the same code the ceiling uses,
+                # because it is the same fact.
+                logging.warning("the service refused the rest of the hour: %s", exc)
+                return 2
             except wclcost.CostProbeError as exc:
                 logging.error("%s", exc)
                 return 1
@@ -3961,11 +3996,29 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_wcl_cost = sub.add_parser(
         "wcl-cost",
-        help="measure whether asking for rateLimitData costs points (needs credentials)",
+        help="price one resolved field or argument against the same document "
+        "without it (needs credentials)",
     )
     p_wcl_cost.add_argument("--encounter", type=int, default=3421, help="encounter id to ask about")
     p_wcl_cost.add_argument("--difficulty", type=int, default=5)
     p_wcl_cost.add_argument("--page", type=int, default=1)
+    p_wcl_cost.add_argument(
+        "--report",
+        help="a report code, which unlocks the two ARGUMENT pairs (the fights() "
+        "filter and includeResources). Read one off a committed fights.json -- it "
+        "is an input rather than a discovery, so it costs no query",
+    )
+    p_wcl_cost.add_argument(
+        "--fight", type=int, help="a fight id in --report, for the includeResources pair"
+    )
+    p_wcl_cost.add_argument(
+        "--events-limit",
+        type=int,
+        default=300,
+        help="events per side of the includeResources pair. The same on both sides, "
+        "so it bounds the response without moving the comparison",
+    )
+    p_wcl_cost.add_argument("--event-window-ms", type=int, default=10_000_000)
     p_wcl_cost.add_argument(
         "--repeats",
         type=int,

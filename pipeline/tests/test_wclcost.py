@@ -8,11 +8,27 @@ somebody would change a cron job on it.
 
 from __future__ import annotations
 
-import argparse
-
 import pytest
 
 from wowdps import cli, progresshours, warcraftlogs, wclcost
+
+
+def _args(**overrides):
+    """What the CLI is handed, taken from the REAL parser rather than mirrored.
+
+    A hand-written Namespace is a fixture that grows a field to match its reader: an
+    option added to the parser and forgotten here turns every CLI test into an
+    AttributeError that reads like a defect in the command, and -- worse -- a default
+    changed in the parser leaves these tests pinning the OLD one. This repository has
+    already paid for that distinction once, in the other direction: `fight-probe`'s
+    dispatch form said `max_pages 3` while every real run passed 20, and every
+    scheduled continuation was a silent no-op for two days.
+    """
+    args = cli.build_parser().parse_args(["wcl-cost", "--repeats", "2"])
+    for key, value in overrides.items():
+        setattr(args, key, value)
+    return args
+
 
 # --------------------------------------------------------------- the documents
 
@@ -34,17 +50,18 @@ def test_the_shipped_pair_differs_in_the_block_and_in_nothing_else():
     (pair,) = wclcost.build_pairs(encounter=3421, difficulty=5, page=1)
 
     assert pair.is_sound()
-    assert pair.without.document == progresshours.PROGRESS_RANKINGS_QUERY
-    assert "rateLimitData" not in pair.without.document
-    assert pair.with_block.document.count("rateLimitData") == 1
+    assert pair.difference is wclcost.BLOCK
+    assert pair.lean.document == progresshours.PROGRESS_RANKINGS_QUERY
+    assert "rateLimitData" not in pair.lean.document
+    assert pair.rich.document.count("rateLimitData") == 1
     # Balanced on both sides. NOT "the same number of braces" -- the block brings
     # its own pair, so that assertion is false by construction and the first
     # version of this test asserted it anyway. What is worth checking here is that
     # the insert produced a document rather than a syntax error; that it differs in
     # nothing ELSE is `is_sound`, one line up, and that check is exhaustive.
-    for side in (pair.without.document, pair.with_block.document):
+    for side in (pair.lean.document, pair.rich.document):
         assert side.count("{") == side.count("}")
-    assert pair.with_block.document.count("{") == pair.without.document.count("{") + 1
+    assert pair.rich.document.count("{") == pair.lean.document.count("{") + 1
 
 
 def test_a_document_that_already_asks_for_the_reading_is_refused():
@@ -186,8 +203,9 @@ def test_a_pair_that_differs_in_more_than_the_block_is_refused_before_any_query(
     bad = wclcost.Pair(
         key="bent",
         question="?",
-        without=wclcost.Variant("a", "query A { x }", {}),
-        with_block=wclcost.Variant("b", "query B { y }", {}),
+        difference=wclcost.BLOCK,
+        lean=wclcost.Variant("a", "query A { x }", {}),
+        rich=wclcost.Variant("b", "query B { y }", {}),
     )
 
     with pytest.raises(wclcost.CostProbeError, match="more than the reading block"):
@@ -231,8 +249,8 @@ def test_a_send_that_raises_is_recorded_and_does_not_lose_the_other_repeats():
 
     result = wclcost.probe(_pair(), poll=counter.poll, send=flaky, repeats=3)
 
-    assert any(result.with_block.errors or result.without.errors)
-    assert result.with_block.deltas or result.without.deltas
+    assert any(result.rich.errors or result.lean.errors)
+    assert result.rich.deltas or result.lean.deltas
 
 
 # ---------------------------------------------------------------------- the CLI
@@ -274,9 +292,7 @@ def test_the_command_never_lets_a_query_touch_the_cache(monkeypatch, capsys):
     monkeypatch.setattr(warcraftlogs.Credentials, "from_env", classmethod(lambda cls: object()))
     monkeypatch.setattr(warcraftlogs, "WarcraftLogsClient", lambda credentials: stub)
 
-    code = cli.cmd_wcl_cost(
-        argparse.Namespace(encounter=3421, difficulty=5, page=1, repeats=2, point_ceiling=0.8)
-    )
+    code = cli.cmd_wcl_cost(_args())
 
     assert code == 0
     assert stub.cache_flags, "no query was sent at all"
@@ -449,3 +465,188 @@ def test_the_three_measured_runs_reproduce_their_published_sensitivity(run_id):
     assert measure.smallest == pytest.approx(row["smallest"])
     assert measure.cheapest_rounds_agree is row["agree"]
     assert measure.query_cost == pytest.approx(row["query"])
+
+
+# ------------------------------------------- the second difference: an argument
+
+
+def test_the_two_shipped_event_documents_are_not_a_sound_pair():
+    """The control that justifies constructing the richer side rather than pairing.
+
+    `EVENTS_QUERY` and `EVENTS_WITH_RESOURCES_QUERY` are both shipped, both real, and
+    differ in TWO things -- the argument and the operation name. Handed to the probe
+    as a pair they would have produced a perfectly good number about the wrong
+    difference, which is the one failure a reader of the output cannot detect.
+    """
+    rich, difference = wclcost.with_argument(
+        warcraftlogs.EVENTS_QUERY, after="limit: $limit", argument="includeResources: true"
+    )
+
+    assert not wclcost.differs_only_by(
+        warcraftlogs.EVENTS_QUERY, warcraftlogs.EVENTS_WITH_RESOURCES_QUERY, difference
+    )
+    # And the whole of that second difference is the operation name: the constructed
+    # document is the shipped one once it is renamed. So the refusal above is about
+    # the name and nothing else, which is what makes it a control rather than a hint.
+    assert (
+        rich.replace("query FightEvents(", "query FightEventsWithResources(")
+        == warcraftlogs.EVENTS_WITH_RESOURCES_QUERY
+    )
+    assert wclcost.differs_only_by(warcraftlogs.EVENTS_QUERY, rich, difference)
+
+
+def test_the_unfiltered_fight_structure_declares_no_variable_it_does_not_use():
+    """Dropping an argument without its declaration is a document the server refuses.
+
+    GraphQL rejects an operation that declares a variable it never uses, so the
+    filter is TWO fragments rather than one -- and a version that stripped only the
+    argument would have priced an error response against a real one.
+    """
+    unfiltered = wclcost.strip_fragments(
+        warcraftlogs.FIGHT_STRUCTURE_QUERY, wclcost.FIGHT_STRUCTURE_FILTER
+    )
+
+    assert "$encounterId" not in unfiltered
+    assert "$difficulty" not in unfiltered
+    assert "fights(killType: Encounters)" in unfiltered
+    assert unfiltered.count("{") == unfiltered.count("}")
+
+
+def test_the_filter_is_written_on_the_LEAN_side_because_the_shorter_document_asks_more():
+    """The direction that makes `written_on` a field rather than an assumption.
+
+    Every other difference here is text the dearer side carries. Dropping a filter
+    inverts that: the document gets SHORTER and the answer gets BIGGER. A rule that
+    assumed the rich side is the longer one would refuse this pair as unsound.
+    """
+    assert wclcost.FIGHT_STRUCTURE_FILTER.written_on == "lean"
+
+    pairs = wclcost.build_pairs(encounter=3421, difficulty=5, page=1, report="abc123")
+    (pair,) = [p for p in pairs if p.key == "fight-structure filter"]
+
+    assert pair.is_sound()
+    assert len(pair.rich.document) < len(pair.lean.document)
+    # The unfiltered side is sent only what it declares.
+    assert set(pair.rich.variables) == {"code"}
+    assert set(pair.lean.variables) == {"code", "encounterId", "difficulty"}
+
+
+def test_a_fragment_that_does_not_name_one_place_is_refused():
+    """Exactness in both directions, and they are one rule.
+
+    Absent means this document is not the side that carries it; twice means the text
+    does not identify a single place, and removing the first is a guess that builds
+    the other side of a pair out of the wrong edit.
+    """
+    twice = wclcost.Difference(noun="x", fragments=("a",), written_on="rich", answers_differ=False)
+    with pytest.raises(wclcost.CostProbeError, match="appears 2 times"):
+        wclcost.strip_fragments("a query a", twice)
+    with pytest.raises(wclcost.CostProbeError, match="appears 0 times"):
+        wclcost.strip_fragments("query { x }", twice)
+
+
+def test_an_ambiguous_anchor_is_refused_rather_than_guessed():
+    """An argument that could land in another field's list is not inserted at all."""
+    with pytest.raises(wclcost.CostProbeError, match="appears 2 time"):
+        wclcost.with_argument(
+            "query Q {\n  a(limit: 1)\n  b(limit: 1)\n}", after="limit: 1", argument="r: true"
+        )
+
+
+def test_a_document_that_already_carries_the_argument_is_refused():
+    """The reversed pair, which would otherwise price two identical sides as equal."""
+    rich, _ = wclcost.with_argument(
+        warcraftlogs.EVENTS_QUERY, after="limit: $limit", argument="includeResources: true"
+    )
+    with pytest.raises(wclcost.CostProbeError, match="already carries"):
+        wclcost.with_argument(rich, after="limit: $limit", argument="includeResources: true")
+
+
+def test_the_verdict_names_the_difference_rather_than_the_block():
+    """The reason `compare` took a noun at all.
+
+    A separation on the argument pairs printed under the old sentence would have
+    said "asking for the block costs MORE" about a document that never asks for it.
+    """
+    lean, rich = _sample("lean", [2.0, 2.0]), _sample("rich", [9.0, 9.0])
+
+    _, sentence = wclcost.compare(lean, rich, noun="`includeResources: true`")
+
+    assert "includeResources" in sentence
+    assert "block" not in sentence
+
+
+def test_a_pair_whose_two_sides_return_different_data_says_so():
+    """The honesty flag, printed on every such pair rather than only on a separating one.
+
+    A reader who sees `inside-the-noise` has to know the two sides return different
+    amounts of data too, or the bound underneath reads as a bound on the ASKING.
+    """
+    counter = _Counter()
+    pairs = wclcost.build_pairs(encounter=3421, difficulty=5, page=1, report="abc123", fight=7)
+    (pair,) = [p for p in pairs if p.key == "events + includeResources"]
+
+    printed = "\n".join(
+        wclcost.describe(wclcost.probe(pair, poll=counter.poll, send=counter.send, repeats=2))
+    )
+
+    assert "do not return the same data" in printed
+    assert "includeResources" in printed
+
+
+def test_a_stop_ends_the_probe_instead_of_dropping_the_rounds_the_hour_refused():
+    """A 429 is a fact about the HOUR, so it may not become a per-round error.
+
+    Walked past, it drops exactly the rounds the hour ran out on and leaves a verdict
+    computed over the ones that got in first -- a BIASED subset rather than a smaller
+    one, and nothing in the printed output could say so. Same two inheritance lines
+    as #199-#201, in the module whose whole subject is the counter.
+    """
+    counter = _Counter()
+    sent: list[str] = []
+
+    def refusing(document, variables):
+        sent.append(document)
+        if len(sent) == 2:
+            raise wclcost.CostProbeStopped("429")
+        counter.send(document, variables)
+
+    with pytest.raises(wclcost.CostProbeStopped):
+        wclcost.probe(_pair(), poll=counter.poll, send=refusing, repeats=4)
+
+    # It stopped rather than running the remaining rounds of either side.
+    assert len(sent) == 2
+
+
+def test_the_command_names_the_pairs_it_did_not_build(monkeypatch, capsys):
+    """A run that priced one question of three and reported success is the failure
+    this module exists to refuse, one level up from its own verdicts."""
+    stub = _StubClient()
+    monkeypatch.setattr(warcraftlogs.Credentials, "from_env", classmethod(lambda cls: object()))
+    monkeypatch.setattr(warcraftlogs, "WarcraftLogsClient", lambda credentials: stub)
+
+    assert cli.cmd_wcl_cost(_args()) == 0
+
+    printed = capsys.readouterr().out
+    for key in wclcost.NEEDS_A_REPORT:
+        assert f"{key}: not built" in printed
+    assert "--report" in printed
+
+
+def test_the_command_reports_a_stop_as_the_hour_rather_than_as_a_refused_pair(monkeypatch):
+    """Exit 2, the code the ceiling already uses, because it is the same fact.
+
+    `CostProbeStopped` subclasses `CostProbeError`, so a handler in the wrong order
+    would report the service refusing everything as this pair being unpriceable --
+    and exit 1, which the workflow fails the step on.
+    """
+    stub = _StubClient()
+
+    def refusing(document, variables=None, label="query", cache=True):
+        raise warcraftlogs.RateLimited("429 Too Many Requests")
+
+    stub.query = refusing
+    monkeypatch.setattr(warcraftlogs.Credentials, "from_env", classmethod(lambda cls: object()))
+    monkeypatch.setattr(warcraftlogs, "WarcraftLogsClient", lambda credentials: stub)
+
+    assert cli.cmd_wcl_cost(_args()) == 2

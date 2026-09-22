@@ -1,14 +1,23 @@
 name: WCL cost
 
-# Does asking for `rateLimitData` cost points?
+# What does asking for a field or an argument cost?
 #
-# #170's cheapest open measurement, and the one two other things wait on. Two of
-# this package's seventeen query documents carry no reading block --
-# `PROGRESS_RANKINGS_QUERY` and `GUILD_PULLS_QUERY`, both on `progress-sweep`'s hot
-# path -- so that cron pays a standalone `rate_limit()` per guild to learn what its
-# own queries could have told it. Adding the block would close that and changes two
-# unmeasured things: every stored response's cache key, and possibly the cost. This
-# is the second half.
+# #170's remaining open measurements, all three of the same shape: one document
+# against the same document with one thing changed.
+#
+#   the reading block   two of this package's query documents carry none --
+#                       PROGRESS_RANKINGS_QUERY and GUILD_PULLS_QUERY, both on
+#                       progress-sweep's hot path -- so that cron pays a standalone
+#                       rate_limit() per guild to learn what its own queries could
+#                       have told it. Measured 2026-09-13: no cost detected, bounded
+#                       under 1% of the 1.01-point query it rides on.
+#   the fights() filter does an UNFILTERED fights() cost more? The catalogue splits
+#                       its stages on the answer.
+#   includeResources    spawn-probe cannot ask for a coordinate without it.
+#
+# The last two need a REPORT CODE, which is an input here rather than a discovery:
+# read one off a committed fights.json and it costs no query. Without one this runs
+# the block pair alone and SAYS which questions it did not ask.
 #
 # THERE IS NO `actions/cache` STEP, AND THAT IS THE MEASUREMENT RATHER THAN AN
 # OMISSION. A cached response really does spend nothing, so a warm store reports
@@ -31,6 +40,18 @@ on:
       page:
         description: 'Ranking page'
         default: '1'
+      report:
+        # Unlocks the two ARGUMENT pairs. It is an INPUT rather than a discovery --
+        # read one off a committed fights.json -- so it costs no query, which is the
+        # rule GUILD_PULLS_QUERY is still excluded under.
+        description: 'A report code, for the fights() filter and includeResources pairs. Empty runs the block pair alone'
+        default: ''
+      fight:
+        description: 'A fight id in that report, for the includeResources pair. Empty skips it'
+        default: ''
+      events_limit:
+        description: 'Events per side of the includeResources pair. Same on both sides, so it bounds the response without moving the comparison'
+        default: '300'
       repeats:
         description: 'Read/send/read rounds per side. The SPREAD decides the verdict, so one round separates nothing'
         default: '3'
@@ -83,9 +104,19 @@ jobs:
           ENCOUNTER: ${{ inputs.encounter }}
           DIFFICULTY: ${{ inputs.difficulty }}
           PAGE: ${{ inputs.page }}
+          REPORT: ${{ inputs.report }}
+          FIGHT: ${{ inputs.fight }}
+          EVENTS_LIMIT: ${{ inputs.events_limit }}
           REPEATS: ${{ inputs.repeats }}
           CEILING: ${{ inputs.point_ceiling }}
         run: |
+          # An array rather than an interpolated flag string: an empty REPORT has to
+          # add NO argument at all, where `${VAR:+...}` word-splitting is exactly the
+          # subtlety that turns into a silently-dropped flag.
+          extra=()
+          [ -n "$REPORT" ] && extra+=(--report "$REPORT")
+          [ -n "$FIGHT" ] && extra+=(--fight "$FIGHT")
+          [ -n "$EVENTS_LIMIT" ] && extra+=(--events-limit "$EVENTS_LIMIT")
           # The runner's default shell is `bash -eo pipefail`, so errexit would end
           # the step AT the pipeline and never reach `status=$?` -- which is how
           # `progress-sweep.yml`'s exit-code branches were dead on arrival.
@@ -96,11 +127,14 @@ jobs:
             --difficulty "$DIFFICULTY" \
             --page "$PAGE" \
             --repeats "$REPEATS" \
-            --point-ceiling "$CEILING" 2>&1 | tee cost.txt
+            --point-ceiling "$CEILING" \
+            "${extra[@]}" 2>&1 | tee cost.txt
           status=$?
           set -e
           if [ "$status" = "2" ]; then
-            echo "::warning::the point ceiling stopped the pass; what was measured is above"
+            # Both the ceiling and a 429 land here, and they are the same fact: the
+            # hour is spent. What was measured before it is above.
+            echo "::warning::the hour stopped the pass; what was measured is above"
             exit 0
           fi
           exit "$status"
@@ -112,7 +146,7 @@ jobs:
         if: always() && steps.creds.outputs.enabled == 'true'
         run: |
           {
-            echo '## Does asking for rateLimitData cost points?'
+            echo '## What does asking for this cost?'
             echo
             echo 'A counter that did not move is UNMEASURED, never zero. Two ranges'
             echo 'that overlap are inside the noise, never "the same cost".'
