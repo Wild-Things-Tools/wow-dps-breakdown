@@ -1303,7 +1303,13 @@ def build_document(
                 # run that sampled 20 -- a shape no reading of "kill" allows.
                 "playersHarvested": len(spec_observations) + len(spec_rejects),
                 "playersUsable": len(spec_observations),
-                "distinctKills": _kills_of(spec_observations),
+                # Over `playersHarvested` rather than `playersUsable`: a rejected
+                # observation is still a sighting of the spec in that kill, and a
+                # count sitting between the two would be a third quantity under a
+                # name that names neither.
+                "distinctKills": _kills_of(
+                    spec_observations + [observation for observation, _ in spec_rejects]
+                ),
                 # The headline of this whole command: how many *different* builds
                 # the sampled players actually ran. One means a settled spec; ten
                 # over ten kills means there is no consensus to harvest.

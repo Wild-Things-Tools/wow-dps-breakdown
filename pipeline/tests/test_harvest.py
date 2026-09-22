@@ -909,6 +909,29 @@ def test_a_partial_overlap_is_not_one_kill():
     assert document["source"]["distinctKills"] == 2
 
 
+def test_a_spec_seen_in_a_kill_it_produced_no_build_from_still_counts_that_kill():
+    """`distinctKills` on a spec row is counted over `playersHarvested`.
+
+    A rejected observation is still a sighting of the spec in that kill. Counting
+    only the usable ones would put a third quantity under a name that names neither
+    -- the kills behind `playersUsable`, which nothing else in the row states.
+    """
+    document = harvest.build_document(
+        "MID2",
+        5,
+        [
+            observation(encode(FROST, FROST_BUILD), report="aBcD1234", fight_id=7),
+            observation("!!!not base64!!!", report="zZzZ0000", fight_id=1, actor_id=13),
+        ],
+        tables(),
+        encounters=[],
+    )
+    (spec,) = document["specs"]
+    assert (spec["playersHarvested"], spec["playersUsable"]) == (2, 1)
+    assert spec["distinctKills"] == 2
+    assert len(spec["rejected"]) == 1
+
+
 def test_the_document_names_its_counts_and_states_what_it_does_not_use():
     """`seenInKills` is *gone* rather than corrected in place.
 
