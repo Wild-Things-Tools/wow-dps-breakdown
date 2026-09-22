@@ -1088,6 +1088,132 @@ def test_a_ceiling_stop_in_the_selection_returns_the_reason_instead_of_raising()
     assert observation.search_budget is None
 
 
+def test_a_429_on_a_ranking_page_returns_the_reason_instead_of_raising():
+    """#196: the same shape as the ceiling above, with the other exception class.
+
+    `RateLimited` is `warcraftlogs.RateLimited(WarcraftLogsError)`;
+    `PointBudgetExhausted` is `fightprobe.PointBudgetExhausted(RuntimeError)`. They
+    are disjoint, so the clause above could never have caught a 429 -- it left
+    `probe_encounter`, and neither the encounter loop nor `cli.main` has a handler.
+    The payload is written only AFTER that loop, so every encounter the same run
+    had already read and paid for went with the traceback.
+    """
+    from wowdps.warcraftlogs import RateLimited
+
+    class Refuses(StubClient):
+        def encounter_rankings(self, encounter_id, difficulty=5, metric="dps", page=1):
+            self.calls.append(f"rankings:{encounter_id}:page{page}")
+            raise RateLimited("429 Too Many Requests")
+
+    client = Refuses(structure=structure_payload(), events={}, tables={})
+
+    observation, reason = fightprobe.probe_encounter(client, 3180, settings())
+
+    assert reason is not None and "429" in reason
+    assert observation.fights == []
+    # The same two claims the ceiling makes, for the same reason: a selection that
+    # never ran must not read as a finished walk.
+    assert observation.search_exhausted is False
+    assert observation.search_budget is None
+
+
+def test_a_429_in_the_report_search_is_not_an_exhausted_search():
+    """The worst thing #196 found, because the wrong answer STICKS.
+
+    `RateLimited` subclasses `WarcraftLogsError`, so the per-report clause caught a
+    429, logged it at DEBUG and moved to the next report -- which 429s too. The walk
+    then ran to the end of the list having read nothing, `truncated` stayed False
+    and `aborted` stayed None, and the observation came out `search_exhausted=True`.
+    `is_complete` reads that as done however few kills were found, so one
+    rate-limited hour closed the encounter permanently: "this boss has no more
+    kills to find", from a spent budget.
+    """
+    from wowdps.fightprobe import _public_first_kills
+    from wowdps.warcraftlogs import RateLimited
+
+    class RefusesEveryReport(_ReportSearchClient):
+        def report_kills(self, code):
+            self.kills_asked.append(code)
+            raise RateLimited("429 Too Many Requests")
+
+    # Two reports on one short page, so the walk would otherwise end by running out
+    # of reports -- which is precisely the state that produced the false claim.
+    client = RefusesEveryReport(pages=[[{"code": "A"}, {"code": "B"}]], kills={})
+
+    pairs, outcome = _public_first_kills(client, 42, 1_700_000_000_000.0, _settings())
+
+    assert pairs == []
+    assert outcome.aborted is not None and "429" in outcome.aborted
+    assert outcome.truncated is True
+    # And it stops at the FIRST refusal rather than asking the rest of the list:
+    # a 429 is the service refusing everything for the rest of the hour.
+    assert client.kills_asked == ["A"]
+
+
+def test_a_429_in_the_fight_loop_stops_instead_of_walking_the_rest():
+    """The third clause, and the only one where ORDER is load-bearing.
+
+    The loop already had `except PointBudgetExhausted` then `except
+    WarcraftLogsError`. A 429 landed in the second and `continue`d to the next
+    kill, which the service refuses too, and the one after that -- so a rate-limited
+    hour walked the whole sample asking questions that could not be answered. The
+    new clause has to sit BETWEEN them: `RateLimited` subclasses
+    `WarcraftLogsError`, so a clause after it is unreachable.
+
+    It returns rather than drops: a kill already read is a real measurement.
+    """
+    from wowdps.warcraftlogs import RateLimited
+
+    class RefusesEveryFight(StubClient):
+        def encounter_rankings(self, encounter_id, difficulty=5, metric="dps", page=1):
+            self.calls.append(f"rankings:{encounter_id}:page{page}")
+            return {
+                "id": encounter_id,
+                "name": "Lightblinded Vanguard",
+                "characterRankings": {
+                    "rankings": [
+                        {"amount": 1.0, "report": {"code": "AAAA1111", "fightID": 7}},
+                        {"amount": 0.9, "report": {"code": "BBBB2222", "fightID": 8}},
+                    ]
+                },
+            }
+
+        def fight_structure(self, code, encounter_id, difficulty):
+            self.calls.append(f"structure:{code}")
+            raise RateLimited("429 Too Many Requests")
+
+    client = RefusesEveryFight(structure=structure_payload(), events={}, tables={})
+
+    observation, reason = fightprobe.probe_encounter(client, 3180, settings())
+
+    assert reason is not None and "429" in reason
+    assert observation.fights == []
+    # Two kills were selected and exactly ONE was attempted.
+    assert [c for c in client.calls if c.startswith("structure:")] == ["structure:AAAA1111"]
+
+
+def test_searchExhausted_is_what_closes_an_encounter_for_good():
+    """The mechanism the test above protects, pinned on its own.
+
+    Without this, a reader has to take on faith that `search_exhausted=False`
+    matters. It is the single field that decides whether an encounter with zero
+    kills is re-opened next hour or never looked at again.
+    """
+    stopped = {
+        "fightsSampled": 0,
+        "order": "public",
+        "difficulty": 5,
+        "eventBudget": 200,
+        "searchExhausted": False,
+        "searchBudget": None,
+    }
+    invented = {**stopped, "searchExhausted": True}
+    asked = dict(wanted=30, event_budget=200, order="public", difficulty=5, search_budget=500)
+
+    assert fightprobe.is_complete(stopped, **asked) is False
+    assert fightprobe.is_complete(invented, **asked) is True
+
+
 def test_a_ceiling_stop_in_the_selection_keeps_the_encounters_already_paid_for(
     tmp_path, monkeypatch
 ):
