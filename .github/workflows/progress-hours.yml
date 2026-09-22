@@ -160,7 +160,16 @@ jobs:
             echo "progress hours unchanged"
             exit 0
           fi
-          git commit -m "data: refresh progress hours for ${TIER} $(date -u +%Y-%m-%d)"
+          # A pass the point ceiling stopped is a PREFIX, and until it said so the
+          # commit was indistinguishable from a complete one -- the document now
+          # carries `stoppedBy` and the record of the run has to carry it too.
+          # "UNMEASURED, never zero" applies to a commit message, which is what the
+          # catalogue's own `0 queries` line cost.
+          stopped=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('stoppedBy') or '')" \
+            "progress-hours-$TIER.json" 2>/dev/null || true)
+          suffix=""
+          [ -n "$stopped" ] && suffix=" (PARTIAL: stopped by $stopped)"
+          git commit -m "data: refresh progress hours for ${TIER} $(date -u +%Y-%m-%d)${suffix}"
           # Rebase before pushing, for the reason `fight-probe.yml` records: these
           # workflows commit into one branch and run concurrently with each other and
           # with a person's own pushes, so a bare push loses the race and fails a run

@@ -703,3 +703,186 @@ def test_a_row_with_fromlog_and_no_kill_time_is_refused_before_the_report_walk(
     assert not [1 for label, _ in client.sent if label and label.startswith("pulls:")], (
         "the report walk ran for a guild the screen had already refused"
     )
+
+
+# --------------------------------------------------------------------------------
+# A pass the point ceiling stopped is a PREFIX, and it used to say so nowhere
+# --------------------------------------------------------------------------------
+
+
+class CeilingAfter(StubClient):
+    """A stub whose hourly counter crosses the ceiling on the Nth reading.
+
+    `refresh_budget()` polls once per boss, so a counter that jumps between two
+    bosses is what a real shared-budget stop looks like: one boss read out, the
+    next entered and abandoned, the rest never asked about at all.
+    """
+
+    def __init__(self, *args, jump_on: int, **kw):
+        super().__init__(*args, **kw)
+        self.jump_on = jump_on
+
+    def rate_limit(self):
+        self.rate_limit_calls += 1
+        spent = 9500.0 if self.rate_limit_calls >= self.jump_on else 0.0
+        return {"limitPerHour": 18000.0, "pointsSpentThisHour": spent}
+
+
+def _document(monkeypatch, tmp_path, client, **overrides):
+    monkeypatch.setattr(warcraftlogs.Credentials, "from_env", staticmethod(lambda: object()))
+    monkeypatch.setattr(warcraftlogs, "WarcraftLogsClient", lambda _c: client)
+    out = tmp_path / "progress-hours.json"
+    args = argparse.Namespace(
+        tier="MID1",
+        encounter=0,
+        zone=0,
+        difficulty=MYTHIC,
+        guilds=4,
+        max_pages=3,
+        rankings_pages=3,
+        point_ceiling=0.5,
+        composition=False,
+        out=str(out),
+    )
+    for key, value in overrides.items():
+        setattr(args, key, value)
+    assert cli.cmd_progress_hours(args) == 0
+    return json.loads(out.read_text(encoding="utf-8"))
+
+
+def _clean_pages():
+    return [listing([{"startTime": 0, "fights": [fight(0, HOUR, kill=True)]}], False)]
+
+
+def test_a_pass_the_ceiling_stopped_names_the_boss_it_stopped_in(monkeypatch, tmp_path):
+    """The whole of #196's second half, in one document.
+
+    `_write_progress_hours` returns 0 whether the pass read every boss out or the
+    point ceiling ended it at boss two of nine, and `progress-hours.yml`'s
+    `if: inputs.publish` carries no status function -- so GitHub ANDs in
+    `success()` and the prefix was committed under the same name as a complete
+    pass. A shorter document under one name is a DIFFERENT measurement, not a
+    smaller one; that is the rule this project already enforces for
+    `write_fights` and for this metric's own floor.
+
+    Two claims, and the second is the one a merge depends on:
+
+    * the boss the stop happened IN says so, per block, so the marker travels
+      with the thing it is about through a union merge on
+      `(encounterId, difficulty)`;
+    * the bosses the pass never entered contribute NOTHING -- absent reads as
+      "nobody asked", where a block of zeros reads as "nobody has killed it",
+      which is a claim about the season.
+
+    Canary: drop either `boss.stopped_by = ...` assignment in
+    `cmd_progress_hours` and the first assertion goes red by name.
+    """
+    # 1 = the pass's opening reading, 2 = boss one's poll, 3 = boss two's.
+    client = CeilingAfter(_clean_pages(), jump_on=3)
+    document = _document(monkeypatch, tmp_path, client)
+
+    assert document["stoppedBy"] == "point-ceiling"
+    bosses = document["bosses"]
+    assert len(bosses) == 2, "a boss the pass never entered still reached the document"
+    assert bosses[0]["sample"] == 1 and "stoppedBy" not in bosses[0]
+    assert bosses[1]["stoppedBy"] == "point-ceiling"
+    assert bosses[1]["sample"] == 0
+
+
+def test_a_pass_that_read_every_boss_out_carries_no_marker(monkeypatch, tmp_path):
+    """The control. Without it the test above passes against a writer that stamps
+    every document, which would make the marker worth nothing."""
+    client = StubClient(_clean_pages())
+    document = _document(monkeypatch, tmp_path, client, encounter=ENCOUNTER)
+
+    assert "stoppedBy" not in document
+    assert all("stoppedBy" not in boss for boss in document["bosses"])
+
+
+# --------------------------------------------------------------------------------
+# A 429 is a fact about the HOUR, never about the guild -- and never a traceback
+# --------------------------------------------------------------------------------
+
+
+class RefusesBudgetPoll(StubClient):
+    """The budget poll answers once and is refused afterwards."""
+
+    def __init__(self, *args, error, **kw):
+        super().__init__(*args, **kw)
+        self.error = error
+
+    def rate_limit(self):
+        self.rate_limit_calls += 1
+        if self.rate_limit_calls == 2:
+            raise self.error
+        return {"limitPerHour": 18000.0, "pointsSpentThisHour": 0.0}
+
+
+def test_a_refused_budget_poll_does_not_take_the_whole_pass_down(monkeypatch, tmp_path):
+    """`rate_limit()` is a real query and sat in no `try` at all.
+
+    It must never be served from the cache -- a cached response is a record of
+    *then* and this asks about *now* -- so it can be refused like any other, and
+    the one call whose purpose is to warn before the budget is overrun could end
+    the pass with a traceback, after every boss before it had been paid for and
+    with the payload not yet written.
+
+    A poll that merely did not answer is NOT a reason to end a run nowhere near
+    its ceiling: the stale reading is carried and said out loud.
+
+    Canary: drop the `except WarcraftLogsError` in `refresh_budget` and this goes
+    red with the refusal, not with an assertion.
+    """
+    client = RefusesBudgetPoll(_clean_pages(), error=warcraftlogs.WarcraftLogsError("down"))
+    boss = run(monkeypatch, tmp_path, client)
+
+    assert boss["sample"] == 1, "a failed poll ended a pass that was nowhere near the ceiling"
+    assert "stoppedBy" not in boss
+
+
+def test_a_429_on_the_budget_poll_stops_the_pass_rather_than_crashing(monkeypatch, tmp_path):
+    """The other half, and the two are not one failure.
+
+    A 429 means the hour is gone, which is the same answer the ceiling gives --
+    so it ends the pass the same way, with what is measured written and the boss
+    saying it was cut short, rather than as a traceback that loses every boss
+    already paid for.
+    """
+    client = RefusesBudgetPoll(_clean_pages(), error=warcraftlogs.RateLimited("429"))
+    document = _document(monkeypatch, tmp_path, client, encounter=ENCOUNTER)
+
+    assert document["stoppedBy"] == "point-ceiling"
+    assert document["bosses"][0]["stoppedBy"] == "point-ceiling"
+
+
+class RefusesTheWalk(StubClient):
+    """The ranking answers; the report walk is refused with a 429."""
+
+    def query(self, document, variables, label=None):
+        if document is progresshours.GUILD_PULLS_QUERY:
+            self.sent.append((label, dict(variables)))
+            raise warcraftlogs.RateLimited("429")
+        return super().query(document, variables, label=label)
+
+
+def test_a_429_in_the_guild_walk_is_not_a_fact_about_the_guild(monkeypatch, tmp_path):
+    """`RateLimited` inherits from `WarcraftLogsError`, so the base clause caught it.
+
+    A 429 was then written as `refused["error"]` -- a statement about the GUILD --
+    and because a 429 hits every guild after it too, the boss ended
+    `medianHours: null` with `refused: {error: N}` and nothing in the document
+    could say the service had refused rather than that the guilds had nothing to
+    show. The clause goes BEFORE the base class, the rule `progresssweep` and
+    `catalogue` already state.
+
+    Canary: delete the `except RateLimited` clause and this goes red -- `refused`
+    comes back `{"error": 1}` and no `stoppedBy` anywhere.
+    """
+    client = RefusesTheWalk(_clean_pages(), guilds=(1, 2, 3))
+    document = _document(monkeypatch, tmp_path, client, encounter=ENCOUNTER)
+    boss = document["bosses"][0]
+
+    assert boss["stoppedBy"] == "point-ceiling"
+    assert "error" not in boss["refused"], "a 429 was published as a refusal of the guild"
+    walks = [label for label, _ in client.sent if label and label.startswith("pulls:")]
+    assert len(walks) == 1, "the walk went on asking after the service had refused"

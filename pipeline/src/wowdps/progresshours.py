@@ -823,6 +823,20 @@ class BossProgress:
     #: ranking rows. Published so a substitution -- or a REFUSED one -- is visible in
     #: the artifact rather than only in a run's log.
     read_as: str | None = None
+    #: Why the pass stopped INSIDE this boss, or None when it read the boss out.
+    #:
+    #: The load-bearing half of the record, and the reason it lives on the BOSS
+    #: rather than only on the document: the published file folds runs on
+    #: ``(encounterId, difficulty)``, so a document-level field describes the newest
+    #: run over blocks most of which came from other ones -- `gear.json`'s
+    #: one-provenance-block-over-three-slots defect (#95) and `spawnmap`'s
+    #: loop-variable block, both recorded in CLAUDE.md. Stamped here it travels with
+    #: the block it is about and is replaced the moment that boss is read out.
+    #:
+    #: `guildsSeen` is set from the ranking BEFORE the guild loop, so a stopped boss
+    #: reads as "50 seen, 2 measured, 48 refused" when 45 were never tried at all.
+    #: This is what separates those two sentences.
+    stopped_by: str | None = None
 
     def record(
         self,
@@ -900,6 +914,10 @@ class BossProgress:
             "sampleShortOfRequest": self.sample_short_of_request,
             "refused": dict(sorted(self.refused.items())),
             "rowsWithoutGuild": self.rows_without_guild,
+            # Absent on a boss the pass read out, so a clean run produces the bytes
+            # it produced before this existed -- and so the key cannot go stale: a
+            # later complete read of this boss writes the block without it.
+            **({"stoppedBy": self.stopped_by} if self.stopped_by else {}),
             # Absent unless a composition pass ran. An empty split published on every
             # boss of every ordinary run would read as "nobody fields this spec",
             # which is the answer to a question nobody asked here.
@@ -1099,7 +1117,47 @@ def publish_document(out_dir: Path, document: dict, *, salt: str | None = None) 
 
 
 class MeasurementsWouldBeLost(RuntimeError):
-    """Refusal: this write would replace measured bosses with none."""
+    """Refusal: this write would replace measured guilds with fewer."""
+
+
+def _blocks_that_would_shrink(
+    published: dict, document: dict
+) -> dict[tuple[Any, Any], tuple[int, int]]:
+    """Per (encounter, difficulty), the blocks whose measured sample would fall.
+
+    Asked per KEY rather than over the whole document, and that is the correction
+    rather than a refinement. The all-or-nothing version this replaces fired only
+    when the new document measured *nothing at all*, so a pass the point ceiling
+    stopped at boss two of eight -- seven measured blocks in the merged document --
+    cleared it while overwriting boss two's published block with the prefix it had
+    managed to read. That is `write_fights`' pre-#155 guard exactly, in the second
+    producer, and it is repaired the same way.
+
+    Asked of the MERGED document, so the caller's order -- fold, then guard -- is
+    load-bearing: over the raw one every single-boss run there is would be refused,
+    since a run measures one boss and the published file holds eight.
+    """
+
+    def by_key(one: dict) -> dict[tuple[Any, Any], int]:
+        out: dict[tuple[Any, Any], int] = {}
+        for boss in one.get("bosses") or []:
+            key = (boss.get("encounterId"), boss.get("difficulty", one.get("difficulty")))
+            out[key] = int(boss.get("sample") or 0)
+        return out
+
+    before, after = by_key(published), by_key(document)
+    # A key the new document does not carry counts as a shrink to ZERO, which is
+    # this project's "absent is not equal" rule pointing at the one direction that
+    # loses data. It is unreachable through the caller -- the merge carries every
+    # published block in -- and that is exactly why it is written strictly: a later
+    # caller that skipped the fold would otherwise publish a document deleting every
+    # boss it did not read, which is the deletion `merge_documents` exists to make
+    # impossible and which would look like a season nobody has measured.
+    return {
+        key: (had, after.get(key, 0))
+        for key, had in before.items()
+        if had and after.get(key, 0) < had
+    }
 
 
 def write_progress_hours(out_dir: Path, document: dict, *, force: bool = False) -> Path:
@@ -1117,16 +1175,16 @@ def write_progress_hours(out_dir: Path, document: dict, *, force: bool = False) 
     except (OSError, ValueError):
         published = None
 
-    def measured(one: dict | None) -> int:
-        return sum(1 for b in (one or {}).get("bosses") or [] if (b.get("sample") or 0) > 0)
-
     if published is not None and not force:
-        had, has = measured(published), measured(document)
-        if had and not has:
+        shrunk = _blocks_that_would_shrink(published, document)
+        if shrunk:
+            detail = ", ".join(
+                f"{key[0]}/d{key[1]} {had}->{has}" for key, (had, has) in sorted(shrunk.items())
+            )
             raise MeasurementsWouldBeLost(
-                f"{path} carries measurements for {had} boss(es) and this document "
-                "has none, so writing it would discard them. Re-run the pass, or "
-                "--force if dropping them is what you mean."
+                f"{path} carries more measured guild(s) for {len(shrunk)} boss(es) than "
+                f"this document does, so writing it would discard them ({detail}). "
+                "Re-run the pass, or --force if dropping them is what you mean."
             )
 
     settled = document

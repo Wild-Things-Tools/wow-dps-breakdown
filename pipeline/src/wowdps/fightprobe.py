@@ -58,6 +58,7 @@ from pathlib import Path
 from . import fightdataset, fightextract, fightprofile, firstkills, harvest
 from .warcraftlogs import (
     Credentials,
+    RateLimited,
     WarcraftLogsClient,
     WarcraftLogsError,
     _ranking_entries,
@@ -191,7 +192,7 @@ def probe_encounter(
             if choice.substituted and choice.used:
                 used_id = int(choice.used)
                 _, pairs, outcome = _select_kills(client, used_id, settings)
-    except PointBudgetExhausted as exc:
+    except (PointBudgetExhausted, RateLimited) as exc:
         # Nothing was selected, so there is nothing to describe. The observation
         # comes back EMPTY and `search_exhausted` stays False: a selection the
         # ceiling stopped saw a window, never the whole list, and claiming
@@ -199,6 +200,18 @@ def probe_encounter(
         # walk that never ran. What the caller does with an empty observation from
         # an aborted encounter is `cmd_fight_probe`'s rule, and it is not "publish
         # it": see the contribution guard there.
+        #
+        # `RateLimited` belongs here for the same reason and was missing: our own
+        # ceiling and the service's 429 end a selection identically -- nothing was
+        # read -- and only one of the two was caught. It is a SEPARATE class from
+        # `PointBudgetExhausted` (`warcraftlogs.RateLimited(WarcraftLogsError)`
+        # against `fightprobe.PointBudgetExhausted(RuntimeError)`), so the clause
+        # above could never have caught it. A 429 on a ranking page therefore left
+        # `probe_encounter`, and neither the encounter loop nor `cli.main` has a
+        # handler -- the process died on the traceback BEFORE the line that writes
+        # the payload, so every encounter the same run had already read and PAID
+        # FOR went with it. Measured by execution, not read: a stub whose
+        # `encounter_rankings` raises propagated straight out.
         return _unselected(encounter_id, settings), str(exc)
 
     observation = fightextract.EncounterObservation(
@@ -230,6 +243,19 @@ def probe_encounter(
             # live kill's fights carry the live id. Only the observation is filed.
             fight = _probe_fight(client, code, fight_id, used_id, settings, started_at)
         except PointBudgetExhausted as exc:
+            return observation, str(exc)
+        except RateLimited as exc:
+            # BEFORE the `WarcraftLogsError` clause, and the order is the whole
+            # point: `RateLimited` subclasses it, so the clause below used to catch
+            # a 429 and `continue` to the next kill -- which the service refuses
+            # too, and the one after that. "This fight failed, move on" and "the
+            # service will refuse everything for the rest of the hour" are
+            # different answers, and only the second is true of a 429.
+            #
+            # It returns the fights already read rather than dropping them: a kill
+            # that WAS read is a real measurement, and `write_fights` refuses a
+            # document that shrinks. Same split as the ceiling one line up.
+            log.warning("  %s fight %d: %s", code, fight_id, exc)
             return observation, str(exc)
         except WarcraftLogsError as exc:
             log.warning("  %s fight %d: %s", code, fight_id, exc)
@@ -557,6 +583,23 @@ def _public_first_kills(
                 check_budget(client, settings.point_ceiling)
                 try:
                     report_start, fights = client.report_kills(code)
+                except RateLimited:
+                    # Out to the walk's own handler, and this `raise` is the fix
+                    # for the worst thing in this file. `RateLimited` subclasses
+                    # `WarcraftLogsError`, so the clause below caught a 429,
+                    # logged it at DEBUG and moved to the next report -- which
+                    # 429s too, and so does every one after it. The walk then ran
+                    # to the end of the list without a single readable report,
+                    # `truncated` stayed False and `aborted` stayed None, and the
+                    # observation was built with `search_exhausted=True`.
+                    #
+                    # That is not a slow run, it is a false statement that STICKS:
+                    # `is_complete` treats `searchExhausted` as done regardless of
+                    # how few kills were found, so one rate-limited hour closed the
+                    # encounter permanently -- "this boss has no more kills to
+                    # find" -- and only raising `--report-pages` would ever reopen
+                    # it. A spent budget became a claim about the game.
+                    raise
                 except WarcraftLogsError as exc:
                     log.debug("  report %s: %s", code, exc)
                     continue
@@ -592,6 +635,20 @@ def _public_first_kills(
         outcome.truncated = True
         outcome.aborted = str(exc)
         log.warning("  report search stopped on the point ceiling: %s", exc)
+    except RateLimited as exc:
+        # The same two fields, and setting them is what makes the 429 harmless
+        # downstream: `aborted` is not None, so `search_exhausted` comes out False
+        # and `_search_budget` returns None -- the encounter is re-opened next hour
+        # instead of being closed on a walk that read nothing. It costs one extra
+        # pass over a list the run had already paid for, which is the direction
+        # this project fails in on purpose.
+        #
+        # WARNING, not DEBUG: the swallowed version logged at DEBUG, and the step
+        # summary does not carry DEBUG. A run that closed an encounter for good
+        # said nothing about it anywhere a person looks.
+        outcome.truncated = True
+        outcome.aborted = str(exc)
+        log.warning("  report search stopped on a 429: %s", exc)
 
     # If the search found nothing at the requested difficulty, say what it *did*
     # find. A run that reports "0 kills" and a run that reports "0 at Mythic, 54 at

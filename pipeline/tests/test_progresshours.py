@@ -842,6 +842,93 @@ def test_a_write_that_would_discard_every_measurement_is_refused(tmp_path):
     progresshours.write_progress_hours(out, empty, force=True)
 
 
+def test_a_ceiling_stopped_boss_does_not_overwrite_a_richer_published_block(tmp_path):
+    """The loss the all-or-nothing guard could not see.
+
+    It fired only when the new document measured NOTHING AT ALL, so a pass the
+    point ceiling stopped at boss two of eight -- seven measured blocks in the
+    merged document -- cleared it while overwriting boss two's published block
+    with the prefix it had managed to read. `merge_documents` is newer-wins per
+    key, so the twenty guilds already published simply went.
+
+    Same defect and same repair as `write_fights` before #155, one producer
+    across: the question is asked per `(encounterId, difficulty)`, of the MERGED
+    document, and the refusal names the ids and the before/after counts.
+
+    Canary: compare the documents whole again and this goes green while the
+    twenty rows go.
+    """
+    out = tmp_path / "MID2"
+    full = {
+        "difficulty": 5,
+        "tier": "MID2",
+        "bosses": [boss_row(1, sample=20), boss_row(2, sample=20)],
+    }
+    progresshours.write_progress_hours(out, progresshours.publish_document(out, full))
+
+    stopped = {
+        "difficulty": 5,
+        "tier": "MID2",
+        "stoppedBy": "point-ceiling",
+        "bosses": [boss_row(1, sample=20), boss_row(2, sample=2, stoppedBy="point-ceiling")],
+    }
+    merged = progresshours.publish_document(out, stopped)
+    with pytest.raises(progresshours.MeasurementsWouldBeLost) as refusal:
+        progresshours.write_progress_hours(out, merged)
+    assert "2/d5 20->2" in str(refusal.value)
+
+    # --force is the way through, exactly as it is for the whole-document case.
+    progresshours.write_progress_hours(out, merged, force=True)
+
+
+def test_the_guard_is_asked_of_the_merged_document_and_that_order_is_load_bearing(tmp_path):
+    """Fold, then guard -- and the guard is strict about what the fold guarantees.
+
+    A published block the new document does not carry counts as a shrink to zero.
+    Through `_write_progress_hours` that can never happen, because the fold runs
+    first and carries every published block in; the strictness is what stops a
+    later caller that skipped the fold from publishing a document that deletes
+    every boss it did not read. `write_fights` pins its own fold-then-guard order
+    with a test for the same reason.
+
+    Canary: make a missing key mean "not a shrink" and this goes red.
+    """
+    out = tmp_path / "MID2"
+    full = {
+        "difficulty": 5,
+        "tier": "MID2",
+        "bosses": [boss_row(1, sample=20), boss_row(2, sample=20)],
+    }
+    progresshours.write_progress_hours(out, progresshours.publish_document(out, full))
+
+    raw = {"difficulty": 5, "tier": "MID2", "bosses": [boss_row(2, sample=30)]}
+    with pytest.raises(progresshours.MeasurementsWouldBeLost) as refusal:
+        progresshours.write_progress_hours(out, raw)
+    assert "1/d5 20->0" in str(refusal.value)
+
+
+def test_a_one_boss_run_is_not_refused_over_the_bosses_it_did_not_read(tmp_path):
+    """The control, and it is what makes the guard usable at all.
+
+    A run measures one boss and the published file holds eight. Asked of the RAW
+    document every such run would be refused; asked of the merged one -- the
+    caller's order, fold then guard -- the seven it did not read are carried in
+    unchanged and are not a shrink. Growing is not a shrink either.
+    """
+    out = tmp_path / "MID2"
+    full = {
+        "difficulty": 5,
+        "tier": "MID2",
+        "bosses": [boss_row(1, sample=20), boss_row(2, sample=20)],
+    }
+    progresshours.write_progress_hours(out, progresshours.publish_document(out, full))
+
+    one = {"difficulty": 5, "tier": "MID2", "bosses": [boss_row(2, sample=30)]}
+    written = progresshours.write_progress_hours(out, progresshours.publish_document(out, one))
+    after = json.loads(written.read_text(encoding="utf-8"))
+    assert [(b["encounterId"], b["sample"]) for b in after["bosses"]] == [(1, 20), (2, 30)]
+
+
 # --------------------------------------------------------------------------------
 # The published guild identity: a quasi-identifier in a public repository
 # --------------------------------------------------------------------------------
