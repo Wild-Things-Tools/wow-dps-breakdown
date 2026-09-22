@@ -152,11 +152,6 @@ jobs:
 
       - name: Commit the published document
         if: inputs.publish
-        env:
-          # `TIER` was read here and bound only on the Measure step above, so every
-          # commit message this workflow has written names an EMPTY tier. There is no
-          # `set -u` in this step, so it expanded to nothing and said so silently.
-          TIER: ${{ inputs.tier }}
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
