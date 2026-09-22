@@ -576,6 +576,37 @@ export interface GearTargetResult {
    * missing rather than equal to it.
    */
   bestSets?: GearBestSet[];
+  /** See `TalentsSource`. Absent means the profile's own talents. */
+  talentsSource?: TalentsSource;
+}
+
+/**
+ * Which build a swept row's numbers were measured on.
+ *
+ * **Absent means the profile's own `talents=` line**, which is what every gear and
+ * buff row ever published was measured on — so an absent field is a fact rather than
+ * an unknown, and a document written before this existed needs no field and is not
+ * lied to.
+ *
+ * Present means the sweep ran on a *computed* build: one this project's search found,
+ * which beat simc's own outside the tie band **on simc's own shipped kit** (owner
+ * decision 5, stage 2). The margin that justified it travels with it rather than as a
+ * bare label, because a claim a reader cannot check against the numbers beside it is
+ * exactly what this project refuses elsewhere.
+ *
+ * Two things it is NOT. It is never the *anchored* margin, which is the projection
+ * measured to be wrong by 2.52 points on one build of twelve with the sign going both
+ * ways. And it says nothing about the row's own gains, which are still differences
+ * between profilesets that all carry these same talents.
+ */
+export interface TalentsSource {
+  origin: 'computed';
+  talentHash: string;
+  label: string;
+  /** The computed build over simc's, on simc's own gear, as a fraction. */
+  shippedMargin: number;
+  /** The two errors in quadrature — the margin cleared this to be published. */
+  tieBand: number;
 }
 
 export interface GearSpecResult {
@@ -1394,6 +1425,8 @@ export interface BuffSpec {
   /** The season boundary, or null for a tier with no predecessor. */
   crossover: BuffCrossover | null;
   errors: string[];
+  /** See `TalentsSource`. Absent means the profile's own talents. */
+  talentsSource?: TalentsSource;
 }
 
 /**

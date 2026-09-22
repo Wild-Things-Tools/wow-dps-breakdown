@@ -25,6 +25,19 @@ on:
       shards:
         description: 'Parallel jobs to split the builds across'
         default: '6'
+      computed:
+        # Owner decision 5, stage 2. What a tier set and an outside Power Infusion
+        # are worth is a property of the build being played, so where a computed
+        # build beats simc's outside the tie band on simc's OWN kit, that build's
+        # talents are what these differences are measured under. No extra
+        # invocation: the same three, one option longer per variant.
+        #
+        # ON by default -- a default is configuration rather than a form hint, and
+        # the command refuses a missing computed-builds.json rather than quietly
+        # sweeping something else.
+        description: 'Sweep on the computed build where it beats simc on simc''s own gear'
+        type: boolean
+        default: true
 
 concurrency:
   group: buffs
@@ -46,6 +59,7 @@ env:
   TARGETS: ${{ inputs.targets || '1' }}
   ITERATIONS: ${{ inputs.iterations || '3000' }}
   SHARDS: ${{ inputs.shards || '6' }}
+  COMPUTED: ${{ inputs.computed }}
   # Not an input, but the same substitution and the same job. Git allows a double
   # quote in a ref name, so a branch could close the string the push command wraps
   # it in. Cheaper to bind than to reason about.
@@ -140,6 +154,12 @@ jobs:
 
       - name: Sweep
         run: |
+          args=()
+          # A published-data ROOT rather than a file: `$TIER` may be `latest`, and
+          # only the command knows what that resolves to (it asks simc's profiles,
+          # not tiers.json). A false test here does NOT trip errexit -- measured:
+          # the failing `[` is not the last command of the `&&` list.
+          [ "$COMPUTED" = "true" ] && args+=(--computed web/public/data)
           wowdps -v buffs \
             --simc bundle/simc \
             --profiles bundle/profiles \
@@ -148,6 +168,7 @@ jobs:
             --targets "$TARGETS" \
             --max-iterations "$ITERATIONS" \
             --shard "${{ matrix.shard }}/$SHARDS" \
+            "${args[@]}" \
             --out shard
 
       - uses: actions/upload-artifact@v4

@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -295,6 +296,126 @@ def shipped_json(simc: Measurement | None, best: Measurement | None) -> dict | N
         "tieBand": round(tie_band(best.dps_error, simc.dps_error), 6),
         "separates": separated(best, simc),
     }
+
+
+# --------------------------------------------------------------------------------
+# Reading it back: the computed build as a sweep's base
+# --------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ComputedBase:
+    """The computed build a sweep should measure on, and the evidence for it.
+
+    Owner decision 5, stage 2 (2026-08-29): the gear and buff sweeps take the computed
+    build as their base *where it beats simc's outside the tie band*. Both sweeps are
+    profileset-against-profileset differences, so the talents they run on decide which
+    items and which set bonuses the difference is measured under -- a trinket that pairs
+    with a talent simc's build does not take ranks differently, which is the whole point
+    of measuring on the build a reader would play. It costs nothing: the same number of
+    profilesets, one option longer.
+
+    Three things in the gate are decisions rather than arithmetic:
+
+    * **The ``shipped`` block is required, and the anchored margin is never a fallback.**
+      The anchored margin is the *projection* #52 measured -- accurate to a tenth of a
+      point on seven builds of nine and wrong by **2.52 points** on one, with the sign
+      going both ways and nothing visible saying which build is which. A row without the
+      block is left on the profile's own talents, which is the direction that cannot
+      manufacture a difference.
+    * **``separates`` is derived from the two numbers beside it**, never read. That is
+      ``dps-best-build``'s rule: a published boolean could disagree with the figures it
+      sits next to and nothing downstream would say which was right. Measured over the
+      committed MID2 document the derived answer agrees with the published one on **148
+      of 148** rows, and no row sits within 1e-6 of its band, so the rounding the
+      document applies cannot flip it today.
+    * **The key carries the scenario and the target count.** A five-target gear sweep
+      taking the one-target computed build would publish a comparison measured under
+      talents nobody chose for it -- and how often the two builds diverge grows with the
+      target count: 13 of 52 builds separate at one target, 26 at five, 29 at ten.
+    """
+
+    build_id: str
+    scenario: str
+    targets: int
+    #: The hash every variant of the sweep carries.
+    talents: str
+    label: str
+    #: The head-to-head on simc's own kit that justified the substitution.
+    margin: float
+    tie_band: float
+
+    def to_json(self) -> dict:
+        """``talentsSource`` as a published row carries it.
+
+        An object rather than the bare word ``computed``: a label is a claim a reader
+        cannot check, and this project's rule is that a verdict travels with the numbers
+        it rests on.
+        """
+        return {
+            "origin": "computed",
+            "talentHash": self.talents,
+            "label": self.label,
+            "shippedMargin": round(self.margin, 6),
+            "tieBand": round(self.tie_band, 6),
+        }
+
+
+def _number(value: object) -> float | None:
+    """A JSON number, or None. ``bool`` is an ``int`` and is not one."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
+
+
+def computed_bases(document: dict | None) -> dict[tuple[str, str, int], ComputedBase]:
+    """Every ``(build, scenario, targets)`` whose computed build a sweep should use.
+
+    A cell absent from this map is swept on the **profile's own** talents, which is what
+    every gear and buff row ever published was swept on. Absent is therefore a fact
+    rather than an unknown, and a document written before this existed needs no field.
+    """
+    bases: dict[tuple[str, str, int], ComputedBase] = {}
+    for row in (document or {}).get("specs") or []:
+        shipped = row.get("shipped")
+        if not isinstance(shipped, dict):
+            continue
+        best, simc = row.get("best") or {}, row.get("simc") or {}
+        talents = best.get("talentHash")
+        margin, band = _number(shipped.get("margin")), _number(shipped.get("tieBand"))
+        if not talents or margin is None or band is None:
+            continue
+        if margin <= band or talents == simc.get("talentHash"):
+            continue
+        build_id, scenario, targets = row.get("id"), row.get("scenario"), row.get("targets")
+        counted = isinstance(targets, int) and not isinstance(targets, bool)
+        if not build_id or not scenario or not counted:
+            continue
+        bases[(build_id, scenario, targets)] = ComputedBase(
+            build_id=build_id,
+            scenario=scenario,
+            targets=targets,
+            talents=talents,
+            label=best.get("label") or "computed",
+            margin=margin,
+            tie_band=band,
+        )
+    return bases
+
+
+def with_talents(options: Sequence[str], talents: str | None) -> tuple[str, ...]:
+    """A variant's options, carrying the hash itself rather than inheriting one.
+
+    The alternative is a single ``talents=`` on the command line ahead of the profileset
+    lines, which is how ``buildsearch`` sets the *base actor's* hash. That one is
+    measured -- simc builds the base actor from the profile file and a refused hash exits
+    81, taking every profileset with it. Whether a profileset carrying no ``talents=`` of
+    its own then **inherits** the command line's is not measured anywhere in this
+    repository, and no simc is reachable from the sandbox this was written in. Writing it
+    on every variant removes the question instead of resting on it, and costs one option
+    per profileset.
+    """
+    return tuple(options) if not talents else (*tuple(options), f"talents={talents}")
 
 
 @dataclass

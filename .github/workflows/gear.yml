@@ -71,6 +71,21 @@ on:
       iterations:
         description: 'Fixed iteration count per variant (deterministic)'
         default: '1000'
+      computed:
+        # Owner decision 5, stage 2: where a computed build beats simc's outside
+        # the tie band ON SIMC'S OWN KIT, that build's talents are what this sweep
+        # measures. Costs no extra invocation -- the same profilesets, one option
+        # longer -- and which items win is a property of the build being played.
+        #
+        # ON by default, because a default is configuration rather than a form
+        # hint: `fight-probe`'s `max_pages` defaulted to 3 while every real
+        # dispatch passed 20, and every hourly continuation was silently a no-op
+        # for two days. Turn it off for a tier with no computed-builds.json --
+        # the command REFUSES a missing document rather than quietly sweeping
+        # something else.
+        description: 'Sweep on the computed build where it beats simc on simc''s own gear'
+        type: boolean
+        default: true
 
 concurrency:
   group: gear
@@ -86,6 +101,7 @@ env:
   SPECS: ${{ inputs.specs }}
   SHARDS: ${{ inputs.shards }}
   ITERATIONS: ${{ inputs.iterations }}
+  COMPUTED: ${{ inputs.computed }}
 
 jobs:
   build-simc:
@@ -196,6 +212,11 @@ jobs:
           args=()
           for count in $TARGETS; do args+=(--targets "$count"); done
           for spec in $SPECS; do args+=(--spec "$spec"); done
+          # A published-data ROOT rather than a file: `$TIER` may be `latest`, and
+          # only the command knows what that resolves to (it asks simc's profiles,
+          # not tiers.json). Resolving it here would be a second definition of the
+          # tier that can disagree with the first.
+          [ "$COMPUTED" = "true" ] && args+=(--computed web/public/data)
           wowdps gear \
             --simc bundle/simc \
             --profiles bundle/profiles \

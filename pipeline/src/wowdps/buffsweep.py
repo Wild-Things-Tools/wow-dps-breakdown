@@ -46,6 +46,7 @@ import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from .computedbuilds import ComputedBase, with_talents
 from .profiles import SpecProfile
 from .scenarios import PATCHWERK, Scenario, SimSettings
 from .simc_runner import Profileset, ProfilesetResult, SimRequest, run_profilesets
@@ -205,6 +206,18 @@ def crossover_variants(previous: str, current: str) -> list[Profileset]:
     ]
 
 
+def _on(sets: list[Profileset], talents: str | None) -> list[Profileset]:
+    """Every variant, carrying the computed hash itself rather than inheriting one.
+
+    ``with_talents`` states why it is written per variant instead of once on the
+    command line. Unchanged when there is no hash, so a spec without a computed build
+    produces the options it always did.
+    """
+    if not talents:
+        return sets
+    return [replace(one, options=with_talents(one.options, talents)) for one in sets]
+
+
 def power_infusion_variants(times: tuple[float, ...]) -> list[Profileset]:
     cast_at = "/".join(f"{value:g}" for value in times)
     return [
@@ -236,6 +249,11 @@ class BuffResult:
     current_four_dps: float | None = None
     dps_error: float = 0.0
     errors: list[str] | None = None
+    #: The computed build these numbers were measured on, when one beat simc's
+    #: outside the tie band on simc's own kit (owner decision 5, stage 2). ``None``
+    #: means the profile's own ``talents=`` line, which is what every buff row ever
+    #: published was swept on -- so an absent field is a fact rather than an unknown.
+    talents_source: ComputedBase | None = None
 
     def to_json(self) -> dict:
         return {
@@ -262,6 +280,11 @@ class BuffResult:
             # question. The view subtracts whichever pair a reader asks for.
             "crossover": self._crossover_json(),
             "errors": self.errors or [],
+            **(
+                {}
+                if self.talents_source is None
+                else {"talentsSource": self.talents_source.to_json()}
+            ),
         }
 
     def _crossover_json(self) -> dict | None:
@@ -306,6 +329,7 @@ def sweep_spec(
     targets: int = 1,
     timeout: int = 1800,
     previous_set: TierSet | None = None,
+    base: ComputedBase | None = None,
 ) -> BuffResult:
     """Every sweep for one spec, in up to three simc invocations.
 
@@ -317,6 +341,11 @@ def sweep_spec(
     The third is the season boundary and only runs when the previous tier has a set
     for this class. Its three variants are alternatives to each other rather than
     gains over a baseline, so they are reported as levels.
+
+    ``base`` is the computed build when this spec takes one. Every variant carries its
+    hash -- which set bonus and which external buff are worth what is a property of the
+    build being played, and the whole point of decision 5's second stage is to measure
+    that on the build a reader would actually play. It costs no extra invocation.
     """
     result = BuffResult(
         spec_id=profile.id,
@@ -325,14 +354,20 @@ def sweep_spec(
         spec=profile.spec,
         hero_talent=profile.hero_label,
         errors=[],
+        talents_source=base,
     )
     request = SimRequest(profile=profile, scenario=scenario, targets=targets)
+    talents = base.talents if base is not None else None
 
     if tier_set is not None:
         result.set_name = tier_set.name
         try:
             measured = run_profilesets(
-                simc, request, settings, set_variants(tier_set.option), timeout=timeout
+                simc,
+                request,
+                settings,
+                _on(set_variants(tier_set.option), talents),
+                timeout=timeout,
             )
         except Exception as exc:  # noqa: BLE001 - one bad spec must not kill a sweep
             result.errors.append(f"tier set: {exc}")
@@ -346,7 +381,7 @@ def sweep_spec(
                 simc,
                 request,
                 settings,
-                crossover_variants(previous_set.option, tier_set.option),
+                _on(crossover_variants(previous_set.option, tier_set.option), talents),
                 timeout=timeout,
             )
         except Exception as exc:  # noqa: BLE001
@@ -366,7 +401,7 @@ def sweep_spec(
     result.power_infusion_times = times
     try:
         measured = run_profilesets(
-            simc, request, settings, power_infusion_variants(times), timeout=timeout
+            simc, request, settings, _on(power_infusion_variants(times), talents), timeout=timeout
         )
     except Exception as exc:  # noqa: BLE001
         result.errors.append(f"power infusion: {exc}")

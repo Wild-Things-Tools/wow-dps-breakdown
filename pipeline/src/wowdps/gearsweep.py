@@ -82,10 +82,12 @@ import itertools
 import logging
 import math
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import simc_runner
+from .computedbuilds import ComputedBase, with_talents
 from .equipment import (
     EquipmentSlot,
     GearItem,
@@ -169,16 +171,26 @@ def _run(
     settings: SimSettings,
     variants: list[Variant],
     timeout: int,
+    talents: str | None = None,
 ) -> dict[str, VariantResult]:
     """One simc invocation covering every variant, returning results by key.
 
     The profileset mechanics live in ``simc_runner`` -- the measurements that
     justify them are in its comment, and the talent sweep needs the same machinery
     with different option strings.
+
+    ``talents`` is the computed build's hash when this spec takes one (owner decision
+    5, stage 2). It rides on **every** variant rather than once on the command line,
+    so nothing rests on whether a profileset inherits a hash it does not state --
+    see ``computedbuilds.with_talents``. Both sides of every comparison below then
+    carry the same talents, which is what keeps a gear difference a gear difference.
     """
     request = simc_runner.SimRequest(profile=profile, scenario=PATCHWERK, targets=targets)
     sets = [
-        simc_runner.Profileset(key=variant.key, options=tuple(variant.equipped.simc_options()))
+        simc_runner.Profileset(
+            key=variant.key,
+            options=with_talents(variant.equipped.simc_options(), talents),
+        )
         for variant in variants
     ]
     return {
@@ -425,6 +437,11 @@ class TargetResult:
     #: enumeration was over budget -- which is not the same as "the baseline is the
     #: ceiling", so it is absent rather than equal.
     best_sets: list[BestSet] = field(default_factory=list)
+    #: The computed build these numbers were measured on, when one beat simc's
+    #: outside the tie band on simc's own kit. ``None`` means the profile's own
+    #: ``talents=`` line, which is what every gear row ever published was swept on --
+    #: so an absent field is a fact rather than an unknown.
+    talents_source: ComputedBase | None = None
 
     def to_json(self) -> dict:
         baseline: dict = {
@@ -452,6 +469,8 @@ class TargetResult:
         }
         if self.best_sets:
             out["bestSets"] = [entry.to_json() for entry in self.best_sets]
+        if self.talents_source is not None:
+            out["talentsSource"] = self.talents_source.to_json()
         return out
 
 
@@ -705,8 +724,16 @@ def sweep_spec(
     settings: SimSettings,
     targets: list[int],
     timeout: int = 3600,
+    bases: Mapping[tuple[str, str, int], ComputedBase] | None = None,
 ) -> SpecSlotResult:
-    """Run the whole three-step comparison for one spec, at each target count."""
+    """Run the whole three-step comparison for one spec, at each target count.
+
+    ``bases`` is ``computedbuilds.computed_bases``' map. It is looked up **per target
+    count**, because which build wins is a property of the target count and not of the
+    spec: over the committed MID2 document 13 of 52 builds separate at one target, 26
+    at five and 29 at ten. A cell it does not name is swept on the profile's own
+    talents, exactly as before.
+    """
     slot = pool.slot
 
     # A profile this project materialises carries no '# gear_<stat>=' summary --
@@ -764,6 +791,7 @@ def sweep_spec(
                     candidates,
                     baseline_level,
                     timeout,
+                    (bases or {}).get((profile.id, PATCHWERK.id, count)),
                 )
             )
         except Exception as exc:  # noqa: BLE001 - one target count must not kill the spec
@@ -785,8 +813,10 @@ def _sweep_one(
     candidates: list[GearItem],
     baseline_level: ItemLevel,
     timeout: int,
+    base: ComputedBase | None = None,
 ) -> TargetResult:
     slot = pool.slot
+    talents = base.talents if base is not None else None
 
     # How *this* profile wears the slot. Read per spec rather than fixed per tier,
     # because a Mage's ring gem is not a Rogue's, and both sides of every comparison
@@ -846,7 +876,7 @@ def _sweep_one(
         len(combos) if full_exhaustive else 0,
         len(combos),
     )
-    step_one = _run(simc, profile, targets, settings, variants, timeout)
+    step_one = _run(simc, profile, targets, settings, variants, timeout, talents)
 
     if _EMPTY_KEY not in step_one:
         raise RuntimeError("simc returned no result for the empty-slot reference")
@@ -962,7 +992,7 @@ def _sweep_one(
                     _candidate_key(item, level), slot, worn_items, worn_ilevels, adornments
                 )
             )
-    step_two = _run(simc, profile, targets, settings, variants, timeout)
+    step_two = _run(simc, profile, targets, settings, variants, timeout, talents)
 
     baseline = step_two.get(_BASELINE_KEY)
     if not baseline:
@@ -1049,4 +1079,5 @@ def _sweep_one(
         baseline_drift=baseline_drift,
         baseline_drift_error=baseline_drift_error,
         best_sets=best_sets,
+        talents_source=base,
     )

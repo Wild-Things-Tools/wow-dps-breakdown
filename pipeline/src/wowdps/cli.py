@@ -11,6 +11,7 @@ from pathlib import Path
 
 from . import (
     catalogue,
+    computedbuilds,
     dataset,
     equipment,
     fightdataset,
@@ -416,6 +417,55 @@ def cmd_build(args: argparse.Namespace) -> int:
     return 0
 
 
+def _computed_bases(path: str | None, tier: str) -> dict | None:
+    """The computed builds a sweep should measure on, or None when none was supplied.
+
+    Owner decision 5, stage 2. An explicit path rather than a lookup under ``--out``,
+    because a sharded run writes into a fresh shard directory and the published
+    document lives in the dataset -- reading it off ``--out`` is the defect
+    ``_tier_set_reference`` shipped once, where the file could not exist and the
+    feature was silently never reached.
+
+    A missing file is a **refusal** rather than a fallback, for a directory exactly as
+    for a file: somebody who passes ``--computed`` is asking for the computed builds,
+    and a sweep that quietly ran on simc's talents instead would publish a full set of
+    plausible numbers answering a question nobody asked -- while a typo'd root would
+    switch the whole feature off and look like a clean run, which is #219's shape. Not
+    passing it at all is the ordinary state and says so.
+    """
+    if not path:
+        logging.info(
+            "no --computed document supplied: every spec is swept on its profile's own talents"
+        )
+        return None
+    source = Path(path)
+    if source.is_dir():
+        # A published-data ROOT, because the caller frequently does not know the tier:
+        # a dispatch says `latest`, and `_resolve_tier` answers from what simc ships
+        # rather than from `tiers.json`. Resolving it here means one definition of the
+        # tier instead of a workflow's and the command's, which is the disagreement
+        # `manifest.simc.ptr` shipped for months.
+        source = source / tier / "computed-builds.json"
+    if not source.is_file():
+        logging.error("no computed-builds document at %s", source)
+        raise SystemExit(1)
+    document = json.loads(source.read_text(encoding="utf-8"))
+    stated = document.get("tier")
+    if stated and stated != tier:
+        logging.error("computed-builds document is for tier %s, this run is %s", stated, tier)
+        raise SystemExit(1)
+    bases = computedbuilds.computed_bases(document)
+    by_targets: dict[int, int] = {}
+    for _, _, count in bases:
+        by_targets[count] = by_targets.get(count, 0) + 1
+    logging.info(
+        "computed builds beat simc on simc's own gear in %d cell(s): %s",
+        len(bases),
+        ", ".join(f"{count} at {n}T" for n, count in sorted(by_targets.items())) or "none",
+    )
+    return bases
+
+
 def cmd_gear(args: argparse.Namespace) -> int:
     """Sweep one equipment slot: which drops are an upgrade over what is already worn."""
     profiles_dir = Path(args.profiles)
@@ -444,6 +494,7 @@ def cmd_gear(args: argparse.Namespace) -> int:
         threads=args.threads,
     )
     targets = args.targets or list(DEFAULT_GEAR_TARGETS)
+    bases = _computed_bases(getattr(args, "computed", None), tier)
 
     logging.info(
         "tier %s | %d specs x %d slot(s) x %d target count(s) | simc %s",
@@ -487,7 +538,13 @@ def cmd_gear(args: argparse.Namespace) -> int:
             # lands inside it too.
             try:
                 result = gearsweep.sweep_spec(
-                    simc, profile, pools.slots[slot_id], settings, targets, timeout=args.timeout
+                    simc,
+                    profile,
+                    pools.slots[slot_id],
+                    settings,
+                    targets,
+                    timeout=args.timeout,
+                    bases=bases,
                 )
             except Exception:  # noqa: BLE001 - one spec must not kill the shard
                 logging.exception("  FAILED %s / %s", profile.id, slot_id)
@@ -1158,6 +1215,7 @@ def cmd_buffs(args: argparse.Namespace) -> int:
 
     found = profiles.discover(profiles_dir, tier, dps_only=True)
     selected = _select(found, args.wow_class, args.spec, args.limit, _parse_shard(args.shard))
+    bases = _computed_bases(getattr(args, "computed", None), tier)
     results: list[buffsweep.BuffResult] = []
     for index, profile in enumerate(selected, start=1):
         tier_set = buffsweep.class_id_of(profile, sets)
@@ -1176,6 +1234,7 @@ def cmd_buffs(args: argparse.Namespace) -> int:
             targets=args.targets,
             timeout=args.timeout,
             previous_set=buffsweep.class_id_of(profile, previous_sets),
+            base=(bases or {}).get((profile.id, scenarios.PATCHWERK.id, args.targets)),
         )
         for message in result.errors or ():
             logging.warning("  %s", message)
@@ -3400,6 +3459,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_gear.add_argument("--threads", type=int, default=0)
     p_gear.add_argument("--timeout", type=int, default=3600)
+    p_gear.add_argument(
+        "--computed",
+        default=None,
+        help=(
+            "a computed-builds.json; where its `shipped` block says the "
+            "computed build beats simc's outside the tie band, that build's "
+            "talents are what this sweep measures on (owner decision 5, stage "
+            "2). Costs no extra invocation. A missing file is refused rather "
+            "than ignored"
+        ),
+    )
     p_gear.set_defaults(func=cmd_gear)
 
     p_candidates = sub.add_parser(
@@ -3904,6 +3974,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_buffs.add_argument("--spec", action="append")
     p_buffs.add_argument("--limit", type=int)
     p_buffs.add_argument("--shard")
+    p_buffs.add_argument(
+        "--computed",
+        default=None,
+        help=(
+            "a computed-builds.json; where its `shipped` block says the "
+            "computed build beats simc's outside the tie band, that build's "
+            "talents are what this sweep measures on (owner decision 5, stage "
+            "2). Costs no extra invocation. A missing file is refused rather "
+            "than ignored"
+        ),
+    )
     p_buffs.set_defaults(func=cmd_buffs)
 
     p_extra = sub.add_parser(

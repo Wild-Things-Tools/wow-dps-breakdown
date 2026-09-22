@@ -769,3 +769,142 @@ def test_the_committed_mid2_pair_is_checked_by_the_same_walk():
     }
     for row in computedbuilds.stale_rows(document, manifest):
         assert row.computed_hash != published[row.build_id]
+
+
+# --------------------------------------------------------------------------------
+# Reading it back: the computed build as a sweep's base (owner decision 5, stage 2)
+# --------------------------------------------------------------------------------
+
+
+def row(
+    build_id="rogue_outlaw_default",
+    scenario="patchwerk",
+    targets=1,
+    *,
+    best_hash="COMPUTED",
+    simc_hash="SIMC",
+    shipped=("margin", 0.03, 0.001),
+):
+    """One document row, with only the fields ``computed_bases`` reads."""
+    out: dict = {
+        "id": build_id,
+        "scenario": scenario,
+        "targets": targets,
+        "best": {"talentHash": best_hash, "label": "a computed build"},
+        "simc": {"talentHash": simc_hash},
+    }
+    if shipped is not None:
+        _, margin, band = shipped
+        out["shipped"] = {
+            "simcDps": 100.0,
+            "bestDps": 100.0 * (1 + margin),
+            "margin": margin,
+            "tieBand": band,
+            # Deliberately the OPPOSITE of what the two numbers say, everywhere it is
+            # not the thing under test: the reader must never consult it.
+            "separates": margin <= band,
+        }
+    return out
+
+
+def test_a_computed_build_that_beats_simc_on_simcs_own_kit_becomes_the_base():
+    bases = computedbuilds.computed_bases({"specs": [row()]})
+    base = bases[("rogue_outlaw_default", "patchwerk", 1)]
+    assert base.talents == "COMPUTED"
+    assert base.to_json() == {
+        "origin": "computed",
+        "talentHash": "COMPUTED",
+        "label": "a computed build",
+        "shippedMargin": 0.03,
+        "tieBand": 0.001,
+    }
+
+
+def test_the_verdict_is_derived_from_the_two_numbers_and_not_from_the_boolean():
+    """``separates`` on every fixture above contradicts its own margin, on purpose.
+
+    ``dps-best-build``'s rule: a published boolean can disagree with the figures it
+    sits beside and nothing downstream would say which was right. Measured over the
+    committed MID2 document the derived answer agrees with the published one on 148
+    of 148 rows, so deriving costs nothing and cannot be quietly wrong.
+    """
+    beats = computedbuilds.computed_bases({"specs": [row(shipped=("m", 0.03, 0.001))]})
+    ties = computedbuilds.computed_bases({"specs": [row(shipped=("m", 0.0005, 0.001))]})
+    assert len(beats) == 1 and not ties
+
+
+def test_a_margin_exactly_on_the_band_is_a_tie():
+    assert not computedbuilds.computed_bases({"specs": [row(shipped=("m", 0.001, 0.001))]})
+
+
+def test_a_row_with_no_shipped_block_is_left_on_the_profiles_own_talents():
+    """The anchored margin is never a fallback, and that is the whole point of #52.
+
+    Projected, it is accurate to a tenth of a point on seven builds of nine and wrong
+    by 2.52 points on one, with the sign going both ways -- so a run reaching for it
+    when the measurement is absent would publish a gear comparison measured under
+    talents that particular build never wins with.
+    """
+    assert not computedbuilds.computed_bases({"specs": [row(shipped=None)]})
+
+
+def test_a_winner_that_is_simcs_own_build_is_not_a_substitution():
+    assert not computedbuilds.computed_bases({"specs": [row(best_hash="SAME", simc_hash="SAME")]})
+
+
+def test_the_key_carries_the_scenario_and_the_target_count():
+    """A five-target sweep must not take the one-target build's talents.
+
+    How often the two disagree grows with the target count -- 13 of 52 builds at one
+    target, 26 at five, 29 at ten -- so this is the difference between a comparison
+    and a comparison under talents nobody chose for it.
+    """
+    bases = computedbuilds.computed_bases({"specs": [row(targets=1), row(targets=5)]})
+    assert set(bases) == {
+        ("rogue_outlaw_default", "patchwerk", 1),
+        ("rogue_outlaw_default", "patchwerk", 5),
+    }
+    assert ("rogue_outlaw_default", "patchwerk", 10) not in bases
+
+
+def test_no_document_at_all_is_an_empty_map_rather_than_a_failure():
+    assert computedbuilds.computed_bases(None) == {}
+    assert computedbuilds.computed_bases({}) == {}
+    assert computedbuilds.computed_bases({"specs": None}) == {}
+
+
+def test_a_margin_that_is_not_a_number_is_skipped_rather_than_coerced():
+    for bad in ("0.03", None, True):
+        broken = row()
+        broken["shipped"]["margin"] = bad
+        assert not computedbuilds.computed_bases({"specs": [broken]}), bad
+
+
+def test_every_variant_carries_the_hash_rather_than_inheriting_one():
+    """Whether a profileset with no ``talents=`` inherits the command line's is not
+    measured anywhere in this repository, and no simc was reachable when this was
+    written. Writing it per variant removes the question."""
+    assert computedbuilds.with_talents(("trinket1=,id=1",), "HASH") == (
+        "trinket1=,id=1",
+        "talents=HASH",
+    )
+
+
+def test_without_a_hash_a_variants_options_are_exactly_what_they_were():
+    assert computedbuilds.with_talents(("a", "b"), None) == ("a", "b")
+    assert computedbuilds.with_talents(("a", "b"), "") == ("a", "b")
+
+
+def test_the_reader_reproduces_the_measurement_on_the_committed_document():
+    """68 cells, 13 at one target, 26 at five, 29 at ten -- the figures #111 is
+    decided on. A published document is the only fixture that cannot be written to
+    agree with the code."""
+    path = Path(__file__).resolve().parents[2] / "web/public/data/MID2/computed-builds.json"
+    if not path.is_file():  # pragma: no cover - the dataset travels with the repo
+        return
+    bases = computedbuilds.computed_bases(json.loads(path.read_text(encoding="utf-8")))
+    by_targets: dict[int, int] = {}
+    for _, _, count in bases:
+        by_targets[count] = by_targets.get(count, 0) + 1
+    assert len(bases) == 68
+    assert by_targets == {1: 13, 5: 26, 10: 29}
