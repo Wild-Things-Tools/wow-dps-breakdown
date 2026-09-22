@@ -25,11 +25,13 @@
         "origin": "harvested",
         "talents": "CEkAAAAAAAAAAAAAAAAAAAAAAYGMzMz2MmZmZmZmMMDAAAAAAY2MmlZYmZ2mZmZZm5BmBGGLzsNDGGbbMhxMjhFAAAgBAAAmZAGAAAAG",
         "specId": 577,
-        "note": "Talents are a real player's: this exact build was logged on 2 ranked Mythic kill(s) of Nek'zali, the Soulcoiler in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The character -- gear, race, consumables -- is MID2_Demon_Hunter_Havoc_Fel-Scarred's (simc's disabled Aldrachi Reaver profile carries a mixed-expansion kit no character could wear), not the player's.",
+        "note": "Talents are a real player's: this exact build was logged on 1 ranked Mythic kill of Nek'zali, the Soulcoiler in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The 2 rows behind it are uploads of that one kill -- Warcraft Logs indexes uploads, not raid nights. The character -- gear, race, consumables -- is MID2_Demon_Hunter_Havoc_Fel-Scarred's (simc's disabled Aldrachi Reaver profile carries a mixed-expansion kit no character could wear), not the player's.",
         "evidence": {
           "source": "harvested-builds.json",
           "buildKey": "0c3dc29088631bab",
-          "seenInKills": 2,
+          "distinctKills": 1,
+          "observations": 2,
+          "countingNote": "Distinct kills derived from the harvest's own rosters: two sampled rows of one encounter are uploads of one kill when they share at least 3 loadouts and at least 50% of the loadouts either carries. See harvest.group_uploads.",
           "reports": [
             {
               "report": "aHfPqydWjTVcLwtG",
@@ -59,11 +61,13 @@
         "origin": "harvested",
         "talents": "CYEAAAAAAAAAAAAAAAAAAAAAAAAAAAANbbzMzyYmZAAAAAAYmyYGmZsNmthZ2mxYMGmxGbDAAgZm2mZ2mBAsBYAwYGmBzYMbYZGMMmxgB",
         "specId": 70,
-        "note": "Talents are a real player's: this exact build was logged on 5 ranked Mythic kill(s) of Nek'zali, the Soulcoiler in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The character -- gear, race, consumables -- is MID2_Paladin_Retribution's, not the player's.",
+        "note": "Talents are a real player's: this exact build was logged on 1 ranked Mythic kill of Nek'zali, the Soulcoiler in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The 5 rows behind it are one player per upload, and the 3 the harvest listed are uploads of that one kill; the other 2 it did not list, so the true count is between 1 and 3. Warcraft Logs indexes uploads, not raid nights. The character -- gear, race, consumables -- is MID2_Paladin_Retribution's, not the player's.",
         "evidence": {
           "source": "harvested-builds.json",
           "buildKey": "58f8c5de0d930a30",
-          "seenInKills": 5,
+          "distinctKills": 1,
+          "observations": 5,
+          "countingNote": "Distinct kills derived from the harvest's own rosters: two sampled rows of one encounter are uploads of one kill when they share at least 3 loadouts and at least 50% of the loadouts either carries. See harvest.group_uploads.",
           "reports": [
             {
               "report": "WVCgH2xKwyptqTDk",
@@ -102,11 +106,13 @@
         "origin": "harvested",
         "talents": "CYEAAAAAAAAAAAAAAAAAAAAAAAAAAAANbbzMzyYmZGAAAAAAjysMDzM2Gz2wMbzYmxYYGbsBgZZ2mZmtGAAAYBwAgxMMwMmZ2AmZGzYYwA",
         "specId": 70,
-        "note": "Talents are a real player's: this exact build was logged on 2 ranked Mythic kill(s) of The Lost Explorers in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The character -- gear, race, consumables -- is MID2_Paladin_Retribution_Herald's, not the player's.",
+        "note": "Talents are a real player's: this exact build was logged on 1 ranked Mythic kill of The Lost Explorers in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The 2 rows behind it are uploads of that one kill -- Warcraft Logs indexes uploads, not raid nights. The character -- gear, race, consumables -- is MID2_Paladin_Retribution_Herald's, not the player's.",
         "evidence": {
           "source": "harvested-builds.json",
           "buildKey": "74593ce5fe748927",
-          "seenInKills": 2,
+          "distinctKills": 1,
+          "observations": 2,
+          "countingNote": "Distinct kills derived from the harvest's own rosters: two sampled rows of one encounter are uploads of one kill when they share at least 3 loadouts and at least 50% of the loadouts either carries. See harvest.group_uploads.",
           "reports": [
             {
               "report": "7TYdmcv2ZK6WNDkR",
@@ -150,11 +156,13 @@
         "origin": "harvested",
         "talents": "CcEAAAAAAAAAAAAAAAAAAAAAAAzMzsMzYmZGAAAghphxwMbLzMzMjZGzMAAAAAGbzMwEALmxwGMwMsRjBLgZGGGMLzsNYmBAYGGA",
         "specId": 71,
-        "note": "Talents are a real player's: this exact build was logged on 2 ranked Mythic kill(s) of The Lost Explorers in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The character -- gear, race, consumables -- is MID2_Warrior_Arms's, not the player's.",
+        "note": "Talents are a real player's: this exact build was logged on 1 ranked Mythic kill of The Lost Explorers in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The 2 rows behind it are uploads of that one kill -- Warcraft Logs indexes uploads, not raid nights. The character -- gear, race, consumables -- is MID2_Warrior_Arms's, not the player's.",
         "evidence": {
           "source": "harvested-builds.json",
           "buildKey": "be6b09884920aa17",
-          "seenInKills": 2,
+          "distinctKills": 1,
+          "observations": 2,
+          "countingNote": "Distinct kills derived from the harvest's own rosters: two sampled rows of one encounter are uploads of one kill when they share at least 3 loadouts and at least 50% of the loadouts either carries. See harvest.group_uploads.",
           "reports": [
             {
               "report": "7TYdmcv2ZK6WNDkR",
@@ -198,11 +206,13 @@
         "origin": "harvested",
         "talents": "CgEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgGDDzMz2yMzMzMMmZMjZMzyMzYMzsMmZGAAIMwGssY0YGAzCmxCwMDDAwMDghZZGjBjB",
         "specId": 72,
-        "note": "Talents are a real player's: this exact build was logged on 1 ranked Mythic kill(s) of Nek'zali, the Soulcoiler in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The character -- gear, race, consumables -- is MID2_Warrior_Fury's, not the player's.",
+        "note": "Talents are a real player's: this exact build was logged on 1 ranked Mythic kill of Nek'zali, the Soulcoiler in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The character -- gear, race, consumables -- is MID2_Warrior_Fury's, not the player's.",
         "evidence": {
           "source": "harvested-builds.json",
           "buildKey": "5cae9dc4679bdf0e",
-          "seenInKills": 1,
+          "distinctKills": 1,
+          "observations": 1,
+          "countingNote": "Distinct kills derived from the harvest's own rosters: two sampled rows of one encounter are uploads of one kill when they share at least 3 loadouts and at least 50% of the loadouts either carries. See harvest.group_uploads.",
           "reports": [
             {
               "report": "dn6cbCpNM7B4xrWk",
@@ -223,11 +233,13 @@
         "origin": "harvested",
         "talents": "CYGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWoMbNjxMDMmFzMzMLgZMLzsMWmxM2GLzYMzMsghBYAW2GbYamZZAAAAwGzMzMYzAjZAMzAADA",
         "specId": 102,
-        "note": "Talents are a real player's: this exact build was logged on 3 ranked Mythic kill(s) of Nek'zali, the Soulcoiler in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The character -- gear, race, consumables -- is MID2_Druid_Balance's, not the player's.",
+        "note": "Talents are a real player's: this exact build was logged on 1 ranked Mythic kill of Nek'zali, the Soulcoiler in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The 3 rows behind it are uploads of that one kill -- Warcraft Logs indexes uploads, not raid nights. The character -- gear, race, consumables -- is MID2_Druid_Balance's, not the player's.",
         "evidence": {
           "source": "harvested-builds.json",
           "buildKey": "9af1b8fb46d2e68d",
-          "seenInKills": 3,
+          "distinctKills": 1,
+          "observations": 3,
+          "countingNote": "Distinct kills derived from the harvest's own rosters: two sampled rows of one encounter are uploads of one kill when they share at least 3 loadouts and at least 50% of the loadouts either carries. See harvest.group_uploads.",
           "reports": [
             {
               "report": "WVCgH2xKwyptqTDk",
@@ -356,11 +368,13 @@
         "origin": "harvested",
         "talents": "C8PAAAAAAAAAAAAAAAAAAAAAAMgxMGWgNYGGawiZmZmZYZAAAAAAYGzYGbzYMjZwYaGAAAgBAGLLzMziZmZMGzMgZ2gNYMmZ2MAA",
         "specId": 255,
-        "note": "Talents are a real player's: this exact build was logged on 3 ranked Mythic kill(s) of Nek'zali, the Soulcoiler in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The character -- gear, race, consumables -- is MID2_Hunter_Survival's, not the player's.",
+        "note": "Talents are a real player's: this exact build was logged on 1 ranked Mythic kill of Nek'zali, the Soulcoiler in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The 3 rows behind it are uploads of that one kill -- Warcraft Logs indexes uploads, not raid nights. The character -- gear, race, consumables -- is MID2_Hunter_Survival's, not the player's.",
         "evidence": {
           "source": "harvested-builds.json",
           "buildKey": "5f60e520f3e0f6eb",
-          "seenInKills": 3,
+          "distinctKills": 1,
+          "observations": 3,
+          "countingNote": "Distinct kills derived from the harvest's own rosters: two sampled rows of one encounter are uploads of one kill when they share at least 3 loadouts and at least 50% of the loadouts either carries. See harvest.group_uploads.",
           "reports": [
             {
               "report": "WVCgH2xKwyptqTDk",
@@ -428,11 +442,13 @@
         "origin": "harvested",
         "talents": "CUQAAAAAAAAAAAAAAAAAAAAAAAgx2MAAAAAwsMGLTMbbjxMDjhZmZGzMbzYGbbzMzMzMjBjZ2GAAAAGMGwY2MMwAzCL0iNMDYmBzYA",
         "specId": 261,
-        "note": "Talents are a real player's: this exact build was logged on 3 ranked Mythic kill(s) of Nek'zali, the Soulcoiler in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The character -- gear, race, consumables -- is MID2_Rogue_Subtlety's, not the player's.",
+        "note": "Talents are a real player's: this exact build was logged on 1 ranked Mythic kill of Nek'zali, the Soulcoiler in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The 3 rows behind it are uploads of that one kill -- Warcraft Logs indexes uploads, not raid nights. The character -- gear, race, consumables -- is MID2_Rogue_Subtlety's, not the player's.",
         "evidence": {
           "source": "harvested-builds.json",
           "buildKey": "c0fd8566a98e9693",
-          "seenInKills": 3,
+          "distinctKills": 1,
+          "observations": 3,
+          "countingNote": "Distinct kills derived from the harvest's own rosters: two sampled rows of one encounter are uploads of one kill when they share at least 3 loadouts and at least 50% of the loadouts either carries. See harvest.group_uploads.",
           "reports": [
             {
               "report": "WVCgH2xKwyptqTDk",
@@ -471,11 +487,13 @@
         "origin": "harvested",
         "talents": "CoQAAAAAAAAAAAAAAAAAAAAAAwMjZmpZjhZmxsNAAAAAAAgxMGWgB2GWohFjZGLz2MzMmBAmZMmZmZAmZGzMAAAjZmZmhhlZMgB",
         "specId": 266,
-        "note": "Talents are a real player's: this exact build was logged on 3 ranked Mythic kill(s) of Nek'zali, the Soulcoiler in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The character -- gear, race, consumables -- is MID2_Warlock_Demonology_Soulharvester's, not the player's.",
+        "note": "Talents are a real player's: this exact build was logged on 1 ranked Mythic kill of Nek'zali, the Soulcoiler in Warcraft Logs, latest read 2026-07-16 (a pre-release raid-test window; the season's live raid had no ranked kills when this was harvested). The 3 rows behind it are uploads of that one kill -- Warcraft Logs indexes uploads, not raid nights. The character -- gear, race, consumables -- is MID2_Warlock_Demonology_Soulharvester's, not the player's.",
         "evidence": {
           "source": "harvested-builds.json",
           "buildKey": "6677de34cc7089ee",
-          "seenInKills": 3,
+          "distinctKills": 1,
+          "observations": 3,
+          "countingNote": "Distinct kills derived from the harvest's own rosters: two sampled rows of one encounter are uploads of one kill when they share at least 3 loadouts and at least 50% of the loadouts either carries. See harvest.group_uploads.",
           "reports": [
             {
               "report": "WVCgH2xKwyptqTDk",

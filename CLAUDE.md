@@ -2976,6 +2976,114 @@ the hash's spec id disagrees with the log's spec name, and simc's own spec rule 
 `talenttree.spec_rule_violation`, so a build simc would refuse is caught **offline**
 rather than after a downstream sweep has paid for it).
 
+### `seenInKills` counted uploads, and the consensus gate was about to sit on it
+
+Found on **2026-09-22** by reading the committed `harvested-builds.json` for #111's
+next step -- the automatic adoption the owner decided on 2026-08-29, whose safeguard
+is *"Konsens-Kriterium (>= N Kills mit identischem Loadout)"*. The number that
+criterion would read is `seenInKills`, and it is `len(self.observations)`: **one
+damage player in one UPLOAD**. Warcraft Logs indexes uploads rather than raid
+nights, which #130 established for `fights.json` and nobody had asked here.
+
+**Measured over the committed document (20 rows, 25 specs, 168 builds), at no query
+cost.** Two rows of one encounter are the same kill when the loadouts they carry
+agree, and that separates perfectly:
+
+```
+shared loadouts   Jaccard      pairs
+11 .. 14          0.85 .. 1.00     8    uploads of one kill
+0                 0.00            all the rest
+```
+
+Nothing in between, on either column. So the 20 rows are **13 kills** (7 singletons,
+5 pairs, 1 triple), and of the 161 builds whose sources are fully listed, **70 shrink
+and 69 stand at two or more "kills" while being carried in exactly one**. At N=2 the
+proposed criterion would have admitted 72 builds of which 69 are one raid counted
+twice; on the corrected count it admits **3**. That is #130's *"one pull became its
+own consensus"*, one module across, in the number a gate was about to be built on.
+
+**An independent reader agrees on the one pair it can see.** `fights.json` records
+`gYmDTakQH8BXLVJh f19` and `7TYdmcv2ZK6WNDkR f19` at **421.342 s and 421.363 s** --
+21 ms apart, which is `fightdataset`'s length-and-curve rule reaching the same
+verdict from fight length. The harvest calls those two kills; they are one.
+
+**And #135's cheaper test answers NO on this document.** The obvious rule is a
+tolerance on `killedAt`, and it does not exist here: the eight duplicate pairs state
+their kill **1, 1, 3, 4, 5, 48, 51 and 54 seconds** apart while pairs that are
+genuinely different kills sit at 37, 48, 49, 85, 90 and 125. There is no gap to put a
+threshold in. (Why two uploads of one kill should state it 54 s apart is **not
+established** -- the ranking row's `startTime` is what the harvest records, and
+inventing a mechanism for the spread is the `counterResetMidRun` error. What is
+measured is that it does not separate.)
+
+#### The false sentence is in the published dataset, on six spec files
+
+Not latent. `extra_builds.json`'s nine harvested cells carry a `note` that is written
+into the profile as `# wowdps-origin-note` and published as the build's first caveat,
+and **eight of the nine overstate it**:
+
+```
+Havoc Aldrachi Reaver    claimed 2 -> 1      Balance Keeper        claimed 3 -> 1
+Retribution Templar      claimed 5 -> 1*     Survival Pack Leader  claimed 3 -> 1
+Retribution Herald       claimed 2 -> 1      Subtlety Trickster    claimed 3 -> 1
+Arms Colossus            claimed 2 -> 1      Demonology Diabolist  claimed 3 -> 1
+Fury Mountain Thane      claimed 1 -> 1      * 3 of its 5 rows are listed
+```
+
+**Not one harvested build in the published dataset was carried by more than one
+kill.** The strongest honest claim any of them can make is *one player, on one kill*,
+and six spec files say two or three. The notes are corrected in the data file, so the
+next nightly's `wowdps extra-builds` rewrites them into the profiles.
+
+#### What is published now, and the two floors
+
+`harvest.group_uploads` is the rule, `schemaVersion` is **2**, and three names moved
+because they said kills and counted something else:
+
+| was | is | counts |
+|---|---|---|
+| `build.seenInKills` | `build.observations` + **`build.distinctKills`** | rows / kills |
+| `spec.killsHarvested` / `killsUsable` | `playersHarvested` / `playersUsable` + **`distinctKills`** | players / kills |
+| `source.killsSampled` (kept) | plus **`source.distinctKills`** | rows / kills |
+
+`killsSampled` keeps its name on `fights.json`'s own argument for `fightsSampled`: it
+is what `--reports` bounds and what the pass paid for. The other two could not be
+defended that way -- the committed document states `killsHarvested: 24` for Balance
+Druid over a run that sampled 20 kills, **a shape no reading of "kill" allows**, and
+it is there because a raid with two Balance Druids contributes two rows.
+
+**`seenInKills` is gone rather than corrected in place.** A published name whose
+meaning silently changes is the worse harm: a reader joining on it would get a number
+wrong by the number of loggers in the raid, with nothing saying so. A `KeyError` is
+the loud direction.
+
+Two refusals in the rule, both failing towards **over**-counting kills, which is the
+direction that cannot manufacture a consensus:
+
+- **rows of different encounters are never merged.** One raid's two bosses have
+  *identical* rosters, which is exactly what the rule otherwise reads as one kill.
+- **two rows sharing fewer than three loadouts are left apart**, however well they
+  agree in ratio. A `--spec` run narrows every roster to one spec, where a single
+  shared loadout is two guilds' Frost Death Knights running the same popular build.
+  The price is stated rather than hidden: such a run over-counts kills and its
+  `distinctKills` is an upper bound.
+
+This is deliberately **not** `fightextract.group_uploads`' rule and the two are not
+shareable: that one groups on fight length and the target-count curve, neither of
+which a harvest reads. What this has instead is the roster, which is the stronger
+agreement signal -- a curve can coincide, a fourteen-loadout roster does not.
+
+#### Two fixtures could not express the difference, which is why nothing caught it
+
+`test_harvest.observation` defaults to one report and one fight, so every
+multi-observation fixture in that file was **several players of one kill** while the
+assertions read `seenInKills == 2` and the comment said kills. And the end-to-end
+sweep's two reports carry the *same* two-build roster, so they are indistinguishable
+from two uploads of one kill -- they stay apart there only because two builds is
+under the count floor, which the test now says in words. Both are the rule this file
+keeps arriving at from new directions: **a fixture that cannot express the difference
+pins nothing.**
+
 ### Verified against real hashes, since real harvested ones do not exist yet
 
 A shipped talent hash and a harvested one are the same kind of object, so MID2's own

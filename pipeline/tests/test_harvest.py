@@ -649,8 +649,8 @@ def test_a_hash_that_will_not_decode_is_reported_never_dropped():
     )
     (spec,) = document["specs"]
     assert spec["builds"] == []
-    assert spec["killsHarvested"] == 1
-    assert spec["killsUsable"] == 0
+    assert spec["playersHarvested"] == 1
+    assert spec["playersUsable"] == 0
     (rejection,) = spec["rejected"]
     assert rejection["reason"] == harvest.REASON_DECODE
     assert rejection["report"] == "aBcD1234"
@@ -724,7 +724,7 @@ def test_two_hash_strings_for_one_loadout_are_one_build():
     )
     assert rejected == {}
     (build,) = builds["death_knight_frost"]
-    assert build.seen_in == 2
+    assert build.observed == 2
 
 
 def test_a_different_loadout_is_a_different_build():
@@ -758,8 +758,201 @@ def test_the_distinct_build_count_is_published_per_spec():
     )
     (spec,) = document["specs"]
     assert spec["distinctBuilds"] == 2
-    assert [b["seenInKills"] for b in spec["builds"]] == [2, 1]
+    # Three players of ONE kill -- the fixture's report and fight are the defaults.
+    # So the rows say 2 and 1 and the kills say 1 and 1, which is the whole of the
+    # distinction: `seenInKills` used to publish the first pair under the second
+    # pair's name.
+    assert [b["observations"] for b in spec["builds"]] == [2, 1]
+    assert [b["distinctKills"] for b in spec["builds"]] == [1, 1]
+    assert spec["distinctKills"] == 1
     assert document["coverage"]["buildsTotal"] == 2
+
+
+# --------------------------------------------------------------------------------
+# Uploads are not kills
+# --------------------------------------------------------------------------------
+
+#: Three loadouts wide, so a roster clears `_SAME_KILL_SHARED`. Anything narrower is
+#: the `--spec` case the rule deliberately refuses to merge.
+_RAID = (
+    {100: (0, 1), 101: (0, 2), 103: (0, 1)},
+    {100: (0, 1), 103: (0, 1)},
+    {101: (0, 1), 103: (0, 1)},
+    {101: (0, 2), 103: (0, 1)},
+)
+
+
+#: The other guild. Every entry takes the SELECTION node's second entry, so it
+#: shares no loadout with `_RAID` at all.
+_OTHER_RAID = (
+    {100: (0, 1), 101: (0, 2), 103: (1, 1)},
+    {100: (0, 1), 103: (1, 1)},
+    {101: (0, 1), 103: (1, 1)},
+    {101: (0, 2), 103: (1, 1)},
+)
+
+
+def _upload(report: str, fight_id: int, picks, *, encounter_id: int = 3470, actor: int = 12):
+    """One raid's damage players, as one upload of one kill."""
+    return [
+        observation(
+            encode(FROST, pick),
+            report=report,
+            fight_id=fight_id,
+            encounter_id=encounter_id,
+            actor_id=actor + index,
+        )
+        for index, pick in enumerate(picks)
+    ]
+
+
+def test_two_uploads_of_one_kill_are_one_kill():
+    """The defect this exists for, in one sentence: Warcraft Logs indexes uploads.
+
+    Six people in one raid each running a logger produce six reports holding the
+    same kill, and every one of them carries the same player with a different actor
+    id. Counting rows therefore counts *loggers*, which is what the published
+    `seenInKills` did -- measured on the committed MID2 harvest, 69 of the 161
+    builds whose sources are fully listed stood at two or more "kills" and were
+    carried in exactly one.
+    """
+    document = harvest.build_document(
+        "MID2",
+        5,
+        _upload("aBcD1234", 7, _RAID) + _upload("eFgH5678", 3, _RAID),
+        tables(),
+        encounters=[],
+    )
+    assert document["source"]["killsSampled"] == 2
+    assert document["source"]["distinctKills"] == 1
+    (spec,) = document["specs"]
+    assert spec["distinctKills"] == 1
+    # Every build was carried twice and by one raid.
+    assert {b["observations"] for b in spec["builds"]} == {2}
+    assert {b["distinctKills"] for b in spec["builds"]} == {1}
+
+
+def test_two_different_kills_stay_two():
+    """The control. Without it the rule above passes by collapsing everything.
+
+    Two guilds of one encounter share no loadout -- which is what the committed
+    harvest measures too: over every pair of its twenty rows the overlap is either
+    0.00 or at least 0.85, with nothing in between.
+    """
+    document = harvest.build_document(
+        "MID2",
+        5,
+        _upload("aBcD1234", 7, _RAID) + _upload("eFgH5678", 3, _OTHER_RAID),
+        tables(),
+        encounters=[],
+    )
+    assert document["source"]["killsSampled"] == 2
+    assert document["source"]["distinctKills"] == 2
+    (spec,) = document["specs"]
+    assert spec["distinctKills"] == 2
+    assert {b["distinctKills"] for b in spec["builds"]} == {1}
+
+
+def test_rows_of_different_encounters_are_never_merged():
+    """A raid killing two bosses in one night is two kills, however alike the rosters.
+
+    This is the half a roster rule cannot get right on its own: one raid's two kills
+    have *identical* rosters, which is exactly what the rule reads as one kill.
+    """
+    document = harvest.build_document(
+        "MID2",
+        5,
+        _upload("aBcD1234", 7, _RAID, encounter_id=3470)
+        + _upload("aBcD1234", 9, _RAID, encounter_id=3445),
+        tables(),
+        encounters=[],
+    )
+    assert document["source"]["distinctKills"] == 2
+    (spec,) = document["specs"]
+    assert {b["distinctKills"] for b in spec["builds"]} == {2}
+
+
+def test_a_roster_too_thin_to_compare_is_left_apart():
+    """The refusal, and it fails towards over-counting kills on purpose.
+
+    A `--spec` run narrows every roster to one spec, where two rows sharing their
+    single loadout are two guilds' Frost Death Knights running the same popular
+    build rather than one raid logged twice. Merging on that would manufacture the
+    consensus a consensus criterion is meant to measure.
+    """
+    document = harvest.build_document(
+        "MID2",
+        5,
+        _upload("aBcD1234", 7, _RAID[:2]) + _upload("eFgH5678", 3, _RAID[:2]),
+        tables(),
+        encounters=[],
+    )
+    assert document["source"]["distinctKills"] == 2
+
+
+def test_a_partial_overlap_is_not_one_kill():
+    """The other floor, and the one no observed pair exercises.
+
+    On the committed harvest every pair of rows overlaps by 0.00 or at least 0.85,
+    so the *ratio* guard never fires there -- which is precisely the reason to pin
+    it: three loadouts shared out of eight clears the count floor and is two rosters
+    that mostly disagree, not one raid logged twice.
+    """
+    left = _RAID + _OTHER_RAID[:3]
+    document = harvest.build_document(
+        "MID2",
+        5,
+        _upload("aBcD1234", 7, left) + _upload("eFgH5678", 3, _OTHER_RAID),
+        tables(),
+        encounters=[],
+    )
+    assert document["source"]["distinctKills"] == 2
+
+
+def test_the_document_names_its_counts_and_states_what_it_does_not_use():
+    """`seenInKills` is *gone* rather than corrected in place.
+
+    A published name that silently changes meaning is the worse of the two harms: a
+    reader joining on it would get a number wrong by the number of loggers in the
+    raid and nothing would say so. A KeyError is the loud direction, which is what
+    the schema bump is for.
+    """
+    document = harvest.build_document(
+        "MID2", 5, _upload("aBcD1234", 7, _RAID), tables(), encounters=[]
+    )
+    assert document["schemaVersion"] == 2
+    (build,) = [b for spec in document["specs"] for b in spec["builds"]][:1]
+    assert "seenInKills" not in build
+    assert {"distinctKills", "observations"} <= set(build)
+    (spec,) = document["specs"]
+    assert "killsHarvested" not in spec and "killsUsable" not in spec
+    # And the run says how it grouped, including the signal it measured and refused.
+    grouping = document["source"]["uploadGrouping"]
+    assert "loadouts" in grouping["rule"]
+    assert "54 s" in grouping["notTimestamps"]
+
+
+def test_the_builds_are_ordered_by_kills_before_rows():
+    """A build seen in two kills outranks one seen in three rows of one kill.
+
+    Ordering by rows is what `seenInKills` did, and the first row of a spec is what
+    a reader takes for its consensus build.
+    """
+    three_rows_one_kill = [
+        observation(encode(FROST, _RAID[0]), report="aBcD1234", fight_id=7, actor_id=12 + i)
+        for i in range(3)
+    ]
+    two_kills = [
+        observation(encode(FROST, _RAID[1]), report="aBcD1234", fight_id=7, actor_id=20),
+        observation(encode(FROST, _RAID[1]), report="zZzZ0000", fight_id=1, actor_id=21),
+    ]
+    document = harvest.build_document(
+        "MID2", 5, three_rows_one_kill + two_kills, tables(), encounters=[]
+    )
+    (spec,) = document["specs"]
+    first, second = spec["builds"]
+    assert (first["distinctKills"], first["observations"]) == (2, 2)
+    assert (second["distinctKills"], second["observations"]) == (1, 3)
 
 
 # --------------------------------------------------------------------------------
@@ -1222,10 +1415,16 @@ def test_the_sweep_runs_end_to_end_and_costs_two_report_queries_per_kill():
         "hunter_beast_mastery",
     }
     assert document["coverage"]["rejectedTotal"] == 0
-    # Two players of one spec ran the same build in two different kills.
+    # Two players of one spec ran the same build in two different kills -- and the
+    # two stay apart here because this fixture's rosters are two builds wide, under
+    # `_SAME_KILL_SHARED`. That is the refusal in `group_uploads`, not the rosters
+    # disagreeing, so the rule itself is exercised by the four tests above rather
+    # than by this one.
     frost = next(row for row in document["specs"] if row["specId"] == "death_knight_frost")
     assert frost["distinctBuilds"] == 1
-    assert frost["builds"][0]["seenInKills"] == 2
+    assert frost["builds"][0]["observations"] == 2
+    assert frost["builds"][0]["distinctKills"] == 2
+    assert document["source"]["distinctKills"] == 2
 
 
 def test_an_encounter_with_fewer_kills_than_asked_for_says_so():
