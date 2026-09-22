@@ -1655,6 +1655,82 @@ def test_the_command_writes_a_dataset_and_reports_what_it_spent(tmp_path, monkey
     assert "points per sampled kill (measured)" in capsys.readouterr().out
 
 
+def _refuse_one(client, target_id, exc):
+    """Make the client refuse exactly one encounter's rankings, and record what was asked.
+
+    Through the CLIENT rather than by stubbing `harvest_encounter`, because the claim
+    is that the service's refusal reaches the loop -- a stub of the function under the
+    loop would pass whether or not it does.
+    """
+    original = client.encounter_rankings
+    asked: list[int] = []
+
+    def rankings(encounter_id, difficulty=5, metric="dps", page=1):
+        asked.append(encounter_id)
+        if encounter_id == target_id:
+            raise exc
+        return original(encounter_id, difficulty, metric, page)
+
+    client.encounter_rankings = rankings
+    return asked
+
+
+def test_an_encounter_that_failed_is_still_in_the_document(tmp_path, monkeypatch):
+    """#200. The `continue` skipped `encounters.append(summary)`, so a boss the
+    service refused was left OUT of the document -- and an absence reads as "nobody
+    asked", where somebody asked and paid.
+
+    Three asked, three in the file: the middle one names why it is empty, and the
+    pass runs on, because a failure on one request is not a fact about the hour.
+    """
+    client = _FullClient()
+    asked = _refuse_one(client, 3471, warcraftlogs.WarcraftLogsError("upstream said no"))
+    _install(monkeypatch, client)
+
+    assert harvest.cmd_harvest_builds(_args(tmp_path, encounter=[3470, 3471, 3472])) == 0
+
+    entries = json.loads((tmp_path / "MID2" / "harvested-builds.json").read_text())["source"][
+        "encounters"
+    ]
+    assert [e["id"] for e in entries] == [3470, 3471, 3472], (
+        "a paid-for encounter left the document"
+    )
+    failed = entries[1]
+    assert "upstream said no" in failed["failedBecause"]
+    assert failed["killsRead"] == 0 and failed["playersRead"] == 0
+    assert "fewerKillsThanRequested" not in failed, (
+        "an unread encounter claimed its rankings are thin"
+    )
+    assert "stoppedBy" not in failed, "a single failed request was published as the end of the pass"
+    assert 3472 in asked, "the pass stopped over one refused request"
+
+
+def test_a_429_keeps_the_encounter_and_ends_the_pass(tmp_path, monkeypatch):
+    """The other half, and the reason the two clauses are ordered.
+
+    `RateLimited` subclasses `WarcraftLogsError`, so under the base clause alone a 429
+    became a `continue` -- the run asked every remaining boss of a hour that refuses
+    everything, and each of them dropped out of the document too. Now the encounter
+    stays, says both things that are true of it, and the pass ends with exit 2, which
+    the workflow reads as a warning rather than a failure.
+    """
+    client = _FullClient()
+    asked = _refuse_one(client, 3471, warcraftlogs.RateLimited("429"))
+    _install(monkeypatch, client)
+
+    assert harvest.cmd_harvest_builds(_args(tmp_path, encounter=[3470, 3471, 3472])) == 2
+
+    entries = json.loads((tmp_path / "MID2" / "harvested-builds.json").read_text())["source"][
+        "encounters"
+    ]
+    assert [e["id"] for e in entries] == [3470, 3471], (
+        "the encounter the 429 hit is not in the file"
+    )
+    assert "429" in entries[1]["failedBecause"]
+    assert entries[1]["stoppedBy"], "the file cannot say the pass ended here"
+    assert 3472 not in asked, "the run asked on into a refusing hour"
+
+
 def test_probe_mode_writes_nothing(tmp_path, monkeypatch, capsys):
     """Whether a full pass is affordable is a measurement, and taking it must not
     require running the pass whose cost is in question."""
