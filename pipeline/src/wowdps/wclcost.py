@@ -69,6 +69,7 @@ control round in the run. See ``Sensitivity`` for why both directions matter.
 
 from __future__ import annotations
 
+import re
 import statistics
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -94,6 +95,19 @@ class CostProbeError(RuntimeError):
     """The probe cannot answer, and says why rather than returning a number."""
 
 
+class CostProbeStopped(CostProbeError):
+    """The service refused the rest of the hour; whatever was read is a prefix.
+
+    Its own class rather than a message, because the two answers are different
+    actions: a soundness refusal means this pair can never be priced and the run
+    should end saying so, where a 429 means the HOUR is spent and the pass stops with
+    what it has. `RateLimited` and `PointBudgetExhausted` are separate inheritance
+    lines in this package, and three producers filed a 429 as three different wrong
+    things before #199-#201; the caller translates once, here, rather than this
+    module importing a client it otherwise never needs.
+    """
+
+
 def add_rate_limit(document: str) -> str:
     """The same document with the reading block added, and nothing else changed.
 
@@ -116,16 +130,155 @@ def add_rate_limit(document: str) -> str:
     return document[: opening + 1] + "\n" + RATE_LIMIT_BLOCK + document[opening + 1 :]
 
 
-def differs_only_by_the_block(without: str, with_block: str) -> bool:
-    """True when the two documents differ in the reading block and nothing else.
+@dataclass(frozen=True)
+class Difference:
+    """The ONE thing two sides of a pair differ in, named so a verdict can say it.
 
-    The check the pair's whole meaning rests on, and it is one line: remove the block
-    and the surrounding whitespace from the richer side and the two must be equal.
-    Written as a function rather than left inside a test because the CLI asserts it
-    too -- a probe that priced two documents differing in two things would produce a
-    number, and the number would be about the wrong difference.
+    The block question needed no such object: there was one difference, it was the
+    block, and ``compare`` could print the word. The two questions #170 leaves open
+    are about an ARGUMENT rather than a field -- does an unfiltered
+    ``FIGHT_STRUCTURE`` cost more than a filtered one, does ``includeResources``
+    cost anything -- and priced under the old rule both would have been refused,
+    correctly, and under a loosened one both would have been reported in a sentence
+    naming the block. A noun that travels with the pair is what stops the second.
+
+    Three fields that are decisions rather than description:
+
+    * ``fragments`` is exact text, never a pattern. An expression matching "the
+      filter" would also match a filter elsewhere in the document and strip the
+      wrong one, and the result is a perfectly good number about the wrong
+      difference -- the one failure a reader of this output cannot detect.
+    * ``written_on`` says which side's DOCUMENT carries them, and it is **not**
+      always the dearer side. Dropping a filter makes the document SHORTER and the
+      answer BIGGER, so text length and cost point in opposite directions on exactly
+      the question this was built for.
+    * ``answers_differ`` is the honesty flag. The block adds three numbers to a
+      response, so a difference there is about the ASKING. An argument changes what
+      comes back, so a difference there is a cost difference and says nothing about
+      whether the charge is per field, per row or per byte. The probe prints that
+      rather than leaving a reader to supply the stronger reading.
     """
-    return with_block.replace("\n" + RATE_LIMIT_BLOCK, "", 1) == without
+
+    noun: str
+    fragments: tuple[str, ...]
+    written_on: str
+    answers_differ: bool
+
+    def carrier(self, lean: str, rich: str) -> tuple[str, str]:
+        """The document that carries the fragments, and the one that does not."""
+        return (rich, lean) if self.written_on == "rich" else (lean, rich)
+
+
+def strip_fragments(document: str, difference: Difference) -> str:
+    """The document without the text the difference names, each fragment removed once.
+
+    Every fragment must appear EXACTLY once, and the two refusals are one rule
+    pointing in opposite directions: a fragment that is absent means this document is
+    not the side the difference says carries it, and one that appears twice means the
+    text does not identify a single place -- removing the first is then a guess, and a
+    guess here builds the other side of a pair out of the wrong edit.
+    """
+    stripped = document
+    for fragment in difference.fragments:
+        found = stripped.count(fragment)
+        if found != 1:
+            raise CostProbeError(
+                f"{difference.noun}: the fragment {fragment.strip()!r} appears "
+                f"{found} times in this document, and it has to appear exactly once "
+                "for the two sides to differ in one place"
+            )
+        stripped = stripped.replace(fragment, "", 1)
+    return stripped
+
+
+def differs_only_by(lean: str, rich: str, difference: Difference) -> bool:
+    """True when the two documents differ in the named difference and nothing else.
+
+    The check a pair's whole meaning rests on. Written as a function rather than left
+    inside a test because the CLI asserts it too -- a probe that priced two documents
+    differing in two things would produce a number, and the number would be about the
+    wrong difference.
+
+    It is not a formality even for documents this package already ships. The two
+    event documents differ in their OPERATION NAME as well as in the argument, so
+    pairing ``EVENTS_QUERY`` with ``EVENTS_WITH_RESOURCES_QUERY`` as written is
+    refused here -- which is why ``build_pairs`` constructs the richer side instead
+    of pairing two documents somebody wrote separately.
+    """
+    carrier, other = difference.carrier(lean, rich)
+    try:
+        return strip_fragments(carrier, difference) == other
+    except CostProbeError:
+        return False
+
+
+#: The difference this probe was built for: one field group, the same answer either way.
+BLOCK = Difference(
+    noun="the reading block",
+    fragments=("\n" + RATE_LIMIT_BLOCK,),
+    written_on="rich",
+    answers_differ=False,
+)
+
+
+def differs_only_by_the_block(without: str, with_block: str) -> bool:
+    """The block case of :func:`differs_only_by`, kept under the name that names it."""
+    return differs_only_by(without, with_block, BLOCK)
+
+
+def with_argument(document: str, *, after: str, argument: str) -> tuple[str, Difference]:
+    """The same document with one argument added, and the difference that describes it.
+
+    The counterpart of ``add_rate_limit`` for the argument questions, and it exists
+    for the same reason: the probe CONSTRUCTS the richer side, so "the two sides
+    differ in one thing" is true by construction rather than by comparison.
+
+    That is not theoretical. ``EVENTS_QUERY`` and ``EVENTS_WITH_RESOURCES_QUERY`` are
+    both shipped, both real, and differ in TWO things -- the argument and the
+    operation name (``FightEvents`` against ``FightEventsWithResources``). Priced
+    against each other they would have answered a question nobody asked.
+
+    The document and the difference are returned **together** because the inserted
+    line takes the anchor's own indentation, so the exact text the difference has to
+    name is not known until the insertion has happened. Deriving it a second time in
+    the caller is how the two drift apart.
+
+    Two refusals:
+
+    * an argument whose NAME the document already carries -- the pair is reversed,
+      and returning the document unchanged would price two identical sides and report
+      "no difference" with total confidence;
+    * an anchor that is absent, or that appears more than once: the insertion point is
+      then a guess, and the argument could land in another field's list.
+    """
+    # Matched as an ARGUMENT -- the name, then a colon -- rather than as a substring.
+    # A bare `in` is what the first version did, and a one-character name then matched
+    # inside any word of the document: `r` is in `query`, so a pair that differed in
+    # `r: true` was refused as reversed before the anchor was ever looked at. Found by
+    # the test written for the anchor, which is the useful direction for that to fail in.
+    name = argument.split(":", 1)[0].strip()
+    if name and re.search(rf"\b{re.escape(name)}\s*:", document):
+        raise CostProbeError(f"this document already carries {name!r}; the pair is reversed")
+    lines = document.splitlines()
+    hits = [i for i, line in enumerate(lines) if after in line]
+    if len(hits) != 1:
+        raise CostProbeError(
+            f"the anchor {after.strip()!r} appears {len(hits)} time(s); it has to appear "
+            "exactly once or the argument could land in another field's list"
+        )
+    index = hits[0]
+    indent = lines[index][: len(lines[index]) - len(lines[index].lstrip())]
+    added = f"{indent}{argument}"
+    lines.insert(index + 1, added)
+    richer = "\n".join(lines) + ("\n" if document.endswith("\n") else "")
+    difference = Difference(
+        noun=f"`{argument}`",
+        fragments=("\n" + added,),
+        written_on="rich",
+        # An argument changes what comes back. See `Difference`.
+        answers_differ=True,
+    )
+    return richer, difference
 
 
 @dataclass(frozen=True)
@@ -139,15 +292,24 @@ class Variant:
 
 @dataclass(frozen=True)
 class Pair:
-    """Two documents differing in exactly one thing, and the question they answer."""
+    """Two documents differing in exactly one thing, and the question they answer.
+
+    ``lean`` and ``rich`` are named for the ANSWER rather than for the document:
+    ``rich`` is the side asking for more back, which for the filter question is the
+    side whose document is *shorter*. They were ``without``/``with_block`` while the
+    block was the only difference this could price, and those names would now be
+    false on two of the three pairs -- a name promising more than its computation
+    delivers is the failure this repository already records under ``inRotation``.
+    """
 
     key: str
     question: str
-    without: Variant
-    with_block: Variant
+    difference: Difference
+    lean: Variant
+    rich: Variant
 
     def is_sound(self) -> bool:
-        return differs_only_by_the_block(self.without.document, self.with_block.document)
+        return differs_only_by(self.lean.document, self.rich.document, self.difference)
 
 
 @dataclass
@@ -177,54 +339,75 @@ class PairResult:
 
     pair: Pair
     poll: Sample
-    without: Sample
-    with_block: Sample
+    lean: Sample
+    rich: Sample
     verdict: str
     sentence: str
 
 
-def compare(without: Sample, with_block: Sample) -> tuple[str, str]:
-    """Four states, and only one of them is a number a caller may act on.
+def verdict_of(lean: Sample, rich: Sample) -> str:
+    """The four states, with no prose attached.
+
+    Split out of ``compare`` so ``sensitivity`` can ask for the verdict without being
+    handed a noun it would then have to print correctly and never prints at all. A
+    function that takes a name it does not use is a name waiting to be wrong -- and
+    the noun stopped being a constant the moment a second kind of difference existed.
 
     Order matters: a backwards counter is checked FIRST, because its deltas are
     arithmetically fine and mean nothing -- a reset mid-probe makes one delta hugely
     negative and every summary over it plausible.
     """
-    every = without.deltas + with_block.deltas
+    every = lean.deltas + rich.deltas
     if not every:
-        return "unmeasured", "no reading came back at all"
+        return "unmeasured"
     if any(d < 0 for d in every):
-        return (
-            "counter-went-backwards",
-            "the hourly counter fell during the probe -- the reset fired mid-run, "
-            "and every delta spanning it is meaningless",
-        )
+        return "counter-went-backwards"
     if all(d == 0 for d in every):
-        return (
-            "unmeasured",
-            "the counter did not move on either side. UNMEASURED -- do not read "
-            "this as 'the field is free'",
-        )
-    if without.low is None or with_block.low is None:
-        return "unmeasured", "one side produced no reading"
+        return "unmeasured"
+    if lean.low is None or rich.low is None:
+        return "unmeasured"
+    if rich.low > lean.high:
+        return "separates"
+    if lean.low > rich.high:
+        return "separates"
+    return "inside-the-noise"
 
-    if with_block.low > without.high:
-        return (
-            "separates",
-            f"asking for the block costs MORE: its cheapest run ({with_block.low:g}) "
-            f"is above the other side's dearest ({without.high:g})",
+
+def compare(lean: Sample, rich: Sample, *, noun: str = "the reading block") -> tuple[str, str]:
+    """The verdict, and the sentence that names what the two sides differ in.
+
+    ``noun`` carries a default only so a caller pricing the block reads the sentence
+    it always read; every pair built here passes its own, off ``Pair.difference``.
+    """
+    verdict = verdict_of(lean, rich)
+    if verdict == "counter-went-backwards":
+        return verdict, (
+            "the hourly counter fell during the probe -- the reset fired mid-run, "
+            "and every delta spanning it is meaningless"
         )
-    if without.low > with_block.high:
-        return (
-            "separates",
-            f"asking for the block costs LESS, which is a finding about the probe "
-            f"rather than about the API: {without.low:g} > {with_block.high:g}",
+    if verdict == "unmeasured":
+        if not (lean.deltas + rich.deltas):
+            return verdict, "no reading came back at all"
+        if lean.low is None or rich.low is None:
+            return verdict, "one side produced no reading"
+        return verdict, (
+            "the counter did not move on either side. UNMEASURED -- do not read "
+            f"this as '{noun} is free'"
         )
-    return (
-        "inside-the-noise",
-        f"the two ranges overlap ({without.low:g}-{without.high:g} against "
-        f"{with_block.low:g}-{with_block.high:g}), so this sample cannot tell them "
-        f"apart. That is NOT 'they cost the same'",
+    if verdict == "separates":
+        if rich.low is not None and lean.high is not None and rich.low > lean.high:
+            return verdict, (
+                f"asking for {noun} costs MORE: its cheapest run ({rich.low:g}) "
+                f"is above the other side's dearest ({lean.high:g})"
+            )
+        return verdict, (
+            f"asking for {noun} costs LESS, which is a finding about the probe "
+            f"rather than about the API: {lean.low:g} > {rich.high:g}"
+        )
+    return verdict, (
+        f"the two ranges overlap ({lean.low:g}-{lean.high:g} against "
+        f"{rich.low:g}-{rich.high:g}), so this sample cannot tell them "
+        f"apart. That is NOT 'they cost the same'"
     )
 
 
@@ -258,12 +441,10 @@ class Sensitivity:
     cheapest_rounds_agree: bool
 
 
-def sensitivity(
-    without: Sample, with_block: Sample, *, poll: Sample | None = None
-) -> Sensitivity | None:
+def sensitivity(lean: Sample, rich: Sample, *, poll: Sample | None = None) -> Sensitivity | None:
     """What extra cost would this sample have separated, under the rule it already used?
 
-    The verdict is asked of ``compare`` rather than re-derived, so the two cannot
+    The verdict is asked of ``verdict_of`` rather than re-derived, so the two cannot
     disagree: a sensitivity is reported for exactly the verdict it bounds, and a
     change to the comparison rule moves both at once.
 
@@ -271,16 +452,15 @@ def sensitivity(
     that is UNMEASURED or backwards has no arithmetic to do -- publishing a number
     there would be a bound computed over readings the module has just refused.
     """
-    verdict, _ = compare(without, with_block)
-    if verdict != "inside-the-noise":
+    if verdict_of(lean, rich) != "inside-the-noise":
         return None
-    if without.low is None or without.high is None or with_block.low is None:
-        return None  # compare() already refuses this; kept so the arithmetic cannot
+    if lean.low is None or lean.high is None or rich.low is None:
+        return None  # verdict_of() already refuses this; kept so the arithmetic cannot
 
-    # The rule is `with_block.low > without.high`. Raise every richer round by d and
+    # The rule is `rich.low > lean.high`. Raise every richer round by d and
     # it fires once d clears the gap -- plus one increment, because the test is strict
     # and a difference the counter cannot express is one this method cannot see.
-    smallest = round(without.high - with_block.low + COUNTER_QUANTUM, 4)
+    smallest = round(lean.high - rich.low + COUNTER_QUANTUM, 4)
 
     # What one query costs on its own: the cheapest round either side managed, less
     # the poll that rides inside every delta. Absent rather than guessed without a
@@ -294,15 +474,15 @@ def sensitivity(
     # the other twenty-three clean rounds agree on.
     query_cost: float | None = None
     if poll is not None and poll.low is not None:
-        margin = round(min(without.low, with_block.low) - poll.low, 4)
+        margin = round(min(lean.low, rich.low) - poll.low, 4)
         query_cost = margin if margin > 0 else None
 
     return Sensitivity(
         smallest=smallest,
-        bar=without.high,
-        floor=with_block.low,
+        bar=lean.high,
+        floor=rich.low,
         query_cost=query_cost,
-        cheapest_rounds_agree=with_block.low <= without.low,
+        cheapest_rounds_agree=rich.low <= lean.low,
     )
 
 
@@ -365,6 +545,13 @@ def measure(
         before = poll()
         try:
             send(variant.document, variant.variables)
+        except CostProbeStopped:
+            # Never a per-round error. A 429 is a fact about the HOUR, so walking
+            # past it would drop the rounds the hour ran out on and leave a verdict
+            # computed over the ones that happened to get in first -- a BIASED
+            # subset rather than a smaller one, and nothing in the output could say
+            # so. Same two inheritance lines, same wrong filing as #199-#201.
+            raise
         except Exception as exc:  # noqa: BLE001 -- recorded, never swallowed
             sample.errors.append(str(exc))
             continue
@@ -413,21 +600,22 @@ def probe(
     """
     if not pair.is_sound():
         raise CostProbeError(
-            f"pair {pair.key!r}: the two documents differ in more than the reading "
-            "block, so any number this produced would be about the wrong difference"
+            f"pair {pair.key!r}: the two documents differ in more than "
+            f"{pair.difference.noun}, so any number this produced would be about "
+            "the wrong difference"
         )
     poll_result = poll_sample or measure_poll(poll=poll, repeats=repeats)
     # The richer side goes FIRST. If the hour resets mid-probe the run is refused
     # either way, but ordering the expensive side first means a budget stop lands
     # before the cheap side rather than after it, leaving a pair with one side.
-    with_block = measure(pair.with_block, poll=poll, send=send, repeats=repeats)
-    without = measure(pair.without, poll=poll, send=send, repeats=repeats)
-    verdict, sentence = compare(without, with_block)
+    rich = measure(pair.rich, poll=poll, send=send, repeats=repeats)
+    lean = measure(pair.lean, poll=poll, send=send, repeats=repeats)
+    verdict, sentence = compare(lean, rich, noun=pair.difference.noun)
     return PairResult(
         pair=pair,
         poll=poll_result,
-        without=without,
-        with_block=with_block,
+        lean=lean,
+        rich=rich,
         verdict=verdict,
         sentence=sentence,
     )
@@ -473,43 +661,155 @@ def describe(result: PairResult) -> list[str]:
         f"    {result.pair.question}",
         "",
         _row(result.poll),
-        _row(result.with_block),
-        _row(result.without),
+        _row(result.rich),
+        _row(result.lean),
         "",
         f"    verdict: {result.verdict} -- {result.sentence}",
     ]
-    measure = sensitivity(result.without, result.with_block, poll=result.poll)
+    if result.pair.difference.answers_differ:
+        # Printed on every such pair rather than only on a separating one: a reader
+        # who sees `inside-the-noise` has to know the sides return different data
+        # too, or the bound below reads as a bound on the ASKING.
+        lines.append(
+            "    note: the two sides do not return the same data, so a difference "
+            "here is a cost difference and says nothing about whether the charge is "
+            "per field, per row or per byte"
+        )
+    measure = sensitivity(result.lean, result.rich, poll=result.poll)
     if measure is not None:
         lines.append("")
         lines.extend(describe_sensitivity(measure))
-    for sample in (result.poll, result.with_block, result.without):
+    for sample in (result.poll, result.rich, result.lean):
         for message in sample.errors:
             lines.append(f"    ! {sample.name}: {message}")
     return lines
 
 
-def build_pairs(*, encounter: int, difficulty: int, page: int) -> list[Pair]:
+#: The two pairs that need a report code, named so a run without one says which
+#: questions it did not ask. A probe that silently priced one of three and reported
+#: success would be the shape this whole module exists to refuse.
+NEEDS_A_REPORT = ("fight-structure filter", "events + includeResources")
+
+#: The filter `FIGHT_STRUCTURE_QUERY` carries, as the two exact fragments that state
+#: it. Written on the LEAN side: the filtered document is the longer one and asks for
+#: fewer fights back, so stripping these builds the side that costs more, if either
+#: does. Both must be removed together -- GraphQL refuses an operation that declares a
+#: variable it does not use, so dropping the argument without its declaration produces
+#: a document the server rejects rather than a cheaper question.
+FIGHT_STRUCTURE_FILTER = Difference(
+    noun="the encounter/difficulty filter",
+    fragments=(
+        ", $encounterId: Int!, $difficulty: Int!",
+        "encounterID: $encounterId, difficulty: $difficulty, ",
+    ),
+    written_on="lean",
+    answers_differ=True,
+)
+
+
+def build_pairs(
+    *,
+    encounter: int,
+    difficulty: int,
+    page: int,
+    report: str | None = None,
+    fight: int | None = None,
+    events_limit: int = 300,
+    event_window_ms: int = 10_000_000,
+) -> list[Pair]:
     """The pairs this probe ships, built from the documents it prices.
 
-    Only the two that #170 names as blocked, and they are the two the ratchet's
-    ``_DOCUMENTS_WITHOUT_A_READING`` lists for a reason a measurement can remove.
-    ``GUILD_PULLS_QUERY`` is deliberately absent: it needs a guild id and a zone,
-    which means discovery, and its answer is the same question as the first pair's
-    unless the cost depends on the document rather than on the block -- which is
-    itself the thing the first pair establishes.
+    The first is #170's block question. The other two are the two measurements #170
+    leaves open, and both are about an ARGUMENT rather than a field -- which is why
+    they could not be built until ``Difference`` existed: ``differs_only_by_the_block``
+    refuses them, correctly, and loosening it to let them through would have priced
+    them under a sentence naming the block.
+
+    Both need a **report code**, so both are absent without one. That is the rule
+    ``GUILD_PULLS_QUERY`` is still excluded under -- a pair whose inputs need
+    discovery is a pair whose cost includes the discovery -- with the difference that
+    a report code is not discovered here: it is read off the committed
+    ``fights.json`` and passed in, which costs no query at all.
+
+    What they can and cannot answer is worth stating before a number exists. Both
+    sides of both pairs return **different amounts of data**, so a separation is a
+    cost difference and not evidence about what is being charged for. The block pair
+    is the only one of the three where the two sides return the same answer, and that
+    is exactly why it was the first one built.
     """
     from . import progresshours
+    from .warcraftlogs import EVENTS_QUERY, FIGHT_STRUCTURE_QUERY
 
     rankings = progresshours.PROGRESS_RANKINGS_QUERY
-    variables = {"e": encounter, "d": difficulty, "p": page}
-    return [
+    pairs = [
         Pair(
             key="progress-rankings + rateLimitData",
             question=(
                 "Does adding the reading block to PROGRESS_RANKINGS_QUERY cost points? "
                 "If not, progresssweep can drop its standalone rate_limit() per guild."
             ),
-            without=Variant("as shipped", rankings, variables),
-            with_block=Variant("+ rateLimitData", add_rate_limit(rankings), variables),
+            difference=BLOCK,
+            lean=Variant("as shipped", rankings, {"e": encounter, "d": difficulty, "p": page}),
+            rich=Variant(
+                "+ rateLimitData",
+                add_rate_limit(rankings),
+                {"e": encounter, "d": difficulty, "p": page},
+            ),
         )
     ]
+    if not report:
+        return pairs
+
+    # The unfiltered side declares two variables fewer, so it is sent two fewer. An
+    # undeclared variable is ignored by most servers and by none of them reliably;
+    # sending only what the document declares removes the question.
+    unfiltered = strip_fragments(FIGHT_STRUCTURE_QUERY, FIGHT_STRUCTURE_FILTER)
+    pairs.append(
+        Pair(
+            key="fight-structure filter",
+            question=(
+                "Does an UNFILTERED fights() cost more than a filtered one? The "
+                "catalogue splits its stages on the answer: REPORT_KILLS_QUERY takes "
+                "only $code and so answers every boss and difficulty at once, which is "
+                "the saving Stufe 3 rests on."
+            ),
+            difference=FIGHT_STRUCTURE_FILTER,
+            lean=Variant(
+                "filtered, as shipped",
+                FIGHT_STRUCTURE_QUERY,
+                {"code": report, "encounterId": encounter, "difficulty": difficulty},
+            ),
+            rich=Variant("unfiltered", unfiltered, {"code": report}),
+        )
+    )
+
+    if fight is None:
+        return pairs
+
+    with_resources, resources_difference = with_argument(
+        EVENTS_QUERY, after="limit: $limit", argument="includeResources: true"
+    )
+    variables = {
+        "code": report,
+        "fightId": fight,
+        "dataType": "DamageTaken",
+        "hostility": "Enemies",
+        "startTime": 0,
+        "endTime": event_window_ms,
+        "limit": events_limit,
+    }
+    pairs.append(
+        Pair(
+            key="events + includeResources",
+            question=(
+                "Does includeResources cost points? spawn-probe cannot ask for a "
+                "coordinate without it, so whatever it costs is the floor under every "
+                "spawn pass -- and the answer decides whether a shared cache between "
+                "the two probes would have been worth anything."
+            ),
+            difference=resources_difference,
+            lean=Variant("as shipped", EVENTS_QUERY, variables),
+            rich=Variant("+ includeResources", with_resources, variables),
+        )
+    )
+    return pairs
