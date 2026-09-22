@@ -8,8 +8,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from wowdps import buffsweep
-from wowdps.simc_runner import ProfilesetResult
+from wowdps import buffsweep, computedbuilds
+from wowdps.profiles import SpecProfile
+from wowdps.scenarios import SimSettings
+from wowdps.simc_runner import Profileset, ProfilesetResult
 
 SETS_INC = """// Set bonus data
 static constexpr std::array<item_set_bonus_t, 3> __set_bonus_data { {
@@ -176,3 +178,92 @@ def test_a_tier_with_no_predecessor_publishes_no_crossover():
         spec_id="a", display_name="A", wow_class="Mage", spec="Fire", hero_talent="Sunfury"
     )
     assert result.to_json()["crossover"] is None
+
+
+# --------------------------------------------------------------------------------
+# The computed build as the sweep's base (owner decision 5, stage 2)
+# --------------------------------------------------------------------------------
+
+
+def _profile(tmp_path: Path) -> SpecProfile:
+    path = tmp_path / "MID2_Mage_Arcane.simc"
+    path.write_text("mage=X\nspec=arcane\n", encoding="utf-8")
+    return SpecProfile(
+        path=path,
+        tier="MID2",
+        wow_class="Mage",
+        spec="Arcane",
+        hero_talent="Spellslinger",
+        role="spell",
+        talent_hash=None,
+    )
+
+
+def _capture(monkeypatch) -> list[list[Profileset]]:
+    """Record the variants of every invocation, answering with nothing measurable.
+
+    The three invocations each catch their own exception, so a stub that returns an
+    empty table produces an empty result rather than a failure -- which is enough:
+    these tests are about the OPTIONS the sweep sends, not about the numbers.
+    """
+    seen: list[list[Profileset]] = []
+
+    def fake(simc, request, settings, sets, timeout=0):
+        seen.append(list(sets))
+        return {}
+
+    monkeypatch.setattr(buffsweep, "run_profilesets", fake)
+    return seen
+
+
+def _base() -> computedbuilds.ComputedBase:
+    return computedbuilds.ComputedBase(
+        build_id="mage_arcane_spellslinger",
+        scenario="patchwerk",
+        targets=1,
+        talents="COMPUTEDHASH",
+        label="a computed build",
+        margin=0.0259,
+        tie_band=0.0007,
+    )
+
+
+def test_every_buff_variant_carries_the_computed_hash(tmp_path, monkeypatch):
+    """What a set bonus and an outside cooldown are worth is a property of the build
+    being played, which is the whole of decision 5's second stage. Written per variant
+    rather than once on the command line -- see ``computedbuilds.with_talents``."""
+    seen = _capture(monkeypatch)
+    tier_set = buffsweep.TierSet(
+        name="Jade Warlord's Dominion", option="midnight_season_2", tier="MID2", class_id=8
+    )
+    buffsweep.sweep_spec(Path("simc"), _profile(tmp_path), tier_set, SimSettings(), base=_base())
+
+    assert len(seen) == 2, "the set sweep and Power Infusion, with no previous tier"
+    for invocation in seen:
+        assert invocation
+        for one in invocation:
+            assert "talents=COMPUTEDHASH" in one.options, one.key
+
+
+def test_a_spec_with_no_computed_build_sends_the_options_it_always_did(tmp_path, monkeypatch):
+    seen = _capture(monkeypatch)
+    buffsweep.sweep_spec(Path("simc"), _profile(tmp_path), None, SimSettings())
+    for invocation in seen:
+        for one in invocation:
+            assert not [option for option in one.options if option.startswith("talents=")]
+
+
+def test_the_row_says_which_build_its_numbers_were_measured_on(tmp_path, monkeypatch):
+    _capture(monkeypatch)
+    result = buffsweep.sweep_spec(
+        Path("simc"), _profile(tmp_path), None, SimSettings(), base=_base()
+    )
+    assert result.to_json()["talentsSource"]["talentHash"] == "COMPUTEDHASH"
+
+
+def test_a_row_swept_on_the_profiles_own_talents_carries_no_such_field(tmp_path, monkeypatch):
+    """Absent is a fact rather than an unknown: every buff row ever published was
+    measured on the profile's own talents."""
+    _capture(monkeypatch)
+    result = buffsweep.sweep_spec(Path("simc"), _profile(tmp_path), None, SimSettings())
+    assert "talentsSource" not in result.to_json()

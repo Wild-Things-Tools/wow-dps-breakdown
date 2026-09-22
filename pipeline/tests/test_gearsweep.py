@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from wowdps import gearsweep, simc_runner
+from wowdps import computedbuilds, gearsweep, simc_runner
 from wowdps.equipment import TRINKET, EquipmentSlot, GearItem, ItemLevel, SlotPool
 from wowdps.gearsweep import Equipped, Variant
 from wowdps.profiles import SpecProfile
@@ -945,7 +945,7 @@ def test_a_one_socket_sweep_runs_end_to_end(monkeypatch, tmp_path):
 
     # Distinct DPS per variant so a candidate that was never equipped would show up as
     # a gain of exactly zero rather than hiding in the noise.
-    def fake_run(simc, profile, targets, settings, variants, timeout):
+    def fake_run(simc, profile, targets, settings, variants, timeout, talents=None):
         out = {}
         for index, variant in enumerate(variants):
             out[variant.key] = VariantResult(
@@ -1186,7 +1186,7 @@ def ring_sweep(monkeypatch, tmp_path):
     which is the failure mode a one-socket run already shipped once.
     """
 
-    def fake_run(simc, profile, targets, settings, variants, timeout):
+    def fake_run(simc, profile, targets, settings, variants, timeout, talents=None):
         out = {}
         for variant in variants:
             worn = frozenset(
@@ -1419,7 +1419,7 @@ ORDER_DPS: dict[frozenset[tuple[int, int]], float] = {
 
 @pytest.fixture
 def order_sweep(monkeypatch, tmp_path):
-    def fake_run(simc, profile, targets, settings, variants, timeout):
+    def fake_run(simc, profile, targets, settings, variants, timeout, talents=None):
         out = {}
         for variant in variants:
             worn = frozenset(
@@ -1581,7 +1581,7 @@ def drifting_sweep(monkeypatch, tmp_path):
     """
     calls: list[int] = []
 
-    def fake_run(simc, profile, targets, settings, variants, timeout):
+    def fake_run(simc, profile, targets, settings, variants, timeout, talents=None):
         calls.append(1)
         scale = 1.0 if len(calls) == 1 else 0.98
         out = {}
@@ -1935,7 +1935,7 @@ def test_a_spec_that_raises_costs_its_row_and_the_rest_still_sweep(monkeypatch, 
         for name in ("Sunfury", "Spellslinger", "Frostfire")
     ]
 
-    def fake_sweep_spec(simc, profile, pool, settings, targets, timeout):
+    def fake_sweep_spec(simc, profile, pool, settings, targets, timeout, bases=None):
         if profile.hero_talent == "Spellslinger":
             raise ValueError(f"{profile.path.name} has no '# gear_<stat>=' summary line")
         return sweep.SpecSlotResult(
@@ -2188,3 +2188,140 @@ def test_write_gear_publishes_the_tiers_build_ids(tmp_path):
     ]
     assert document["coverage"]["specsAvailable"] == 2
     assert document["slots"][0]["coverage"]["specsAvailable"] == 2
+
+
+# --------------------------------------------------------------------------------
+# The computed build as the sweep's base (owner decision 5, stage 2)
+# --------------------------------------------------------------------------------
+
+
+def _computed_base(build_id, targets=1):
+    return computedbuilds.ComputedBase(
+        build_id=build_id,
+        scenario="patchwerk",
+        targets=targets,
+        talents="COMPUTEDHASH",
+        label="a computed build",
+        margin=0.0259,
+        tie_band=0.0007,
+    )
+
+
+def _profileset_groups(options):
+    """The options each profileset carries, keyed by its name."""
+    groups: dict[str, list[str]] = {}
+    for option in options:
+        if not option.startswith("profileset."):
+            continue
+        head, value = option.split("=", 1)
+        name = head.removeprefix("profileset.").removesuffix("+")
+        groups.setdefault(name, []).append(value)
+    return groups
+
+
+def test_every_gear_variant_of_both_invocations_carries_the_computed_hash(stub_simc, profile):
+    """Per variant, never once on the command line.
+
+    A profileset applies on top of the base profile; whether one that states no
+    ``talents=`` then inherits a ``talents=`` given ahead of the profileset lines is
+    not measured anywhere in this repository. Writing it on every variant means the
+    sweep does not rest on the answer -- and it is what keeps both sides of every
+    gear difference on the same talents.
+    """
+    bases = {(profile.id, "patchwerk", 1): _computed_base(profile.id)}
+    gearsweep.sweep_spec(Path("simc"), profile, POOL, SimSettings(), [1], timeout=60, bases=bases)
+    assert len(stub_simc) == 2, "the baseline and the candidates are two invocations"
+    for invocation in stub_simc:
+        groups = _profileset_groups(invocation)
+        assert groups, "the stub saw no profileset at all"
+        for name, options in groups.items():
+            assert "talents=COMPUTEDHASH" in options, name
+
+
+def test_a_spec_with_no_computed_build_is_swept_exactly_as_it_always_was(stub_simc, profile):
+    """Absent is a fact rather than an unknown: every gear row ever published was
+    measured on the profile's own talents, so an absent base must change no byte."""
+    gearsweep.sweep_spec(Path("simc"), profile, POOL, SimSettings(), [1], timeout=60, bases={})
+    for invocation in stub_simc:
+        assert not [option for option in invocation if "talents=" in option]
+
+
+def test_the_base_is_looked_up_per_target_count(stub_simc, profile):
+    """A base measured at five targets must not reach a one-target sweep."""
+    bases = {(profile.id, "patchwerk", 5): _computed_base(profile.id, targets=5)}
+    result = gearsweep.sweep_spec(
+        Path("simc"), profile, POOL, SimSettings(), [1], timeout=60, bases=bases
+    )
+    assert result.targets[0].talents_source is None
+    for invocation in stub_simc:
+        assert not [option for option in invocation if "talents=" in option]
+
+
+def test_the_row_says_which_build_its_numbers_were_measured_on(stub_simc, profile):
+    bases = {(profile.id, "patchwerk", 1): _computed_base(profile.id)}
+    result = gearsweep.sweep_spec(
+        Path("simc"), profile, POOL, SimSettings(), [1], timeout=60, bases=bases
+    )
+    published = result.targets[0].to_json()
+    assert published["talentsSource"] == {
+        "origin": "computed",
+        "talentHash": "COMPUTEDHASH",
+        "label": "a computed build",
+        "shippedMargin": 0.0259,
+        "tieBand": 0.0007,
+    }
+
+
+def test_a_row_swept_on_the_profiles_own_talents_carries_no_such_field(stub_simc, profile):
+    result = gearsweep.sweep_spec(Path("simc"), profile, POOL, SimSettings(), [1], timeout=60)
+    assert "talentsSource" not in result.targets[0].to_json()
+
+
+def test_a_missing_computed_document_is_refused_rather_than_ignored(tmp_path):
+    """Somebody passing ``--computed`` is asking for the computed builds.
+
+    Falling back to the profile's own talents would publish a full set of plausible
+    numbers answering a different question, with nothing in the document saying so --
+    which is the failure ``talentsSource`` exists to make visible in the first place.
+    """
+    from wowdps import cli
+
+    with pytest.raises(SystemExit) as stop:
+        cli._computed_bases(str(tmp_path / "nowhere.json"), "MID2")
+    assert stop.value.code == 1
+
+
+def test_a_computed_document_for_another_tier_is_refused(tmp_path):
+    """The talents of MID1's winner are not MID2's, and the row ids would still join."""
+    from wowdps import cli
+
+    path = tmp_path / "computed-builds.json"
+    path.write_text('{"tier": "MID1", "specs": []}', encoding="utf-8")
+    with pytest.raises(SystemExit) as stop:
+        cli._computed_bases(str(path), "MID2")
+    assert stop.value.code == 1
+
+
+def test_no_computed_document_at_all_is_the_ordinary_state(tmp_path):
+    from wowdps import cli
+
+    assert cli._computed_bases(None, "MID2") is None
+
+
+def test_a_published_data_root_resolves_to_the_tiers_own_document(tmp_path):
+    """A dispatch says `latest`; only the command knows what that resolves to.
+
+    So the root is resolved here rather than in a workflow, which is one definition
+    of the tier instead of two that can disagree.
+    """
+    from wowdps import cli
+
+    root = tmp_path / "data"
+    (root / "MID2").mkdir(parents=True)
+    (root / "MID2" / "computed-builds.json").write_text(
+        '{"tier": "MID2", "specs": []}', encoding="utf-8"
+    )
+    assert cli._computed_bases(str(root), "MID2") == {}
+
+    with pytest.raises(SystemExit):
+        cli._computed_bases(str(root), "MID1")
