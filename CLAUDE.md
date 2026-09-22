@@ -4633,6 +4633,68 @@ reports each and MID2's carries none, so there is no walk to pay for. The number
 is a property of the *sample's logging*, not of the query, and any budget taken
 from one tier and spent on another is a guess.
 
+### The committed document now reads 3.0 nights, and that is DEPTH rather than a matured season
+
+Measured on **2026-09-22** against `web/public/data/MID2/progress-hours.json`, no
+query sent. The subsection above is the 20-guild run of 2026-08-28 and stands as
+written; what follows is why its headline does not transfer to the file on disk.
+
+The committed document -- The Twin Fangs at Mythic, the `--composition` pass of
+2026-09-06, 150 requested and **70 seen**, 34 measured -- reads
+`medianNightsObserved` **3.0**, `medianSpanDays` **2.94**, `medianAttempts`
+**67.5**. Against 1.0 night and 0.02-0.06 days on every row above, that reads as
+the season having matured, which is exactly the reading #108 was waiting for.
+
+**It is not, and the split is decisive:**
+
+```
+ranks 1-20    measured  2/20   nights 2.0   span 1.01 d   attempts 77.5
+ranks 21-70   measured 32/50   nights 3.0   span 2.99 d   attempts 67.5
+```
+
+**Only 2 of the 34 measured rows sit in the top 20**, and 17 of that top 20 are
+`no-reports` with `reportsSeen: 0` -- the same state the run above recorded. The
+cohort the table above describes is still very nearly unmeasurable; the multi-night
+population is ranks 21-70, i.e. the guilds *outside* the world-first race, who by
+construction take more nights.
+
+So the two documents differ in **depth** as well as in date -- top-20-of-the-field
+against the whole 70-guild field -- and depth alone predicts the whole difference.
+Reading 3.0 as *"MID2 is now comparable"* would be the two-populations-on-one-axis
+error the subsection above names, one level further out, committed by its own
+successor.
+
+**It is not separable from these two documents.** The rows carry no rank, and the
+per-guild nights cannot be split by ranking position beyond the 20/50 cut above;
+separating maturity from depth needs the *same* depth read at two dates. Do not
+spend points to settle it in passing -- it is a property of the sample the next
+ordinary pass will carry anyway.
+
+What the document does establish, and it is the half #108 needs: **a measurable
+multi-night population exists in this boss's field now**, where in August there was
+none. 32 of the 34 measured guilds raided two nights or more (distribution
+`{1: 2, 2: 11, 3: 18, 4: 2, 5: 1}`).
+
+**And the other half of the comparison has never been published.**
+`git log --all -- web/public/data/MID1/progress-hours.json` is **empty**: MID1 has
+no such document and never had one. Its figures live in this file and in run logs
+only, so a season comparison today has a published counterpart on neither side of
+the join -- which is a second blocker beside the maturity one, and a cheaper one.
+
+**Cost, if somebody does run it.** This one boss at full field depth cost **694
+points over 113 queries**. Eight bosses at that depth is roughly 5,550 *if they
+behave alike*, which this file's own measurements say they do not -- three of the
+eight bosses measured nothing in August, two of them for want of a single ranked
+guild. Against a counter #195 measures at 80%
+spent by 06:30 UTC, the sizing is a decision rather than a dispatch.
+
+**The scrub is confirmed on the committed file**, incidentally and for the first
+time on real published data: 70 guild rows, and the key union over all of them is
+`outcome, reportsSeen, hours, attempts, nightsObserved, spanDays, firstAttemptAt,
+killAt, composition, fieldsSpec` -- **no `id`, no `guild`, no name, no realm**, with
+`guildIdentity: "withheld"` at document level. #172's projection holds where it
+matters.
+
 ### The residue, and why the claim changed
 
 After both screens one mechanism survives: a guild whose first kill *is* logged, with
