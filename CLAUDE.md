@@ -5233,6 +5233,92 @@ which is what the hourly-then-two-hourly backfill predicts (this file's own figu
 That is a second reader agreeing with the first, which is what the paragraph above could
 not have.
 
+## A 429 is a fact about the HOUR, and four producers filed it as something else (#196)
+
+`RateLimited` and `PointBudgetExhausted` answer the same question -- *stop asking* --
+and are **separate inheritance lines**:
+
+```
+warcraftlogs.RateLimited(WarcraftLogsError)
+fightprobe.PointBudgetExhausted(RuntimeError)
+```
+
+So `except PointBudgetExhausted` could never catch a 429, and `except
+WarcraftLogsError` caught it as an ordinary failure. Both halves shipped, in both
+directions, and the ordering rule `progresssweep` and `catalogue` write out --
+`RateLimited` BEFORE the base class -- is the whole of the fix.
+
+**It is not hypothetical any more.** Two of the seventeen committed `fight-probe`
+measurements are lockouts, eight days apart:
+
+```
+2026-09-14 06:30   firstReading 14403.7    2 queries   1.00 points   nothing read
+2026-09-20 22:33   firstReading 14561.14   2 queries   2.01 points   nothing read
+```
+
+The counter is shared account-wide; the backend's four scheduled jobs alone put a
+measured ~16,645 points a day into four UTC hours, 06 among them. That answers the
+budget pass's own open question (*"not measured whether a real 429 has ever
+occurred"*) with yes.
+
+### The quiet one closed a boss for good
+
+`fightprobe`'s report walk caught the 429, logged at DEBUG and `continue`d, so the
+walk ran the whole list without one readable answer -- and neither `truncated` nor
+`aborted` was set:
+
+```python
+search_exhausted=(outcome is not None and not outcome.truncated and outcome.aborted is None)
+```
+
+`is_complete` reads `searchExhausted` as *"this encounter is finished"* and closes it
+**permanently**. Nothing in the published document can tell that from *"the zone
+really has this many kills"* -- `fights.json` publishes neither field. A 429 would
+have retired a boss silently and for ever.
+
+### `progress-hours` published a prefix under a complete run's name
+
+`_write_progress_hours` returns 0 either way, and `progress-hours.yml`'s
+`if: inputs.publish` carries no status function, so `success()` is ANDed in. The
+document now carries `stoppedBy` -- on the BOSS the stop happened in as well as at
+document level, because the published file folds on `(encounterId, difficulty)` and a
+document-level field would describe the newest run over blocks from other ones
+(`gear.json`'s #95 defect).
+
+**The labelling was the smaller half.** The loss refusal was all-or-nothing --
+`if had and not has` -- so a pass stopped at boss two of eight had seven measured
+blocks in the merged document, cleared the guard, and **overwrote boss two's
+published block** with the prefix it had read. `merge_documents` is newer-wins per
+key, so the twenty already-published guilds simply went. Same defect and same repair
+as `write_fights` before #155: the question is asked per key, of the MERGED document
+(fold, then guard -- asked of the raw one every single-boss run there is would be
+refused), and the refusal names the ids and the counts.
+
+Two more in the same loop: the budget poll itself sat in no `try` at all -- the one
+call whose purpose is to warn before the ceiling could end the pass with a traceback,
+after every boss before it was paid for and before the payload is written -- and a
+429 in the guild walk was written as `refused["error"]`, i.e. as a statement about
+the GUILD, on every guild after it.
+
+### `yaml.safe_load` is not GitHub's validator, and a duplicate key is where they part
+
+Found by breaking it. The `Commit the published document` step carries its own `env:`
+block **at the END of the step, after `run:`**; read from the top it looks as though
+it has none. Adding one produced a **duplicate key**: PyYAML silently takes the last
+and reports nothing, GitHub refuses to load the file at all.
+
+The signature from outside, and it is the only one available here:
+
+```
+name        .github/workflows/progress-hours.yml      <- the PATH, not the workflow's name
+event       push                                       <- on a workflow that is dispatch-only
+conclusion  failure, zero jobs, created_at == updated_at
+```
+
+That is **not** a failed run; it is GitHub saying it could not read the file. The
+workflow was undispatchable for two commits. So: check a workflow edit for duplicate
+keys explicitly, and read a step to its END before concluding what it does not have.
+
 ## Probing across hours, rather than restarting
 
 Warcraft Logs meters by points per hour and a pass at a useful sample size does not
