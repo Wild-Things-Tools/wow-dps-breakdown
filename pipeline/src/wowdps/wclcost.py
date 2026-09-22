@@ -497,7 +497,7 @@ def describe_sensitivity(measure: Sensitivity, *, noun: str = "the reading block
     a reason worth keeping: ``verdict_of`` was split out so ``sensitivity`` need not be
     handed a name it never prints, and that argument was read one function too far.
     This renderer DOES print one, and it printed "the block" on all three pairs of run
-    34774586069 -- including the two whose difference is an argument. The
+    35774586069 -- including the two whose difference is an argument. The
     justification ("it never prints it") stopped being true in the same change that
     added a second kind of difference, and the run written to exercise it is what
     said so.

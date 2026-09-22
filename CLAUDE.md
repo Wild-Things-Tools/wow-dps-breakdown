@@ -6691,7 +6691,7 @@ colon. The useful direction for a test to miss in.
 
 #### Both argument questions are answered, and the run was the first clean one
 
-Run **34774586069**, 2026-09-22, Sszorak Mythic through its live twin `3420`, report
+Run **35774586069**, 2026-09-22, Sszorak Mythic through its live twin `3420`, report
 `2ZzYG19fLw8NHq6P` fight 41 (read off the committed `fights.json`, so the inputs cost
 no query), 12 repeats, 229 API queries in **43 seconds**, exit 0.
 
@@ -6750,6 +6750,69 @@ The 299 is the **token endpoint's** counter, which has its own `limit: 300`; poo
 two manufactures a reset that never happened. Split on the `limit` that travels in the
 same header tuple and both are monotone. Plausible arithmetic over the wrong column,
 in the one measurement whose whole subject is a counter.
+
+#### The 800 counter comes back between runs, and three readings bound it at two minutes
+
+The paragraph above leaves the request counter's window "unbounded by this run". It is
+not unbounded, and settling it cost **no query at all**: the three `wcl-cost` runs of
+13.09 sit minutes apart and their job logs were already paid for. Read back on
+2026-09-22, splitting on the `limit` that travels in the same header tuple:
+
+```
+run 34761515445   14:02:49 -> 14:02:51    798 -> 777    22 queries   runner ...4607
+                  gap 3 min 12 s
+run 34761672707   14:06:03 -> 14:06:08    798 -> 756    43 queries   runner ...4609
+                  gap 2 min 04 s
+run 34761774999   14:08:13 -> 14:08:26    798 -> 714    85 queries   runner ...4610
+```
+
+Every step inside every run is exactly **-1** with no increase anywhere, so nothing
+resets mid-run -- and yet each run *opens* at 798 over a counter its predecessor had
+walked down. **42 units came back inside 2 minutes 4 seconds at the tightest gap.**
+An hourly window cannot do that: under one, run 2 would have opened near 777.
+
+The token endpoint's own counter says the same thing twice over: **299 on all three
+runs**, where three fetches inside six minutes against one hourly counter would read
+299, 298, 297.
+
+**What this does NOT establish is the mechanism, and there are three candidates.**
+Each run is a different runner, so a different IP, and each fetches its own token:
+
+| candidate | predicts a fresh 798 because |
+|---|---|
+| a short time window | enough time passed |
+| per IP | a new runner |
+| per OAuth token | each run authenticates separately |
+
+The *point* counter is demonstrably account-wide -- the outliers above are other jobs
+spending concurrently -- but the *request* counter sharing that scope is an assumption
+rather than a measurement, and these three runs cannot separate the three. For the
+token counter the third candidate is self-refuting (a token cannot be fetched with a
+token), which leaves it the same two.
+
+**The experiment that separates them is one job with a gap in it, and no log has
+one.** Every workflow that sends Warcraft Logs queries either runs straight through
+(`fight-probe`, `wcl-cost`) or does its sleeping inside a command that is not verbose
+-- `catalogue` and `progress-sweep` were checked and log no headers at all, so the
+`catalogue` run that slept 2811 s mid-job and then walked 25 pages cannot answer
+either. A `--gap-seconds` on `wcl-cost` that polls, waits ninety seconds and polls
+again would answer it from one runner, one IP and one token for about ten queries.
+
+It is **not built**, and the reason is that no producer here paces near 800 in any
+window: the densest client measured anywhere in this repository is this probe at
+229 queries in 43 s, about 320 a minute. Build it the day somebody wants to raise
+concurrency, and not before.
+
+**So the sentence to carry is narrower than it looks.** The counter comes back, and
+on two of the three candidates it comes back for a reason a single long-running job
+would not enjoy -- which is exactly the job a request ceiling would bite. Do not turn
+800 into a per-pass budget on the strength of that table.
+
+**And the run id this section quoted was wrong until 2026-09-22.** The entry above
+cited `34774586069`, which **404s**; the run is `35774586069`. Nothing measured moved
+-- but a run id is the whole of how a reader re-opens the evidence, and this file's
+own rule is that a figure quoted beside a run id is only as good as the id. Corrected
+here, in `wclcost.py` and in the test that names it.
 
 #### The bound named "the block" on all three pairs, and I had written down why it would not
 
